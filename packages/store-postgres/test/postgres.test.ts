@@ -356,10 +356,18 @@ describe.skipIf(!url)('postgres store adapter', () => {
 
     it('racing transactions with CAS: exactly one wins', async () => {
       const r = await store.records.create('race', { owner: null })
+      // Every transaction reads before any of them writes, so they all race on the same version
+      // (without the barrier, a late starter reads the winner's version and rightly succeeds too).
+      const n = 6
+      let read = 0
+      let allRead!: () => void
+      const barrier = new Promise<void>((resolve) => (allRead = resolve))
       const results = await Promise.allSettled(
-        Array.from({ length: 6 }, (_, i) =>
+        Array.from({ length: n }, (_, i) =>
           store.transaction(async (tx) => {
             const cur = await tx.records.get('race', r.id)
+            if (++read === n) allRead()
+            await barrier
             return tx.records.update('race', r.id, { owner: `w${i}` }, { expectedVersion: cur!.version })
           }),
         ),
