@@ -55,6 +55,16 @@ describe('docs maintenance', () => {
     expect(await finish(t, 'done')).toBeUndefined()
   })
 
+  it('counts an edit of a docs file as a docs update (git.edit_file, not only git.write_file)', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    await t.recordCall(t.run.id, 'git.commit', { sha: 'abc123', branch: 'mp/x' })
+    await t.recordCall(t.run.id, 'git.edit_file', { path: 'src/diff.js', replaced: 1 })
+    expect((await finish(t, 'done'))?.block).toContain('updated no docs')
+    await t.recordCall(t.run.id, 'git.edit_file', { path: 'README.md', replaced: 1 })
+    expect(await finish(t, 'done')).toBeUndefined()
+  })
+
   it('accepts docs tools, ignores failed ones and commits with nothing to commit', async () => {
     const t = await stack()
     registerPolicies(t.hooks, t.deps)

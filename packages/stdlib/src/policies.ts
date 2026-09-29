@@ -12,7 +12,7 @@ import type { PolicyConfig, StdlibDeps } from './types.ts'
 export const AUTO_COMMIT_MESSAGE = 'Work in progress (auto-commit at end of run)'
 /** What the model writes to finish a run that committed code without touching docs. */
 export const NO_DOCS_PHRASE = /no docs update needed:\s*\S/i
-/** Paths that count as docs when written with git.write_file. */
+/** Paths that count as docs when written with git.write_file or git.edit_file. */
 export const DOCS_PATH = /(^|\/)docs\/|\.mdx?$/i
 
 /** What the model ends with when it decides a message needs no answer. */
@@ -62,14 +62,16 @@ const outputOf = (r: ToolResultContent): Record<string, unknown> =>
 export const committedCode = (entries: Entry[]) =>
   results(entries).some((r) => r.name === 'git.commit' && !r.isError && typeof outputOf(r).sha === 'string')
 
-/** Whether the run wrote docs: `docs.write`, `docs.write_chapter`, or `git.write_file` on a docs path or markdown file. */
+/** Whether the run wrote docs: `docs.write`, `docs.write_chapter`, or `git.write_file`/`git.edit_file` on a docs path or markdown file. */
 export const wroteDocs = (entries: Entry[]) =>
   results(entries).some(
     (r) =>
       !r.isError &&
       (r.name === 'docs.write' ||
         r.name === 'docs.write_chapter' ||
-        (r.name === 'git.write_file' && typeof outputOf(r).path === 'string' && DOCS_PATH.test(outputOf(r).path as string))),
+        ((r.name === 'git.write_file' || r.name === 'git.edit_file') &&
+          typeof outputOf(r).path === 'string' &&
+          DOCS_PATH.test(outputOf(r).path as string))),
   )
 
 /**
