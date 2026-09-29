@@ -418,9 +418,6 @@ a local Postgres and Redis installed through **asdf** and pinned in
 orchestration itself, and for the deployed setup. Tests for every other part
 run without it.
 
-Open questions:
-
-
 ## Not covered here yet
 
 - **Language and framework.** BullMQ means the back end is Node, presumably in
