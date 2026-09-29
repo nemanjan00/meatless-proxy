@@ -1,0 +1,13 @@
+{
+  "name": "@mp/git",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Git port: local mirror cache, worktrees, commits and guarded pushes. Includes a fake.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0"
+  }
+}

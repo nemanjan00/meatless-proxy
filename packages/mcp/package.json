@@ -1,0 +1,13 @@
+{
+  "name": "@mp/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP port: connected MCP servers, their tools, calls and notifications. Includes a fake hub.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0"
+  }
+}

@@ -1,17 +1,65 @@
 # meatless-proxy
 
-A meat proxy, without the meat.
-
-meatless-proxy is an AI harness.
+**A meat proxy, without the meat.**
 
 A *meat proxy* is a person who just relays messages between their colleagues
-and an AI. meatless-proxy fills that role without the person in the middle: an
-AI employee that knows the company's people, projects, owners and procedures,
-answers questions briefly and truthfully, and owns the tasks it's given.
+and an AI: they paste a question into a chatbot, and paste the answer back.
+meatless-proxy removes the person in the middle. It's an AI harness that runs
+**AI employees**: colleagues that know who everyone in the company is, which
+projects exist and who owns them, and how things are done. They take work from
+chat and task systems, do it, and answer like a person would: briefly, and
+correctly.
 
-- [docs/spec.md](docs/spec.md) is the harness spec.
-- [docs/employee.md](docs/employee.md) defines the role: what it knows, how it
-  interacts with people, and how it handles tasks.
+> **Status: early and experimental.** The design is written down in `docs/`,
+> and the implementation is being built against it. Expect breaking changes.
+
+## What makes it different
+
+- **No single operator.** Most harnesses have one person at a terminal. This
+  one talks to the whole company. Work starts from chat messages, task
+  assignments and schedules, and routes itself to the right context.
+- **Database first.** Everything is state in Postgres: people, projects,
+  procedures, memory, and every session's full history. Sessions survive
+  restarts and can be picked up by any worker.
+- **Sessions as a tree.** Sessions can be forked at any point, fanned out over
+  a list, rewound with a summary instead of compacted, and committed or thrown
+  away. No context is ever lost.
+- **Triggers and subscriptions.** A new task goes to the context assigned to
+  that kind of work. A session working on an existing task subscribes to it,
+  so replies reach it directly, with nobody routing them.
+- **Procedures as contexts.** Each company procedure has a context that
+  already knows it. Work that needs the procedure runs in a fork of that
+  context, with nothing to re-read.
+- **Safe by construction.** AI employees open pull requests and never merge or
+  deploy. Secrets are injected at call time and never shown to the model.
+  Checklists need evidence before anything counts as done.
+
+## Documentation
+
+| Document | What's in it |
+|----------|--------------|
+| [docs/spec.md](docs/spec.md) | What the harness does: every feature, with open questions |
+| [docs/employee.md](docs/employee.md) | The role: what an AI employee knows, and how it talks and works |
+| [docs/execution.md](docs/execution.md) | How it runs: events, routing, runs, the entry tree, crash safety |
+| [docs/architecture.md](docs/architecture.md) | How the code is organised: layers, ports and adapters, testing |
+| [docs/stylebook.md](docs/stylebook.md) | How the web UI looks |
+
+## Install
+
+The whole thing runs with Docker Compose:
+
+```sh
+git clone https://github.com/nemanjan00/meatless-proxy.git
+cd meatless-proxy
+cp .env.example .env    # then set OPENAI_API_KEY and SECRETS_KEY
+docker compose up
+```
+
+Then open <http://localhost:3000>.
+
+The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
+first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
+in `.env`.
 
 ## Development
 
@@ -19,21 +67,60 @@ Development runs natively, without Docker. Node, Postgres and Redis are
 installed through [asdf](https://asdf-vm.com) and pinned in `.tool-versions`.
 
 ```sh
+asdf plugin add nodejs
 asdf plugin add postgres https://github.com/smashedtoatoms/asdf-postgres.git
 asdf plugin add redis https://github.com/smashedtoatoms/asdf-redis.git
 asdf install                      # builds Postgres and Redis from source
+npm install
 
-# one-time setup, data lives in .data/ (ignored by git)
+# one-time database setup; data lives in .data/ (ignored by git)
 initdb -D .data/postgres -U postgres --auth=trust -E UTF8
 pg_ctl -D .data/postgres -l .data/postgres.log -o "-p 5432 -k /tmp" start
 createdb -h 127.0.0.1 -U postgres meatless_proxy
 
-# every session
+# every time
 pg_ctl -D .data/postgres -l .data/postgres.log -o "-p 5432 -k /tmp" start
-redis-server --port 6379 --dir .data/redis --daemonize yes --logfile "$PWD/.data/redis.log"
+mkdir -p .data/redis && redis-server --port 6379 --dir .data/redis --daemonize yes --logfile "$PWD/.data/redis.log"
+cp .env.example .env              # once, then fill in
+npm run dev
 ```
 
-Configuration is in `.env` (not committed): `OPENAI_BASE_URL`,
-`OPENAI_API_KEY`, `MODEL`, `DATABASE_URL`
-(`postgres://postgres@127.0.0.1:5432/meatless_proxy`) and `REDIS_URL`
-(`redis://127.0.0.1:6379`).
+Without `DATABASE_URL` and `REDIS_URL`, the server falls back to in-memory
+storage and an in-memory queue. That's handy for trying things out, but
+nothing is kept.
+
+### Checks
+
+```sh
+npm test               # all tests (Postgres and Redis tests skip when not configured)
+npm run lint           # Biome
+npm run typecheck
+npm run check:deps     # architecture: layers point down, no cycles
+npm run check:secrets  # nothing that looks like a key in the repo
+npm run check          # all of the above
+```
+
+CI runs all of these on every push, with Postgres and Redis.
+
+## Repository layout
+
+```
+docs/                 the spec and design documents
+packages/
+  core/               ids, errors, clock, logger, event bus, hooks, schemas
+  store/ queue/ …     ports: generic interfaces with in-memory implementations
+  store-postgres/ …   adapters: real implementations of the ports
+  records/ sessions/… domain: contacts, projects, sessions, chat, …
+  router/ runner/     the engine
+  stdlib/             the model's tools
+  server/ web/        the app: API, WebSocket, workers, and the web UI
+scripts/              architecture and secret checks
+```
+
+Dependencies only point down the layers, and every component can be replaced
+by writing a new package against the same interface. See
+[docs/architecture.md](docs/architecture.md).
+
+## License
+
+Not chosen yet.

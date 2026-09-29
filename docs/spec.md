@@ -86,7 +86,10 @@ module to it:
 | triggers          | [Triggers](#triggers)                         |
 | procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
+| skills            | [Skills](#skills)                             |
+| files             | [Employee filesystem](#employee-filesystem)   |
 | checklists        | [Checklists](#checklists)                     |
+| policies          | [Policy hooks](#policy-hooks)                 |
 | supervision, limits | [Runaway protection](#runaway-protection)   |
 
 ## Terminology
@@ -151,7 +154,9 @@ session.
 - **It is a contact.** The employee has a [contact](#contacts) record like
   everyone else, marked as an AI, with a name and handles in every connected
   system (chat, task system, git host, email). Links, ownership and routing
-  work for it the same way they do for people.
+  work for it the same way they do for people. An employee can **own a
+  project**: questions and work about it are routed to the employee first, and
+  it escalates to people when a decision needs one.
 - **Git identity.** Commits are authored under the employee's own name and
   email, optionally signed with its own key. Every commit is traceable to the
   session that made it and to the contact who asked for the work, e.g. through
@@ -540,7 +545,7 @@ Core fields:
 | `aliases`     | list of string, optional      | other names people use for it          |
 | `description` | string                        | one paragraph                          |
 | `status`      | string                        | e.g. active / maintenance / sunset     |
-| `owner`       | contact id                    | the person accountable for the project; a view of the [links](#links-between-contacts-and-projects) |
+| `owner`       | contact id                    | who is accountable for the project, a person or an [AI employee](#identity); a view of the [links](#links-between-contacts-and-projects) |
 | `members`     | list of {contact id, role}    | role on this project, e.g. `reviewer`; a view of the links |
 | `repositories`| list of repository            | see [git repositories](#git-repositories) |
 | `links`       | list of {system, ref}         | task boards, chat channels, other      |
@@ -629,9 +634,16 @@ and can run it.
 - The cache is kept up to date by fetching: on a schedule, when a task starts,
   and when the task system or chat reports new changes (e.g. a push or a merged
   PR).
-- Each task works in its **own checkout** (for example a git worktree taken
-  from the cache), so concurrent tasks can't interfere with each other or with
-  the cache.
+- Each session works in its **own checkout**, a `git worktree` of the
+  cached mirror. The mirror is the one `.git` for that remote: every worktree
+  shares its object store, so a checkout costs only the working files, not
+  another clone. Each worktree has its own index and `HEAD`.
+- Each session works on its **own branch**, e.g. `mp/<employee>/<session-slug>`,
+  because git allows a branch to be checked out in only one worktree. A fork
+  gets a new worktree at the same commit, on its own branch.
+- Worktrees are removed with `git worktree remove` when the session ends, and
+  `git worktree prune` cleans up after crashes. Fetching into the mirror is
+  shared by every worktree of that remote.
 - Access is scoped: the harness uses credentials that allow what the project
   needs (read by default, write only where tasks need it), and it follows the
   project's branch and review rules.
@@ -841,6 +853,65 @@ Open questions:
 - How does a session choose its rewind point: by itself, at run and task
   boundaries, or when a context size threshold is reached?
 
+### Skills
+
+A **skill** is a packaged playbook: instructions for doing one kind of thing
+well, e.g. "cut a release", "write a migration", or "triage a customer bug".
+It works like a Claude skill: the model sees each skill's name and a one-line
+description up front, and loads the full instructions only when a task calls
+for it, so skills cost almost no context until they're used.
+
+- **Company-level skills** apply everywhere. Every employee whose scope allows
+  it can use them.
+- **Project-level skills** belong to a [project](#projects). They're offered
+  only in sessions that work on that project, and they can refine or override
+  a company skill with the same name.
+- A skill is a record with an extendable schema: `name`, `description` (used
+  to decide relevance), `body` (markdown instructions, which can link to docs,
+  contacts and procedures), `scope` (company or a project id), and optional
+  attached files (scripts, templates).
+- **Versioned and editable** in the [web UI](#web-ui), with edit history like
+  every other record. A session records which skill versions it loaded.
+- Skills complement [procedures](#procedures). A procedure says *what has to
+  happen and who approves*. A skill says *how to do a piece of work well*. A
+  procedure can name the skills its steps use.
+
+| Tool         | What it does                                                  |
+|--------------|---------------------------------------------------------------|
+| list skills  | skills available here (company plus the session's projects), with descriptions |
+| load skill   | load a skill's full instructions and files into the session   |
+
+### Employee filesystem
+
+Every employee has its **own filesystem**: a persistent space for working
+files, notes, drafts, exports and scratch data, separate from any project's
+repository.
+
+- **Private by default.** An employee's files are visible only to that
+  employee's sessions.
+- **Sharing.** A file or a directory can be shared with another employee or a
+  person, read-only or read-write. Sharing is a [link](#links-between-contacts-and-projects)
+  with a role (`shared_with`) and a permission. Shared files show up under
+  `/shared/<owner>/…` for the recipient.
+- **Stored in the database** ([database first](#database-first)), as files with
+  paths and content, with edit history like other records.
+- **Usable in environments.** A session can copy files from its employee's
+  filesystem into its checkout or container, and results back out.
+- Browsable and editable in the [web UI](#web-ui).
+
+| Tool          | What it does                                            |
+|---------------|---------------------------------------------------------|
+| fs.list       | list a directory (own files and `/shared`)              |
+| fs.read       | read a file                                             |
+| fs.write      | write a file                                            |
+| fs.move / fs.delete | move or delete a file                             |
+| fs.share      | share a file or directory with an employee or person   |
+
+Open questions:
+
+- Size limits per employee, and are large binary files kept in the database or
+  in an object store it references?
+
 ### Checklists
 
 A **checklist** says what "done" means for a piece of work, in items that can
@@ -874,6 +945,34 @@ of a promise in the prompt.
 | add item         | add an item (required or optional)                      |
 | check            | check an item, with evidence (entry ids)                |
 | request review   | have a fresh-context evaluator check an item            |
+
+### Policy hooks
+
+Some rules shouldn't depend on the model remembering them. **Policy hooks**
+enforce them in the harness, on the [hook points](architecture.md#event-bus-and-hooks)
+the runner exposes: before a model call, before and after a tool call, and
+before a run finishes. It's the same idea as Claude Code hooks, applied to
+every employee.
+
+Built-in policies, each configurable per deployment, employee or project:
+
+- **Docs maintenance.** A run that changed a project's code (commits in its
+  worktree) can't finish until the project's docs were updated in the same
+  run, or it states why no update is needed. A run can't finish without
+  updating its session document.
+- **Checklist gate.** A run can't finish as successful while required
+  [checklist](#checklists) items are unchecked.
+- **Commit on stop.** Uncommitted changes in a session's worktree are
+  committed to its branch when the run ends, so no work is lost.
+- **Evidence before claims.** A checklist item can't be checked without
+  evidence from the session's own history.
+- **Tool gates.** The allow and deny lists, and secret injection, run as
+  before-tool-call policies.
+
+When a policy blocks, the run gets the reason as a message and carries on:
+it fixes the problem (updates the docs, checks the item) and tries again, like
+a Stop hook that says "not yet". Policies are ordinary code registered on
+hooks, so adding one needs no change to the runner.
 
 ### Runaway protection
 

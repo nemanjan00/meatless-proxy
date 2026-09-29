@@ -1,0 +1,13 @@
+{
+  "name": "@mp/model",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Model port: OpenAI-compatible chat completions. Includes a scripted fake for tests.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0"
+  }
+}

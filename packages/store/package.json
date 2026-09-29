@@ -1,0 +1,14 @@
+{
+  "name": "@mp/store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Storage port: generic records, links and the entry tree. Includes an in-memory implementation and the contract test suite every adapter must pass.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0"
+  }
+}

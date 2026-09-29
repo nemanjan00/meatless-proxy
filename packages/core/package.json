@@ -1,0 +1,10 @@
+{
+  "name": "@mp/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Foundation: ids, errors, clock, logger, event bus, hooks, schemas.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

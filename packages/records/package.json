@@ -1,0 +1,14 @@
+{
+  "name": "@mp/records",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generic extendable records: kinds with schemas, validation, links with roles, documents with id links and backlinks, revisions.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0"
+  }
+}
