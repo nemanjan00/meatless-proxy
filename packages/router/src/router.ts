@@ -107,6 +107,15 @@ export function renderEvent(event: MpEvent, maxChars = 4000): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n… (truncated, ${text.length - maxChars} more characters)` : text
 }
 
+/** A readable title for a fork that handles one event: the start of its text, else its type. */
+export function forkTitle(contextTitle: string, event: MpEvent): string {
+  const p = event.data.payload as any
+  const raw = (typeof event.data.text === 'string' && event.data.text) || (typeof p?.text === 'string' && p.text) || ''
+  const text = raw.replace(/\s+/g, ' ').trim()
+  if (!text) return `${contextTitle}: ${event.data.type}`
+  return text.length > 60 ? `${text.slice(0, 57).trimEnd()}…` : text
+}
+
 export interface Router {
   /** Works out who gets an event, without delivering anything. */
   plan(event: MpEvent): Promise<Delivery[]>
@@ -250,7 +259,7 @@ export function createRouter(opts: RouterOptions): Router {
 
     // Forks: a fresh fork of the context handles this one event.
     if (d.fork) {
-      const fork = await opts.sessions.fork(sessionId, { title: `${session.data.title}: ${event.data.type}` })
+      const fork = await opts.sessions.fork(sessionId, { title: forkTitle(session.data.title, event) })
       sessionId = fork.id
     }
 

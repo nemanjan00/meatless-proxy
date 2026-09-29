@@ -125,7 +125,8 @@ export function registerChatTools(kit: Kit): void {
   kit.tool(
     {
       name: 'chat.reply',
-      description: 'Reply in a harness chat thread (threadId = the thread root, or any message in it).',
+      description:
+        'Reply in a harness chat thread (threadId = the thread root, or any message in it). You are subscribed to the thread, so replies come back to you.',
       effect: 'idempotent',
       params: { properties: { threadId: { type: 'string' }, text: { type: 'string' } }, required: ['threadId', 'text'] },
     },
@@ -135,7 +136,18 @@ export function registerChatTools(kit: Kit): void {
       const output = await kit.once('chat.reply', ctx, async () => {
         const m = await chat.getMessage(threadRef(a.threadId))
         if (!m) throw new NotFoundError('message', threadRef(a.threadId))
-        return post(ctx, m.data.channelId, text, m.id)
+        const out = await post(ctx, m.data.channelId, text, m.id)
+        // Replying makes the thread this session's conversation: follow-ups come back here.
+        // It becomes the primary subscriber only if nobody else is.
+        const subject = { system: 'mp', id: out.threadId }
+        const subs = await deps.events.subscriptions.forSubject(subject)
+        if (!subs.some((x) => x.data.sessionId === ctx.sessionId)) {
+          await deps.events.subscriptions.subscribe(ctx.sessionId, subject, {
+            primary: !subs.some((x) => x.data.primary),
+            actor: kit.actor(ctx),
+          })
+        }
+        return out
       })
       return ok(output)
     },

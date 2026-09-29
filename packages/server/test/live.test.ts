@@ -40,13 +40,13 @@ describe('websocket /ws', () => {
     ws.send(JSON.stringify({ type: 'ping' }))
     await until(() => messages.find((m) => m.type === 'pong'), 'pong')
 
-    const requests = (await s.chat.channelByName('requests'))!
-    const post = await fetch(`http://127.0.0.1:${t.port}/api/chat/channels/${requests.id}/messages`, {
+    // A message straight to the router session: it runs there, so its stream is on session:<routerId>.
+    const post = await fetch(`http://127.0.0.1:${t.port}/api/sessions/${routerId}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'Hi over the socket' }),
     })
-    expect(post.status).toBe(201)
+    expect(post.status).toBe(200)
 
     const events = () => messages.filter((m) => m.type === 'event')
     await until(
@@ -54,7 +54,7 @@ describe('websocket /ws', () => {
       'run completed',
     )
     const topics = new Set(events().map((m) => m.topic))
-    for (const topic of ['run.state', 'entry.appended', 'model.delta', 'event.ingested', 'record.changed', 'usage.recorded'])
+    for (const topic of ['run.state', 'entry.appended', 'model.delta', 'event.ingested', 'usage.recorded'])
       expect(topics, topic).toContain(topic)
 
     const state = events().find((m) => m.topic === 'run.state' && m.channel === `session:${routerId}`)
@@ -67,7 +67,6 @@ describe('websocket /ws', () => {
     const deltas = events().filter((m) => m.topic === 'model.delta' && m.channel === 'now')
     expect(deltas.map((d) => d.payload.content ?? '').join('')).toContain('Streaming a longer answer')
     expect(events().find((m) => m.topic === 'event.ingested').channel).toBe('events')
-    expect(events().find((m) => m.topic === 'record.changed').payload.kind).toBe('message')
     expect(typeof events()[0].at).toBe('string')
     // Nothing arrives on channels the socket didn't subscribe to.
     expect(events().every((m) => ['now', `session:${routerId}`, 'events', 'records:message'].includes(m.channel))).toBe(true)

@@ -95,6 +95,26 @@ const lastToolOutput = (req: ModelRequest): any => {
   }
 }
 
+/**
+ * Each request in #requests runs in its own fork of the router context. The
+ * newest such fork, i.e. the session handling the latest request.
+ */
+async function requestSessionId(t: TestApp): Promise<string> {
+  const s = t.a.services
+  const kids = await s.sessions.children((await s.routerSessionFor())!)
+  const id = kids.at(-1)?.id
+  if (!id) throw new Error('no request session yet')
+  return id
+}
+
+/** Every run started by a request in #requests (one per request fork), oldest first. */
+async function requestRuns(t: TestApp): Promise<Run[]> {
+  const s = t.a.services
+  const kids = await s.sessions.children((await s.routerSessionFor())!)
+  const all = (await Promise.all(kids.map((k) => s.sessions.runs({ sessionId: k.id })))).flat()
+  return all.filter((r) => r.data.cause.type === 'event').sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+}
+
 async function requestsChannel(t: TestApp): Promise<string> {
   const ch = await t.a.services.chat.channelByName('requests')
   return ch!.id
@@ -128,6 +148,41 @@ export function scenarioSuite(backend: Backend) {
     }
   })
 
+  it('1b. a request answered directly in its fork: the follow-up in the thread comes back to the same session', async () => {
+    let t!: TestApp
+    const script = async (req: ModelRequest): Promise<ScriptResult> => {
+      const rootId = await rootByText(t, 'What is 17 * 23')
+      if (lastMsg(req).role === 'tool') return reply('Replied in the thread.')
+      if ((lastMsg(req).content ?? '').includes('and times 2'))
+        return callTools([{ name: 'chat.reply', args: { threadId: `mp:${rootId}`, text: '782.' } }])
+      return callTools([{ name: 'chat.reply', args: { threadId: rootId, text: '391.' } }])
+    }
+    t = await make({ script })
+    const s = t.a.services
+    const requests = await requestsChannel(t)
+    const root = await post(t, requests, 'What is 17 * 23?')
+    await quiet(t)
+    const reqId = await requestSessionId(t)
+    expect((await s.sessions.require(reqId)).data.title).toBe('#requests: What is 17 * 23?')
+
+    await post(t, requests, 'and times 2?', root.id)
+    await quiet(t)
+    // Only one request session: the follow-up did not become a new request.
+    expect(await s.sessions.children((await s.routerSessionFor())!)).toHaveLength(1)
+    const runs = await s.sessions.runs({ sessionId: reqId })
+    expect(runs.map((r) => [r.data.state, r.data.mode])).toEqual([
+      ['completed', 'continuing'],
+      ['completed', 'continuing'],
+    ])
+    const followUp = await s.rawEvents.require(runs[1]!.data.cause.eventId!)
+    expect((followUp.data as any).routing.deliveries.map((d: any) => d.reason)).toEqual(['subscription'])
+    // The second run saw the first exchange: the conversation was committed to the session.
+    const history = await s.sessions.history(reqId)
+    expect(history.filter((e) => e.kind === 'event')).toHaveLength(2)
+    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
+    expect(thread.body.replies.map((m: any) => m.data.text)).toEqual(['391.', 'and times 2?', '782.'])
+  })
+
   it('1. a request in #requests is routed to the router, which forks a worker; the reply comes back to the worker', async () => {
     let t!: TestApp
     const script = async (req: ModelRequest): Promise<ScriptResult> => {
@@ -156,7 +211,8 @@ export function scenarioSuite(backend: Backend) {
     await quiet(t)
 
     const s = t.a.services
-    const routerId = (await s.routerSessionFor())!
+    const routerId = await requestSessionId(t)
+    expect((await s.sessions.require(routerId)).data.parent?.sessionId).toBe(await s.routerSessionFor())
     const routerRuns = await s.sessions.runs({ sessionId: routerId })
     expect(routerRuns).toHaveLength(1)
     expect(routerRuns[0]!.data.state).toBe('completed')
@@ -363,7 +419,7 @@ export function scenarioSuite(backend: Backend) {
     await post(t, await requestsChannel(t), 'LOOP over the three items')
     await quiet(t)
     const s = t.a.services
-    const routerId = (await s.routerSessionFor())!
+    const routerId = await requestSessionId(t)
     const [parentRun] = await s.sessions.runs({ sessionId: routerId })
     expect(parentRun!.data.state).toBe('completed')
     expect(parentRun!.data.result?.output).toBe('All three children are done.')
@@ -380,8 +436,11 @@ export function scenarioSuite(backend: Backend) {
     expect((wake!.content as any).text).toContain('done: gamma')
 
     const tree = await t.req('GET', `/api/sessions/${routerId}/tree`)
-    expect(tree.body.children.map((c: any) => c.origin)).toEqual(['loop', 'loop', 'loop'])
-    expect(tree.body.children[0].loop).toMatchObject({ of: 3 })
+    // The tree starts at the router context; the request's fork holds the loop.
+    expect(tree.body.children.map((c: any) => c.origin)).toEqual(['fork'])
+    const loop = tree.body.children[0].children
+    expect(loop.map((c: any) => c.origin)).toEqual(['loop', 'loop', 'loop'])
+    expect(loop[0].loop).toMatchObject({ of: 3 })
   })
 
   it('4. the checklist gate keeps a run going until required items are checked with evidence', async () => {
@@ -401,7 +460,7 @@ export function scenarioSuite(backend: Backend) {
     await post(t, await requestsChannel(t), 'Please do the checklist thing')
     await quiet(t)
     const s = t.a.services
-    const [run] = await s.sessions.runs({ sessionId: (await s.routerSessionFor())! })
+    const [run] = await s.sessions.runs({ sessionId: await requestSessionId(t) })
     expect(run!.data.state).toBe('completed')
     expect(run!.data.result?.output).toBe('Now it is really done.')
     const history = await s.sessions.runHistory(run!.id)
@@ -460,12 +519,11 @@ export function scenarioSuite(backend: Backend) {
       },
     })
     const s = t.a.services
-    const routerId = (await s.routerSessionFor())!
     const requests = await requestsChannel(t)
     const finished = async (n: number) =>
       until(
         async () => {
-          const rs = await s.sessions.runs({ sessionId: routerId })
+          const rs = await requestRuns(t)
           return rs.length >= n && rs.every((r) => ['completed', 'failed'].includes(r.data.state)) ? rs : null
         },
         'runs to finish',
@@ -504,7 +562,7 @@ export function scenarioSuite(backend: Backend) {
     await s.usage.limits.set({ target: { type: 'employee', id: employee.id }, maxTokens: 1000, period: 'run' })
     await post(t, await requestsChannel(t), 'Something expensive')
     await quiet(t)
-    const [run] = await s.sessions.runs({ sessionId: (await s.routerSessionFor())! })
+    const [run] = await s.sessions.runs({ sessionId: await requestSessionId(t) })
     expect(run!.data.state).toBe('paused')
     expect(run!.data.pauseReason).toBeTruthy()
     const inbox = await t.req('GET', '/api/inbox')

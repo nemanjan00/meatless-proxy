@@ -115,11 +115,20 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
         employeeId: employee.id,
         match: { source: 'chat', type: 'message.posted', where: { 'payload.channelId': requestsId } },
         target: { type: 'router' },
+        // Each request gets its own fork of the router context: it starts out knowing how to take
+        // requests, keeps the conversation (continuing), and follow-ups in the thread come back to it.
+        fork: true,
+        mode: 'continuing',
       },
       actor,
     )
     await s.chat.updateChannel(requestsId, { contextSessionId: routerSessionId }, actor)
     created = true
+  }
+
+  if (!trigger.data.fork) {
+    // Deployments bootstrapped before requests got their own fork.
+    trigger = await s.events.triggers.update(trigger.id, { fork: true, mode: 'continuing' }, actor)
   }
 
   await defaultWebContact(s)

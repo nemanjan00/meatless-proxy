@@ -162,28 +162,31 @@ describe('sessions and runs', () => {
     const post = await t.req('POST', `/api/chat/channels/${requestsId}/messages`, { text: 'hello router' })
     expect(post.status).toBe(201)
     await quiet(t)
+    // The request runs in its own fork of the router context.
+    const reqId = (await t.a.services.sessions.children(routerId))[0]!.id
     const list = await t.req('GET', `/api/sessions?employeeId=${employeeId}&status=active,waiting`)
-    const row = list.body.items.find((x: any) => x.session.id === routerId)
+    const row = list.body.items.find((x: any) => x.session.id === reqId)
     expect(row).toMatchObject({ employee: { id: employeeId, name: 'Meatless' }, runState: 'completed', children: 0 })
     expect(row.tokens.calls).toBeGreaterThan(0)
 
-    const detail = await t.req('GET', `/api/sessions/${routerId}`)
-    expect(detail.body).toMatchObject({ session: { id: routerId }, employee: { name: 'Meatless' }, activeRun: null })
+    const detail = await t.req('GET', `/api/sessions/${reqId}`)
+    expect(detail.body).toMatchObject({ session: { id: reqId }, employee: { name: 'Meatless' }, activeRun: null })
     expect(detail.body.checklist?.data.items ?? []).toEqual([])
     expect(detail.body.tokens.total).toBeGreaterThan(0)
 
-    const history = await t.req('GET', `/api/sessions/${routerId}/history`)
+    const history = await t.req('GET', `/api/sessions/${reqId}/history`)
     expect(history.body[0]).toMatchObject({ kind: 'system', parent: null })
+    // A continuing run: its work is committed to the request session's history.
+    expect(history.body.map((e: any) => e.kind)).toEqual(['system', 'event', 'assistant'])
     const tree = await t.req('GET', `/api/sessions/${routerId}/tree`)
-    expect(tree.body).toMatchObject({ id: routerId, origin: 'root', children: [], employee: { name: 'Meatless' } })
+    expect(tree.body).toMatchObject({ id: routerId, origin: 'root', employee: { name: 'Meatless' } })
+    expect(tree.body.children.map((c: any) => [c.id, c.origin])).toEqual([[reqId, 'fork']])
 
-    const runs = await t.req('GET', `/api/sessions/${routerId}/runs`)
-    expect(runs.body[0].data).toMatchObject({ state: 'completed', mode: 'ephemeral' })
+    const runs = await t.req('GET', `/api/sessions/${reqId}/runs`)
+    expect(runs.body[0].data).toMatchObject({ state: 'completed', mode: 'continuing' })
     const runId = runs.body[0].id
-    const entryTree = await t.req('GET', `/api/sessions/${routerId}/entry-tree`)
+    const entryTree = await t.req('GET', `/api/sessions/${reqId}/entry-tree`)
     expect(entryTree.body.runs.map((r: any) => r.id)).toContain(runId)
-    // The ephemeral run's entries are in the entry tree, but not in the committed history.
-    expect(entryTree.body.entries.length).toBeGreaterThan(history.body.length)
 
     const runHistory = await t.req('GET', `/api/runs/${runId}/history`)
     expect(runHistory.body.map((e: any) => e.kind)).toEqual(['system', 'event', 'assistant'])
@@ -209,7 +212,7 @@ describe('sessions and runs', () => {
     expect(ev.body.deliveries[0].data).toMatchObject({ sessionId: fork.body.id, rule: 'session_tag', runId: sent.body.runId })
     expect((await t.req('POST', `/api/sessions/${fork.body.id}/message`, {})).status).toBe(400)
     const tree = await t.req('GET', `/api/sessions/${routerId}/tree`)
-    expect(tree.body.children.map((c: any) => [c.id, c.origin])).toEqual([[fork.body.id, 'fork']])
+    expect(tree.body.children.map((c: any) => [c.id, c.origin])).toContainEqual([fork.body.id, 'fork'])
     const lineage = await t.req('GET', `/api/lineage/${fork.body.id}`)
     expect(lineage.body.focus).toBe(fork.body.id)
     expect(lineage.body.edges).toEqual(
