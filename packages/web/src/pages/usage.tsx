@@ -1,12 +1,13 @@
 import type { UsageFilter, UsageGroupBy, UsageRow } from '@mp/api'
 import { ChartBar } from 'lucide-react'
 import { useMemo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { NavLink, useNavigate, useSearchParams } from 'react-router'
 import { type DataColumn, DataTable } from '@/components/data-table.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { BreakdownBars, UsageArea } from '@/components/usage-charts.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { formatCostOf, formatNumber, formatTokens, NO_PRICING, unpriced } from '@/lib/format.ts'
 import { fillSeries } from '@/lib/usage-series.ts'
@@ -43,6 +44,7 @@ export function UsagePage() {
   const group = (params.get('group') as UsageGroupBy) ?? 'session'
   const { currentId } = useEmployees()
   const navigate = useNavigate()
+  const admin = useAuth().can('admin')
   // Round to the minute so the filter (and the load) is stable across renders.
   const since = useMemo(
     () => new Date(Math.floor(Date.now() / 60_000) * 60_000 - range.hours * 3_600_000).toISOString(),
@@ -160,7 +162,23 @@ export function UsagePage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="usage-totals">
             {[
               ['Tokens', formatTokens(totals.total), `${formatTokens(totals.input)} in · ${formatTokens(totals.output)} out`],
-              unpriced(totals) ? ['Cost', '—', NO_PRICING] : ['Cost', formatCostOf(totals), `${range.label}`],
+              unpriced(totals)
+                ? [
+                    'Cost',
+                    '—',
+                    <>
+                      {NO_PRICING}
+                      {admin && (
+                        <>
+                          {' · '}
+                          <NavLink to="/settings/pricing" className="text-[#828fff] hover:underline">
+                            set prices
+                          </NavLink>
+                        </>
+                      )}
+                    </>,
+                  ]
+                : ['Cost', formatCostOf(totals), `${range.label}`],
               [
                 'Model calls',
                 formatNumber(totals.calls),
@@ -172,7 +190,7 @@ export function UsagePage() {
                 `${formatTokens(totals.cached)} cached input`,
               ],
             ].map(([k, v, sub]) => (
-              <div key={k} className="rounded-xl border bg-card px-4 py-3">
+              <div key={String(k)} className="rounded-xl border bg-card px-4 py-3">
                 <div className="text-micro text-fg-tertiary">{k}</div>
                 <div className="mt-0.5 text-title2 font-semibold tabular-nums">{v}</div>
                 <div className="text-micro text-fg-quaternary">{sub}</div>

@@ -76,6 +76,15 @@ export interface RunnerOptions {
   projectOf?: (session: Session) => Promise<string | undefined>
   /** Model calls per run before it pauses. Default 60. */
   maxSteps?: number
+  /** Wall-clock time a run may work before it pauses, when `limitsFor` doesn't say. Default: none. */
+  maxWallMs?: number
+  /**
+   * The limits of a run, read before it starts and before every model call (e.g. from `@mp/usage`):
+   * its step and wall-clock limits, and how many runs its employee may have working at once.
+   */
+  limitsFor?: (run: Run, session: Session) => Promise<RunLimits>
+  /** How long a run held back by its employee's concurrency cap waits before it is tried again. Default 3000. */
+  concurrencyRetryMs?: number
   /** Times `beforeFinish` may block before the run pauses for a person. Default 3. */
   maxFinishBlocks?: number
   maxTokens?: number
@@ -89,6 +98,14 @@ export interface RunnerOptions {
    * or its bytes changed (the model then sees "[image no longer available]").
    */
   loadImage?: (ref: ImageRef) => Promise<LoadedImage | null>
+}
+
+/** Limits of one run. Missing fields fall back to the runner's options. */
+export interface RunLimits {
+  maxSteps?: number
+  maxWallMs?: number
+  /** Runs of the same employee working (`running`) at once; a run over it stays queued and is tried again. */
+  maxConcurrentRuns?: number
 }
 
 export type ExecuteOutcome =
@@ -118,6 +135,18 @@ export function createRunner(opts: RunnerOptions): Runner {
   const baseLogger = opts.logger ?? silentLogger
   const maxSteps = opts.maxSteps ?? 60
   const maxFinishBlocks = opts.maxFinishBlocks ?? 3
+  const noLimits: RunLimits = {}
+  const limitsOf = async (run: Run, session: Session): Promise<RunLimits> =>
+    opts.limitsFor ? await opts.limitsFor(run, session) : noLimits
+  /** How long the run has been working: earlier work plus the time since it last started. */
+  const activeMs = (run: Run) => {
+    const since = run.data.runningSince ?? run.data.startedAt
+    return (run.data.activeMs ?? 0) + (since ? Math.max(0, clock.now() - Date.parse(since)) : 0)
+  }
+  const minutes = (ms: number) => {
+    const m = Math.round(ms / 60_000)
+    return m < 1 ? `${Math.round(ms / 1000)} seconds` : m === 1 ? '1 minute' : `${m} minutes`
+  }
   const emit = (topic: string, payload: unknown) => opts.bus?.publish(topic, payload)
 
   const enqueue: Runner['enqueue'] = async (runId, o = {}) => {
@@ -358,8 +387,26 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
     let resumed = false
     if (run.data.state === 'queued') {
+      // An employee over its concurrency cap: the run waits in the queue and is tried again.
+      const cap = opts.limitsFor ? (await limitsOf(run, await sessions.require(run.data.sessionId))).maxConcurrentRuns : undefined
+      if (cap !== undefined) {
+        const working = await sessions.runs({ employeeId: run.data.employeeId, state: 'running', limit: cap + 1 })
+        if (working.length >= cap) {
+          await enqueue(runId, { delayMs: opts.concurrencyRetryMs ?? 3000, priority: run.data.priority })
+          emit('run.deferred', { runId, employeeId: run.data.employeeId, working: working.length, max: cap })
+          return { status: 'skipped', runId, reason: `${working.length} runs of this employee are working (limit ${cap})` }
+        }
+      }
+      const limitPaused = run.data.limitPaused
       try {
-        run = await sessions.transition(runId, 'queued', 'running', run.data.startedAt ? {} : { startedAt: clock.iso() })
+        run = await sessions.transition(runId, 'queued', 'running', {
+          ...(run.data.startedAt ? {} : { startedAt: clock.iso() }),
+          runningSince: clock.iso(),
+          // Resumed after a step or wall-clock pause: a fresh allowance.
+          ...(limitPaused === 'wall' ? { activeMs: 0 } : {}),
+          ...(limitPaused === 'steps' ? { stepsFrom: run.data.steps } : {}),
+          ...(limitPaused ? { limitPaused: undefined } : {}),
+        })
       } catch (err) {
         if (isMpError(err, 'conflict')) return { status: 'skipped', runId, reason: 'claimed by another worker' }
         throw err
@@ -400,7 +447,11 @@ export function createRunner(opts: RunnerOptions): Runner {
     try {
       for (;;) {
         run = await sessions.requireRun(runId)
-        if (run.data.state !== 'running') return { status: 'paused', runId, reason: `run is ${run.data.state}` }
+        if (run.data.state !== 'running') {
+          // Paused from outside (a person, the kill switch): keep the time it worked.
+          if (run.data.state === 'paused') await sessions.updateRun(runId, { activeMs: activeMs(run) }).catch(() => {})
+          return { status: 'paused', runId, reason: `run is ${run.data.state}` }
+        }
 
         // Finish tool calls left open by a crash or by a suspend in the middle of several calls.
         let history = await sessions.runHistory(runId)
@@ -421,6 +472,7 @@ export function createRunner(opts: RunnerOptions): Runner {
             continue
           }
           if (c.suspend) {
+            await sessions.updateRun(runId, { activeMs: activeMs(run) })
             const suspended = await sessions.suspend(runId, c.suspend)
             await scheduleTimers(suspended, c.suspend)
             // The wait may already be satisfied (children finished very fast).
@@ -451,15 +503,31 @@ export function createRunner(opts: RunnerOptions): Runner {
           if (items.length) history = await sessions.runHistory(runId)
         }
 
-        if (run.data.steps >= maxSteps) {
-          await sessions.transition(runId, 'running', 'paused', { pauseReason: `reached ${maxSteps} model calls in one run` })
+        const limits = await limitsOf(run, session)
+        const stepLimit = limits.maxSteps ?? maxSteps
+        if (run.data.steps - (run.data.stepsFrom ?? 0) >= stepLimit) {
+          await sessions.transition(runId, 'running', 'paused', {
+            pauseReason: `reached ${stepLimit} model calls in one run. Resuming gives it another ${stepLimit}.`,
+            limitPaused: 'steps',
+            activeMs: activeMs(run),
+          })
+          emit('run.paused', { runId, reason: 'max steps' })
           return { status: 'paused', runId, reason: 'max steps' }
+        }
+        // Wall clock: checked between steps, so a tool call in progress is never cut off.
+        const wallLimit = limits.maxWallMs ?? opts.maxWallMs
+        const worked = activeMs(run)
+        if (wallLimit !== undefined && worked >= wallLimit) {
+          const reason = `worked for ${minutes(worked)}, over the limit of ${minutes(wallLimit)} per run. Resuming gives it another ${minutes(wallLimit)}.`
+          await sessions.transition(runId, 'running', 'paused', { pauseReason: reason, limitPaused: 'wall', activeMs: worked })
+          emit('run.paused', { runId, reason })
+          return { status: 'paused', runId, reason: 'wall clock' }
         }
 
         const messages = renderMessages(history)
         const pause = await hooks.decide(beforeModelCall, { run, session, messages, step: run.data.steps })
         if (pause) {
-          await sessions.transition(runId, 'running', 'paused', { pauseReason: pause.pause })
+          await sessions.transition(runId, 'running', 'paused', { pauseReason: pause.pause, activeMs: activeMs(run) })
           emit('run.paused', { runId, reason: pause.pause })
           return { status: 'paused', runId, reason: pause.pause }
         }
@@ -542,7 +610,10 @@ export function createRunner(opts: RunnerOptions): Runner {
         if (block) {
           const n = countBlock ? countBlock() + 1 : maxFinishBlocks + 1
           if (n > maxFinishBlocks) {
-            await sessions.transition(runId, 'running', 'paused', { pauseReason: `could not finish: ${block.block}` })
+            await sessions.transition(runId, 'running', 'paused', {
+              pauseReason: `could not finish: ${block.block}`,
+              activeMs: activeMs(r),
+            })
             return { status: 'paused', runId, reason: block.block }
           }
           await sessions.append(runId, {

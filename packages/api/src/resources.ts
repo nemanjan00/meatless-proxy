@@ -257,21 +257,7 @@ export interface MemoryData extends Record<string, unknown> {
   scope?: string
 }
 
-/** Kind `limit`: a set of limits for a scope (deployment, employee, template, procedure or session). */
-export interface LimitData extends Record<string, unknown> {
-  name?: string
-  scope: { type: 'deployment' | 'employee' | 'template' | 'procedure' | 'session'; id?: string }
-  forkDepth?: number
-  fanOut?: number
-  concurrentSessions?: number
-  tokensPerRun?: number
-  tokensPerSession?: number
-  tokensPerTree?: number
-  tokensPerEmployeePerDay?: number
-  costPerDay?: number
-  wallClockPerRunSec?: number
-  aiToAiStreak?: number
-}
+// Kind `limit`: `LimitData` is in ./limits.ts.
 
 // ─── Sessions and runs ──────────────────────────────────────────────────────
 

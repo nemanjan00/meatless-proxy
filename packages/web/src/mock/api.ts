@@ -50,6 +50,7 @@ import { createMockMcpApi } from './mcp.ts'
 import { createMockAttachmentsApi } from './attachments.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
+import { createMockLimitsApi } from './limits.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
 import { mockListExtras, mockQuerySessions } from './session-list.ts'
@@ -1259,6 +1260,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Notification preferences (./notifications.ts).
     ...createMockNotificationsApi({ delay }),
+
+    // Limits and pricing (./limits.ts).
+    ...createMockLimitsApi({ db, iso, delay, write, get, all }),
 
     // Who is working on chat threads, and a small simulation when you post (./chat-activity.ts).
     channelActivity: chatActivity.channelActivity,

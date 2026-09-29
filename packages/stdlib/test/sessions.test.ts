@@ -140,10 +140,17 @@ describe('sessions.loop', () => {
     expect(t.enqueued).toHaveLength(0)
   })
 
-  it('enforces the concurrent sessions limit', async () => {
+  it("doesn't refuse a loop over the concurrency cap: the runner queues the extra runs", async () => {
     const t = await stack({ defaults: { maxConcurrentSessions: 2 } })
-    const r = await t.call('sessions.loop', { items: [1, 2], instruction: 'x' })
-    expect(JSON.stringify(r.output)).toContain('running sessions 3 is over the limit of 2')
+    const o = await t.out('sessions.loop', { items: [1, 2, 3], instruction: 'x' })
+    expect(o.children).toHaveLength(3)
+    expect(t.enqueued).toHaveLength(3)
+  })
+
+  it('takes fork limits from the usage defaults', async () => {
+    const t = await stack({ usageDefaults: { maxFanOut: 2 } })
+    const r = await t.call('sessions.loop', { items: [1, 2, 3], instruction: 'x' })
+    expect(JSON.stringify(r.output)).toContain('fan-out 3 is over the limit of 2')
   })
 
   it('realTasks without a task system explains that it is not configured', async () => {

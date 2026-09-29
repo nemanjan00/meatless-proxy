@@ -14,7 +14,7 @@ import { createSessions } from '@mp/sessions'
 import { createSkills } from '@mp/skills'
 import { memoryStore } from '@mp/store'
 import { createToolRegistry, type ToolContext } from '@mp/tools'
-import { createUsage } from '@mp/usage'
+import { createUsage, type LimitDefaults } from '@mp/usage'
 import { DEFAULT_TOOLSET, registerStdlib, type StdlibDeps, type WorktreeFs } from '../src/index.ts'
 
 export const REPO = 'https://github.com/acme/billing.git'
@@ -53,6 +53,8 @@ export interface StackOptions {
   /** The code.run sandbox (on a fake runtime whose kernels run JavaScript). Default on. */
   sandbox?: boolean
   defaults?: StdlibDeps['config']['defaults']
+  /** Deployment defaults of the usage service. */
+  usageDefaults?: LimitDefaults
   /** Replaces the default `enqueueRun` (which only records ids). */
   enqueueRun?: (runId: string) => Promise<void>
   /** Whether the model can see images (image.view). Default on. */
@@ -90,7 +92,7 @@ export async function stack(opts: StackOptions = {}) {
   const memory = createMemory({ records, clock })
   const skills = createSkills({ records })
   const checklists = createChecklists({ records, sessions, clock, bus })
-  const usage = createUsage({ records, clock, bus })
+  const usage = createUsage({ records, clock, bus, ...(opts.usageDefaults ? { defaults: opts.usageDefaults } : {}) })
   const git = fakeGitCache()
   const containers = fakeRuntime({ clock })
   const sandboxRuntime = fakeSandboxRuntime({ clock })

@@ -15,7 +15,8 @@ import type { Procedure, ProcedureData } from '@mp/directory'
 import type { Trigger } from '@mp/events'
 import type { Actor } from '@mp/store'
 import { type Context, Hono } from 'hono'
-import { principalOf } from '../auth/guard.ts'
+import { principalOf, viewerOf } from '../auth/guard.ts'
+import { ChatVisibility, PRIVATE_TITLE } from '../auth/visibility.ts'
 import { BadRequestError, jsonBody, requireString } from '../http/util.ts'
 import { actorOf } from '../http/views.ts'
 import type { Services } from '../services.ts'
@@ -215,7 +216,22 @@ export function procedureRoutes(s: Services): Hono {
     return c.json(items)
   })
 
-  app.get('/api/procedures/:id', async (c) => c.json(await views().detail(await requireProcedure(c.req.param('id')))))
+  app.get('/api/procedures/:id', async (c) => {
+    const detail = await views().detail(await requireProcedure(c.req.param('id')))
+    // Instances that came from a DM: their members only; admins see that they exist (src/auth/visibility.ts).
+    const vis = new ChatVisibility(s)
+    const viewer = viewerOf(principalOf(c))
+    const runs: Api.ProcedureRun[] = []
+    for (const r of detail.runs) {
+      const access = await vis.sessionAccess(viewer, await s.sessions.get(r.sessionId))
+      if (access === 'full') runs.push(r)
+      else if (access === 'redacted') {
+        const { outcome: _, ...rest } = r
+        runs.push({ ...rest, title: PRIVATE_TITLE, startedBy: { type: 'system', label: '' } })
+      }
+    }
+    return c.json({ ...detail, runs })
+  })
 
   // ── Creating ─────────────────────────────────────────────────────────────
 

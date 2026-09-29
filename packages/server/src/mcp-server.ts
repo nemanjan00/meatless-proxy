@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { attachmentsOf, type AuthorInfo, type ChatAuthor, type Message } from '@mp/chat'
 import { DeniedError, NotFoundError, errorMessage, isMpError, type BusMessage } from '@mp/core'
 import type { Contact, Employee } from '@mp/directory'
-import type { RunData } from '@mp/sessions'
+import type { Run, RunData } from '@mp/sessions'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
@@ -280,6 +280,8 @@ export class HarnessMcpServer {
       if (a.contact.data.kind !== 'agent') throw new DeniedError('join chat first (chat_join)')
       return a.contact
     }
+    /** The caller for the private-session rule: the person, and their joined agent (its own DMs). */
+    const viewer = () => ({ contactId: person, ...(session.agentId ? { also: [session.agentId] } : {}) })
     const canSee = async (contact: Contact, channelId: string) =>
       contact.data.kind === 'agent' ? agents.canSee(contact, channelId) : agents.vis.canSeeChannel(contact.id, channelId)
 
@@ -547,8 +549,9 @@ export class HarnessMcpServer {
         inputSchema: { id: z.string() },
       },
       safe(async ({ id }) => {
-        const x = await s.sessions.require(id)
-        const runs = await s.sessions.runs({ sessionId: id })
+        const x = await agents.vis.requireSession(viewer(), id)
+        const runs: Run[] = []
+        for (const r of await s.sessions.runs({ sessionId: id })) if (await agents.vis.canReadRun(viewer(), r)) runs.push(r)
         const last = runs.at(-1)
         return text({
           id: x.id,
@@ -571,8 +574,11 @@ export class HarnessMcpServer {
         inputSchema: { text: z.string().min(1), limit: z.number().int().min(1).max(50).optional() },
       },
       safe(async ({ text: q, limit }) => {
-        const res = await s.sessions.searchSessions(q, { limit: limit ?? 10 })
-        return text(res.items.map((x) => ({ id: x.id, title: x.data.title, slug: x.data.slug, status: x.data.status })))
+        const res = await s.sessions.searchSessions(q, { limit: 200 })
+        const shown = []
+        for (const x of res.items)
+          if (shown.length < (limit ?? 10) && (await agents.vis.canReadSession(viewer(), x))) shown.push(x)
+        return text(shown.map((x) => ({ id: x.id, title: x.data.title, slug: x.data.slug, status: x.data.status })))
       }),
     )
 
@@ -621,16 +627,19 @@ export class HarnessMcpServer {
           orderBy: { field: 'createdAt', dir: 'desc' },
           limit: 20,
         })
-        const sessionIds = new Set(runs.items.map((r) => r.data.sessionId))
+        const mine: Run[] = []
+        for (const r of runs.items) if (await agents.vis.canReadRun(viewer(), r as Run)) mine.push(r as Run)
+        const sessionIds = new Set(mine.map((r) => r.data.sessionId))
         for (const id of ids)
           for (const l of await s.records.linked({ kind: 'contact', id }, { kind: 'session' })) sessionIds.add(l.record.id)
         const sessions = []
         for (const id of sessionIds) {
           const x = await s.sessions.get(id)
-          if (x) sessions.push({ id: x.id, title: x.data.title, slug: x.data.slug, status: x.data.status })
+          if (x && (await agents.vis.canReadSession(viewer(), x)))
+            sessions.push({ id: x.id, title: x.data.title, slug: x.data.slug, status: x.data.status })
         }
         return text({
-          runs: runs.items.map((r) => ({
+          runs: mine.map((r) => ({
             id: r.id,
             sessionId: r.data.sessionId,
             state: r.data.state,
@@ -731,6 +740,8 @@ export class HarnessMcpServer {
         mine = links.some((l) => (me.has(l.from.id) || me.has(l.to.id)) && run.data.mode === 'continuing')
       }
       if (!mine) return
+      const reader = { contactId, ...(session.agentId ? { also: [session.agentId] } : {}) }
+      if (!(await this.agents.vis.canReadRun(reader, run))) return
       const x = await s.sessions.get(run.data.sessionId)
       const title = x?.data.title ?? run.data.sessionId
       if (to === 'paused') {

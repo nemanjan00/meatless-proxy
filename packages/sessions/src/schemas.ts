@@ -86,6 +86,10 @@ export const runSchema: KindSchema = {
     { name: 'result', type: 'json' },
     { name: 'startedAt', type: 'timestamp' },
     { name: 'endedAt', type: 'timestamp' },
+    { name: 'runningSince', type: 'timestamp' },
+    { name: 'activeMs', type: 'number' },
+    { name: 'limitPaused', type: 'enum', values: ['steps', 'wall'] },
+    { name: 'stepsFrom', type: 'number' },
     { name: 'committed', type: 'json' },
   ],
 }

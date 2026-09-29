@@ -347,6 +347,25 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   chat. The WebSocket and the MCP server require the same sign-in.
 - **What people see** follows the confidentiality rules: DMs only for their
   members, and secrets never.
+- **Private sessions.** Work that came from a direct message is private to the
+  DM's members, like the DM itself: a session whose work was caused by a DM
+  event (a harness chat DM, or an integration DM such as a Slack `im`), one
+  subscribed or linked to a DM thread, or a fork or child of a private session.
+  Only the DM's members (for an integration DM, the person who wrote it) can
+  read it: its detail, history, entries, runs, tree, lineage, checklist and
+  document, in search, on the live stream and through the MCP server. Anyone
+  else gets 404. **Admins are refused too**; they see that a private session
+  exists (a row with a redacted title in the sessions list, and a redacted
+  detail), nothing it holds. A router context is shared by many requests, so it
+  isn't hidden as a whole: the entries a DM request added to it (the request and
+  its decision line) are redacted for everyone outside that DM. DM events of
+  any source are hidden from the events list and detail the same way. Usage
+  numbers include private sessions; their titles are redacted. The employee's
+  own tools are not affected.
+- **Employee files** are private: admins can list, read and change any
+  employee's files (they manage them); everyone else sees only what the
+  employee [shared](#employee-filesystem) with them, and changes only what was
+  shared with them read-write (and only as a member or admin).
 - **Bootstrap.** The first start creates an admin contact (with
   `ADMIN_EMAIL`) and prints a one-time admin sign-in link to the log, again on
   each start until an admin has signed in.
@@ -567,21 +586,35 @@ Postgres.
   Uploads nobody attached are deleted after about an hour.
 - **Download:** `GET /api/chat/attachments/:id`, only for someone who can see
   the message's channel (a DM's members; 404 for anyone else, admins
-  included). Served with the type sniffed from the bytes,
-  `X-Content-Type-Options: nosniff`, `Content-Disposition: inline` (images
-  only; `?download=1` for `attachment`) and a `default-src 'none'; sandbox`
-  CSP of its own. There are no thumbnails: the browser scales the image.
+  included). Always with `X-Content-Type-Options: nosniff` and a
+  `default-src 'none'; sandbox` CSP of its own. Images are served with their
+  sniffed type and `Content-Disposition: inline` (`?download=1` for
+  `attachment`); there are no thumbnails: the browser scales the image. Every
+  other file is **always a download** (`Content-Disposition: attachment` with
+  a safe file name, never inline), with its own type, except anything a
+  browser could run or render (HTML, SVG, XML, JavaScript, CSS, PDF), which is
+  served as `application/octet-stream`.
+- **Text previews:** `GET /api/chat/attachments/:id/text` (the same
+  visibility) returns `{ attachment, text, truncated }` for a text file, at
+  most 256 KB; 422 for images and binary files. The web UI shows text files up
+  to 256 KB as a collapsed code block of the first lines, expandable, rendered
+  as plain text (never HTML).
 - **Deleting a message** deletes its attachments.
-- **Employees see them lazily.** The chat event of a message with images names
-  them, one line each: `[image: chart.png 800x600, attachment att_…]`, or with
-  a [saved description](#image-descriptions) when one exists:
-  `[image: chart.png 800x600, attachment att_…: "A bar chart of disk use …"]`.
-  The image isn't included: the employee calls `image.view` when it needs to
-  look at details itself, which keeps token costs down.
+- **Employees see them lazily.** The chat event of a message with attachments
+  names them, one line each: `[image: chart.png 800x600, attachment att_…]`,
+  or with a [saved description](#image-descriptions) when one exists:
+  `[image: chart.png 800x600, attachment att_…: "A bar chart of disk use …"]`;
+  a file as `[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment att_…]`.
+  The content isn't included: the employee calls `image.view` for an image or
+  `chat.attachment_text` for a text file when it needs it, which keeps token
+  costs down.
+- **Search** matches attachment names (and images' descriptions and visible
+  text).
 
 | Tool        | What it does |
 |-------------|--------------|
-| image.view  | `{ attachment?: id, path?: string, describe_only?: boolean }` → the image, attached to the result, next to its saved description and visible text: an attachment of a message in a channel the employee can see (a DM only if the employee, its contact or one of its sessions is a member), or an image in its filesystem (own files, or shared with it). `describe_only: true` returns only the description and visible text (cheap, no image in context), and the tool's description recommends it first. Read-only; tagged `vision` (see [model calls](#model-calls)). |
+| image.view  | `{ attachment?: id, path?: string, describe_only?: boolean }` → the image, attached to the result, next to its saved description and visible text: an attachment of a message in a channel the employee can see (a DM only if the employee, its contact or one of its sessions is a member), or an image in its filesystem (own files, or shared with it). `describe_only: true` returns only the description and visible text (cheap, no image in context), and the tool's description recommends it first. A file attachment is refused, pointing at `chat.attachment_text`. Read-only; tagged `vision` (see [model calls](#model-calls)). |
+| chat.attachment_text | `{ attachment: id, maxChars? }` → a text attachment's content (default 20,000 characters, at most 100,000, from the first 256 KB; `truncated` when cut), with the same visibility as `image.view`, marked as information from whoever attached it. Images and binary files are refused. Read-only. |
 
 #### Image descriptions
 
@@ -896,13 +929,15 @@ harness. That's the AI-to-AI path from the [goals](#goals).
 
 - **Tools:** post in harness chat, react, ask an employee (`@employee`),
   search chat, look up sessions, read and search documents, and check on work
-  the caller started. Images: `chat_read`, `chat_search` and deliveries list a
-  message's attachments (with their saved `description` and `visibleText`),
-  `chat_attachment { id, describe_only? }` returns one as MCP image content
-  with its description, or only the description with `describe_only` (made
-  if there is none yet) (if the caller can see its channel), and `chat_post` takes
-  `attachments: [{ name, mime, data }]` (base64), with the web upload's limits
-  and checks (a `mime` the bytes don't bear out is refused). They're scoped to what the connected contact may see and
+  the caller started. Attachments: `chat_read`, `chat_search` and deliveries list a
+  message's attachments (images with their saved `description` and `visibleText`),
+  `chat_attachment { id, describe_only? }` (if the caller can see its channel)
+  returns an image as MCP image content with its description, or only the
+  description with `describe_only` (made if there is none yet), a text file as
+  text content (at most 256 KB), and any other file as an embedded resource
+  (`{ type: 'resource', resource: { uri, mimeType, blob } }`, base64). `chat_post` takes
+  `attachments: [{ name, mime?, data }]` (base64) of any type, with the web
+  upload's limits and checks (an image `mime` the bytes don't bear out is refused). They're scoped to what the connected contact may see and
   ask for ([permissions](#permissions)): DMs only for their members, and a
   viewer's token reads and searches but doesn't post.
 - **Notifications out:** the server pushes MCP notifications to connected
@@ -1885,18 +1920,59 @@ task.
 
 #### Configurable limits
 
-Limits are set per deployment, and can be tightened per employee, template,
-procedure or session:
+Limits work without any configuration: every deployment starts with
+defaults, set by environment variables and changed by admins in
+**Settings → Limits**:
 
-- fork depth and fan-out (children per loop)
-- number of sessions running at once
-- tokens and cost, per run, per session, per tree, per employee and per period
-- wall-clock time per run and per session
-- messages between employees in one thread without a person taking part
-  (local AI agents connected over MCP count as AI, not as people)
+| Limit | Default |
+|-------|---------|
+| fork depth | 5 |
+| fan-out (children per loop) | 20 |
+| runs working at once, per employee (more wait in the queue) | 8 |
+| model calls per run | 60 (`MAX_STEPS`) |
+| wall-clock time a run works | 30 minutes |
+| tokens per employee per day | 5 million |
+| cost per employee per day | off (it needs prices) |
+| tokens and cost for the whole deployment per day | off |
+| messages between employees in one thread without a person | 20 |
 
-When a limit is reached, the work pauses and the relevant owner or requester is
-asked whether to continue. It is never silently dropped.
+(Local AI agents connected over MCP count as AI, not as people.)
+
+- **Overrides.** A limit record overrides the defaults for its target: the
+  whole deployment, every employee or one, every requester (the contact who
+  asked for the work) or one, a template, a procedure, a session or a tree.
+  For each value the most specific override wins (session, tree, procedure,
+  template, requester, employee, deployment; one naming an id beats one for
+  every one of its type). An override can also lift a limit ("no limit").
+- **Budgets** are tokens and cost, per run, per session, per tree, or per day
+  or month of their target: each employee, each requester, or the whole
+  deployment (UTC days and months). They're checked before every model call
+  in this order: run, session, tree, requester, employee, deployment. A cost
+  budget only counts models that have a price.
+- **Wall clock** counts the time a run spends working: waiting for children,
+  a timer, a person or a place in the queue doesn't count. It's checked
+  between steps, so a tool call in progress is never cut off.
+- **Runs at once** are capped when a run would start: a run over the cap
+  stays queued and starts when another of the employee's runs stops working.
+  Depth and fan-out are checked when a fork or loop is created; a loop that
+  would go over isn't started at all.
+- **Warnings.** At 80 % of a daily or monthly budget of an employee, a
+  requester or the deployment, one alert is posted in `#alerts` per budget per
+  period, tagging the employee's owner or the admins (and the requester, for
+  theirs). Another follows when it's used up.
+
+When a limit is reached, the work pauses with the reason and the relevant
+owner or requester is asked whether to continue. Resuming gives a run a fresh
+allowance of steps and wall-clock time; a used-up budget pauses new work
+again until the period ends or an admin raises it. It is never silently
+dropped.
+
+**Pricing.** Cost comes from a price per model (USD per million input,
+cached input and output tokens): a small built-in table of prices checked on
+the providers' official pricing pages (with the source and date next to each
+one), overridden by the `PRICING` variable, overridden by **Settings →
+Pricing**. A model without a price counts as $0, and the UI says "no pricing
+configured" and links to the editor.
 
 Open questions:
 
@@ -1905,6 +1981,8 @@ Open questions:
   (e.g. expected size)?
 - Does the supervisor check continuously, at run boundaries, or on a sample?
 - Is there a global kill switch that pauses all employees at once?
+- Should a budget that is used up pause runs already in progress at their next
+  step (as now), or only stop new ones?
 
 ### Triggers
 
@@ -2324,7 +2402,9 @@ All of these update live over the WebSocket.
   tokens, and the model used.
 - The UI shows usage per session, rolled up per session tree, per project, per
   contact (who requested the work), per template and over time. Cost is shown
-  next to the token counts.
+  next to the token counts, from the [pricing](#configurable-limits); a model
+  without a price shows "no pricing configured", with a link to Settings →
+  Pricing for admins.
 - Usage can be broken down to find what's expensive: which sessions, tools or
   steps used the most tokens.
 

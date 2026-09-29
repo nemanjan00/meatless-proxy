@@ -25,7 +25,8 @@ function Dir({
   dir: string
   depth: number
   selected: string | null
-  onSelect(p: string): void
+  /** With the permission of a file shared with you (people who aren't admins see only those). */
+  onSelect(p: string, permission?: 'read' | 'write'): void
 }) {
   const list = useLoad((a) => a.listFiles(employeeId, dir), [employeeId, dir])
   const [open, setOpen] = useState<Set<string>>(new Set(depth === 0 ? ['/notes'] : []))
@@ -42,7 +43,7 @@ function Dir({
                 if (n.has(f.path)) n.delete(f.path)
                 else n.add(f.path)
                 setOpen(n)
-              } else onSelect(f.path)
+              } else onSelect(f.path, f.shared?.permission)
             }}
             className={cn(
               'flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left hover:bg-secondary',
@@ -79,13 +80,13 @@ function Dir({
   )
 }
 
-function Editor({ employeeId, path }: { employeeId: string; path: string }) {
+function Editor({ employeeId, path, permission }: { employeeId: string; path: string; permission?: 'read' | 'write' }) {
   const api = useApi()
   const file = useLoad((a) => a.readFile(employeeId, path), [employeeId, path])
   const [draft, setDraft] = useState<string | null>(null)
   if (!file.data) return <LoadingRows rows={4} />
   const f = file.data
-  const readOnly = path.startsWith('/shared/')
+  const readOnly = path.startsWith('/shared/') || permission === 'read'
   const save = async (content: string) => {
     const next = await api.writeFile(employeeId, path, content, f.version)
     file.setData(next)
@@ -100,6 +101,7 @@ function Editor({ employeeId, path }: { employeeId: string; path: string }) {
           · v{f.version} · {formatDateTime(f.updatedAt)}
         </span>
         {readOnly && <span className="rounded-sm border px-1 text-tiny">shared · read-only</span>}
+        {permission === 'write' && <span className="rounded-sm border px-1 text-tiny">shared with you</span>}
       </div>
       {path.endsWith('.md') ? (
         <DocumentEditor value={f.content} onSave={readOnly ? undefined : save} />
@@ -134,6 +136,7 @@ export function FilesPage() {
   const [params, setParams] = useSearchParams()
   const employeeId = params.get('employee') ?? current?.id ?? employees[0]?.id ?? null
   const path = params.get('path')
+  const [permission, setPermission] = useState<'read' | 'write' | undefined>()
   const emp = employees.find((e) => e.id === employeeId)
   const set = (k: string, v: string) => {
     const n = new URLSearchParams(params)
@@ -167,14 +170,25 @@ export function FilesPage() {
                 </button>
               ))}
             </div>
-            <Dir key={employeeId} employeeId={employeeId} dir="/" depth={0} selected={path} onSelect={(p) => set('path', p)} />
+            <Dir
+              key={employeeId}
+              employeeId={employeeId}
+              dir="/"
+              depth={0}
+              selected={path}
+              onSelect={(p, perm) => {
+                setPermission(perm)
+                set('path', p)
+              }}
+            />
             <p className="mt-auto px-1 text-tiny text-fg-quaternary">
-              Private to {emp?.data.name ?? 'this employee'}'s sessions unless shared. Shared files appear under /shared.
+              Private to {emp?.data.name ?? 'this employee'}'s sessions and admins. You see what it shared with you; files others
+              shared with it appear under /shared (admins only).
             </p>
           </nav>
           <section className="min-w-0 flex-1 overflow-auto">
             {path ? (
-              <Editor key={`${employeeId}${path}`} employeeId={employeeId} path={path} />
+              <Editor key={`${employeeId}${path}`} employeeId={employeeId} path={path} permission={permission} />
             ) : (
               <EmptyState text="Pick a file to read or edit." />
             )}

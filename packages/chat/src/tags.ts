@@ -35,3 +35,16 @@ export function parseTags(text: string): ParsedTag[] {
   }
   return out
 }
+
+// "Meatless, …", "Hey meatless: …": a name at the very start, before a comma or colon.
+const ADDRESS_RE = /^\s*(?:(?:hey|hi|hello|ok|okay|thanks|thank you)[\s,!]+)?([A-Za-z][A-Za-z0-9_-]{1,40})\s*[,:]/i
+
+/**
+ * The name a message opens by addressing, without an `@`: `Meatless, save it as a file` gives
+ * `Meatless`. Callers decide what it resolves to (only employees count as tags, so that "Ana, …"
+ * between people stays plain chat unless Ana is an employee).
+ */
+export function addressedName(text: string): string | null {
+  const m = ADDRESS_RE.exec(stripCode(text))
+  return m ? m[1]! : null
+}

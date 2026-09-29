@@ -1,6 +1,7 @@
 import type { Access, ApiRecord, ContactData, CreatedApiToken, EmployeeData, SecretScope, TriggerData } from '@mp/api'
 import {
   Bell,
+  CircleDollarSign,
   CirclePause,
   CirclePlay,
   Copy,
@@ -25,7 +26,6 @@ import { Page, SectionTitle } from '@/components/page.tsx'
 import { StatusIcon } from '@/components/status-icon.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
-import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
@@ -38,6 +38,8 @@ import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 import { McpServers } from '@/components/mcp-servers.tsx'
 import { NotificationSettings } from '@/components/notification-settings.tsx'
+import { LimitsSettings } from '@/components/limits-settings.tsx'
+import { PricingSettings } from '@/components/pricing-settings.tsx'
 
 /** Settings sections; `admin` ones are hidden from everyone else (the server refuses them anyway). */
 const SECTIONS = [
@@ -47,6 +49,7 @@ const SECTIONS = [
   { key: 'mcp', label: 'MCP servers', icon: Server, admin: true },
   { key: 'triggers', label: 'Triggers', icon: Zap, admin: true },
   { key: 'limits', label: 'Limits', icon: Gauge, admin: true },
+  { key: 'pricing', label: 'Pricing', icon: CircleDollarSign, admin: true },
   { key: 'control', label: 'Kill switch', icon: Power, admin: true },
   { key: 'people', label: 'People and access', icon: UserCog, admin: true },
   { key: 'tokens', label: 'API tokens', icon: Ticket, admin: false },
@@ -477,27 +480,6 @@ function Triggers() {
   )
 }
 
-function Limits() {
-  const kinds = useLoad((a) => a.kinds(), [])
-  const list = useLoad((a) => a.listRecords('limit'), [])
-  const schema = kinds.data?.find((k) => k.kind === 'limit')
-  if (!schema || !list.data) return <LoadingRows />
-  if (!list.data.items.length) return <EmptyState text="No limits configured." />
-  return (
-    <div className="grid max-w-[900px] gap-4 lg:grid-cols-2">
-      {list.data.items.map((l) => (
-        <div key={l.id} className="rounded-xl border bg-card p-4">
-          <div className="mb-3 font-medium">{String(l.data.name ?? l.id)}</div>
-          <RecordPropertiesForm schema={schema} record={l} onSaved={list.reload} exclude={['name', 'scope']} />
-        </div>
-      ))}
-      <p className="text-micro text-fg-quaternary lg:col-span-2">
-        Reaching a limit pauses the work and asks the owner or requester whether to continue. It's never silently dropped.
-      </p>
-    </div>
-  )
-}
-
 function Control() {
   const api = useApi()
   const state = useLoad((a) => a.control(), [])
@@ -746,7 +728,8 @@ export function SettingsPage() {
         {allowed && section === 'integrations' && <Integrations />}
         {allowed && section === 'mcp' && <McpServers heading={false} />}
         {allowed && section === 'triggers' && <Triggers />}
-        {allowed && section === 'limits' && <Limits />}
+        {allowed && section === 'limits' && <LimitsSettings />}
+        {allowed && section === 'pricing' && <PricingSettings />}
         {allowed && section === 'control' && <Control />}
         {allowed && section === 'people' && <People />}
         {allowed && section === 'tokens' && <Tokens />}

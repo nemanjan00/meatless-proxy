@@ -220,3 +220,73 @@ describe('rebuilding a router context when the employee prompt changes', () => {
     expect(await refreshRouterPrompt(s, employee.id)).toBe(false)
   })
 })
+
+describe('one owner per thread', () => {
+  it('a second employee tagged into a thread follows it; untagged messages stay with the owner', async () => {
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        const called = (name: string) =>
+          req.messages.some((m) => m.tool_calls?.some((c) => c.function.name.replace(/__/g, '.') === name))
+        if (router && !called('sessions.create'))
+          return callTools([{ name: 'sessions.create', args: { title: 'Thread work', instruction: 'Handle it.' } }])
+        if (router && !called('sessions.commit'))
+          return callTools([{ name: 'sessions.commit', args: { summary: 'thread → started a session' } }])
+        return reply('ok')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script })
+    const s = t.a.services
+    const created = await t.req('POST', '/api/employees', { name: 'Vegan', personality: 'Reviewer.' })
+    expect(created.status).toBe(201)
+    const vegan = (await s.directory.employees.byHandle('vegan'))!
+    const general = (await s.chat.channelByName('general'))!.id
+    const root = await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless write a script' })
+    await settle(t)
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@vegan review it please', threadId: root.body.id })
+    await settle(t)
+    const subs = await s.events.subscriptions.forSubject({ system: 'mp', id: root.body.id })
+    const byEmployee = new Map<string, boolean>()
+    for (const x of subs) {
+      const e = (await s.sessions.require(x.data.sessionId)).data.employeeId
+      byEmployee.set(e, (byEmployee.get(e) ?? false) || !!x.data.primary)
+    }
+    console.log(
+      'SUBS',
+      vegan.id,
+      await Promise.all(
+        subs.map(async (x) => [
+          (await s.sessions.require(x.data.sessionId)).data.slug,
+          (await s.sessions.require(x.data.sessionId)).data.employeeId,
+          x.data.primary,
+        ]),
+      ),
+    )
+    const meatless = (await s.directory.employees.byHandle('meatless'))!.id
+    expect(byEmployee.get(meatless)).toBe(true)
+    expect(byEmployee.get(vegan.id)).toBe(false)
+    // An untagged follow-up is the owner's; addressing Vegan by name reaches Vegan.
+    const events = async () =>
+      (
+        await s.records.query<any>('event', {
+          where: { type: 'message.replied' },
+          orderBy: { field: 'createdAt', dir: 'desc' },
+          limit: 1,
+        })
+      ).items[0]
+    await t.req(
+      'POST',
+      `/api/chat/channels/${general}/messages`,
+      { text: 'thanks, one more thing', threadId: root.body.id },
+      { 'x-mp-skip': '1' },
+    )
+    const plain = await s.router.plan((await events())!)
+    const actors = async (plan: any[]) =>
+      Promise.all(plan.filter((d) => d.expectedToAct).map(async (d) => (await s.sessions.require(d.sessionId)).data.employeeId))
+    expect(await actors(plain)).toEqual([meatless])
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: 'Vegan, anything else?', threadId: root.body.id })
+    const named = await s.router.plan((await events())!)
+    expect(await actors(named)).toEqual([vegan.id])
+  })
+})

@@ -31,6 +31,7 @@ so the browser bundle stays free of Node code.
 - `GET /api/me`: who is signed in (`contactId`, `name`, `access`, `email?`, `via`: `session` or `token`); 401 when nobody is
 - Sign-in and tokens: `GET /api/auth/config` (public), `POST /api/auth/logout`, `GET|POST /api/auth/tokens`, `DELETE /api/auth/tokens/:id`, `POST /api/auth/links` (admins)
 - Usage: `GET /api/usage/totals|breakdown|series`
+- Limits and pricing (`src/limits.ts`, `LIMIT_ROUTES`, admins only, reading included): `GET /api/limits` (`LimitsOverview`: the defaults, the overrides, `scopes` with the effective caps and budgets of every employee, each employee and each requester with an override, and budget usage; `unpricedModels`), `POST /api/limits` (`LimitData`: `target { type: global|employee|contact|…, id? }`, caps, `maxTokens`/`maxCostUsd` with a `period`; `null` lifts a default), `PUT|DELETE /api/limits/:id`, `GET|PUT /api/pricing` (`PricingInfo`: `custom`, `env`, `builtin` tables and the models in use; `PUT { pricing }` replaces the custom prices)
 - Files: `GET /api/files/:employeeId`, `GET|PUT /api/files/:employeeId/content`
 - Secrets: `GET|PUT|DELETE /api/secrets` (names and scopes only; values are write-only)
 - Live previews: `GET /api/sessions/:id/preview` (`SessionPreview`: ports, status, running commit), `POST /api/previews/token` (`{ envId, port }` → `PreviewToken`, members); live topic `preview.commit` on `session:<id>`

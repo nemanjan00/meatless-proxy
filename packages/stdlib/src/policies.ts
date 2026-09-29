@@ -276,6 +276,7 @@ export function registerUsagePolicies(hooks: Hooks, deps: StdlibDeps): () => voi
     sessionId: session.id,
     rootSessionId: run.data.rootSessionId,
     runId: run.id,
+    ...(run.data.requesterId ? { requesterId: run.data.requesterId } : {}),
     ...(session.data.template ? { templateId: session.data.template.id } : {}),
     ...(typeof session.data.meta?.procedureId === 'string' ? { procedureId: session.data.meta.procedureId } : {}),
   })

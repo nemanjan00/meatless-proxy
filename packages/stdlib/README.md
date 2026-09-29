@@ -43,7 +43,8 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
   docs maintenance, session document (off by default), commit on stop, and the
   `git.push` tool gate. Returns an unregister function.
 - `registerUsagePolicies(hooks, deps)`: budgets (`beforeModelCall` pauses when
-  `usage.checkBudget` fails) and usage recording (`afterModelCall`).
+  `usage.checkBudget` fails, with the run's requester so per-requester budgets
+  apply) and usage recording (`afterModelCall`).
 - `registerRouterPolicies(hooks, deps, config?)`: the AI-to-AI streak limit on
   `router.beforeDeliver` (sessions and contacts of kind `ai` or `agent`, i.e. local agents, count as AI).
 - Helpers: `nodeWorktreeFs()`, `safeRelPath()`, `branchFor()`, `trailersFor()`,
@@ -115,11 +116,24 @@ Notes on behaviour:
   without `deps.vision.enabled` the runner doesn't offer it, and it answers
   "this model can't see images". It reports the size the model gets
   (`shownAs` when a PNG is downscaled to `vision.maxSide`) and refuses images
-  over `vision.maxBytes`. `chat.post` and `chat.reply` take `attachments:
-  [{ path }]` (`uploadFiles`: read with the employee's permissions, uploaded
-  to `deps.attachments` as the session, then posted); `chat.read` lists a
-  message's attachments as `[image: <name> <w>x<h>, attachment <id>]`. The
-  prompt has one line on this, the same whether vision is on or not.
+  over `vision.maxBytes`, and file attachments (pointing at
+  `chat.attachment_text`). `chat.post` and `chat.reply` take `attachments:
+  [{ path }]` of any file (`uploadFiles`: read with the employee's
+  permissions, uploaded to `deps.attachments` as the session, then posted);
+  `chat.read` lists a message's attachments as `[image: <name> <w>x<h>,
+  attachment <id>]` or `[file: <name> <size> <type>, attachment <id>]`.
+  `chat.attachment_text { attachment, maxChars? }` reads a text attachment
+  (same visibility as `image.view`; default 20,000 characters, at most
+  100,000, from the first 256 KB). The prompt has one line on this, the same
+  whether vision is on or not.
+- **Paths.** Every file path goes through `files.forEmployee`, which takes
+  `/work/files/<p>`, `/<p>` and `<p>` as one file (`employeePath` in
+  `@mp/files`); the fs, image, chat and code tool descriptions say so in one
+  sentence (`SANDBOX_PATHS_NOTE`).
+- **Repeats.** `chat.post` and `chat.reply` don't post the same text (and
+  attachment names) twice from one session in one thread (or at the top level
+  of one channel) within `DUPLICATE_WINDOW_MS` (2 minutes): they return
+  `{ duplicate: true, messageId, threadId, note }`.
   With `deps.describer` (an `ImageDescriber` from `@mp/chat`), images have
   saved descriptions: `image.view` makes one on the first look (per
   attachment, or per file's sha256) and returns it next to the image
@@ -136,8 +150,10 @@ Notes on behaviour:
 - **Forks** start "at the current point": the run's tip without the assistant
   message that asked for the fork. Runs are started with
   `cause: { type: 'fork' | 'loop', parentRunId }` and queued with
-  `deps.enqueueRun`. Fork limits: configured limits (`usage.limits.effective`)
-  win, `config.defaults` fill the gaps.
+  `deps.enqueueRun`. Fork limits (depth, fan-out): the usage service's
+  defaults overridden by limit records (`usage.limits.effective`), then
+  `config.defaults`. Runs working at once aren't refused at fork time: the
+  runner holds extra runs in the queue.
 - **`sessions.wait`** answers right away when the runs are already done;
   otherwise it returns a `suspend` control signal.
 - **Real forks** (`sessions.loop` with `realTasks`) call the tool named in

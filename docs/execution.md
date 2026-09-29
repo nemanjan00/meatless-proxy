@@ -352,8 +352,17 @@ stays the same across calls, runs and forks:
 ## Limits, pause and kill
 
 - **Budget ledger.** Every model call writes its `usage`. Before each model
-  call, the worker checks the budgets that apply (run, session, tree, employee,
-  period) against the ledger.
+  call, the worker checks the budgets that apply (run, session, tree, then
+  the day or month of the requester, the employee and the deployment) against
+  the ledger. Deployment defaults apply without configuration; limit records
+  override them per target, the most specific winning.
+- **Step and wall-clock limits.** Before each model call the worker also
+  checks the run's steps and the time it has worked (`activeMs` plus the time
+  since it last started running; waits, pauses and queue time don't count).
+  Over either, it pauses between steps, never in the middle of a tool call.
+  Resuming gives a fresh allowance.
+- **Runs at once.** A queued run whose employee already has its cap of runs
+  `running` isn't started: its job is re-queued with a short delay.
 - **Fork and loop checks.** Depth, fan-out and the number of sessions running
   at once are checked when a fork or loop is created. A loop that would go over
   the limit isn't started at all.
@@ -367,7 +376,7 @@ stays the same across calls, runs and forks:
   call or container job that's in progress. The global flag is the kill switch
   the spec asks about.
 - **Supervisor hooks.** Lifecycle events (a run finishing, a tree growing past
-  *n* sessions, budgets at 50 % and 80 %, AI-to-AI streaks, uncertain effects,
+  *n* sessions, budgets at 80 % (also posted in `#alerts`), AI-to-AI streaks, uncertain effects,
   suspicious input) are published as events that the
   [supervisor](spec.md#supervisor)'s triggers subscribe to. The supervisor
   pauses things by setting the same flags. It has its own budget.

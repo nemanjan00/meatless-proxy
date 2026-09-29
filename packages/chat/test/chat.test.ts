@@ -11,7 +11,15 @@ import { createEvents, type Events } from '@mp/events'
 import { createRecords, type Records } from '@mp/records'
 import { memoryStore } from '@mp/store'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { ChatTopics, createChat, normalizeChannelName, parseTags, type Chat, type ChatMessagePosted } from '../src/index.ts'
+import {
+  addressedName,
+  ChatTopics,
+  createChat,
+  normalizeChannelName,
+  parseTags,
+  type Chat,
+  type ChatMessagePosted,
+} from '../src/index.ts'
 
 describe('parseTags', () => {
   it('parses names and session slugs', () => {
@@ -35,6 +43,16 @@ describe('parseTags', () => {
   it('handles line starts and punctuation before the tag', () => {
     expect(parseTags('@a\n(@b) "@c"').map((t) => t.name)).toEqual(['a', 'b', 'c'])
     expect(parseTags('see https://x.test/@path and a:@b').map((t) => t.name)).toEqual([])
+  })
+})
+
+describe('addressedName', () => {
+  it('reads a name the message opens by addressing', () => {
+    expect(addressedName('Meatless, save it as your file')).toBe('Meatless')
+    expect(addressedName('hey billing-bot: any news?')).toBe('billing-bot')
+    expect(addressedName('Thanks, Ana, that works')).toBe('Ana')
+    expect(addressedName('the script works, thanks')).toBeNull()
+    expect(addressedName('`x`, y')).toBeNull()
   })
 })
 
@@ -237,6 +255,20 @@ describe('everyday chat features', () => {
     return { ch, root }
   }
   const eventTypes = async () => (await events.query({ source: 'chat' })).map((e) => e.data.type)
+
+  it('addressing an employee by name at the start tags it; a person addressed by name stays plain', async () => {
+    const ch = await chat.createChannel({ name: 'addressing', createdBy: { kind: 'contact', id: ana } })
+    const m = await chat.post({ channelId: ch.id, author: { kind: 'contact', id: ana }, text: 'Billing-bot, save it as a file' })
+    expect(m.data.tags).toEqual([{ raw: 'Billing-bot', type: 'employee', employeeId: EMP }])
+    const both = await chat.post({
+      channelId: ch.id,
+      author: { kind: 'contact', id: ana },
+      text: 'billing-bot, ping @billing-bot',
+    })
+    expect(both.data.tags.filter((t) => t.type === 'employee')).toHaveLength(1)
+    const person = await chat.post({ channelId: ch.id, author: { kind: 'contact', id: ana }, text: 'ana, lunch?' })
+    expect(person.data.tags).toEqual([])
+  })
 
   it('edits own messages: tags are resolved again, history kept, the thread hears about it', async () => {
     const { root } = await setupThread()

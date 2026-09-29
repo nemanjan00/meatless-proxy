@@ -13,6 +13,7 @@ import { SettingNames } from './settings.ts'
  * requester and the session's employee:
  *
  * - a run failed (bus topic `run.state`, `to: 'failed'`);
+ * - a daily or monthly token or cost budget reached its warning share, or was used up (src/budget-alerts.ts);
  * - a run has been paused longer than `ALERT_PAUSED_MINUTES` (checked by a
  *   repeatable queue job);
  * - the model provider, the Docker daemon or an MCP server keeps failing: `ALERT_UNAVAILABLE_COUNT`
@@ -34,7 +35,7 @@ export const ALERTS_JOB_ID = 'alerts-paused-check'
 /** How often paused runs are checked. */
 export const ALERTS_CHECK_EVERY_MS = 60_000
 
-export type AlertCondition = 'run.failed' | 'run.paused' | 'dependency.unavailable'
+export type AlertCondition = 'run.failed' | 'run.paused' | 'dependency.unavailable' | 'budget.warning' | 'budget.reached'
 
 export interface AlertData extends Record<string, unknown> {
   condition: AlertCondition
@@ -55,6 +56,8 @@ export interface AlertInput {
   sessionId?: string
   dependency?: string
   text: string
+  /** More people to tag (`@handle` or a name), e.g. an employee's owner or the admins for a budget. */
+  tags?: string[]
 }
 
 export const alertSchema: KindSchema = {
@@ -63,7 +66,12 @@ export const alertSchema: KindSchema = {
   description: 'An alert posted in #alerts. The record key (condition and run, or dependency and window) makes it once only.',
   titleField: 'text',
   core: [
-    { name: 'condition', type: 'enum', values: ['run.failed', 'run.paused', 'dependency.unavailable'], required: true },
+    {
+      name: 'condition',
+      type: 'enum',
+      values: ['run.failed', 'run.paused', 'dependency.unavailable', 'budget.warning', 'budget.reached'],
+      required: true,
+    },
     { name: 'runId', type: 'ref', ref: 'run' },
     { name: 'sessionId', type: 'ref', ref: 'session' },
     { name: 'dependency', type: 'string' },
@@ -109,7 +117,7 @@ async function alertsChannel(s: Services, employee: Employee): Promise<Channel> 
 }
 
 /** `@handle` of a contact's `mp` handle, or its name, or null. */
-async function contactTag(s: Services, contactId: string | undefined): Promise<string | null> {
+export async function contactTag(s: Services, contactId: string | undefined): Promise<string | null> {
   if (!contactId) return null
   const c = await s.directory.contacts.get(contactId)
   if (!c) return null
@@ -174,16 +182,18 @@ export function startAlerts(s: Services, opts: { checkEveryMs?: number } = {}): 
         return null
       }
       const at = s.clock.iso()
+      const { tags: extraTags, ...stored } = data
       const { record, created } = await s.records.store.records.createOrGet<AlertData>(
         alertSchema.kind,
         key,
-        { ...data, at } as AlertData,
+        { ...stored, at } as AlertData,
         { prefix: alertSchema.prefix },
       )
       if (!created) return null
       const channel = await alertsChannel(s, employee)
       channelId = channel.id
       const tags = await tagsFor(s, run)
+      for (const t of extraTags ?? []) if (!tags.includes(t)) tags.push(t)
       const text = tags.length ? `${data.text}\n\n${tags.join(' ')}` : data.text
       const msg = await s.chat.post({ channelId: channel.id, author: { kind: 'contact', id: employee.data.contactId }, text })
       await s.records.update<AlertData>(alertSchema.kind, record.id, { channelId: channel.id, messageId: msg.id })

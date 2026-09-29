@@ -47,6 +47,7 @@ import { createControl, type Control } from './control.ts'
 import { wireMcpNotifications } from './mcp-in.ts'
 import { enqueueOnIngest, withJobDefaults, QUEUES } from './queues.ts'
 import { DEFAULT_SETTINGS, SettingNames, createSettings, type Settings } from './settings.ts'
+import { limitDefaults, PricingStore, runLimitsFor } from './limits.ts'
 import { loadStdlib, type StdlibModule } from './stdlib.ts'
 import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
@@ -55,6 +56,7 @@ import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
 import { McpServers } from './mcp-servers/index.ts'
+import { privateEvents, privateSessions, watchDmLinks } from './private-work.ts'
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -118,6 +120,8 @@ export interface Services {
   describer: ImageDescriber
   tools: ToolRegistry
   usage: UsageService
+  /** The pricing the ledger uses: Settings → Pricing, `PRICING`, the built-in table (src/limits.ts). */
+  pricing: PricingStore
   settings: Settings
   control: Control
   router: Router
@@ -234,9 +238,12 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const fileStorage = o.fileStorage ?? directoryStorage({ root: config.FILES_DIR })
   const files = createFiles({ records, storage: fileStorage, bus })
   await migrateFileRecords({ records: store.records, storage: fileStorage, logger: logger.child({ component: 'files' }) })
-  const rawEvents = createEvents({ records, clock, bus })
+  // Work from direct messages is private: marked when it happens (src/private-work.ts).
+  const privacy = { records, logger: logger.child({ component: 'privacy' }) }
+  const rawEvents = privateEvents(createEvents({ records, clock, bus }), privacy)
   const events = enqueueOnIngest(rawEvents, queue, logger)
-  const sessions = createSessions({ records, clock, bus })
+  const sessions = privateSessions(createSessions({ records, clock, bus }), privacy)
+  watchDmLinks(bus, sessions, privacy)
   const checklists = createChecklists({ records, sessions, clock, bus })
   // Chat attachments live on the files volume too, under `attachments/`, apart from employees' files.
   const attachments = createChatAttachments({
@@ -291,8 +298,11 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
           namePrefix: config.DOCKER_NAME_PREFIX,
         })
       : null
-  const usage = createUsage({ records, clock, bus, ...(config.PRICING ? { pricing: config.PRICING } : {}) })
   const settings = createSettings(records)
+  // Pricing and deployment limit defaults that work without configuration (src/limits.ts).
+  const pricing = new PricingStore({ settings, env: config.PRICING, logger, now: () => clock.now() })
+  await pricing.load()
+  const usage = createUsage({ records, clock, bus, pricing: () => pricing.current(), defaults: limitDefaults(config) })
 
   const employeeCache = new Map<string, { at: number; employee: Employee | null }>()
   const employee = async (id: string) => {
@@ -303,10 +313,17 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     return e
   }
 
+  // An edited employee (a new router context, say) is read fresh, not from the cache.
+  bus.subscribe<{ kind: string; id: string }>('record.changed', (m) => {
+    if (m.payload.kind === 'employee') employeeCache.delete(m.payload.id)
+  })
+
   const routerSessionFor = async (employeeId?: string): Promise<string | null> => {
     if (employeeId) {
       const e = await employee(employeeId)
       if (e?.data.routerSessionId) return e.data.routerSessionId
+      // A known employee without a router context yet: its work never goes to another employee's router.
+      if (e) return null
     }
     const def = await settings.get<string>(SettingNames.defaultRouter)
     return typeof def === 'string' ? def : null
@@ -410,6 +427,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     toolListsFor,
     projectOf,
     maxSteps: config.MAX_STEPS,
+    limitsFor: runLimitsFor(usage),
     ...(config.MAX_TOKENS ? { maxTokens: config.MAX_TOKENS } : {}),
   })
 
@@ -476,6 +494,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     describer,
     tools,
     usage,
+    pricing,
     settings,
     control,
     router,

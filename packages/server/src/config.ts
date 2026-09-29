@@ -85,6 +85,20 @@ const priceSchema = z.object({
   cachedInputPerM: z.number().nonnegative().optional(),
 })
 
+/** A non-negative number, or undefined when unset or empty; `0` means off where the variable says so. */
+const optNum = optStr.transform((v, ctx) => {
+  if (v === undefined) return undefined
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) {
+    ctx.addIssue({ code: 'custom', message: 'must be a non-negative number' })
+    return z.NEVER
+  }
+  return n
+})
+
+/** A non-negative number with a default when unset or empty. */
+const numOr = (def: number) => optNum.transform((v) => v ?? def)
+
 const jsonOrFile = (what: string) =>
   optStr.transform((v, ctx) => {
     if (v === undefined) return undefined
@@ -189,6 +203,27 @@ export const configSchema = z.object({
   RUN_BACKOFF_MS: z.coerce.number().int().min(0).default(2000),
   /** Model calls per run before it pauses. */
   MAX_STEPS: z.coerce.number().int().min(1).default(60),
+  // ── Runaway protection defaults (src/limits.ts). Settings → Limits overrides them per deployment, employee or requester. ──
+  /** How deep forks may go. */
+  LIMIT_MAX_DEPTH: numOr(5),
+  /** Children per loop. */
+  LIMIT_MAX_FAN_OUT: numOr(20),
+  /** Runs of one employee working at once; more wait in the queue. */
+  LIMIT_MAX_CONCURRENT_RUNS: numOr(8),
+  /** Minutes of work per run before it pauses (0 = no limit). */
+  LIMIT_RUN_WALL_MINUTES: numOr(30),
+  /** Tokens per employee per UTC day before its new work pauses (0 = no limit). */
+  LIMIT_EMPLOYEE_DAILY_TOKENS: numOr(5_000_000),
+  /** USD per employee per UTC day (unset = no cost budget; it counts only models with a price). */
+  LIMIT_EMPLOYEE_DAILY_COST_USD: optNum,
+  /** Tokens per UTC day for the whole deployment (unset = none). */
+  LIMIT_DEPLOYMENT_DAILY_TOKENS: optNum,
+  /** USD per UTC day for the whole deployment (unset = none). */
+  LIMIT_DEPLOYMENT_DAILY_COST_USD: optNum,
+  /** Messages between employees in a thread without a person before deliveries pause. */
+  LIMIT_MAX_AI_STREAK: numOr(20),
+  /** Percent of a daily or monthly budget at which #alerts gets a warning (0 = no warnings). */
+  BUDGET_WARN_PERCENT: numOr(80).refine((v) => v <= 100, 'must be at most 100'),
   /** max_tokens per model call (leave room for reasoning). */
   MAX_TOKENS: z.coerce.number().int().min(1).optional(),
   /**

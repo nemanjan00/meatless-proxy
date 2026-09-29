@@ -237,6 +237,35 @@ within two minutes is told so instead of posting it again.
 | `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached file or image |
 | `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | attachments per message |
 
+### Limits and budgets
+
+Runaway protection works out of the box. Every employee gets these defaults,
+and admins override them in **Settings → Limits** for the whole deployment,
+every or one employee, or every or one requester (the person who asked). The
+most specific override wins. Work over a limit pauses with the reason and
+waits for someone to resume it; nothing is dropped. `#alerts` gets a warning
+at 80 % of a daily budget and a note when it's used up, tagging the
+employee's owner or the admins.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `LIMIT_MAX_DEPTH` | 5 | how deep forks may go |
+| `LIMIT_MAX_FAN_OUT` | 20 | children per loop |
+| `LIMIT_MAX_CONCURRENT_RUNS` | 8 | runs of one employee working at once; more wait in the queue |
+| `MAX_STEPS` | 60 | model calls per run before it pauses |
+| `LIMIT_RUN_WALL_MINUTES` | 30 | minutes of work per run before it pauses, between steps (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_TOKENS` | 5,000,000 | tokens per employee per UTC day (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_COST_USD` | off | dollars per employee per UTC day (counts only models with a price) |
+| `LIMIT_DEPLOYMENT_DAILY_TOKENS`, `LIMIT_DEPLOYMENT_DAILY_COST_USD` | off | the same for the whole deployment |
+| `BUDGET_WARN_PERCENT` | 80 | when `#alerts` warns about a budget (`0`: never) |
+| `PRICING` | built-in table | USD per million tokens per model, as JSON (`{"my-model":{"inputPerM":0.6,"cachedInputPerM":0.15,"outputPerM":2.5}}`) or a JSON file |
+
+Costs come from a small built-in price table (Kimi and some OpenAI models,
+checked on the providers' pricing pages), `PRICING`, and **Settings →
+Pricing**, which wins over both. A model without a price costs $0 and the UI
+says "no pricing configured". See
+[docs/spec.md](docs/spec.md#configurable-limits).
+
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
 in `.env`.

@@ -176,6 +176,14 @@ export interface RunData extends Record<string, unknown> {
   result?: RunResult
   startedAt?: string
   endedAt?: string
+  /** When it last started working (queued → running); with `activeMs`, its wall clock. */
+  runningSince?: string
+  /** Time spent working before `runningSince` (waits, pauses and time in the queue don't count). */
+  activeMs?: number
+  /** Set by the runner when it paused the run for its step or wall-clock limit; resuming gives a fresh allowance. */
+  limitPaused?: 'steps' | 'wall'
+  /** Steps taken before the latest resume after a step-limit pause. */
+  stepsFrom?: number
   /** Set once the run was committed to its session: in full (head moved to the tip) or as a summary entry. */
   committed?: { as: 'full' | 'summary'; at: string; entryId: string | null }
 }

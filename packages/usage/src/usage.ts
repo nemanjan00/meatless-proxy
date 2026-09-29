@@ -1,6 +1,7 @@
 import { NotFoundError, ValidationError, type Clock, type EventBus, type KindSchema } from '@mp/core'
 import type { Records } from '@mp/records'
 import type { Actor, Condition, StoredRecord } from '@mp/store'
+import { priceFor, type ModelPrice, type Pricing } from './pricing.ts'
 
 /** `Omit` that keeps known keys of types with an index signature. */
 type Without<T, K extends PropertyKey> = { [P in keyof T as P extends K ? never : P]: T[P] }
@@ -39,15 +40,20 @@ export const usageSchema: KindSchema = {
   ],
 }
 
-export const LIMIT_TARGETS = ['global', 'employee', 'template', 'procedure', 'session', 'tree'] as const
+export const LIMIT_TARGETS = ['global', 'employee', 'contact', 'template', 'procedure', 'session', 'tree'] as const
 export const LIMIT_PERIODS = ['run', 'session', 'tree', 'day', 'month'] as const
 export type LimitTargetType = (typeof LIMIT_TARGETS)[number]
 export type LimitPeriod = (typeof LIMIT_PERIODS)[number]
 
+/** Limit fields that cap a number (not budgets). */
+export const CAP_FIELDS = ['maxDepth', 'maxFanOut', 'maxConcurrentSessions', 'maxSteps', 'maxWallMs', 'maxAiStreak'] as const
+export type CapField = (typeof CAP_FIELDS)[number]
+
 export const limitSchema: KindSchema = {
   kind: 'limit',
   prefix: 'lim',
-  description: 'A configurable limit: global, or tightened per employee, template, procedure, session or tree.',
+  description:
+    'An override of the deployment defaults: for the whole deployment (global), or per employee, requester (contact), template, procedure, session or tree.',
   core: [
     {
       name: 'target',
@@ -65,12 +71,14 @@ export const limitSchema: KindSchema = {
       name: 'period',
       type: 'enum',
       values: [...LIMIT_PERIODS],
-      description: 'What maxTokens/maxCostUsd are measured over. day/month: the employee since the start of the UTC day/month.',
+      description:
+        'What maxTokens/maxCostUsd are measured over. day/month: the target (employee, requester, whole deployment…) since the start of the UTC day/month.',
     },
     { name: 'maxDepth', type: 'number', description: 'Fork depth.' },
     { name: 'maxFanOut', type: 'number', description: 'Children per loop.' },
-    { name: 'maxConcurrentSessions', type: 'number' },
-    { name: 'maxWallMs', type: 'number' },
+    { name: 'maxConcurrentSessions', type: 'number', description: 'Runs working at once per employee; more wait in the queue.' },
+    { name: 'maxSteps', type: 'number', description: 'Model calls per run before it pauses.' },
+    { name: 'maxWallMs', type: 'number', description: 'Wall-clock time a run may work before it pauses.' },
     { name: 'maxAiStreak', type: 'number', description: 'Messages between employees in one thread without a person.' },
     { name: 'enabled', type: 'boolean', description: 'Default true.' },
   ],
@@ -103,17 +111,6 @@ export type UsageInput = Without<UsageData, 'totalTokens' | 'costUsd' | 'at'> & 
   costUsd?: number
   at?: string
 }
-
-export interface ModelPrice {
-  /** USD per million uncached input tokens. */
-  inputPerM: number
-  /** USD per million output tokens. */
-  outputPerM: number
-  /** USD per million cached input tokens. Defaults to `inputPerM`. */
-  cachedInputPerM?: number
-}
-
-export type Pricing = Record<string, ModelPrice>
 
 export interface UsageFilter {
   runId?: string
@@ -158,16 +155,20 @@ export interface BreakdownRow extends UsageTotals {
   key: string | null
 }
 
+/** A cap or budget value: a number, or `null` for "no limit" (it overrides a default). */
+export type LimitValue = number | null
+
 export interface LimitData extends Record<string, unknown> {
   target: { type: LimitTargetType; id?: string }
-  maxTokens?: number
-  maxCostUsd?: number
+  maxTokens?: LimitValue
+  maxCostUsd?: LimitValue
   period?: LimitPeriod
-  maxDepth?: number
-  maxFanOut?: number
-  maxConcurrentSessions?: number
-  maxWallMs?: number
-  maxAiStreak?: number
+  maxDepth?: LimitValue
+  maxFanOut?: LimitValue
+  maxConcurrentSessions?: LimitValue
+  maxSteps?: LimitValue
+  maxWallMs?: LimitValue
+  maxAiStreak?: LimitValue
   enabled?: boolean
 }
 
@@ -176,6 +177,8 @@ export type Limit = StoredRecord<LimitData>
 /** Where the work is, to find the limits that apply. */
 export interface LimitContext {
   employeeId?: string
+  /** The contact who asked for the work. */
+  requesterId?: string
   sessionId?: string
   rootSessionId?: string
   templateId?: string
@@ -186,21 +189,50 @@ export interface BudgetContext extends LimitContext {
   runId?: string
 }
 
-export interface Budget {
+/** A budget that applies without any limit record, e.g. 5M tokens per employee per day. */
+export interface DefaultBudget {
+  /** Whose usage counts, for day and month budgets (`global`: the whole deployment). */
+  target: LimitTargetType
+  period: LimitPeriod
   maxTokens?: number
   maxCostUsd?: number
 }
 
-/** The tightest value of each field across the limits that apply. */
-export interface EffectiveLimits {
-  maxDepth?: number
-  maxFanOut?: number
-  maxConcurrentSessions?: number
-  maxWallMs?: number
-  maxAiStreak?: number
-  budgets: Partial<Record<LimitPeriod, Budget>>
+/** Deployment-wide defaults. Limit records override them for their target. */
+export interface LimitDefaults extends Partial<Record<CapField, number>> {
+  budgets?: DefaultBudget[]
+  /** Share of a budget (0–1) at which a warning is due. Default 0.8. */
+  warnAt?: number
+}
+
+export interface EffectiveBudget {
+  /** `run`, `session`, `tree`, or `<day|month>:<scope>`, e.g. `day:employee`. */
+  key: string
+  period: LimitPeriod
+  /** For day and month budgets: whose usage counts (employee, contact, global = the whole deployment…). */
+  scope?: LimitTargetType
+  maxTokens?: number
+  maxCostUsd?: number
+  /** Where each value comes from: a limit id, or `default`. */
+  sources: { maxTokens?: string; maxCostUsd?: string }
+}
+
+/** The limits that apply: the defaults, overridden by the most specific matching limit records. */
+export interface EffectiveLimits extends Partial<Record<CapField, number>> {
+  budgets: EffectiveBudget[]
   /** Ids of the limits that were merged. */
   limitIds: string[]
+  /** Where each cap comes from: a limit id, or `default`. */
+  sources: Partial<Record<CapField, string>>
+}
+
+/** A budget with what has been used of it. */
+export interface BudgetStatus extends EffectiveBudget {
+  /** The employee, contact, … whose usage counts (day and month budgets). */
+  scopeId?: string
+  /** Start of the period (day and month budgets). */
+  since?: string
+  used: { tokens: number; costUsd: number }
 }
 
 export type BudgetCheck =
@@ -210,7 +242,10 @@ export type BudgetCheck =
       reason: string
       field: 'maxTokens' | 'maxCostUsd'
       period: LimitPeriod
-      limit: Limit
+      scope?: LimitTargetType
+      /** A limit id, or `default`. */
+      source: string
+      max: number
       used: { tokens: number; costUsd: number }
     }
 
@@ -226,6 +261,9 @@ export interface Limits {
   remove(id: string, opts?: { actor?: Actor }): Promise<void>
   /** Enabled limits whose target matches the context. */
   matching(ctx: LimitContext): Promise<Limit[]>
+  /** The deployment defaults. */
+  defaults(): Promise<LimitDefaults>
+  /** The defaults, overridden by the matching limits (the most specific wins). */
   effective(ctx: LimitContext): Promise<EffectiveLimits>
 }
 
@@ -233,18 +271,29 @@ export interface UsageService {
   record(input: UsageInput, opts?: { actor?: Actor }): Promise<UsageRecord>
   /** Cost of a call from the pricing table, 0 for unknown models. */
   cost(model: string, tokens: { promptTokens: number; completionTokens: number; cachedTokens?: number }): number
+  /** The price of a model, or null when it has none. */
+  priceOf(model: string): ModelPrice | null
   totals(filter?: UsageFilter): Promise<UsageTotals>
   /** Totals per group, most tokens first. */
   breakdown(groupBy: GroupBy, filter?: UsageFilter): Promise<BreakdownRow[]>
   limits: Limits
-  /** Whether the token and cost budgets that apply still have room. Returns the first one reached. */
+  /** Every token and cost budget that applies, with what has been used, in check order. */
+  budgetStatus(ctx: BudgetContext): Promise<BudgetStatus[]>
+  /**
+   * Whether the token and cost budgets that apply still have room. Returns the first one reached,
+   * in this order: run, session, tree, then day and month budgets from the narrowest scope to the
+   * employee, the requester and the whole deployment.
+   */
   checkBudget(ctx: BudgetContext): Promise<BudgetCheck>
 }
 
 export interface UsageDeps {
   records: Records
   clock: Clock
-  pricing?: Pricing
+  /** Prices by model, or a function returning the current ones (they can change at runtime). */
+  pricing?: Pricing | (() => Pricing)
+  /** Deployment defaults, or a function returning the current ones. */
+  defaults?: LimitDefaults | (() => LimitDefaults | Promise<LimitDefaults>)
   bus?: EventBus
 }
 
@@ -272,8 +321,28 @@ const GROUP_FIELD: Record<Exclude<GroupBy, 'day'>, keyof UsageData> = {
   project: 'projectId',
 }
 
+/** The usage field and context field of each target type (global has none). */
+const TARGET_FIELD: Record<Exclude<LimitTargetType, 'global'>, keyof LimitContext & keyof UsageFilter> = {
+  employee: 'employeeId',
+  contact: 'requesterId',
+  template: 'templateId',
+  procedure: 'procedureId',
+  session: 'sessionId',
+  tree: 'rootSessionId',
+}
+
 const TOKEN_FIELDS = ['promptTokens', 'completionTokens', 'cachedTokens', 'reasoningTokens', 'totalTokens'] as const
-const NUMERIC_LIMIT_FIELDS = ['maxDepth', 'maxFanOut', 'maxConcurrentSessions', 'maxWallMs', 'maxAiStreak'] as const
+
+/** How specific a target type is: a more specific limit overrides a less specific one. */
+const RANK: Record<LimitTargetType, number> = {
+  global: 0,
+  employee: 1,
+  contact: 2,
+  template: 3,
+  procedure: 4,
+  tree: 5,
+  session: 6,
+}
 
 const emptyTotals = (): UsageTotals => ({
   promptTokens: 0,
@@ -300,44 +369,83 @@ export function startOfUtcMonth(ms: number): string {
 
 /** The period a budget is measured over when the limit doesn't say. */
 export function defaultPeriod(target: LimitTargetType): LimitPeriod {
-  return target === 'session' ? 'session' : target === 'tree' ? 'tree' : 'run'
+  return target === 'session' ? 'session' : target === 'tree' ? 'tree' : target === 'contact' ? 'day' : 'run'
+}
+
+/** Specificity of a target: the type, then whether it names one (an id beats "every one"). */
+export function specificity(target: LimitData['target']): number {
+  return RANK[target.type] * 2 + (target.id !== undefined ? 1 : 0)
+}
+
+/** The budget key: `run`, `session`, `tree`, or `<period>:<target type>` for day and month. */
+export function budgetKey(period: LimitPeriod, target: LimitTargetType): string {
+  return period === 'day' || period === 'month' ? `${period}:${target}` : period
+}
+
+/** Check order of a budget: run, session, tree, then day and month from the narrowest scope to the deployment. */
+function budgetOrder(b: { period: LimitPeriod; scope?: LimitTargetType }): number {
+  if (b.period === 'run') return 0
+  if (b.period === 'session') return 1
+  if (b.period === 'tree') return 2
+  return 3 + (RANK.session - RANK[b.scope ?? 'global']) * 2 + (b.period === 'month' ? 1 : 0)
 }
 
 /** Whether a limit's target covers the context. A target without an id covers every one of its type. */
 export function limitApplies(l: LimitData, ctx: LimitContext): boolean {
   if (l.enabled === false) return false
-  const ctxId: Record<LimitTargetType, string | undefined> = {
-    global: 'global',
-    employee: ctx.employeeId,
-    template: ctx.templateId,
-    procedure: ctx.procedureId,
-    session: ctx.sessionId,
-    tree: ctx.rootSessionId,
-  }
-  const have = ctxId[l.target.type]
   if (l.target.type === 'global') return true
+  const have = ctx[TARGET_FIELD[l.target.type]]
   if (!have) return false
   return l.target.id === undefined || l.target.id === have
 }
 
-/** Merges limits: the tightest value of each field, and of each period's budget. */
-export function mergeLimits(limits: Limit[]): EffectiveLimits {
-  const out: EffectiveLimits = { budgets: {}, limitIds: [] }
-  const min = (a: number | undefined, b: number | undefined) => (a === undefined ? b : b === undefined ? a : Math.min(a, b))
-  for (const l of limits) {
-    out.limitIds.push(l.id)
-    for (const f of NUMERIC_LIMIT_FIELDS) {
-      const v = min(out[f], l.data[f])
-      if (v !== undefined) out[f] = v
-    }
-    if (l.data.maxTokens !== undefined || l.data.maxCostUsd !== undefined) {
-      const p = l.data.period ?? defaultPeriod(l.data.target.type)
-      const b = out.budgets[p] ?? {}
-      const t = min(b.maxTokens, l.data.maxTokens)
-      const c = min(b.maxCostUsd, l.data.maxCostUsd)
-      out.budgets[p] = { ...(t !== undefined ? { maxTokens: t } : {}), ...(c !== undefined ? { maxCostUsd: c } : {}) }
-    }
+/**
+ * Merges defaults and limits: each cap and each budget value comes from the
+ * most specific limit that sets it (session, tree, procedure, template,
+ * requester, employee, then the whole deployment; one naming an id beats one
+ * for every one of its type), else from the defaults. `null` means no limit.
+ */
+export function mergeLimits(limits: Limit[], defaults: LimitDefaults = {}): EffectiveLimits {
+  const out: EffectiveLimits = { budgets: [], limitIds: [], sources: {} }
+  const set = (f: CapField, v: LimitValue | undefined, source: string) => {
+    if (v === undefined) return
+    if (v === null) delete out[f]
+    else out[f] = v
+    out.sources[f] = source
   }
+  for (const f of CAP_FIELDS) set(f, defaults[f], 'default')
+  const budgets = new Map<string, EffectiveBudget>()
+  const setBudget = (
+    period: LimitPeriod,
+    target: LimitTargetType,
+    v: Pick<LimitData, 'maxTokens' | 'maxCostUsd'>,
+    source: string,
+  ) => {
+    const key = budgetKey(period, target)
+    const b = budgets.get(key) ?? { key, period, ...(key.includes(':') ? { scope: target } : {}), sources: {} }
+    for (const f of ['maxTokens', 'maxCostUsd'] as const) {
+      const x = v[f]
+      if (x === undefined) continue
+      if (x === null) delete b[f]
+      else b[f] = x
+      b.sources[f] = source
+    }
+    budgets.set(key, b)
+  }
+  for (const d of defaults.budgets ?? []) setBudget(d.period, d.target, d, 'default')
+  const ordered = limits
+    .filter((l) => l.data.enabled !== false)
+    .map((l, i) => ({ l, i }))
+    .sort((a, b) => specificity(a.l.data.target) - specificity(b.l.data.target) || a.i - b.i)
+  for (const { l } of ordered) {
+    out.limitIds.push(l.id)
+    for (const f of CAP_FIELDS) set(f, l.data[f], l.id)
+    if (l.data.maxTokens !== undefined || l.data.maxCostUsd !== undefined)
+      setBudget(l.data.period ?? defaultPeriod(l.data.target.type), l.data.target.type, l.data, l.id)
+  }
+  out.budgets = [...budgets.values()]
+    .filter((b) => b.maxTokens !== undefined || b.maxCostUsd !== undefined)
+    .sort((a, b) => budgetOrder(a) - budgetOrder(b))
   return out
 }
 
@@ -350,7 +458,7 @@ export function checkForkLimits(input: {
   depth: number
   fanOut: number
   runningSessions: number
-  limits: EffectiveLimits
+  limits: Pick<EffectiveLimits, 'maxDepth' | 'maxFanOut' | 'maxConcurrentSessions'>
 }): ForkCheck {
   const { limits } = input
   const checks = [
@@ -365,22 +473,60 @@ export function checkForkLimits(input: {
   return { ok: true }
 }
 
+const WHOSE: Partial<Record<LimitTargetType, string>> = {
+  employee: "the employee's",
+  contact: "the requester's",
+  global: "the whole deployment's",
+}
+
+/** "the employee's daily token budget is used up: 5,000,120 of 5,000,000 tokens today". */
+export function describeBudget(
+  b: Pick<BudgetStatus, 'period' | 'scope'>,
+  field: 'maxTokens' | 'maxCostUsd',
+  used: number,
+  max: number,
+) {
+  const whose =
+    b.period === 'run'
+      ? 'the run'
+      : b.period === 'session'
+        ? 'the session'
+        : b.period === 'tree'
+          ? 'the session tree'
+          : (WHOSE[b.scope ?? 'global'] ?? `the ${b.scope}'s`)
+  const every = b.period === 'day' ? ' daily' : b.period === 'month' ? ' monthly' : ''
+  const amount =
+    field === 'maxTokens'
+      ? `${Math.round(used).toLocaleString('en-US')} of ${max.toLocaleString('en-US')} tokens`
+      : `$${used.toFixed(2)} of $${max.toFixed(2)}`
+  const when = b.period === 'day' ? ' today (it resets at 00:00 UTC)' : b.period === 'month' ? ' this month' : ''
+  return `${whose}${every} ${field === 'maxTokens' ? 'token' : 'cost'} budget is used up: ${amount}${when}`
+}
+
 function checkLimitData(d: LimitData) {
-  for (const f of ['maxTokens', 'maxCostUsd', ...NUMERIC_LIMIT_FIELDS] as const) {
+  if (!d.target || typeof d.target !== 'object' || !LIMIT_TARGETS.includes(d.target.type))
+    throw new ValidationError(`target.type must be one of ${LIMIT_TARGETS.join(', ')}`)
+  if (d.target.id !== undefined && (typeof d.target.id !== 'string' || !d.target.id))
+    throw new ValidationError('target.id must be a non-empty string')
+  if (d.period !== undefined && !LIMIT_PERIODS.includes(d.period))
+    throw new ValidationError(`period must be one of ${LIMIT_PERIODS.join(', ')}`)
+  for (const f of ['maxTokens', 'maxCostUsd', ...CAP_FIELDS] as const) {
     const v = d[f]
-    if (v !== undefined && (typeof v !== 'number' || v < 0 || !Number.isFinite(v)))
+    if (v !== undefined && v !== null && (typeof v !== 'number' || v < 0 || !Number.isFinite(v)))
       throw new ValidationError(`${f} must be a non-negative number`)
   }
-  if (d.target?.type === 'global' && d.target.id !== undefined) throw new ValidationError('a global limit has no target id')
+  if (d.target.type === 'global' && d.target.id !== undefined) throw new ValidationError('a global limit has no target id')
 }
 
 const limitKey = (d: LimitData) => `${d.target.type}:${d.target.id ?? '*'}:${d.period ?? ''}`
 
 /** Registers the `usage` and `limit` kinds and returns the usage service. */
-export function createUsage({ records, clock, pricing = {}, bus }: UsageDeps): UsageService {
+export function createUsage({ records, clock, pricing = {}, defaults = {}, bus }: UsageDeps): UsageService {
   records.kinds.define(usageSchema)
   records.kinds.define(limitSchema)
   const store = records.store.records
+  const prices = typeof pricing === 'function' ? pricing : () => pricing
+  const getDefaults = async () => (typeof defaults === 'function' ? await defaults() : defaults)
 
   const where = (f: UsageFilter = {}): Condition[] => {
     const out: Condition[] = []
@@ -390,8 +536,10 @@ export function createUsage({ records, clock, pricing = {}, bus }: UsageDeps): U
     return out
   }
 
+  const priceOf: UsageService['priceOf'] = (model) => (typeof model === 'string' ? priceFor(model, prices()) : null)
+
   const cost: UsageService['cost'] = (model, t) => {
-    const p = pricing[model]
+    const p = priceOf(model)
     if (!p) return 0
     const cached = Math.min(t.cachedTokens ?? 0, t.promptTokens)
     const uncached = t.promptTokens - cached
@@ -437,9 +585,45 @@ export function createUsage({ records, clock, pricing = {}, bus }: UsageDeps): U
     async matching(ctx) {
       return (await limits.list()).filter((l) => limitApplies(l.data, ctx))
     },
+    defaults: getDefaults,
     async effective(ctx) {
-      return mergeLimits(await limits.matching(ctx))
+      return mergeLimits(await limits.matching(ctx), await getDefaults())
     },
+  }
+
+  const budgetStatus: UsageService['budgetStatus'] = async (ctx) => {
+    const eff = await limits.effective(ctx)
+    const now = clock.now()
+    const cache = new Map<string, Promise<UsageTotals>>()
+    const out: BudgetStatus[] = []
+    for (const b of eff.budgets) {
+      let filter: UsageFilter | null
+      let scopeId: string | undefined
+      let since: string | undefined
+      if (b.period === 'run') filter = ctx.runId ? { runId: ctx.runId } : null
+      else if (b.period === 'session') filter = ctx.sessionId ? { sessionId: ctx.sessionId } : null
+      else if (b.period === 'tree') filter = ctx.rootSessionId ? { rootSessionId: ctx.rootSessionId } : null
+      else {
+        since = b.period === 'day' ? startOfUtcDay(now) : startOfUtcMonth(now)
+        const scope = b.scope ?? 'global'
+        if (scope === 'global') filter = { since }
+        else {
+          scopeId = ctx[TARGET_FIELD[scope]]
+          filter = scopeId ? { [TARGET_FIELD[scope]]: scopeId, since } : null
+        }
+      }
+      if (!filter) continue
+      const k = JSON.stringify(filter)
+      if (!cache.has(k)) cache.set(k, totals(filter))
+      const t = await cache.get(k)!
+      out.push({
+        ...b,
+        ...(scopeId ? { scopeId } : {}),
+        ...(since ? { since } : {}),
+        used: { tokens: t.totalTokens, costUsd: t.costUsd },
+      })
+    }
+    return out
   }
 
   const service: UsageService = {
@@ -469,6 +653,7 @@ export function createUsage({ records, clock, pricing = {}, bus }: UsageDeps): U
     },
 
     cost,
+    priceOf,
     totals,
 
     async breakdown(groupBy, filter) {
@@ -488,57 +673,25 @@ export function createUsage({ records, clock, pricing = {}, bus }: UsageDeps): U
     },
 
     limits,
+    budgetStatus,
 
     async checkBudget(ctx) {
-      const cache = new Map<LimitPeriod, Promise<UsageTotals> | null>()
-      const usedFor = (period: LimitPeriod): Promise<UsageTotals> | null => {
-        if (cache.has(period)) return cache.get(period)!
-        const now = clock.now()
-        const filter: UsageFilter | null =
-          period === 'run'
-            ? ctx.runId
-              ? { runId: ctx.runId }
-              : null
-            : period === 'session'
-              ? ctx.sessionId
-                ? { sessionId: ctx.sessionId }
-                : null
-              : period === 'tree'
-                ? ctx.rootSessionId
-                  ? { rootSessionId: ctx.rootSessionId }
-                  : null
-                : ctx.employeeId
-                  ? { employeeId: ctx.employeeId, since: period === 'day' ? startOfUtcDay(now) : startOfUtcMonth(now) }
-                  : null
-        const p = filter ? totals(filter) : null
-        cache.set(period, p)
-        return p
-      }
-      for (const l of await limits.matching(ctx)) {
-        if (l.data.maxTokens === undefined && l.data.maxCostUsd === undefined) continue
-        const period = l.data.period ?? defaultPeriod(l.data.target.type)
-        const pending = usedFor(period)
-        if (!pending) continue
-        const t = await pending
-        const used = { tokens: t.totalTokens, costUsd: t.costUsd }
-        if (l.data.maxTokens !== undefined && t.totalTokens >= l.data.maxTokens)
+      for (const b of await budgetStatus(ctx)) {
+        for (const field of ['maxTokens', 'maxCostUsd'] as const) {
+          const max = b[field]
+          const used = field === 'maxTokens' ? b.used.tokens : b.used.costUsd
+          if (max === undefined || used < max) continue
           return {
             ok: false,
-            reason: `${period} token budget reached: ${t.totalTokens} of ${l.data.maxTokens}`,
-            field: 'maxTokens',
-            period,
-            limit: l,
-            used,
+            reason: describeBudget(b, field, used, max),
+            field,
+            period: b.period,
+            ...(b.scope ? { scope: b.scope } : {}),
+            source: b.sources[field] ?? 'default',
+            max,
+            used: b.used,
           }
-        if (l.data.maxCostUsd !== undefined && t.costUsd >= l.data.maxCostUsd)
-          return {
-            ok: false,
-            reason: `${period} cost budget reached: $${t.costUsd} of $${l.data.maxCostUsd}`,
-            field: 'maxCostUsd',
-            period,
-            limit: l,
-            used,
-          }
+        }
       }
       return { ok: true }
     },

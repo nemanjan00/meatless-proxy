@@ -37,7 +37,7 @@ along by itself, and the data layer echoes the `mp_csrf` cookie in `x-mp-csrf`. 
 shows who you are and your access, with API tokens and Sign out. Actions your access doesn't allow
 are hidden (the server refuses them anyway): viewers get no message boxes, no "New" buttons and
 read-only forms; only admins see the kill switch and the admin settings (employees, secrets,
-triggers, limits, people and access with sign-in links, MCP servers). Settings → API tokens creates a token
+triggers, limits, pricing, people and access with sign-in links, MCP servers). Settings → API tokens creates a token
 (shown once), lists and revokes yours. The mock (`VITE_MOCK=1`) is signed in as an admin.
 
 `src/components/mcp-servers.tsx` is `<McpServers employeeId? />`: the MCP servers of an employee, or
@@ -274,7 +274,14 @@ members and admins see (kill switch, settings sections, chat message box), and t
 ## Notes
 
 - Cost shows "no pricing configured" (or `—` in tables) when calls were made but cost
-  nothing, instead of `$0`.
+  nothing, instead of `$0`; on the usage page admins get a link to Settings → Pricing.
+- Settings → Limits (`src/components/limits-settings.tsx`): the effective limits of every employee,
+  each employee and each requester with an override, in plain words ("Max 8 runs at once per
+  employee"), each marked default or override, with a small bar of usage against each daily budget;
+  the overrides with create, edit and delete (target, fields with "No limit", the budget period,
+  checked before sending). Settings → Pricing (`src/components/pricing-settings.tsx`): the models in
+  use with their price and where it comes from, the prices set here (per model: input, cached input,
+  output per 1M tokens), and the built-in and `PRICING` tables to copy from.
 - Usage over time fills empty buckets with 0 (hours for 24 hours, days for 7 and 14 days)
   and draws a lone bucket as a bar.
 - Chart colours use the stylebook's `--chart-*` tokens in the order 1, 3, 2, 5, 4

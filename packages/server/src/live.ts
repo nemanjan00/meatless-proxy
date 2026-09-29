@@ -13,7 +13,8 @@ import { errorMessage, type BusMessage } from '@mp/core'
 import type { Message } from '@mp/chat'
 import type { Run } from '@mp/sessions'
 import type { Services } from './services.ts'
-import { ChatVisibility } from './auth/visibility.ts'
+import { ChatVisibility, type PrivateMark, type Viewer, markOf } from './auth/visibility.ts'
+import { SESSION_OWNED_KINDS } from './http/private-views.ts'
 import { INBOX_READ_TOPIC, type InboxViewer, PersonInbox } from './inbox.ts'
 import { Views, mapChecklist, mapEvent } from './http/views.ts'
 
@@ -137,6 +138,17 @@ const FRESH_MS = 2 * 60_000
 const MAX_SENT_ITEMS = 500
 /** Record kinds that can belong to a DM. */
 const CHAT_RECORD_KINDS = new Set(['channel', 'message', 'event'])
+/** How long a "may this person read that session / run / event" answer is reused. */
+const WORK_CACHE_MS = 3000
+
+/** The private work a live event is about (src/auth/visibility.ts): each must be readable to send it. */
+interface WorkRefs {
+  sessionIds: string[]
+  runIds: string[]
+  eventIds: string[]
+  /** Markers carried by the payload itself (an entry of a private run). */
+  marks: PrivateMark[]
+}
 
 /**
  * The WebSocket fan-out: turns bus messages into `@mp/api` live events and
@@ -153,6 +165,8 @@ export class LiveHub {
   private inbox: PersonInbox
   /** `contact:channel` → whether they may see it, briefly cached (one lookup per event and client otherwise). */
   private seen = new Map<string, { at: number; ok: boolean }>()
+  /** `contact:kind:id` → whether they may read that session, run or event, briefly cached. */
+  private readable = new Map<string, { at: number; ok: boolean }>()
 
   constructor(
     private s: Services,
@@ -289,6 +303,82 @@ export class LiveHub {
     return null
   }
 
+  /**
+   * The sessions, runs and events a live event is about, so work from a DM reaches only the DM's
+   * members: entries, runs, steps, tokens, checklists, session records and links, and events.
+   * Null when it is about none.
+   */
+  private async workOf(m: BusMessage, topic: string, payload: Record<string, any>): Promise<WorkRefs | null> {
+    const refs: WorkRefs = { sessionIds: [], runIds: [], eventIds: [], marks: [] }
+    const raw = m.payload as Record<string, any>
+    for (const p of [payload, raw]) {
+      if (typeof p.sessionId === 'string') refs.sessionIds.push(p.sessionId)
+      if (typeof p.runId === 'string') refs.runIds.push(p.runId)
+      if (typeof p.eventId === 'string') refs.eventIds.push(p.eventId)
+    }
+    if (typeof payload.run?.data?.sessionId === 'string') refs.sessionIds.push(payload.run.data.sessionId)
+    const entryMark = topic === 'entry.appended' ? markOf({ data: payload.entry?.meta ?? {} }) : null
+    if (entryMark) refs.marks.push(entryMark)
+    if (topic === 'record.changed') {
+      // A session, run or event that just became private: forget what was cached about it.
+      if (['session', 'run', 'event'].includes(payload.kind))
+        for (const k of this.readable.keys()) if (k.endsWith(`:${payload.kind}:${payload.id}`)) this.readable.delete(k)
+      if (payload.kind === 'session') refs.sessionIds.push(payload.id)
+      else if (payload.kind === 'run') refs.runIds.push(payload.id)
+      else if (payload.kind === 'event') refs.eventIds.push(payload.id)
+      else if (SESSION_OWNED_KINDS.has(payload.kind)) {
+        const r = await this.s.records.get(payload.kind, payload.id)
+        if (typeof r?.data.sessionId === 'string') refs.sessionIds.push(r.data.sessionId)
+        if (typeof r?.data.runId === 'string') refs.runIds.push(r.data.runId)
+      }
+    }
+    if (topic === 'link.changed') {
+      for (const end of [payload.from, payload.to] as { kind?: string; id?: string }[])
+        if (end?.kind === 'session' && end.id) refs.sessionIds.push(end.id)
+    }
+    if (topic === 'event.ingested' && typeof payload.event?.id === 'string') refs.eventIds.push(payload.event.id)
+    if (!refs.sessionIds.length && !refs.runIds.length && !refs.eventIds.length && !refs.marks.length) return null
+    return {
+      sessionIds: [...new Set(refs.sessionIds)],
+      runIds: [...new Set(refs.runIds)],
+      eventIds: [...new Set(refs.eventIds)],
+      marks: refs.marks,
+    }
+  }
+
+  private async mayRead(client: Client, work: WorkRefs): Promise<boolean> {
+    const viewer: Viewer = { contactId: client.contactId!, ...(client.admin ? { admin: true } : {}) }
+    const check = async (kind: string, id: string, load: () => Promise<boolean>) => {
+      const key = `${viewer.contactId}:${kind}:${id}`
+      const now = this.s.clock.now()
+      const hit = this.readable.get(key)
+      if (hit && now - hit.at < WORK_CACHE_MS) return hit.ok
+      const ok = await load()
+      if (this.readable.size > 10_000) this.readable.clear()
+      this.readable.set(key, { at: now, ok })
+      return ok
+    }
+    for (const mark of work.marks) if (!(await this.visibility.canReadMark(viewer, mark))) return false
+    for (const id of work.sessionIds) {
+      const ok = await check('session', id, async () => {
+        const x = await this.s.sessions.get(id)
+        return !x || this.visibility.canReadSession(viewer, x)
+      })
+      if (!ok) return false
+    }
+    for (const id of work.runIds) {
+      const ok = await check('run', id, async () => {
+        const run = await this.s.sessions.getRun(id)
+        return !run || this.visibility.canReadRun(viewer, run)
+      })
+      if (!ok) return false
+    }
+    for (const id of work.eventIds)
+      if (!(await check('event', id, async () => this.visibility.canSeeEvent(viewer, await this.s.rawEvents.get(id)))))
+        return false
+    return true
+  }
+
   private send(client: Client, msg: LiveServerMessage) {
     if (client.closed) return
     client.queue.push(JSON.stringify(msg))
@@ -391,8 +481,10 @@ export class LiveHub {
     if (!chans.length) return
     const at = new Date(m.at).toISOString()
     const chat = await this.chatChannelOf(built.topic, built.payload)
+    const work = await this.workOf(m, built.topic, built.payload)
     for (const client of this.clients) {
       if (client.contactId && chat !== null && (chat === undefined || !(await this.maySee(client, chat)))) continue
+      if (client.contactId && work && !(await this.mayRead(client, work))) continue
       for (const channel of chans) {
         if (!client.channels.has(channel)) continue
         this.send(client, { type: 'event', channel, topic: built.topic, payload: built.payload, at } as LiveServerMessage)

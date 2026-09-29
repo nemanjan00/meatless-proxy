@@ -185,7 +185,19 @@ describe('usage policies', () => {
       model: 'kimi-test',
     })
     expect(await t.hooks.decide(beforeModelCall, payload)).toMatchObject({
-      pause: expect.stringContaining('token budget reached'),
+      pause: expect.stringContaining('token budget is used up'),
+    })
+  })
+
+  it("pauses when the requester's daily budget is used up", async () => {
+    const t = await stack()
+    registerUsagePolicies(t.hooks, t.deps)
+    await t.usage.limits.set({ target: { type: 'contact', id: t.ana.id }, maxTokens: 50 })
+    const payload = { run: t.run, session: t.session, messages: [], step: 0 }
+    expect(await t.hooks.decide(beforeModelCall, payload)).toBeUndefined()
+    await t.usage.record({ requesterId: t.ana.id, model: 'm', promptTokens: 40, completionTokens: 20 })
+    expect(await t.hooks.decide(beforeModelCall, payload)).toEqual({
+      pause: "the requester's daily token budget is used up: 60 of 50 tokens today (it resets at 00:00 UTC)",
     })
   })
 })

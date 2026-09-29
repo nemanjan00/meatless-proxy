@@ -153,8 +153,6 @@ export function pathValue(obj: unknown, path: string): unknown {
   return cur
 }
 
-const ACTIVE_STATES = ['queued', 'running', 'suspended', 'paused'] as const
-
 export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
   const { records, sessions, directory } = deps
   if (!records.kinds.has(ONCE_KIND))
@@ -172,8 +170,9 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
   const names: string[] = []
 
   /**
-   * When a router context starts new work, the session it starts becomes the primary subscriber of
-   * the subject the router was asked about (the thread, issue or MR), so follow-ups skip the router.
+   * When a router context starts new work, the session it starts subscribes to the subject the router
+   * was asked about (the thread, issue or MR), so follow-ups skip the router. It becomes the primary
+   * subscriber (the owner, which acts on untagged messages) unless another session already owns it.
    */
   const handOverSubject = async (newSessionId: string, ctx: ToolContext) => {
     const caller = await sessions.get(ctx.sessionId)
@@ -184,8 +183,13 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     const event = await deps.events.get(eventId)
     const subject = event?.data.subject
     if (!subject) return
+    // One owner per subject: a thread another session already owns (e.g. another employee's) keeps its
+    // owner, and this session follows it; tags still reach it.
+    const owned = (await deps.events.subscriptions.forSubject(subject)).some(
+      (x) => x.data.primary && x.data.sessionId !== newSessionId,
+    )
     await deps.events.subscriptions.subscribe(newSessionId, subject, {
-      primary: true,
+      primary: !owned,
       ...subscriptionScope(subject.system),
       actor: { type: 'session', id: ctx.sessionId },
     })
@@ -298,6 +302,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     },
 
     async checkLimits(employeeId, parent, newChildren) {
+      // The deployment defaults (in @mp/usage) overridden by limit records; `config.defaults` fills what neither sets.
       const eff = await deps.usage.limits.effective({
         employeeId,
         ...(parent ? { sessionId: parent.id, rootSessionId: parent.data.rootId } : {}),
@@ -305,25 +310,14 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
         ...(typeof parent?.data.meta?.procedureId === 'string' ? { procedureId: parent.data.meta.procedureId } : {}),
       })
       const d = deps.config.defaults ?? {}
-      const limits = {
-        ...eff,
-        ...(eff.maxDepth === undefined && d.maxDepth !== undefined ? { maxDepth: d.maxDepth } : {}),
-        ...(eff.maxFanOut === undefined && d.maxFanOut !== undefined ? { maxFanOut: d.maxFanOut } : {}),
-        ...(eff.maxConcurrentSessions === undefined && d.maxConcurrentSessions !== undefined
-          ? { maxConcurrentSessions: d.maxConcurrentSessions }
-          : {}),
-      }
-      let running = 0
-      if (limits.maxConcurrentSessions !== undefined) {
-        const runs = await sessions.runs({ employeeId, state: [...ACTIVE_STATES], limit: 100_000 })
-        running = new Set(runs.map((r) => r.data.sessionId)).size
-      }
+      const pick = (f: 'maxDepth' | 'maxFanOut') => (eff.sources[f] !== undefined ? eff[f] : d[f])
       const children = parent && newChildren === 1 ? (await sessions.children(parent.id)).length : 0
+      // Runs working at once are capped by the runner: work over the cap waits in the queue, it isn't refused.
       const check = checkForkLimits({
         depth: parent ? parent.data.depth + 1 : 0,
         fanOut: newChildren === 1 ? children + 1 : newChildren,
-        runningSessions: running + newChildren,
-        limits,
+        runningSessions: 0,
+        limits: { maxDepth: pick('maxDepth'), maxFanOut: pick('maxFanOut') },
       })
       if (!check.ok)
         throw new ValidationError(`limit reached: ${check.reason}. Ask the requester or owner to raise it, or do less.`)

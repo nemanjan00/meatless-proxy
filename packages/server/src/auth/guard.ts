@@ -9,6 +9,7 @@ import { contactForToken } from '../tokens.ts'
 import { type Access, accessOf, atLeast } from './access.ts'
 import { RateLimiter } from './rate-limit.ts'
 import { resolveAuthSession } from './sessions.ts'
+import { ChatVisibility, type Viewer } from './visibility.ts'
 
 /** The session cookie: httpOnly, SameSite=Lax, Path=/, Secure over https. */
 export const SESSION_COOKIE = 'mp_session'
@@ -79,6 +80,32 @@ const ownRun = async ({ principal, params, s }: GuardContext) => {
   if (!run) return // the handler answers 404
   if (run.data.requesterId !== principal.contactId) throw new DeniedError('only admins can steer work someone else asked for')
 }
+
+/** The principal as the visibility rules see them. */
+export const viewerOf = (p: Principal): Viewer => ({ contactId: p.contactId, admin: p.access === 'admin' })
+
+/**
+ * Private sessions (work from a DM) are for the DM's members: 404 for everyone else. With
+ * `redacted`, an admin passes too (the handler shows them that it exists, and nothing more).
+ */
+const readableSession =
+  (redacted = false) =>
+  async ({ principal, params, s }: GuardContext) => {
+    if (!(await s.sessions.get(params.id ?? ''))) return // the handler answers 404
+    await new ChatVisibility(s).requireSession(viewerOf(principal), params.id ?? '', { redacted })
+  }
+
+/** A run of a private session, or a private run of a shared context: its DM's members only. */
+const readableRun = async ({ principal, params, s }: GuardContext) => {
+  if (!(await s.sessions.getRun(params.id ?? ''))) return
+  await new ChatVisibility(s).requireRun(viewerOf(principal), params.id ?? '')
+}
+
+const all =
+  (...checks: NonNullable<GuardRule['check']>[]) =>
+  async (g: GuardContext) => {
+    for (const c of checks) await c(g)
+  }
 
 /**
  * Every route and what it needs, first match wins. Anything not listed
@@ -159,13 +186,19 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/chat/*', need: 'member' },
   { method: 'PATCH', path: '/api/chat/*', need: 'member' },
   { method: 'DELETE', path: '/api/chat/*', need: 'member' },
-  { method: 'POST', path: '/api/sessions/:id/message', need: 'member' },
-  { method: 'POST', path: '/api/sessions/:id/fork', need: 'member' },
+  { method: 'POST', path: '/api/sessions/:id/message', need: 'member', check: readableSession() },
+  { method: 'POST', path: '/api/sessions/:id/fork', need: 'member', check: readableSession() },
   // Live previews: a token for yourself, to watch a session's environment (src/previews).
   { method: 'POST', path: '/api/previews/token', need: 'member' },
-  { method: 'POST', path: '/api/runs/:id/pause', need: 'member', check: ownRun },
-  { method: 'POST', path: '/api/runs/:id/resume', need: 'member', check: ownRun },
-  { method: 'POST', path: '/api/runs/:id/cancel', need: 'member', check: ownRun },
+  { method: 'POST', path: '/api/runs/:id/pause', need: 'member', check: all(readableRun, ownRun) },
+  { method: 'POST', path: '/api/runs/:id/resume', need: 'member', check: all(readableRun, ownRun) },
+  { method: 'POST', path: '/api/runs/:id/cancel', need: 'member', check: all(readableRun, ownRun) },
+
+  // Sessions from a DM are private (src/auth/visibility.ts): the detail shows admins a redacted session.
+  { method: 'GET', path: '/api/sessions/:id', need: 'viewer', check: readableSession(true) },
+  { method: 'GET', path: '/api/sessions/:id/*', need: 'viewer', check: readableSession() },
+  { method: 'GET', path: '/api/runs/:id', need: 'viewer', check: readableRun },
+  { method: 'GET', path: '/api/runs/:id/*', need: 'viewer', check: readableRun },
 
   // Reading: everything else, for everyone signed in (secrets are above).
   { method: 'GET', path: '/api/*', need: 'viewer' },

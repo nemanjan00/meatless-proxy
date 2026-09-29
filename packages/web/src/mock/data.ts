@@ -293,19 +293,18 @@ const KINDS: ApiKindSchema[] = [
   {
     kind: 'limit',
     prefix: 'lim',
-    titleField: 'name',
     core: [
-      { name: 'name', type: 'string' },
-      { name: 'scope', type: 'json', required: true },
-      { name: 'forkDepth', type: 'number' },
-      { name: 'fanOut', type: 'number' },
-      { name: 'concurrentSessions', type: 'number' },
-      { name: 'tokensPerRun', type: 'number' },
-      { name: 'tokensPerTree', type: 'number' },
-      { name: 'tokensPerEmployeePerDay', type: 'number' },
-      { name: 'costPerDay', type: 'number' },
-      { name: 'wallClockPerRunSec', type: 'number' },
-      { name: 'aiToAiStreak', type: 'number' },
+      { name: 'target', type: 'json', required: true },
+      { name: 'maxTokens', type: 'number' },
+      { name: 'maxCostUsd', type: 'number' },
+      { name: 'period', type: 'enum', values: ['run', 'session', 'tree', 'day', 'month'] },
+      { name: 'maxDepth', type: 'number' },
+      { name: 'maxFanOut', type: 'number' },
+      { name: 'maxConcurrentSessions', type: 'number' },
+      { name: 'maxSteps', type: 'number' },
+      { name: 'maxWallMs', type: 'number' },
+      { name: 'maxAiStreak', type: 'number' },
+      { name: 'enabled', type: 'boolean' },
     ],
   },
 ]
@@ -2451,24 +2450,17 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
 
   // ── limits ──
   put<LimitData>('limit', mockId('lim', 1), {
-    name: 'Deployment defaults',
-    scope: { type: 'deployment' },
-    forkDepth: 4,
-    fanOut: 20,
-    concurrentSessions: 12,
-    tokensPerRun: 120_000,
-    tokensPerTree: 2_000_000,
-    tokensPerEmployeePerDay: 8_000_000,
-    costPerDay: 40,
-    wallClockPerRunSec: 3600,
-    aiToAiStreak: 8,
+    target: { type: 'employee', id: EMP.billing },
+    maxTokens: 8_000_000,
+    period: 'day',
+    maxConcurrentSessions: 12,
   })
   put<LimitData>('limit', mockId('lim', 2), {
-    name: 'Billing Bot',
-    scope: { type: 'employee', id: EMP.billing },
-    tokensPerEmployeePerDay: 4_000_000,
-    costPerDay: 20,
+    target: { type: 'contact', id: CON.chen },
+    maxTokens: 1_000_000,
+    period: 'day',
   })
+  put<LimitData>('limit', mockId('lim', 3), { target: { type: 'global' }, maxTokens: 30_000_000, period: 'day' })
 
   // ── usage: two weeks, hourly ──
   const rand = rng(42)

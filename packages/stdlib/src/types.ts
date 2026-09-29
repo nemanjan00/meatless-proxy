@@ -126,7 +126,10 @@ export interface StdlibConfig {
    * (`DOCKER_DIRECT_NETWORK`). Default true; false turns it into no network.
    */
   directNetwork?: boolean
-  /** Default limits used when none are configured. */
+  /**
+   * Fork limits used when neither the usage service's defaults nor a limit record sets them. The
+   * server passes its defaults to `@mp/usage` instead. `maxConcurrentSessions` is enforced by the runner.
+   */
   defaults?: { maxFanOut?: number; maxDepth?: number; maxConcurrentSessions?: number }
 }
 

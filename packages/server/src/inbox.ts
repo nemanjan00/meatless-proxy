@@ -129,7 +129,8 @@ export class PersonInbox {
     ]
     for (const run of runs) {
       const type = runItemType(run, viewer)
-      if (type) push(await this.runItem(run, type, v))
+      // Work from a DM someone isn't in never shows in their inbox (src/auth/visibility.ts).
+      if (type && (await this.vis.canReadRun(viewer, run))) push(await this.runItem(run, type, v))
     }
 
     const dms = await this.vis.dmChannels(contactId)
@@ -203,7 +204,7 @@ export class PersonInbox {
   /** The item a run's new state is for this person, or null (the same rule as `items`). */
   async itemForRun(run: Run, viewer: InboxViewer, v: Views): Promise<Api.InboxItem | null> {
     const type = runItemType(run, viewer)
-    if (!type) return null
+    if (!type || !(await this.vis.canReadRun(viewer, run))) return null
     return this.withState(await this.runItem(run, type, v), await this.state(viewer.contactId))
   }
 

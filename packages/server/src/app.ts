@@ -15,6 +15,7 @@ import { Metrics, metricsRoutes } from './http/metrics.ts'
 import { defaultWebDist, serveWeb } from './http/static.ts'
 import { webhookRoutes } from './http/webhooks.ts'
 import { mcpServerRoutes } from './http/mcp-servers.ts'
+import { limitRoutes } from './http/limits.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { ChatActivity, chatActivityRoutes } from './chat-activity.ts'
@@ -147,6 +148,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', projectRoutes(services))
   app.route('/', procedureRoutes(services))
   app.route('/', notificationPrefsRoutes(services))
+  app.route('/', limitRoutes(services)) // Settings → Limits and Pricing (src/http/limits.ts)
   app.route('/', chatAttachmentRoutes(services, auth.visibility))
   app.route('/', chatActivityRoutes(activity, auth.visibility))
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))

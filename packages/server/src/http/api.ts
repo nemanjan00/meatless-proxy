@@ -11,12 +11,14 @@ import type { UsageData } from '@mp/usage'
 import { Hono, type Context } from 'hono'
 import { AUTH_KINDS } from '../auth/access.ts'
 import { PersonInbox } from '../inbox.ts'
-import { principalOf } from '../auth/guard.ts'
-import type { ChatVisibility } from '../auth/visibility.ts'
+import { principalOf, viewerOf } from '../auth/guard.ts'
+import { type ChatVisibility, PRIVATE_TITLE, type Viewer, redactSession } from '../auth/visibility.ts'
 import type { Services } from '../services.ts'
 import { rotateSshKey } from '../ssh.ts'
 import { lineage } from './lineage.ts'
 import { querySessionList, sessionOrigins } from './session-list.ts'
+import { employeeFiles } from './files-access.ts'
+import { canReadWorkRecord, privateWorkFilter, visibleEventsPage, visibleLineage, visibleTree } from './private-views.ts'
 import { BadRequestError, boolParam, intParam, jsonBody, requireString } from './util.ts'
 import {
   Views,
@@ -106,18 +108,22 @@ export function apiRoutes(deps: ApiDeps): Hono {
   const inbox = new PersonInbox(s, vis)
   const me_ = (c: Context) => principalOf(c).contactId
   const origins = sessionOrigins(s)
+  /** The caller, for the private-session rule (src/auth/visibility.ts). */
+  const viewer = (c: Context) => viewerOf(principalOf(c))
 
   /** Extra conditions hiding DM channels (and their messages and chat events) from people who aren't members. */
   const dmFilter = async (c: Context, kind: string): Promise<Condition[]> => {
-    if (!CHAT_KINDS.has(kind)) return []
+    const work = await privateWorkFilter(vis, viewer(c), kind)
+    if (!CHAT_KINDS.has(kind)) return work
     const hidden = [...(await vis.hiddenChannels(me_(c)))]
-    if (!hidden.length) return []
+    if (!hidden.length) return work
     const field = kind === 'channel' ? 'id' : kind === 'message' ? 'channelId' : 'payload.channelId'
-    return [{ field, op: 'nin', value: hidden }]
+    return [...work, { field, op: 'nin', value: hidden }]
   }
   /** 404 for a record in a DM the caller isn't in. */
   const requireVisible = async <R extends StoredRecord | null>(c: Context, r: R): Promise<R> => {
     if (r && CHAT_KINDS.has(r.kind) && !(await vis.canSeeRecord(me_(c), r))) throw new NotFoundError(r.kind, r.id)
+    if (r && !(await canReadWorkRecord(s, vis, viewer(c), r))) throw new NotFoundError(r.kind, r.id)
     return r
   }
   /** Only admins change who may do what, or anything of a session but its document and title. */
@@ -230,7 +236,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     )
     const shown = []
     for (const l of linked)
-      if (!HIDDEN_KINDS.has(l.record.kind) && (await vis.canSeeRecord(me_(c), l.record as StoredRecord))) shown.push(l)
+      if (
+        !HIDDEN_KINDS.has(l.record.kind) &&
+        (await vis.canSeeRecord(me_(c), l.record as StoredRecord)) &&
+        (await canReadWorkRecord(s, vis, viewer(c), l.record as StoredRecord))
+      )
+        shown.push(l)
     return c.json(shown satisfies Api.ApiLinkedRecord[])
   })
 
@@ -271,7 +282,10 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const kind = visibleKind(c.req.param('kind'))
     const id = c.req.param('id')
     await requireVisible(c, await s.records.require(kind, id))
-    return c.json((await s.records.backlinks({ kind, id })).filter((r) => !HIDDEN_KINDS.has(r.kind)) satisfies Api.ApiRecord[])
+    const shown = []
+    for (const r of await s.records.backlinks({ kind, id }))
+      if (!HIDDEN_KINDS.has(r.kind) && (await canReadWorkRecord(s, vis, viewer(c), r as StoredRecord))) shown.push(r)
+    return c.json(shown satisfies Api.ApiRecord[])
   })
 
   // ── Sessions and runs ────────────────────────────────────────────────────
@@ -279,13 +293,32 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/sessions', async (c) => {
     const page = await querySessionList(s, origins, c.req.query())
     const v = views()
-    const items = await Promise.all(page.items.map((x) => v.sessionListItem(x, page.origins.get(x.id))))
-    return c.json({ items, total: page.total } satisfies Api.Page<Api.SessionListItem>)
+    // Private sessions: redacted for admins who aren't in the DM, left out for everyone else.
+    const who = viewer(c)
+    const shown: typeof page.items = []
+    for (const x of page.items) {
+      const access = await vis.sessionAccess(who, x)
+      if (access !== 'none') shown.push(access === 'redacted' ? redactSession(x) : x)
+    }
+    const items = await Promise.all(shown.map((x) => v.sessionListItem(x, page.origins.get(x.id))))
+    return c.json({ items, total: page.total - (page.items.length - shown.length) } satisfies Api.Page<Api.SessionListItem>)
   })
 
   app.get('/api/sessions/:id', async (c) => {
-    const session = await s.sessions.require(c.req.param('id'))
+    const session = await vis.requireSession(viewer(c), c.req.param('id'), { redacted: true })
     const v = views()
+    if (session.data.meta?.redacted === true) {
+      // An admin outside the DM: that the session exists, whose it is and what it cost, nothing it holds.
+      return c.json({
+        session: session as Api.Session,
+        employee: await v.employeeSummary(session.data.employeeId),
+        checklist: null,
+        activeRun: null,
+        links: [],
+        tokens: await v.tokens({ sessionId: session.id }),
+        threads: [],
+      } satisfies Api.SessionDetail)
+    }
     const [employee, checklist, runs, links, tokens, subs] = await Promise.all([
       v.employeeSummary(session.data.employeeId),
       s.records.getByKey<DomainChecklist['data']>('checklist', session.id),
@@ -316,18 +349,29 @@ export function apiRoutes(deps: ApiDeps): Hono {
       if (root) threads.push({ channelId: root.data.channelId, threadId: root.id, title: root.data.text.slice(0, 80) })
     }
     const hidden = await vis.hiddenChannels(me_(c))
+    const shownLinks = []
+    for (const l of links)
+      if (
+        !HIDDEN_KINDS.has(l.record.kind) &&
+        !(l.record.kind === 'channel' && hidden.has(l.record.id)) &&
+        (await canReadWorkRecord(s, vis, viewer(c), l.record as StoredRecord))
+      )
+        shownLinks.push(l)
+    const shownRun = activeRun && (await vis.canReadRun(viewer(c), activeRun)) ? activeRun : null
     return c.json({
       session: session as Api.Session,
       employee,
       checklist: checklist ? mapChecklist(checklist as DomainChecklist) : null,
-      activeRun: activeRun as Api.Run | null,
-      links: links.filter((l) => !HIDDEN_KINDS.has(l.record.kind) && !(l.record.kind === 'channel' && hidden.has(l.record.id))),
+      activeRun: shownRun as Api.Run | null,
+      links: shownLinks,
       tokens,
       threads: threads.filter((t) => !hidden.has(t.channelId)),
     } satisfies Api.SessionDetail)
   })
 
-  app.get('/api/sessions/:id/history', async (c) => c.json((await s.sessions.history(c.req.param('id'))) as Api.ApiEntry[]))
+  app.get('/api/sessions/:id/history', async (c) =>
+    c.json((await vis.redactEntries(viewer(c), await s.sessions.history(c.req.param('id')))) as Api.ApiEntry[]),
+  )
 
   app.get('/api/sessions/:id/tree', async (c) => {
     const tree = await s.sessions.tree(c.req.param('id'))
@@ -365,7 +409,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
         children,
       }
     }
-    return c.json(await build(tree))
+    return c.json(await visibleTree(s, vis, viewer(c), await build(tree)))
   })
 
   app.get('/api/sessions/:id/entry-tree', async (c) => {
@@ -387,20 +431,23 @@ export function apiRoutes(deps: ApiDeps): Hono {
         if (orig) add([orig as Api.ApiEntry])
       }
     }
-    const entries = [...byId.values()].sort((a, b) =>
-      a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
-    )
+    const entries = (await vis.redactEntries(viewer(c), [...byId.values()] as never[])) as Api.ApiEntry[]
+    entries.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1))
+    const shownRuns = []
+    for (const r of runs) if (await vis.canReadRun(viewer(c), r)) shownRuns.push(r)
     return c.json({
       sessionId: session.id,
       head: session.data.head,
       entries,
-      runs: runs.map((r) => ({ id: r.id, mode: r.data.mode, state: r.data.state, base: r.data.base, tip: r.data.tip })),
+      runs: shownRuns.map((r) => ({ id: r.id, mode: r.data.mode, state: r.data.state, base: r.data.base, tip: r.data.tip })),
     } satisfies Api.EntryTree)
   })
 
   app.get('/api/sessions/:id/runs', async (c) => {
     const session = await s.sessions.require(c.req.param('id'))
-    return c.json((await s.sessions.runs({ sessionId: session.id })).reverse() as Api.Run[])
+    const shown = []
+    for (const r of await s.sessions.runs({ sessionId: session.id })) if (await vis.canReadRun(viewer(c), r)) shown.push(r)
+    return c.json(shown.reverse() as Api.Run[])
   })
 
   app.get('/api/subscriptions', async (c) => {
@@ -408,7 +455,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const subs = sessionId
       ? await s.events.subscriptions.forSession(sessionId)
       : (await s.records.query<any>('subscription', { orderBy: { field: 'createdAt', dir: 'desc' }, limit: 500 })).items
-    const out = subs.map(mapSubscription)
+    if (sessionId) await vis.requireSession(viewer(c), sessionId)
+    const hiddenWork = await vis.hiddenWork(viewer(c))
+    const out = subs.filter((x) => !hiddenWork.sessions.has(x.data.sessionId)).map(mapSubscription)
     // Chat threads have no title of their own: use the start of the thread's first message.
     const titles = new Map<string, string>()
     for (const sub of out) {
@@ -488,12 +537,18 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/entries/:id/children', async (c) => {
     const id = c.req.param('id')
-    if (!(await s.store.entries.get(id))) throw new NotFoundError('entry', id)
-    return c.json((await s.store.entries.children(id)) as Api.ApiEntry[])
+    const entry = await s.store.entries.get(id)
+    if (!entry) throw new NotFoundError('entry', id)
+    // An entry of a private session is as private as the session.
+    const sid = typeof entry.meta.sessionId === 'string' ? entry.meta.sessionId : null
+    if (sid && !(await vis.canReadSession(viewer(c), await s.sessions.get(sid)))) throw new NotFoundError('entry', id)
+    return c.json((await vis.redactEntries(viewer(c), await s.store.entries.children(id))) as Api.ApiEntry[])
   })
 
   app.get('/api/runs/:id', async (c) => c.json((await s.sessions.requireRun(c.req.param('id'))) as Api.Run))
-  app.get('/api/runs/:id/history', async (c) => c.json((await s.sessions.runHistory(c.req.param('id'))) as Api.ApiEntry[]))
+  app.get('/api/runs/:id/history', async (c) =>
+    c.json((await vis.redactEntries(viewer(c), await s.sessions.runHistory(c.req.param('id')))) as Api.ApiEntry[]),
+  )
 
   app.post('/api/runs/:id/pause', async (c) => {
     const body = await jsonBody<{ reason?: unknown }>(c)
@@ -527,7 +582,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json(r as Api.Run)
   })
 
-  app.get('/api/lineage/:id', async (c) => c.json(await lineage(s, c.req.param('id'))))
+  app.get('/api/lineage/:id', async (c) => c.json(await visibleLineage(s, vis, viewer(c), await lineage(s, c.req.param('id')))))
 
   // ── Activity ─────────────────────────────────────────────────────────────
 
@@ -537,7 +592,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const items: Api.NowItem[] = []
     for (const run of runs.slice(0, 200)) {
       const session = await v.session(run.data.sessionId)
-      if (!session) continue
+      if (!session || !(await vis.canReadRun(viewer(c), run))) continue
       const [employee, tokens, checklist] = await Promise.all([
         v.employeeSummary(run.data.employeeId),
         v.tokens({ runId: run.id }),
@@ -602,7 +657,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/events', async (c) => {
     const q = c.req.query()
-    const where: Condition[] = [...(await dmFilter(c, 'event'))]
+    // The chat DM rule; integration DMs are handled by `visibleEventsPage` (a `private` marker).
+    const hiddenDms = [...(await vis.hiddenChannels(me_(c)))]
+    const where: Condition[] = hiddenDms.length ? [{ field: 'payload.channelId', op: 'nin', value: hiddenDms }] : []
     if (q.source) where.push({ field: 'source', op: 'eq', value: q.source })
     if (q.type) where.push({ field: 'type', op: 'eq', value: q.type })
     if (q.subject) where.push({ field: q.subject.includes(':') ? 'subjectKey' : 'subject.id', op: 'eq', value: q.subject })
@@ -613,16 +670,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const offset = intParam(q.offset, 'offset', 0)
     if (q.routed === 'unmatched') {
       const all = await s.records.query<MpEvent['data']>('event', { where, orderBy: { field: 'receivedAt', dir: 'desc' } })
-      const unmatched = (all.items as MpEvent[]).filter(isUnmatched)
+      const unmatched: MpEvent[] = []
+      for (const e of (all.items as MpEvent[]).filter(isUnmatched)) if (await vis.canSeeEvent(viewer(c), e)) unmatched.push(e)
       return c.json({ items: unmatched.slice(offset, offset + limit).map(mapEvent), total: unmatched.length })
     }
-    const page = await s.records.query<MpEvent['data']>('event', {
-      where,
-      orderBy: { field: 'receivedAt', dir: 'desc' },
-      limit,
-      offset,
-    })
-    return c.json({ items: (page.items as MpEvent[]).map(mapEvent), total: page.total } satisfies Api.Page<Api.ApiEvent>)
+    const page = await visibleEventsPage(s, viewer(c), where, limit, offset)
+    return c.json({ items: page.items.map(mapEvent), total: page.total } satisfies Api.Page<Api.ApiEvent>)
   })
 
   app.get('/api/events/:id', async (c) => {
@@ -641,10 +694,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
         if (r) all.set(id, r)
       }
     }
+    const shownRuns = []
+    for (const r of all.values()) if (await vis.canReadRun(viewer(c), r as never)) shownRuns.push(r)
     return c.json({
       event: mapEvent(e),
       deliveries: views().deliveries(e),
-      runs: [...all.values()] as Api.Run[],
+      runs: shownRuns as Api.Run[],
     } satisfies Api.EventDetail)
   })
 
@@ -670,6 +725,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json({ event: mapEvent(event), created }, created ? 201 : 200)
   })
 
+  const visibleOnly = async (c: Context, events: MpEvent[]) => {
+    const out: MpEvent[] = []
+    for (const e of events) if (await vis.canSeeEvent(viewer(c), e)) out.push(e)
+    return out
+  }
+
   app.get('/api/triggers', async (c) => {
     const v = views()
     const out: Api.TriggerStats[] = []
@@ -687,7 +748,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
         employee: await v.employeeSummary(t.data.employeeId),
         fires: t.data.fired ?? 0,
         lastFiredAt: t.data.lastFiredAt ?? null,
-        recentEvents: (recent.items as MpEvent[]).map((e) => ({
+        recentEvents: (await visibleOnly(c, recent.items as MpEvent[])).map((e) => ({
           id: e.id,
           type: e.data.type,
           ...(e.data.subject ? { subject: { system: e.data.subject.system, ref: e.data.subject.id } } : {}),
@@ -805,7 +866,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     ]
     for (const id of ids) {
       const x = await v.session(id)
-      if (x)
+      if (x && (await vis.canReadSession(viewer(c), x)))
         sessions.push({ id: x.id, slug: x.data.slug, title: x.data.title, employee: await v.employeeSummary(x.data.employeeId) })
     }
     return c.json({ root: root!, replies, sessions } satisfies Api.ChatThread)
@@ -985,10 +1046,15 @@ export function apiRoutes(deps: ApiDeps): Hono {
     }
   }
 
-  const labelOf = async (v: Views, by: Api.UsageGroupBy, key: string): Promise<string> => {
+  const labelOf = async (v: Views, by: Api.UsageGroupBy, key: string, who?: Viewer): Promise<string> => {
     if (!key) return '(none)'
     if (by === 'employee') return (await v.employee(key))?.data.name ?? key
-    if (by === 'session' || by === 'tree') return (await v.session(key))?.data.title ?? key
+    if (by === 'session' || by === 'tree') {
+      // The numbers of private sessions count; their titles are the DM's members' only.
+      const x = await v.session(key)
+      if (x && who && !(await vis.canReadSession(who, x))) return PRIVATE_TITLE
+      return x?.data.title ?? key
+    }
     if (by === 'contact') return (await v.contact(key))?.data.name ?? key
     if (by === 'project') return (await s.directory.projects.get(key))?.data.name ?? key
     if (by === 'template') return (await s.sessions.getTemplate(key))?.data.name ?? key
@@ -1028,7 +1094,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       rows.set(key, row)
     }
     const v = views()
-    for (const r of rows.values()) r.label = await labelOf(v, groupBy, r.key)
+    for (const r of rows.values()) r.label = await labelOf(v, groupBy, r.key, viewer(c))
     const list = [...rows.values()]
     if (groupBy === 'day' || groupBy === 'hour') list.sort((a, b) => (a.key < b.key ? -1 : 1))
     else list.sort((a, b) => b.total - a.total)
@@ -1055,7 +1121,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const v = views()
     const keyList = [...keys.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
     const labelled = await Promise.all(
-      keyList.map(async (key) => ({ key, label: splitBy && key !== '(none)' ? await labelOf(v, splitBy, key) : key })),
+      keyList.map(async (key) => ({ key, label: splitBy && key !== '(none)' ? await labelOf(v, splitBy, key, viewer(c)) : key })),
     )
     const points = [...buckets.entries()]
       .sort((a, b) => (a[0] < b[0] ? -1 : 1))
@@ -1072,26 +1138,15 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/files/:employeeId', async (c) => {
     const employeeId = c.req.param('employeeId')
     await s.directory.employees.require(employeeId)
-    const list = await s.files.list(employeeId, c.req.query('dir') || '/')
-    return c.json(
-      list.map((e) => {
-        const m = /^\/shared\/([^/]+)\/.+/.exec(e.path)
-        return {
-          path: e.path,
-          name: e.name,
-          type: e.type,
-          size: e.size ?? 0,
-          updatedAt: e.updatedAt ?? '',
-          ...(m ? { shared: { ownerEmployeeId: m[1]!, permission: 'read' as const } } : {}),
-        }
-      }) satisfies Api.FileEntry[],
-    )
+    // Private: admins see all of it, others what was shared with them (src/http/files-access.ts).
+    return c.json((await employeeFiles(s, principalOf(c), employeeId).list(c.req.query('dir') || '/')) satisfies Api.FileEntry[])
   })
 
   app.get('/api/files/:employeeId/content', async (c) => {
     const path = requireString(c.req.query('path'), 'path')
-    const f = await s.files.read(c.req.param('employeeId'), path)
-    return c.json({ path: f.path, content: f.content, version: f.version, updatedAt: f.updatedAt } satisfies Api.FileContent)
+    const employeeId = c.req.param('employeeId')
+    await s.directory.employees.require(employeeId)
+    return c.json((await employeeFiles(s, principalOf(c), employeeId).read(path)) satisfies Api.FileContent)
   })
 
   app.put('/api/files/:employeeId/content', async (c) => {
@@ -1101,11 +1156,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (body.version !== undefined && typeof body.version !== 'number') throw new BadRequestError('version must be a number')
     const employeeId = c.req.param('employeeId')
     await s.directory.employees.require(employeeId)
-    const f = await s.files.write(employeeId, path, body.content, {
+    // Admins, or a person the path was shared with for writing.
+    const f = await employeeFiles(s, principalOf(c), employeeId).write(path, body.content, {
       ...(typeof body.version === 'number' ? { expectedVersion: body.version } : {}),
       actor: await actor(c),
     })
-    return c.json({ path: f.path, content: f.content, version: f.version, updatedAt: f.updatedAt } satisfies Api.FileContent)
+    return c.json(f satisfies Api.FileContent)
   })
 
   // ── Secrets (names only; values are write-only) ──────────────────────────

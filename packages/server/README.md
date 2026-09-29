@@ -50,11 +50,20 @@ first by a small built-in loader; variables already set win.
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` (JSON lines) |
 | `MP_BOOTSTRAP` | `true` | Seed an empty store at startup |
 | `MP_WEB_DIST` | `packages/web/dist` | Built web UI to serve, if present |
-| `PRICING` | `{}` | JSON `{ "<model>": { "inputPerM", "outputPerM", "cachedInputPerM"? } }` (USD per million tokens) |
+| `PRICING` | `{}` | JSON `{ "<model>": { "inputPerM", "outputPerM", "cachedInputPerM"? } }` (USD per million tokens), or a path to a JSON file. Wins over the built-in table; Settings → Pricing wins over it. See [Limits and pricing](#limits-and-pricing) |
 | `RUN_CONCURRENCY` | `4` | Runs executed at once by this process |
 | `RUN_ATTEMPTS` | `5` | Attempts per run job (an unavailable provider is retried, the run resumes from its journal) |
 | `RUN_BACKOFF_MS` | `2000` | First retry delay, doubled per attempt |
-| `MAX_STEPS` | `60` | Model calls per run before it pauses |
+| `MAX_STEPS` | `60` | Model calls per run before it pauses (resuming gives another 60) |
+| `LIMIT_MAX_DEPTH` | `5` | How deep forks may go |
+| `LIMIT_MAX_FAN_OUT` | `20` | Children per loop |
+| `LIMIT_MAX_CONCURRENT_RUNS` | `8` | Runs of one employee working at once; more wait in the queue |
+| `LIMIT_RUN_WALL_MINUTES` | `30` | Minutes of work per run before it pauses between steps (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_TOKENS` | `5000000` | Tokens per employee per UTC day before its new work pauses (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_COST_USD` | none | USD per employee per UTC day (counts only models with a price) |
+| `LIMIT_DEPLOYMENT_DAILY_TOKENS`, `LIMIT_DEPLOYMENT_DAILY_COST_USD` | none | The same for the whole deployment |
+| `LIMIT_MAX_AI_STREAK` | `20` | Messages between employees in a thread without a person before deliveries pause |
+| `BUDGET_WARN_PERCENT` | `80` | Share of a daily or monthly budget at which `#alerts` gets a warning (`0`: none) |
 | `MAX_TOKENS` | none | `max_tokens` per model call (leave room for reasoning) |
 | `ALERTS_ENABLED` | `true` | Post alerts in `#alerts` (see [Alerts](#alerts)) |
 | `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |
@@ -180,7 +189,7 @@ have their own admin routes, `/api/mcp-servers`).
 
 All of it is in `src/auth/`: `guard.ts` (who is calling, CSRF, the route
 table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
-`visibility.ts` (DMs), `headers.ts` (CSP), `rate-limit.ts`,
+`visibility.ts` (DMs, private sessions), `headers.ts` (CSP), `rate-limit.ts`,
 `bootstrap-admin.ts`.
 
 - **Sign-in links.** `npm run login-link -- --contact <id|email>` prints one,
@@ -228,6 +237,40 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   session threads and the records API (`channel`, `message`, `event`) leave them
   out or answer 404, and `/ws` refuses `chat:<dm>` subscriptions and drops a DM's
   live events for everyone else.
+- **Private sessions.** Work that came from a DM is private to the DM's members
+  (admins included). `src/private-work.ts` marks it when it happens, as a
+  `private: { contacts, channels }` field (readers: the contacts listed, and the
+  current members of those harness DM channels): integration events that are
+  DMs at ingest (Slack `im`/`mpim`, `*.direct` types, `dm: true`; readers: the
+  person who wrote it); a run caused by a DM event or started by a private run
+  (and the entries it starts with, in their `meta.private`); its session, unless
+  that is a shared context (router, procedure or trigger context: there only
+  the run and its entries are private); a session a DM event reaches through
+  its inbox; forks and loop children of a private session; a session that
+  subscribes to, or is linked to, a DM, a message in one, or joins one. Markers
+  only grow. The rule is in `ChatVisibility` (`sessionAccess`, `canReadSession`,
+  `canReadRun`, `entryRedactor`, `hiddenWork`, `canSeeEvent`) and applied by
+  the guard (every `GET /api/sessions/:id/*` and `/api/runs/:id*` route, and
+  messages, forks and steering), the handlers (`src/http/private-views.ts`:
+  the sessions list and search, trees, lineage, subscriptions, entry children,
+  Now, the inbox, events and event detail, trigger stats, procedure instances, the records API for
+  `session`, `run`, `checklist`, `inbox`, `subscription`, `usage`, `event`),
+  `/ws` (entries, runs, steps, tokens, checklists, session and run records,
+  links, events), and the MCP tools (`session_get`, `sessions_search`,
+  `my_work`, finished-work notifications). Others get 404; an admin outside the
+  DM gets the session's detail and list row redacted (`PRIVATE_TITLE`, no
+  document, links, threads or run), nothing else. A router context stays
+  readable, with a DM request's entries and decision line redacted
+  (`redactEntry`) and its run left out. Usage totals count private sessions;
+  their titles are redacted in breakdowns. The employee's own tools don't go
+  through any of this.
+- **Employee files** (`src/http/files-access.ts`) are private: admins list, read
+  and write any employee's files through `/api/files/:employeeId`; everyone else
+  sees only what the employee shared with them (`fs_share` to their contact), at
+  the employee's paths, marked with the grant's permission, and writes only
+  under a `write` grant (and as a member). With nothing shared the top level is
+  empty, and deeper paths are 403. What other employees share with this one
+  (`/shared/…`) is for admins.
 - **CSRF**: a cookie-authenticated POST, PUT, PATCH or DELETE needs an `Origin`
   matching `PUBLIC_URL` (else the request's host), or `x-mp-csrf` repeating the
   `mp_csrf` cookie (the web UI sends it). A cookie-authenticated WebSocket must
@@ -365,13 +408,15 @@ returns the thread id), `session_get`, `sessions_search`, `docs_search`,
 `chat_join_channel`, `chat_leave_channel`, `chat_inbox`. Posting, reacting
 and joining need `member` access (a viewer's token reads and searches only).
 Chat reads, posts and search follow `ChatVisibility`: DMs only for members.
-Images (`src/mcp-attachments.ts`): `chat_read`, `chat_search` and deliveries
-carry a message's `attachments` (with `description` and `visibleText`),
-`chat_attachment` (id) returns one as MCP `image` content plus its metadata and
+Attachments (`src/mcp-attachments.ts`): `chat_read`, `chat_search` and deliveries
+carry a message's `attachments` (images with `description` and `visibleText`),
+`chat_attachment` (id) returns an image as MCP `image` content plus its metadata and
 saved description (`describe_only: true`: only the text, describing it first if
-needed, for the caller), and `chat_post` takes `attachments: [{ name?,
-mime?, data }]` (base64; the web upload's limits, and a `mime` the bytes don't
-bear out is refused).
+needed, for the caller), a text file as `text` content (at most 256 KB), and any
+other file as an embedded `resource` (`uri: mp://chat/attachments/<id>`, `mimeType`,
+base64 `blob`); `chat_post` takes `attachments: [{ name?, mime?, data }]` of any
+type (base64; the web upload's limits, and an image `mime` the bytes don't bear out
+is refused).
 
 ### Local agents in chat (`src/mcp-agents`)
 
@@ -568,6 +613,42 @@ start runs: tagging the employee is a notification, otherwise a failing
 provider would keep alerting about its own alerts. Replies in an alert's
 thread are routed as usual.
 
+- **Budgets** (`src/budget-alerts.ts`): after every model call, the daily and
+  monthly budgets of its employee, its requester and the whole deployment are
+  checked. At `BUDGET_WARN_PERCENT` (80 %) one warning per budget per period,
+  and one more when it's used up (new work then pauses until the period ends
+  or an admin raises the limit). They tag the employee's owner (an `ownerId`
+  contact on the employee) or else the admins; a requester's budget tags that
+  person too. The key names the budget, the period's start and the field.
+
+## Limits and pricing
+
+`src/limits.ts` makes runaway protection work without configuration
+(docs/spec.md#configurable-limits):
+
+- `limitDefaults(config)`: the deployment defaults from the `LIMIT_*`
+  variables, `MAX_STEPS` and `BUDGET_WARN_PERCENT`, given to `@mp/usage`.
+  Limit records (Settings → Limits) override them per target: the whole
+  deployment, every or one employee, every or one requester (contact); the
+  most specific wins, and `null` lifts a default.
+- `runLimitsFor(usage)`: the runner's `limitsFor`: steps, wall clock and the
+  employee's concurrency cap from the effective limits of the run (its
+  employee, requester, session, tree, template and procedure). Fork depth and
+  fan-out are checked by the stdlib when a fork or loop is made; budgets by
+  its `beforeModelCall` policy.
+- `PricingStore`: the pricing the ledger reads on every call: the `pricing`
+  setting (Settings → Pricing), then `PRICING`, then `BUILTIN_PRICING` from
+  `@mp/usage`. It's loaded at start, after every change, and again after a
+  minute (another instance may have changed it).
+
+`src/http/limits.ts` serves `GET|POST /api/limits`, `PUT|DELETE
+/api/limits/:id` and `GET|PUT /api/pricing`, for admins only (reading
+included; the handler checks, so the guard's default for `GET` doesn't open
+it). `GET /api/limits` shows the effective limits of every employee (defaults
+and overrides for all), of each employee, and of each requester with an
+override, with each budget's usage, plus the models used in the last 30 days
+that have no price.
+
 ## Projects and assignments
 
 `src/projects` (docs/spec.md#assigning-projects): an employee works on a project through a `contact -> project` link
@@ -619,13 +700,19 @@ never changes when someone assigns one. A failure only logs a warning.
 - `createChatAttachments` (from `@mp/chat`) on the files storage, owner
   `attachments` (`<FILES_DIR>/attachments/…`), with `CHAT_ATTACHMENT_MAX_BYTES`
   and `CHAT_ATTACHMENTS_PER_MESSAGE`; `services.attachments`.
-- `POST /api/chat/attachments?name=` (raw body or multipart `file`; members,
-  like every chat write; 413 over the limit, 422 for anything that isn't an
-  image by content) → `{ attachment, expiresAt }`. `GET
+- `POST /api/chat/attachments?name=` (raw body or multipart `file`, any type;
+  members, like every chat write; 413 over the limit, 422 for a file claiming
+  an image type or extension whose bytes aren't one; the `Content-Type` is only
+  checked, never used as the type) → `{ attachment, expiresAt }`. `GET
   /api/chat/attachments/:id` for whoever can see the channel (a pending upload:
-  its uploader), with the sniffed type, `nosniff`, `inline` (or `?download=1`),
-  and `default-src 'none'; sandbox`. `POST /api/chat/channels/:id/messages`
-  takes `attachments: [id…]` (the text may then be empty).
+  its uploader), always with `nosniff` and `default-src 'none'; sandbox`:
+  images with their sniffed type and `inline` (or `?download=1`), every other
+  file as `attachment` with a safe file name and its type, or
+  `application/octet-stream` for HTML, SVG, XML, JavaScript, CSS and PDF
+  (`downloadMime`). `GET /api/chat/attachments/:id/text` (same visibility):
+  `{ attachment, text, truncated }` for a text file, at most 256 KB; 422 for
+  images and binaries. `POST /api/chat/channels/:id/messages` takes
+  `attachments: [id…]` (the text may then be empty).
 - `startAttachmentCleanup` (with the workers, every 10 minutes) deletes uploads
   nobody attached within the hour.
 - `resolveVision(config, model, logger)` at start: `MODEL_VISION` `true` /
@@ -784,6 +871,11 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 `npx vitest run --project node packages/server`:
 
 - `api.test.ts`: every `@mp/api` route exists, shapes, error mapping, secrets never returned, pause-all.
+- `limits.test.ts`: the defaults with no configuration and from the environment, defaults applied with no records, a
+  run pausing at 100 % of the daily budget (and an override letting it through), the limits API (admins only;
+  create, edit, delete, validation; the overview with budget usage and unpriced models), pricing (built-in table,
+  `PRICING`, the Settings editor and its validation), budget alerts (80 % once per period, 100 % once, tags; a
+  requester's and the deployment's budgets).
 - `session-list.test.ts`: `GET /api/sessions` filters (employee, project, requester, origin, combined), sort orders,
   paging an origin filter, retired routers hidden by default, row details, viewers may list; in memory, and on
   Postgres and BullMQ when `DATABASE_URL` and `REDIS_URL` are set.
@@ -843,6 +935,14 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   members and admins may do, the admin bootstrap and its link, security headers.
 - `visibility.test.ts`: DMs hidden from others and admins over HTTP (lists, reads, search, unread, records,
   events) and over the WebSocket (subscriptions, live events); a cross-site cookie socket refused.
+- `private-sessions.test.ts`: work from a DM is marked (work session, runs, router run but not the router
+  context; forks, loop children, inbox deliveries, subscriptions and member sessions); every session and run
+  route refused to a member, a viewer and an admin outside the DM, readable by the member; the admin's redacted
+  detail and list row; list, search and records API; a router context's DM entries redacted; usage labels; Now; a
+  Slack-style DM event hidden (list, unmatched, detail, records) and its work private; live entries, deltas and
+  a new DM request's router entries only for the member; the MCP tools. Postgres too with `DATABASE_URL`.
+- `private-files.test.ts`: employee files over the API: nothing without a grant, read and write grants (and
+  only what they cover, compare-and-swap kept), `/shared` for admins only, admins can do everything.
 - `oidc.test.ts`: a fake identity provider (discovery, JWKS, PKCE-checking token endpoint): RS256 and ES256,
   unknown emails, bad signatures, audiences, nonces, issuers, expiry, unverified emails, forged state cookies.
 - `metrics.test.ts`: access, and every metric through a strict parser of the text format.

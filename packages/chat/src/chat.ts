@@ -22,7 +22,7 @@ import {
   attachmentSchema,
   attachmentsOf,
 } from './attachments.ts'
-import { parseTags } from './tags.ts'
+import { addressedName, parseTags } from './tags.ts'
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -356,6 +356,16 @@ export function createChat(opts: ChatOptions): Chat {
         )
       } else if (r.type === 'employee') out.push({ raw: t.raw, type: 'employee', employeeId: r.employeeId })
       else out.push({ raw: t.raw, type: 'person', contactId: r.contactId })
+    }
+    // Addressing an employee by name at the start ("Meatless, …") counts as tagging it.
+    const addressed = addressedName(text)
+    if (addressed) {
+      const r = await opts.resolveName(addressed.toLowerCase())
+      if (
+        r?.type === 'employee' &&
+        !out.some((t) => t.type !== 'unresolved' && 'employeeId' in t && t.employeeId === r.employeeId)
+      )
+        out.push({ raw: addressed, type: 'employee', employeeId: r.employeeId })
     }
     return out
   }

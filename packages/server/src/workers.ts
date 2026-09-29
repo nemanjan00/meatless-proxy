@@ -2,6 +2,7 @@ import { errorMessage, isMpError, type Json } from '@mp/core'
 import type { WorkerHandle } from '@mp/queue'
 import type { RouteResult } from '@mp/router'
 import { startAlerts } from './alerts.ts'
+import { wireBudgetAlerts } from './budget-alerts.ts'
 import { asEmployee } from './git-store.ts'
 import { wireMcpAlerts } from './mcp-servers/index.ts'
 import { startScheduler } from './scheduler.ts'
@@ -78,7 +79,14 @@ export function startWorkers(s: Services): Workers {
   // A runtime MCP server that needs a new sign-in is an alert too (src/mcp-servers/alerts.ts).
   if (alerts) {
     const off = wireMcpAlerts(s, alerts)
-    handles.push({ close: async () => off() })
+    // Budgets at their warning share, and used up (src/budget-alerts.ts).
+    const offBudgets = wireBudgetAlerts(s, alerts)
+    handles.push({
+      close: async () => {
+        off()
+        offBudgets()
+      },
+    })
   }
   handles.push(
     s.queue.process<{ eventId: string }>(
