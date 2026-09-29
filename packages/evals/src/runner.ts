@@ -16,6 +16,8 @@ export interface ScenarioRun {
   /** Setup, act or settle failed (the checks still ran, when the app got that far). */
   error?: string
   tokens: number
+  /** Prompt tokens the provider served from its cache (part of `tokens`). */
+  cachedTokens: number
   costUsd: number
   modelCalls: number
   /** From the request to the runs settling. */
@@ -64,6 +66,7 @@ export async function runScenario(
     pass: false,
     checks: [],
     tokens: 0,
+    cachedTokens: 0,
     costUsd: 0,
     modelCalls: 0,
     durationMs: 0,
@@ -96,6 +99,7 @@ export async function runScenario(
     }
     const u = await ctx.usage()
     result.tokens = u.totalTokens
+    result.cachedTokens = u.cachedTokens
     result.costUsd = u.costUsd
     result.modelCalls = u.calls
   } catch (e) {

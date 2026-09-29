@@ -44,3 +44,23 @@ describe('subscriptions.subscribe tool', () => {
     expect(sub!.data).toMatchObject({ subject: { system: 'mp', id: p.threadId }, types: DEFAULT_SUBSCRIPTION_TYPES.mp })
   })
 })
+
+describe('router toolset', async () => {
+  const { ROUTER_EXCLUDED_TOOLS, DEFAULT_TOOLSET } = await import('../src/index.ts')
+  const { globMatch } = await import('@mp/core')
+  it('leaves out git, env, files, doc writing and chat administration, and keeps routing tools', () => {
+    const kept = DEFAULT_TOOLSET.filter((n) => !ROUTER_EXCLUDED_TOOLS.some((p) => globMatch(p, n)))
+    expect(kept.some((n) => /^(git|env|fs)\./.test(n))).toBe(false)
+    expect(kept).toEqual(
+      expect.arrayContaining([
+        'sessions.commit',
+        'sessions.create',
+        'sessions.message',
+        'sessions.wait',
+        'procedures.run',
+        'chat.reply',
+      ]),
+    )
+    expect(kept.length).toBeLessThan(DEFAULT_TOOLSET.length * 0.75)
+  })
+})

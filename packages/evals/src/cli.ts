@@ -72,7 +72,7 @@ try {
 const report = buildReport(runs, { startedAt, finishedAt: new Date().toISOString(), model, repeat })
 process.stdout.write(`\n${formatTable(report.summary)}\n\n`)
 process.stdout.write(
-  `total: ${report.totals.passed}/${report.totals.runs} passed, ${report.totals.tokens} tokens${report.totals.costUsd ? `, $${report.totals.costUsd.toFixed(4)}` : ''}\n`,
+  `total: ${report.totals.passed}/${report.totals.runs} passed, ${report.totals.tokens} tokens (${report.totals.cachedTokens} cached)${report.totals.costUsd ? `, $${report.totals.costUsd.toFixed(4)}` : ''}\n`,
 )
 const path = writeResults(fileURLToPath(new URL('../results', import.meta.url)), report)
 process.stdout.write(`results: ${path}\n`)

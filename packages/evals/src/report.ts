@@ -10,6 +10,7 @@ export interface ScenarioSummary {
   /** 0..1 */
   passRate: number
   avgTokens: number
+  avgCachedTokens: number
   avgCostUsd: number
   avgModelCalls: number
   avgDurationMs: number
@@ -26,7 +27,7 @@ export interface EvalReport {
   model: string
   repeat: number
   summary: ScenarioSummary[]
-  totals: { runs: number; passed: number; passRate: number; tokens: number; costUsd: number }
+  totals: { runs: number; passed: number; passRate: number; tokens: number; cachedTokens: number; costUsd: number }
   runs: ScenarioRun[]
 }
 
@@ -47,6 +48,7 @@ export function summarize(runs: ScenarioRun[]): ScenarioSummary[] {
       passed,
       passRate: passed / rs.length,
       avgTokens: Math.round(avg(rs.map((r) => r.tokens))),
+      avgCachedTokens: Math.round(avg(rs.map((r) => r.cachedTokens ?? 0))),
       avgCostUsd: avg(rs.map((r) => r.costUsd)),
       avgModelCalls: avg(rs.map((r) => r.modelCalls)),
       avgDurationMs: Math.round(avg(rs.map((r) => r.durationMs))),
@@ -70,6 +72,7 @@ export function buildReport(
       passed,
       passRate: runs.length ? passed / runs.length : 0,
       tokens: runs.reduce((a, r) => a + r.tokens, 0),
+      cachedTokens: runs.reduce((a, r) => a + (r.cachedTokens ?? 0), 0),
       costUsd: runs.reduce((a, r) => a + r.costUsd, 0),
     },
     runs,
@@ -84,11 +87,13 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 export function formatTable(summary: ScenarioSummary[], opts: { reasonWidth?: number } = {}): string {
   const width = opts.reasonWidth ?? 90
   const rows = [
-    ['scenario', 'pass', 'avg tokens', 'avg time', 'failure sample'],
+    ['scenario', 'pass', 'avg tokens', 'cached', 'avg calls', 'avg time', 'failure sample'],
     ...summary.map((s) => [
       s.scenario,
       `${pct(s.passRate)} (${s.passed}/${s.runs})`,
       String(s.avgTokens),
+      s.avgTokens ? pct((s.avgCachedTokens ?? 0) / s.avgTokens) : '-',
+      s.avgModelCalls.toFixed(1),
       secs(s.avgDurationMs),
       s.failureSample ? clip(s.failureSample.replace(/\s+/g, ' '), width) : '',
     ]),

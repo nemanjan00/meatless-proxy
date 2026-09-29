@@ -303,6 +303,7 @@ describe('the report', () => {
     pass,
     checks: [{ name: 'c', pass, reason: pass ? 'ok' : 'nope' }],
     tokens,
+    cachedTokens: tokens / 2,
     costUsd: 0.001,
     modelCalls: 2,
     durationMs,
@@ -319,6 +320,7 @@ describe('the report', () => {
         passed: 1,
         passRate: 0.5,
         avgTokens: 200,
+        avgCachedTokens: 100,
         avgCostUsd: 0.001,
         avgModelCalls: 2,
         avgDurationMs: 2000,
@@ -331,6 +333,7 @@ describe('the report', () => {
         passed: 1,
         passRate: 1,
         avgTokens: 50,
+        avgCachedTokens: 25,
         avgCostUsd: 0.001,
         avgModelCalls: 2,
         avgDurationMs: 500,
@@ -339,10 +342,10 @@ describe('the report', () => {
     ])
     const table = formatTable(summary)
     expect(table.split('\n')).toEqual([
-      '| scenario | pass       | avg tokens | avg time | failure sample |',
-      '|----------|------------|------------|----------|----------------|',
-      '| a        | 50% (1/2)  | 200        | 2.0 s    | c: nope        |',
-      '| b        | 100% (1/1) | 50         | 0.5 s    |                |',
+      '| scenario | pass       | avg tokens | cached | avg calls | avg time | failure sample |',
+      '|----------|------------|------------|--------|-----------|----------|----------------|',
+      '| a        | 50% (1/2)  | 200        | 50%    | 2.0       | 2.0 s    | c: nope        |',
+      '| b        | 100% (1/1) | 50         | 50%    | 2.0       | 0.5 s    |                |',
     ])
     const report = buildReport(runs, {
       startedAt: '2026-09-29T10:00:00.000Z',
@@ -350,7 +353,7 @@ describe('the report', () => {
       model: 'scripted',
       repeat: 1,
     })
-    expect(report.totals).toEqual({ runs: 3, passed: 2, passRate: 2 / 3, tokens: 450, costUsd: 0.003 })
+    expect(report.totals).toEqual({ runs: 3, passed: 2, passRate: 2 / 3, tokens: 450, cachedTokens: 225, costUsd: 0.003 })
     const dir = tmp()
     const path = writeResults(join(dir, 'results'), report)
     expect(path).toBe(join(dir, 'results', '2026-09-29T10-00-00-000Z.json'))

@@ -1,3 +1,4 @@
+import { globMatch } from '@mp/core'
 import type { Actor } from '@mp/store'
 import type { Employee } from '@mp/directory'
 import type { Services } from './services.ts'
@@ -60,7 +61,7 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
     if (existing) routerSessionId = existing.id
     else {
       const lists = await s.toolListsFor(employee.id)
-      const toolset = s.tools.allowed(lists).map((t) => t.name)
+      const toolset = routerToolset(s, lists)
       const contact = await s.directory.employees.contact(employee.id)
       const prompt = s.stdlib ? s.stdlib.employeePrompt({ employee, contact, now: s.clock.iso() }) : builtinPrompt(employee)
       const session = await s.sessions.create({
@@ -74,7 +75,10 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
           { kind: 'system', content: { text: prompt } },
           ...(s.stdlib ? [{ kind: 'system' as const, content: { text: s.stdlib.ROUTER_INSTRUCTIONS } }] : []),
         ],
-        meta: { role: 'router', ...(s.stdlib ? { routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION } : {}) },
+        meta: {
+          role: 'router',
+          ...(s.stdlib ? { routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION, routerToolset: 1 } : {}),
+        },
         actor,
       })
       routerSessionId = session.id
@@ -157,10 +161,30 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
   return { created, employeeId: employee.id, routerSessionId, channels, triggerId: trigger.id }
 }
 
+/**
+ * A router context gets every allowed tool except the ones it never needs (git, environments,
+ * files, writing docs, chat administration): fewer tool definitions keep every router call small.
+ */
+function routerToolset(s: Services, lists: Parameters<Services['tools']['allowed']>[0]): string[] {
+  const excluded = s.stdlib?.ROUTER_EXCLUDED_TOOLS ?? []
+  return s.tools
+    .allowed(lists)
+    .filter((t) => !excluded.some((pattern) => globMatch(pattern, t.name)))
+    .map((t) => t.name)
+}
+
 /** Router contexts created before the router instructions existed get them as a committed system entry. */
 async function ensureRouterInstructions(s: Services, routerSessionId: string, actor: Actor) {
   if (!s.stdlib) return
-  const session = await s.sessions.require(routerSessionId)
+  let session = await s.sessions.require(routerSessionId)
+  // The routing-only toolset, for router contexts created with the full one.
+  if (!session.data.meta?.routerToolset) {
+    const toolset = routerToolset(s, await s.toolListsFor(session.data.employeeId))
+    session = await s.records.update<typeof session.data>('session', session.id, {
+      toolset,
+      meta: { ...(session.data.meta ?? {}), routerToolset: 1 },
+    })
+  }
   if (((session.data.meta?.routerInstructions as number | undefined) ?? 0) >= s.stdlib.ROUTER_INSTRUCTIONS_VERSION) return
   const run = await s.sessions.createRun({
     sessionId: routerSessionId,

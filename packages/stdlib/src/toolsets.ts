@@ -102,3 +102,26 @@ export const REVIEWER_TOOLSET: readonly string[] = [
   'git.diff',
   'sessions.get',
 ]
+
+/**
+ * Tools a router context never needs: it routes, it doesn't do the work. The
+ * sessions it starts get the full toolset. Leaving these out keeps every
+ * router call small (about a third fewer tool definitions).
+ */
+export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
+  'git.**',
+  'env.**',
+  'fs.**',
+  'docs.write',
+  'docs.write_chapter',
+  'chat.add_member',
+  'chat.archive',
+  'chat.create_channel',
+  'chat.delete',
+  'chat.edit',
+  'chat.remove_member',
+  'sessions.offload',
+  'sessions.restore',
+  'sessions.save_template',
+  'triggers.**',
+]
