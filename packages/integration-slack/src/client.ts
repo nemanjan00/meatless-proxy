@@ -150,12 +150,38 @@ export function createSlackClient(opts: SlackClientOptions): SlackClient {
           await retry(wait, 'rate limited', { status: res.status, error, retryAfterMs: wait })
           continue
         }
-        throw new MpError('integration_request', `slack ${method}: ${error}`, { method, status: res.status, error })
+        const messages = slackMessages(data)
+        throw new MpError('integration_request', `slack ${method}: ${error}`, {
+          method,
+          status: res.status,
+          error,
+          ...(messages.length ? { messages } : {}),
+          ...(typeof data.needed === 'string' ? { needed: data.needed } : {}),
+        })
       }
       return data
     }
   }
   return { call }
+}
+
+/** Most of Slack's explanation lines kept with an error. */
+const MAX_ERROR_MESSAGES = 10
+
+/**
+ * What Slack says about an error beyond its code: `response_metadata.messages` (e.g. for
+ * `invalid_blocks`, `[ERROR] … [json-pointer:/blocks/0/text]`, naming the block) and `errors`.
+ */
+function slackMessages(data: SlackResponse): string[] {
+  const meta = (data.response_metadata ?? {}) as { messages?: unknown }
+  const lines = [meta.messages, data.errors].flatMap((v) => (Array.isArray(v) ? v : []))
+  return [...new Set(lines.filter((l): l is string => typeof l === 'string' && l !== ''))].slice(0, MAX_ERROR_MESSAGES)
+}
+
+/** Slack's explanation lines of an error from the client (`response_metadata.messages`), if any. */
+export function slackErrorMessages(err: unknown): string[] | undefined {
+  if (err instanceof MpError && Array.isArray(err.details?.messages)) return err.details.messages as string[]
+  return undefined
 }
 
 /** The Slack error code (`channel_not_found`, …) of an error from the client, if any. */

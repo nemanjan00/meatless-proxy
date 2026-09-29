@@ -71,9 +71,10 @@ export const slackSpec: IntegrationSpec = {
     update_message: 'idempotent',
     ask: 'non_idempotent',
     get_file: 'idempotent',
+    upload_file: 'non_idempotent',
     post_blocks: 'non_idempotent',
   },
-  answerTools: ['post_message', 'reply', 'update_message', 'ask', 'post_blocks'],
+  answerTools: ['post_message', 'reply', 'update_message', 'ask', 'post_blocks', 'upload_file'],
   identity: slackIdentity,
   create: (v, d) =>
     createSlackIntegration({

@@ -322,6 +322,8 @@ function setupSuite(backend: Backend) {
       const m = await t.req('GET', `/api/employees/${emp}/integrations/slack/manifest`)
       expect(m.body.manifest.settings.event_subscriptions.request_url).toBe(`${PUBLIC_URL}/webhooks/slack/${emp}`)
       expect(m.body.manifest.oauth_config.scopes.bot).toEqual(SLACK_BOT_SCOPES)
+      // get_file and upload_file.
+      expect(m.body.manifest.oauth_config.scopes.bot).toEqual(expect.arrayContaining(['files:read', 'files:write']))
       expect(m.body.manifest.settings.interactivity).toEqual({
         is_enabled: true,
         request_url: `${PUBLIC_URL}/webhooks/slack/${emp}/interactive`,
@@ -422,6 +424,14 @@ function setupSuite(backend: Backend) {
       expect(stepOf(slack, 'tokens').status).toBe('warning')
       expect(stepOf(slack, 'tokens').detail).toContain('reactions:write')
       expect(stepOf(slack, 'channels')).toMatchObject({ status: 'todo', data: { invite: '/invite @billing' } })
+    })
+
+    it('warns about an app installed before upload_file, without files:write', async () => {
+      fake.world.slack.scopes = SLACK_BOT_SCOPES.filter((sc) => sc !== 'files:write')
+      await setSecrets('slack', { SLACK_BOT_TOKEN: 'xoxb-good', SLACK_SIGNING_SECRET: SIGNING })
+      const tokens = stepOf(await status('slack', true), 'tokens')
+      expect(tokens.status).toBe('warning')
+      expect(tokens.detail).toMatch(/lacks the scopes files:write: add them and reinstall it/)
     })
 
     it('reuses a check for 30 s unless asked to re-check', async () => {

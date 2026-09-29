@@ -139,3 +139,101 @@ describe('files in events', () => {
     expect(e!.text).toBe('Slack #general U1: see logs [file: build log.txt, slack file F1] [file: shot.png, slack file F2]')
   })
 })
+
+describe('uploadFile', () => {
+  const root = '1712000002.000100'
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+
+  it('uploads an image and a text file into a thread with the three-step flow', async () => {
+    const img = await integration.uploadFile({ bytes: png, filename: 'chart.png', channel: 'C1', thread_ts: root })
+    expect(img).toEqual({
+      fileId: expect.stringMatching(/^F/),
+      channel: 'C1',
+      thread_ts: root,
+      permalink: expect.stringContaining(img.fileId),
+    })
+    const txt = await integration.uploadFile({
+      bytes: text('total: 42\n'),
+      filename: 'report.txt',
+      channel: 'C1',
+      thread_ts: root,
+      title: 'Q3 report',
+      comment: 'Here is the report',
+    })
+    expect(slack.callsTo('files.getUploadURLExternal').map((c) => c.params)).toEqual([
+      { filename: 'chart.png', length: String(png.byteLength) },
+      { filename: 'report.txt', length: '10' },
+    ])
+    const [first, second] = slack.callsTo('files.completeUploadExternal')
+    expect(first!.params).toEqual({ files: [{ id: img.fileId, title: 'chart.png' }], channel_id: 'C1', thread_ts: root })
+    expect(second!.params).toMatchObject({ channel_id: 'C1', thread_ts: root, initial_comment: 'Here is the report' })
+    expect(slack.uploads.get(img.fileId)!.bytes).toEqual(png)
+    const up = slack.uploads.get(txt.fileId)!
+    expect(new TextDecoder().decode(up.bytes)).toBe('total: 42\n')
+    expect(up).toMatchObject({ channel: 'C1', thread_ts: root, title: 'Q3 report', comment: 'Here is the report' })
+    // Both are in the thread.
+    const inThread = slack.channels.get('C1')!.messages.filter((m) => m.thread_ts === root && m.files)
+    expect(inThread.map((m) => m.files![0]!.name).sort()).toEqual(['chart.png', 'report.txt'])
+  })
+
+  it('refuses a file over the limit, or empty, before contacting Slack', async () => {
+    await expect(
+      integration.uploadFile({ bytes: new Uint8Array(2048), filename: 'big.bin', channel: 'C1' }, { maxBytes: 1024 }),
+    ).rejects.toMatchObject({ code: 'limit' })
+    await expect(integration.uploadFile({ bytes: new Uint8Array(), filename: 'empty.txt', channel: 'C1' })).rejects.toMatchObject(
+      {
+        code: 'validation',
+      },
+    )
+    expect(slack.calls).toHaveLength(0)
+  })
+
+  it('reports a missing files:write scope as such', async () => {
+    slack.failWith('files.getUploadURLExternal', 'missing_scope', 1, { needed: 'files:write', provided: 'chat:write' })
+    const err = await integration.uploadFile({ bytes: png, filename: 'a.png', channel: 'C1' }).catch((e) => e)
+    expect(err).toMatchObject({ code: 'denied' })
+    expect(err.message).toMatch(/add files:write and reinstall the app/)
+  })
+
+  it('never sends the bytes to a host that is not Slack', async () => {
+    slack.script('files.getUploadURLExternal', {
+      status: 200,
+      body: JSON.stringify({ ok: true, upload_url: 'https://evil.example.com/upload', file_id: 'FEVIL' }),
+    })
+    await expect(integration.uploadFile({ bytes: png, filename: 'a.png', channel: 'C1' })).rejects.toThrow(
+      /evil.example.com, which is not Slack/,
+    )
+    // Plain http to a Slack host is refused too.
+    slack.script('files.getUploadURLExternal', {
+      status: 200,
+      body: JSON.stringify({ ok: true, upload_url: 'http://files.slack.com/upload/v1/x', file_id: 'FX' }),
+    })
+    await expect(integration.uploadFile({ bytes: png, filename: 'a.png', channel: 'C1' })).rejects.toMatchObject({
+      code: 'denied',
+    })
+    expect(slack.callsTo('files.completeUploadExternal')).toHaveLength(0)
+  })
+
+  it("passes Slack's channel errors on", async () => {
+    await expect(integration.uploadFile({ bytes: png, filename: 'a.png', channel: 'C2' })).rejects.toThrow(/not_in_channel/)
+    await expect(integration.uploadFile({ bytes: png, filename: 'a.png', channel: 'C1', thread_ts: '1.2' })).rejects.toThrow(
+      /invalid_thread_ts/,
+    )
+  })
+
+  it('the upload_file tool without the harness refuses clearly', async () => {
+    const server = integration.createMcpServer()
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    await server.connect(b)
+    const client = new Client({ name: 'test', version: '0.0.0' })
+    await client.connect(a)
+    const r = (await client.callTool({ name: 'upload_file', arguments: { path: '/a.png', channel: 'C1' } })) as {
+      content: { text: string }[]
+      isError?: boolean
+    }
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ error: 'not_supported', message: expect.stringMatching(/harness/) })
+    expect(slack.calls).toHaveLength(0)
+    await client.close()
+  })
+})

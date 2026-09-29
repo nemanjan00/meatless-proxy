@@ -1,4 +1,4 @@
-import { errorMessage, isMpError, type Logger } from '@mp/core'
+import { errorMessage, isMpError, type Logger, MpError } from '@mp/core'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
@@ -12,7 +12,7 @@ import {
   parseBlocks,
   validateAsk,
 } from './blocks.ts'
-import { type SlackClient, type SlackResponse, slackErrorCode } from './client.ts'
+import { type SlackClient, type SlackResponse, slackErrorCode, slackErrorMessages } from './client.ts'
 import { fileInfo } from './files.ts'
 
 type Obj = Record<string, unknown>
@@ -79,6 +79,7 @@ const HINTS: Record<string, string> = {
   not_in_channel: 'the app is not a member of this channel; ask someone to invite it (/invite @app)',
   channel_not_found: 'no such channel, or the app cannot see it; use list_channels for ids',
   thread_not_found: 'no such thread; thread_ts must be the ts of the thread root message',
+  invalid_thread_ts: 'no such thread; thread_ts must be the ts of the thread root message',
   message_not_found: 'no such message in this channel',
   cant_update_message: 'only messages the app posted itself can be updated',
   users_not_found: 'no user with that email',
@@ -90,10 +91,16 @@ const HINTS: Record<string, string> = {
   invalid_blocks_format: 'blocks must be a JSON array of block objects',
 }
 
+/** The hint for a Slack error code the model can act on, if there is one. */
+export const slackErrorHint = (code: string | undefined): string | undefined => (code ? HINTS[code] : undefined)
+
 const fail = (err: unknown): CallToolResult => {
   const code = slackErrorCode(err)
   const body: Obj = { error: code ?? (isMpError(err) ? err.code : 'error'), message: errorMessage(err) }
   if (code && HINTS[code]) body.hint = HINTS[code]
+  // Slack's own explanation, e.g. which block of invalid_blocks failed and why.
+  const details = slackErrorMessages(err)
+  if (details) body.slack_messages = details
   if (isMpError(err, 'unavailable')) body.retryable = true
   return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: true }
 }
@@ -382,6 +389,25 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
     async (a) => {
       const { url: _url, ...info } = await fileInfo(client, a.file_id)
       return info
+    },
+  )
+  tool(
+    'upload_file',
+    'The way to share an image or file in Slack (never upload it to another file host and post a link). Shares a file from your filesystem: an image (shown inline, e.g. a chart code.run saved or an env.screenshot) or any other file (a report, a log). path is in your filesystem: /report.png, /work/files/report.png (as code.run sees it) or /shared/<owner>/… for files shared with you. Pass thread_ts to post inside a thread; comment is posted with the file as its message. At most 25 MB. Returns { fileId, channel, thread_ts, permalink }. This is an answer in Slack: no separate reply is needed.',
+    {
+      path: z.string().min(1).describe('The file in your filesystem, e.g. /report/revenue.png'),
+      channel,
+      thread_ts: ts.optional().describe('Thread root ts, to share inside a thread'),
+      title: z.string().optional().describe('Title shown on the file (default: its name)'),
+      comment: z.string().optional().describe('Message posted with the file (mrkdwn)'),
+    },
+    WRITE,
+    // The harness does the upload, reading the file from the employee's own files. This server has no files to read.
+    async () => {
+      throw new MpError(
+        'not_supported',
+        "upload_file only works in the harness, which reads the file from the employee's files: this MCP server has no file store",
+      )
     },
   )
   tool(

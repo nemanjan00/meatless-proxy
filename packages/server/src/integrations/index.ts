@@ -13,7 +13,7 @@ import { createInstance, InstanceCache, type IntegrationInstance } from './insta
 import { defineInteractionKind, interactionStore, noteAnswerEvent, registerAskPolicy } from './interactions.ts'
 import { registerIntegrationPolicies } from './policies.ts'
 import type { ProvisioningOptions } from './provisioning.ts'
-import { slackGetFileHandler } from './slack-files.ts'
+import { slackGetFileHandler, slackUploadFileHandler } from './slack-files.ts'
 import { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
 
 export { closingReason, mergeRequestSubject, needsExternalReply } from './policies.ts'
@@ -67,7 +67,10 @@ export interface IntegrationsDeps {
   directory: Directory
   /** Holds `identity_link` records: integration users and the contacts they are. */
   records: Records
-  /** Employees' files: Slack's get_file saves into them. Without it, get_file only reads a file's metadata. */
+  /**
+   * Employees' files: Slack's get_file saves into them and upload_file reads from them. Without it, get_file only
+   * reads a file's metadata and upload_file refuses.
+   */
   files?: FilesService
   clock: Clock
   logger: Logger
@@ -159,14 +162,20 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
 
   // ── Tools: definitions from an instance with placeholder secrets, calls to the caller's instance ──
   const toolNames: string[] = []
-  /** Tools the server does itself instead of the MCP server: Slack's get_file writes into the employee's files. */
+  /**
+   * Tools the server does itself instead of the MCP server: Slack's get_file writes into the employee's files, and
+   * upload_file reads from them.
+   */
   const serverHandlers: Record<string, ToolHandler> = {}
-  if (specs.slack && deps.files)
-    serverHandlers[`mcp.${specs.slack.name}.get_file`] = slackGetFileHandler({
-      instanceFor: (employeeId) => instanceFor(specs.slack!, employeeId),
+  if (specs.slack && deps.files) {
+    const slackFileDeps = {
+      instanceFor: (employeeId: string) => instanceFor(specs.slack!, employeeId),
       files: deps.files,
       logger,
-    })
+    }
+    serverHandlers[`mcp.${specs.slack.name}.get_file`] = slackGetFileHandler(slackFileDeps)
+    serverHandlers[`mcp.${specs.slack.name}.upload_file`] = slackUploadFileHandler(slackFileDeps)
+  }
   for (const spec of Object.values(specs)) {
     const definitions = createInstance(spec, undefined, {}, { clock: deps.clock, logger, ...factoryDeps(spec) })
     try {

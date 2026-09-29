@@ -1,7 +1,14 @@
 import { type Clock, errorMessage, type Logger, silentLogger, systemClock } from '@mp/core'
 import type { ExternalUser, Integration, IntegrationEvent, WebhookRequest, WebhookResult } from '@mp/mcp'
 import { createSlackClient, DEFAULT_BASE_URL, type RetryOptions, slackErrorCode } from './client.ts'
-import { type DownloadOptions, downloadSlackFile, type SlackDownload } from './files.ts'
+import {
+  type DownloadOptions,
+  downloadSlackFile,
+  type SlackDownload,
+  type SlackUploadInput,
+  type SlackUploadResult,
+  uploadSlackFile,
+} from './files.ts'
 import { mapSlackEvent, type SelfIdentity, type SlackEnvelope, SLACK_SYSTEM } from './events.ts'
 import { type BlockActionsPayload, handleBlockActions, type SlackInteractionStore } from './interactions.ts'
 import { verifySlackSignature } from './signature.ts'
@@ -56,6 +63,11 @@ export interface SlackIntegration extends Integration {
    * the harness to save into the employee's files: the bytes never go through the model.
    */
   downloadFile(fileId: string, opts?: DownloadOptions): Promise<SlackDownload>
+  /**
+   * Shares a file in a channel or thread (Slack's external upload flow, scope `files:write`),
+   * with bytes the harness read from the employee's files: they never go through the model.
+   */
+  uploadFile(input: SlackUploadInput, opts?: { maxBytes?: number; signal?: AbortSignal }): Promise<SlackUploadResult>
 }
 
 /**
@@ -253,17 +265,14 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
 
   // A Web API base other than Slack's (tests, a proxy) serves files too.
   const apiHost = opts.baseUrl && opts.baseUrl !== DEFAULT_BASE_URL ? new URL(opts.baseUrl).host : undefined
-  const downloadFile: SlackIntegration['downloadFile'] = (fileId, o) =>
-    downloadSlackFile(
-      {
-        client,
-        token: opts.secrets.botToken,
-        ...(opts.fetch ? { fetch: opts.fetch } : {}),
-        ...(apiHost ? { allowHost: (host: string) => host === apiHost } : {}),
-      },
-      fileId,
-      o,
-    )
+  const fileDeps = {
+    client,
+    token: opts.secrets.botToken,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    ...(apiHost ? { allowHost: (host: string) => host === apiHost } : {}),
+  }
+  const downloadFile: SlackIntegration['downloadFile'] = (fileId, o) => downloadSlackFile(fileDeps, fileId, o)
+  const uploadFile: SlackIntegration['uploadFile'] = (input, o) => uploadSlackFile(fileDeps, input, o)
 
   return {
     name: 'slack',
@@ -271,5 +280,6 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     handleWebhook,
     resolveUser,
     downloadFile,
+    uploadFile,
   }
 }

@@ -700,6 +700,11 @@ and the users mentioned in the text are resolved, `actorContactId` and
   instance's `downloadFile` fetches the file (Slack hosts only, 25 MB), and it's written to the employee's files at
   `/slack/<file id>-<safe name>` (`safeFileName`) with its sniffed type. The model gets `{ path, name, mime, size }`,
   the text of text files up to 64 KB (capped at 16 000 characters), and for images a hint to use `image.view`.
+  `mcp.slack.upload_file` is done by the server too: `path` is read from the employee's files with `FilesService.read`
+  (its own, or `/shared/<owner>/…` with a read grant; `/work/files/…` spellings too), refused over 25 MB from its listed
+  size before it's read, and the instance's `uploadFile` shares it (Slack's external upload flow, Slack hosts only,
+  scope `files:write`). The model gets `{ fileId, channel, thread_ts?, permalink? }`. It's one of Slack's `answerTools`,
+  so a run that shared a file doesn't also get its final text posted.
 
 ## Alerts
 
@@ -1049,7 +1054,9 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   secrets, webhooks, actor mapping, policies), Slack's `ask` end to end (blocks posted, the `interaction` record, the
   session subscribed and suspended in `sessions.wait { delivery: true }`, a signed interactive answer: empty 200,
   `chat.update`, `interaction.answered` with the contact, the run woken; a second answer, an unknown message and a bad
-  signature change nothing), and `get_file` saving text and images into the employee's files.
+  signature change nothing), `get_file` saving text and images into the employee's files, and `upload_file`: an image
+  and a text file into a thread, missing paths, read-only shares allowed and unshared files refused, too large files,
+  a missing `files:write` scope, an upload URL off Slack, and no final text posted after an upload.
 - `identity.test.ts`: identity from integrations with a fake lookup (email match, a created contact that can't sign
   in, name-only suggestions, bots, caching, failures, timeouts, concurrent events, ignored users, mention rendering) and
   through signed Slack webhooks (the `payload.author` trigger fires for a Slack user, the admin-only routes, link, move

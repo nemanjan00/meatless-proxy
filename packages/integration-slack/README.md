@@ -56,8 +56,10 @@ The package also exports these building blocks:
 
 ## Tools
 
-Results are compact JSON. Failures are `isError` results of the form `{ error, message, hint?, retryable? }`, where
-`error` is Slack's code and `hint` says what to do about it (e.g. `not_in_channel` → invite the app).
+Results are compact JSON. Failures are `isError` results of the form `{ error, message, hint?, slack_messages?, retryable? }`,
+where `error` is Slack's code, `hint` says what to do about it (e.g. `not_in_channel` → invite the app), and
+`slack_messages` is Slack's own explanation when it gives one (`response_metadata.messages` and `errors`, at most 10
+lines): for `invalid_blocks`, which block failed and why (`[ERROR] … [json-pointer:/blocks/1/text]`).
 
 | Tool | Slack method | Arguments | Result |
 |------|--------------|-----------|--------|
@@ -74,6 +76,7 @@ Results are compact JSON. Failures are `isError` results of the form `{ error, m
 | `ask` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text`, `fields`, `buttons?`, `allow_multiple?` | `{ channel, ts, thread_ts?, ask }`; in the harness `{ channel, ts, thread_ts?, interactionId, subject }`. See [questions with inputs](#questions-with-inputs). |
 | `post_blocks` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text` (the fallback), `blocks` (a JSON array of 1-50 blocks, or its JSON text) | `{ channel, ts, thread_ts? }`. Slack's `invalid_blocks` comes with a hint. |
 | `get_file` | `files.info` | `file_id` | Outside the harness, the file's metadata `{ id, name, mime, filetype, size, title, mode }`. In the harness, the server downloads it into the employee's files: `{ path, name, mime, size, text? }`. See [files](#files). |
+| `upload_file` | `files.getUploadURLExternal`, the upload, `files.completeUploadExternal` | `path`, `channel`, `thread_ts?`, `title?`, `comment?` | In the harness, the server reads `path` from the employee's files and uploads it: `{ fileId, channel, thread_ts?, permalink? }`. Outside the harness it refuses (`not_supported`): the plain MCP server has no files to read. See [files](#files). |
 
 A message looks like `{ ts, user?, bot_id?, subtype?, text, thread_ts?, reply_count?, reactions?: [{ name, count }], files?: [{ id, name }], edited? }`.
 
@@ -221,6 +224,29 @@ In the harness, the file is written to the employee's files at `/slack/<file id>
 the model gets `{ path, name, mime, size }`, plus the text for text files up to 64 KB. Images then work with
 `image.view { path }`, everything with `fs.read`, and `code.run` sees `/work/files/slack/…`.
 
+### Sharing a file into Slack
+
+`uploadFile` (and so `upload_file` in the harness) uses Slack's external upload flow, since `files.upload` is being
+retired (bot scope `files:write`):
+
+1. [`files.getUploadURLExternal`](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/)
+   `{ filename, length }` returns an `upload_url` and a `file_id`.
+2. The bytes are POSTed to `upload_url`, only over https to Slack's own hosts (the same check as downloads; a configured
+   `baseUrl` other than Slack's is allowed too, for tests). Redirects aren't followed.
+3. [`files.completeUploadExternal`](https://docs.slack.dev/reference/methods/files.completeUploadExternal/)
+   `{ files: [{ id, title }], channel_id, thread_ts?, initial_comment? }` shares it in the channel or thread.
+
+At most 25 MB, and not empty, checked before anything is sent (`LimitError`, `ValidationError`). Without `files:write`
+Slack answers `missing_scope`, reported as "add files:write and reinstall the app" (`DeniedError`).
+
+In the harness, `path` is a path in the employee's files, spelled as everywhere else: `/report.png`,
+`/work/files/report.png` (as `code.run` sees it), or `/shared/<owner>/…` for a file shared with the employee, which
+needs a read grant (the same rules as chat attachments). The bytes never pass through the model. An `upload_file`
+counts as an answer in Slack, so the run's final text isn't also posted.
+
+The `upload_file` tool on the plain MCP server (outside the harness) refuses with `not_supported`: it has no files to
+read, and the bytes aren't taken as a tool argument so that they never go through a model.
+
 ## Setup
 
 **Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → Slack). It generates this
@@ -260,6 +286,7 @@ oauth_config:
       - channels:read
       - chat:write
       - files:read
+      - files:write
       - groups:history
       - groups:read
       - im:history
@@ -294,6 +321,7 @@ What the scopes are for:
 |-------|------------|
 | `chat:write` | `post_message`, `reply`, `update_message`, `ask`, `post_blocks`, and updating an answered question (`chat.update`, `chat.postEphemeral`) |
 | `files:read` | `get_file` (`files.info` and the download) |
+| `files:write` | `upload_file` (`files.getUploadURLExternal`, `files.completeUploadExternal`) |
 | `channels:history`, `groups:history`, `im:history`, `mpim:history` | `read_channel` and `read_thread`, and the `message.*` events |
 | `channels:read`, `groups:read` | `list_channels`, and channel names in events |
 | `im:write`, `mpim:write` | `open_dm`. `mpim:write` is only needed for group DMs. |
@@ -303,7 +331,7 @@ What the scopes are for:
 
 Interactivity needs no scope of its own, only the Request URL (**Interactivity & Shortcuts**). For an app created
 before, turn it on there and set the Request URL to `https://harness.example.com/webhooks/slack/meatless/interactive`,
-and add the `files:read` scope under **OAuth & Permissions** (then reinstall the app).
+and add the `files:read` and `files:write` scopes under **OAuth & Permissions** (then reinstall the app).
 
 Slack verifies the request URL when you save the manifest, so the harness must already be running with the signing
 secret set. If it isn't, save the manifest anyway, then retry the URL under **Event Subscriptions** once the harness is up.
@@ -363,7 +391,7 @@ answers directly or starts a session that then owns the thread, and keeps a one-
 ```
 
 **Answers go back to Slack.** When a run caused by a Slack event it was expected to act on ends with a final answer (not
-`NO_REPLY`), without posting in Slack itself (`post_message`, `reply`, `update_message`, `ask`, `post_blocks`) and without handing the work to
+`NO_REPLY`), without posting in Slack itself (`post_message`, `reply`, `update_message`, `ask`, `post_blocks`, `upload_file`) and without handing the work to
 another session, the server posts that answer in the event's thread with the employee's bot. A working session is then
 subscribed to the thread, so follow-ups come back to it; the router context never subscribes (follow-ups come back
 through its trigger, and it decides again).
@@ -406,7 +434,10 @@ tests cover:
   401 for a bad or stale signature, the answer recorded, first answer wins under concurrency, `allowMultiple`, empty
   required inputs, `chat.update` failing, unknown messages and buttons ignored.
 - Files (`test/files.test.ts`): the download with the token, redirects to other hosts refused, the size limit (declared
-  and actual), the missing scope, external and unknown files.
+  and actual), the missing scope, external and unknown files; uploads of an image and a text file into a thread through
+  the three steps, too large and empty files refused before any call, the missing `files:write` scope, upload URLs off
+  Slack (or over http) refused, channel errors, and the tool refusing outside the harness.
+- Slack's explanation of an error (`slack_messages`) on `post_blocks` and `ask` (`test/interactive.test.ts`).
 
 The live smoke test is opt-in. It makes one read call (`list_channels`):
 

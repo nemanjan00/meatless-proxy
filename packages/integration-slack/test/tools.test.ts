@@ -57,6 +57,7 @@ describe('slack MCP tools', () => {
         'reply',
         'unreact',
         'update_message',
+        'upload_file',
       ].sort(),
     )
     for (const t of tools) expect(t.description?.length).toBeGreaterThan(20)

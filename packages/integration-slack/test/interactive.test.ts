@@ -327,6 +327,21 @@ describe('the ask tool', () => {
     const rejected = await call('post_blocks', { channel: 'C1', text: 'hi', blocks: [{ type: 'nonsense' }] })
     expect(rejected.value).toMatchObject({ error: 'invalid_blocks', hint: expect.stringContaining('Block Kit') })
   })
+
+  it("post_blocks and ask errors carry Slack's explanation of which block failed", async () => {
+    const why = ['[ERROR] must be more than 0 characters [json-pointer:/blocks/1/text/text]']
+    slack.failWith('chat.postMessage', 'invalid_blocks', 1, { errors: why, response_metadata: { messages: why } })
+    const r = await call('post_blocks', { channel: 'C1', text: 'hi', blocks: [{ type: 'divider' }, { type: 'section' }] })
+    expect(r.isError).toBe(true)
+    expect(r.value).toMatchObject({ error: 'invalid_blocks', slack_messages: why })
+    slack.failWith('chat.postMessage', 'invalid_blocks', 1, { response_metadata: { messages: ['[ERROR] bad button'] } })
+    const asked = await call('ask', { channel: 'C1', text: 'q', fields: [{ id: 'x', label: 'X', type: 'text' }] })
+    expect(asked.value).toMatchObject({ error: 'invalid_blocks', slack_messages: ['[ERROR] bad button'] })
+    // Without an explanation there's no empty list.
+    slack.failWith('chat.postMessage', 'invalid_blocks', 1)
+    const bare = await call('post_blocks', { channel: 'C1', text: 'hi', blocks: [{ type: 'divider' }] })
+    expect(bare.value.slack_messages).toBeUndefined()
+  })
 })
 
 // ── The interactive webhook ────────────────────────────────────────────────

@@ -22,6 +22,7 @@ export interface FakeMessage {
   reactions?: { name: string; users: string[]; count: number }[]
   edited?: { user: string; ts: string }
   blocks?: unknown[]
+  files?: { id: string; name: string; title?: string }[]
 }
 export interface FakeChannel {
   id: string
@@ -65,6 +66,21 @@ export interface RecordedCall {
   params: Record<string, unknown>
 }
 
+/** A file uploaded with the external upload flow (getUploadURLExternal, the POST, completeUploadExternal). */
+export interface FakeUpload {
+  id: string
+  filename: string
+  length: number
+  /** The bytes POSTed to the upload URL, and the token they carried. */
+  bytes?: Uint8Array
+  auth?: string | undefined
+  /** Set by completeUploadExternal. */
+  channel?: string
+  thread_ts?: string
+  title?: string
+  comment?: string
+}
+
 type Handler = (p: Record<string, unknown>) => Record<string, unknown>
 
 export interface FakeSlack {
@@ -75,13 +91,23 @@ export interface FakeSlack {
   files: Map<string, FakeFile>
   /** Download requests: path and the token they carried. */
   downloads: { path: string; auth: string | undefined }[]
+  /** Uploads by file id, from files.getUploadURLExternal on. */
+  uploads: Map<string, FakeUpload>
   /** Queues raw responses for a method, used before the method's normal handler. */
   script(method: string, ...responses: ScriptedResponse[]): void
-  /** Makes a method answer `{ ok: false, error }`. */
-  failWith(method: string, error: string, times?: number): void
+  /** Makes a method answer `{ ok: false, error, ...extra }`. */
+  failWith(method: string, error: string, times?: number, extra?: Record<string, unknown>): void
   callsTo(method: string): RecordedCall[]
   close(): Promise<void>
 }
+
+const readBytes = (req: IncomingMessage) =>
+  new Promise<Uint8Array>((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => resolve(new Uint8Array(Buffer.concat(chunks))))
+    req.on('error', reject)
+  })
 
 const readBody = (req: IncomingMessage) =>
   new Promise<string>((resolve, reject) => {
@@ -107,7 +133,9 @@ export async function startFakeSlack(): Promise<FakeSlack> {
   const users = new Map<string, FakeUser>()
   const calls: RecordedCall[] = []
   const scripted = new Map<string, ScriptedResponse[]>()
-  const failures = new Map<string, { error: string; times: number }>()
+  const failures = new Map<string, { error: string; times: number; extra?: Record<string, unknown> }>()
+  const uploads = new Map<string, FakeUpload>()
+  let fileCounter = 100
   const files = new Map<string, FakeFile>()
   const downloads: { path: string; auth: string | undefined }[] = []
   let origin = ''
@@ -211,6 +239,51 @@ export async function startFakeSlack(): Promise<FakeSlack> {
           url_private: url.replace('/download/', '/'),
           url_private_download: url,
         },
+      }
+    },
+    // https://docs.slack.dev/reference/methods/files.getUploadURLExternal/ (form body)
+    'files.getUploadURLExternal': (p) => {
+      const length = Number(p.length)
+      if (!p.filename || !Number.isInteger(length) || length <= 0) return err('invalid_arguments')
+      const id = `FUP${fileCounter++}`
+      uploads.set(id, { id, filename: String(p.filename), length })
+      return { ok: true, upload_url: `${origin}/upload/v1/${id}`, file_id: id }
+    },
+    // https://docs.slack.dev/reference/methods/files.completeUploadExternal/
+    'files.completeUploadExternal': (p) => {
+      const list = (typeof p.files === 'string' ? JSON.parse(p.files) : p.files) as { id: string; title?: string }[] | undefined
+      if (!Array.isArray(list) || !list.length) return err('invalid_arguments')
+      const done = list.map((f) => ({ f, u: uploads.get(f.id) }))
+      if (done.some(({ u }) => !u?.bytes)) return err('file_not_found')
+      const c = p.channel_id ? findChannel(p.channel_id) : undefined
+      if (p.channel_id) {
+        if (!c) return err('channel_not_found')
+        if (!c.is_member) return err('not_in_channel')
+      }
+      const thread = p.thread_ts ? String(p.thread_ts) : undefined
+      if (c && thread && !c.messages.some((m) => m.ts === thread)) return err('invalid_thread_ts')
+      const shared = done.map(({ f, u }) => {
+        Object.assign(u!, {
+          ...(c ? { channel: c.id } : {}),
+          ...(thread ? { thread_ts: thread } : {}),
+          ...(f.title ? { title: f.title } : {}),
+          ...(p.initial_comment ? { comment: String(p.initial_comment) } : {}),
+        })
+        files.set(u!.id, { id: u!.id, name: u!.filename, mimetype: 'application/octet-stream', bytes: u!.bytes! })
+        return { id: u!.id, name: u!.filename, title: f.title ?? u!.filename }
+      })
+      if (c)
+        c.messages.unshift({
+          ts: nextTs(),
+          user: BOT_USER,
+          bot_id: BOT_ID,
+          text: p.initial_comment ? String(p.initial_comment) : '',
+          ...(thread ? { thread_ts: thread } : {}),
+          files: shared,
+        })
+      return {
+        ok: true,
+        files: shared.map((f) => ({ ...f, permalink: `https://example.slack.com/files/${BOT_USER}/${f.id}/${f.name}` })),
       }
     },
     'conversations.history': (p) => {
@@ -321,6 +394,24 @@ export async function startFakeSlack(): Promise<FakeSlack> {
       res.writeHead(302, { location: to })
       return res.end()
     }
+    // Uploads: /upload/v1/<file id>, the bytes as the body (step 2 of the external upload flow).
+    const up = /^\/upload\/v1\/([A-Z0-9]+)$/.exec(path)
+    if (up) {
+      const u = uploads.get(up[1]!)
+      const bytes = await readBytes(req)
+      if (!u || req.method !== 'POST') {
+        res.writeHead(404)
+        return res.end()
+      }
+      if (bytes.byteLength !== u.length) {
+        res.writeHead(400)
+        return res.end('length mismatch')
+      }
+      u.bytes = bytes
+      u.auth = req.headers.authorization
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      return res.end(`OK - ${bytes.byteLength}`)
+    }
     const dl = /^\/files-pri\/T1-([A-Z0-9]+)\//.exec(path)
     if (dl) {
       downloads.push({ path, auth: req.headers.authorization })
@@ -357,7 +448,7 @@ export async function startFakeSlack(): Promise<FakeSlack> {
     const f = failures.get(method)
     if (f && f.times > 0) {
       f.times--
-      return send(200, JSON.stringify(err(f.error)))
+      return send(200, JSON.stringify({ ...err(f.error), ...f.extra }))
     }
     const h = handlers[method]
     if (!h) return send(404, JSON.stringify(err('unknown_method')))
@@ -374,8 +465,10 @@ export async function startFakeSlack(): Promise<FakeSlack> {
     users,
     files,
     downloads,
+    uploads,
     script: (method, ...responses) => scripted.set(method, [...(scripted.get(method) ?? []), ...responses]),
-    failWith: (method, error, times = Number.POSITIVE_INFINITY) => failures.set(method, { error, times }),
+    failWith: (method, error, times = Number.POSITIVE_INFINITY, extra) =>
+      failures.set(method, { error, times, ...(extra ? { extra } : {}) }),
     callsTo: (method) => calls.filter((c) => c.method === method),
     close: () => new Promise<void>((r) => server.close(() => r())),
   }

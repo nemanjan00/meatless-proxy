@@ -874,7 +874,7 @@ Each integration has three parts:
 
 | | Slack | Linear | GitLab |
 |---|---|---|---|
-| Tools | post, reply in thread, read channel or thread, react, look up users, open DM, [ask with inputs and buttons](#interactive-questions-in-slack), post Block Kit, save a shared file into the employee's files | search, get, create and update issues; comment; assign; set state and labels; list teams, projects and cycles; create sub-issues for [real forks](#real-forks-go-through-the-task-system) | projects, branches and files; create and update merge requests; comment on MRs and issues; pipeline status and job logs; issues |
+| Tools | post, reply in thread, read channel or thread, react, look up users, open DM, [ask with inputs and buttons](#interactive-questions-in-slack), post Block Kit, save a shared file into the employee's files, share a file from the employee's files | search, get, create and update issues; comment; assign; set state and labels; list teams, projects and cycles; create sub-issues for [real forks](#real-forks-go-through-the-task-system) | projects, branches and files; create and update merge requests; comment on MRs and issues; pipeline status and job logs; issues |
 | Events in | Events API (messages, mentions, reactions, app DMs); interactivity (answers to questions asked with inputs) | webhooks (issue created, updated or assigned; comments; state changes) | webhooks (MR opened or updated; comments; pipeline and job status; push; issues) |
 | Subjects | `slack:<channel>/<thread ts>` | `linear:<issue identifier>` | `gitlab:<project>!<mr iid>`, `gitlab:<project>#<issue iid>`, `gitlab:<project>@pipeline/<id>` |
 
@@ -884,7 +884,14 @@ Each integration has three parts:
   one into the employee's own files (`/slack/<file id>-<name>`, at most 25 MB,
   downloaded by the server from Slack's own hosts only), so the bytes never
   pass through the model, and it works with `image.view`, `fs.read` and
-  `code.run`.
+  `code.run`. The other way, `upload_file { path, channel, thread_ts?,
+  title?, comment? }` shares a file from the employee's files (its own, or
+  one shared with it for reading, as for chat attachments) into a channel or
+  thread: the server reads it and uploads it with Slack's external upload
+  flow (at most 25 MB, to Slack's own hosts only, bot scope `files:write`),
+  so again the bytes never pass through the model. It's how an employee
+  shares a screenshot or a generated chart or report in Slack, and it counts
+  as an answer there, so the run's final text isn't also posted.
 - **Linear is the task system:** a new issue assigned to an employee starts
   work through a trigger, and comments on it come back through the
   subscription.

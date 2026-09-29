@@ -6,7 +6,7 @@
  */
 import { createHmac } from 'node:crypto'
 import { type Json, silentLogger, systemClock } from '@mp/core'
-import { solidPng } from '@mp/files'
+import { encodeContent, solidPng } from '@mp/files'
 import { callTools, type ModelRequest, reply, type ScriptResult } from '@mp/model'
 import type { ToolContext } from '@mp/tools'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -37,7 +37,12 @@ function fakeApis() {
   const slackUsers: Record<string, { id: string; real_name: string; profile: { email?: string } }> = {}
   const gitlabUsers: Record<string, { id: number; username: string; name: string; public_email?: string }> = {}
   const slackFiles: Record<string, { name: string; mimetype: string; bytes: Uint8Array }> = {}
+  /** Files shared with upload_file, by id: getUploadURLExternal, the POSTed bytes, completeUploadExternal. */
+  const slackUploads: Record<string, { filename: string; length: number; bytes?: Uint8Array; complete?: any }> = {}
+  /** How the fake app is set up: without files:write, or handing out an upload URL elsewhere. */
+  const slackApp: { noFilesWrite?: boolean; uploadUrl?: string } = {}
   let ts = 1_700_000_100
+  let uploadId = 1
 
   const fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
@@ -47,6 +52,17 @@ function fakeApis() {
     const body = type.includes('json') && raw ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw))
     const method = (init.method ?? 'GET').toUpperCase()
 
+    if (url.origin === new URL(SLACK_API).origin && url.pathname.startsWith('/upload/v1/')) {
+      calls.push({ system: 'slack', method, path: url.pathname, token: headers.get('authorization'), body: null })
+      const u = slackUploads[url.pathname.split('/').pop()!]
+      if (!u) return new Response('not found', { status: 404 })
+      u.bytes = new Uint8Array(init.body as Uint8Array)
+      return new Response(`OK - ${u.bytes.byteLength}`, { status: 200 })
+    }
+    if (url.origin !== new URL(SLACK_API).origin && url.pathname.startsWith('/upload/')) {
+      calls.push({ system: 'slack', method, path: url.href, token: headers.get('authorization'), body: null })
+      return new Response('OK', { status: 200 })
+    }
     if (url.origin === new URL(SLACK_API).origin && url.pathname.startsWith('/files-pri/')) {
       calls.push({ system: 'slack', method, path: url.pathname, token: headers.get('authorization'), body: null })
       const f = slackFiles[url.pathname.split('/')[2]!.replace('T1-', '')]
@@ -88,6 +104,22 @@ function fakeApis() {
         }
         case 'chat.postEphemeral':
           return json({ ok: true, message_ts: `${ts++}.000200` })
+        case 'files.getUploadURLExternal': {
+          if (slackApp.noFilesWrite) return json({ ok: false, error: 'missing_scope', needed: 'files:write' })
+          const id = `FUP${uploadId++}`
+          slackUploads[id] = { filename: body.filename, length: Number(body.length) }
+          return json({ ok: true, upload_url: slackApp.uploadUrl ?? `${new URL(SLACK_API).origin}/upload/v1/${id}`, file_id: id })
+        }
+        case 'files.completeUploadExternal': {
+          const [f] = body.files as { id: string; title: string }[]
+          const u = slackUploads[f!.id]
+          if (!u?.bytes) return json({ ok: false, error: 'file_not_found' })
+          u.complete = body
+          return json({
+            ok: true,
+            files: [{ id: f!.id, title: f!.title, permalink: `https://example.slack.com/files/UBOT/${f!.id}` }],
+          })
+        }
         default:
           return json({ ok: false, error: 'unknown_method' })
       }
@@ -144,7 +176,7 @@ function fakeApis() {
     throw new Error(`unexpected fetch ${url.href}`)
   }) as typeof globalThis.fetch
 
-  return { fetch, calls, slackUsers, gitlabUsers, slackFiles, reset: () => calls.splice(0) }
+  return { fetch, calls, slackUsers, gitlabUsers, slackFiles, slackUploads, slackApp, reset: () => calls.splice(0) }
 }
 
 // ─── Webhook helpers ─────────────────────────────────────────────────────────
@@ -272,6 +304,7 @@ const script = async (req: ModelRequest): Promise<ScriptResult> => {
   if (tool === 'mcp.slack.react') return reply('Hello Ana, looking into it.')
   if (tool === 'mcp.linear.viewer') return reply('Took PAY-1.')
   if (tool === 'mcp.gitlab.create_merge_request') return reply('Opened the MR.')
+  if (tool === 'mcp.slack.upload_file') return reply('Here is the chart.')
   if (tool) return reply('done')
   const text = lastUser(req)
   if (text.includes('merge request merged') || text.includes('moved to Done')) return reply('NO_REPLY')
@@ -279,6 +312,11 @@ const script = async (req: ModelRequest): Promise<ScriptResult> => {
     return callTools([{ name: 'mcp.slack.react', args: { channel: 'C1', ts: '1700000000.000100', name: 'eyes' } }])
   // A router that ends with its decision and no answer (live: "Logged." was posted in Slack).
   if (text.includes('integration:slack') && text.includes('just log it')) return reply('Logged.')
+  // Shares a chart in the thread and ends with a text that must not be posted as well.
+  if (text.includes('integration:slack') && text.includes('please share the chart'))
+    return callTools([
+      { name: 'mcp.slack.upload_file', args: { path: '/charts/q3.png', channel: 'C1', thread_ts: '1700000003.000100' } },
+    ])
   if (text.includes('integration:slack')) return reply('NO_REPLY')
   if (text.includes('integration:linear')) return callTools([{ name: 'mcp.linear.viewer', args: {} }])
   if (text.includes('integration:gitlab'))
@@ -610,6 +648,129 @@ function integrationSuite(backend: Backend) {
     // Kai has no Slack token.
     const none = await s.tools.execute('mcp.slack.get_file', { file_id: 'F9' }, toolCtx(kai))
     expect(none.isError).toBe(true)
+  })
+
+  it('slack upload_file: the server reads the file from the employee’s files and uploads it into the thread', async () => {
+    const s = t.a.services
+    api.reset()
+    const root = '1700000002.000100'
+    const png = solidPng(2, 2, [0, 128, 255, 255])
+    const img = encodeContent(png)
+    await s.files.write(meatless, '/report/revenue.png', img.content, { encoding: img.encoding })
+    await s.files.write(meatless, '/notes.txt', 'total: 42\n')
+
+    const r = await s.tools.execute(
+      'mcp.slack.upload_file',
+      { path: '/report/revenue.png', channel: 'C1', thread_ts: root, title: 'Revenue', comment: 'Q3 revenue' },
+      toolCtx(meatless),
+    )
+    expect(r.isError).toBeFalsy()
+    const fileId = (r.output as any).fileId as string
+    expect(r.output).toEqual({ fileId, channel: 'C1', thread_ts: root, permalink: expect.stringContaining(fileId) })
+    const up = api.slackUploads[fileId]!
+    expect(up).toMatchObject({ filename: 'revenue.png', length: png.byteLength })
+    expect(up.bytes).toEqual(png)
+    expect(up.complete).toEqual({
+      files: [{ id: fileId, title: 'Revenue' }],
+      channel_id: 'C1',
+      thread_ts: root,
+      initial_comment: 'Q3 revenue',
+    })
+    // The bytes went to Slack's upload URL with this employee's bot token, and only there.
+    const post = api.calls.find((c) => c.path.startsWith('/upload/v1/'))!
+    expect(post.token).toBe('Bearer xoxb-meatless')
+
+    // A text file, by the path code.run sees.
+    const txt = await s.tools.execute(
+      'mcp.slack.upload_file',
+      { path: '/work/files/notes.txt', channel: 'C1', thread_ts: root },
+      toolCtx(meatless),
+    )
+    expect(txt.isError).toBeFalsy()
+    const txtUp = api.slackUploads[(txt.output as any).fileId]!
+    expect(new TextDecoder().decode(txtUp.bytes)).toBe('total: 42\n')
+    expect(txtUp.complete).toMatchObject({ files: [{ title: 'notes.txt' }], thread_ts: root })
+
+    const missing = await s.tools.execute('mcp.slack.upload_file', { path: '/nope.png', channel: 'C1' }, toolCtx(meatless))
+    expect(missing).toMatchObject({ isError: true, output: { error: 'not_found' } })
+    const noChannel = await s.tools.execute('mcp.slack.upload_file', { path: '/notes.txt' }, toolCtx(meatless))
+    expect(noChannel).toMatchObject({ isError: true, output: { error: expect.stringContaining('channel is required') } })
+    // Kai has no Slack token.
+    const none = await s.tools.execute('mcp.slack.upload_file', { path: '/notes.txt', channel: 'C1' }, toolCtx(kai))
+    expect(none.isError).toBe(true)
+  })
+
+  it('slack upload_file: files shared with the employee for reading work, others are refused', async () => {
+    const s = t.a.services
+    const meatlessContact = (await s.files.contactOf(meatless))!
+    await s.files.write(kai, '/public/plan.md', '# Plan\n')
+    await s.files.write(kai, '/private/salaries.csv', 'a,b\n')
+    await s.files.share(kai, '/public', meatlessContact, 'read')
+    const ok = await s.tools.execute(
+      'mcp.slack.upload_file',
+      { path: `/shared/${kai}/public/plan.md`, channel: 'C1' },
+      toolCtx(meatless),
+    )
+    expect(ok.isError).toBeFalsy()
+    expect(new TextDecoder().decode(api.slackUploads[(ok.output as any).fileId]!.bytes)).toBe('# Plan\n')
+    api.reset()
+    for (const path of [`/shared/${kai}/private/salaries.csv`, `/work/shared/${kai}/private/salaries.csv`]) {
+      const denied = await s.tools.execute('mcp.slack.upload_file', { path, channel: 'C1' }, toolCtx(meatless))
+      expect(denied).toMatchObject({ isError: true, output: { error: 'denied' } })
+    }
+    expect(api.calls.filter((c) => c.path === 'files.getUploadURLExternal')).toEqual([])
+  })
+
+  it('slack upload_file: too large, a missing files:write scope, and an upload URL off Slack fail clearly', async () => {
+    const s = t.a.services
+    api.reset()
+    const big = encodeContent(new Uint8Array(25 * 1024 * 1024 + 1))
+    await s.files.write(meatless, '/big.bin', big.content, { encoding: big.encoding })
+    const tooBig = await s.tools.execute('mcp.slack.upload_file', { path: '/big.bin', channel: 'C1' }, toolCtx(meatless))
+    expect(tooBig).toMatchObject({ isError: true, output: { error: 'limit' } })
+    expect(api.calls).toEqual([])
+    await s.files.delete(meatless, '/big.bin')
+
+    await s.files.write(meatless, '/small.txt', 'hi\n')
+    api.slackApp.noFilesWrite = true
+    try {
+      const scope = await s.tools.execute('mcp.slack.upload_file', { path: '/small.txt', channel: 'C1' }, toolCtx(meatless))
+      expect(scope).toMatchObject({
+        isError: true,
+        output: { error: 'denied', message: expect.stringContaining('add files:write and reinstall the app') },
+      })
+    } finally {
+      delete api.slackApp.noFilesWrite
+    }
+
+    api.slackApp.uploadUrl = 'https://uploads.evil.example.com/upload/x'
+    try {
+      const off = await s.tools.execute('mcp.slack.upload_file', { path: '/small.txt', channel: 'C1' }, toolCtx(meatless))
+      expect(off).toMatchObject({ isError: true, output: { error: 'denied', message: expect.stringContaining('not Slack') } })
+      expect(api.calls.some((c) => c.path.includes('evil.example.com'))).toBe(false)
+      expect(api.calls.some((c) => c.path === 'files.completeUploadExternal')).toBe(false)
+    } finally {
+      delete api.slackApp.uploadUrl
+    }
+  })
+
+  it('slack: a run that answered with upload_file does not also post its final text', async () => {
+    const s = t.a.services
+    const png = encodeContent(solidPng(2, 2, [255, 255, 0, 255]))
+    await s.files.write(meatless, '/charts/q3.png', png.content, { encoding: png.encoding })
+    api.reset()
+    const root = '1700000003.000100'
+    const r = await post(
+      '/webhooks/slack/meatless',
+      slackRequest(SLACK_SECRET_A, mention('EvUpload', 'U_ANA', '<@UBOT> please share the chart', root)),
+    )
+    expect(r.status).toBe(200)
+    await settle()
+    const runs = await s.sessions.runs({ state: ['completed'] })
+    expect(runs.some((x) => x.data.result?.output === 'Here is the chart.')).toBe(true)
+    const done = api.calls.find((c) => c.path === 'files.completeUploadExternal')
+    expect(done?.body).toMatchObject({ channel_id: 'C1', thread_ts: root })
+    expect(api.calls.filter((c) => c.path === 'chat.postMessage')).toEqual([])
   })
 
   it('slack: two employees’ apps in one thread each get their own delivery of the same message', async () => {
