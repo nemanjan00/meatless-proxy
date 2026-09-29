@@ -218,9 +218,30 @@ stored in the database like everything else.
   go straight to that session, without being routed again.
 - **Direct messages** between two employees, or between an employee and a
   person, work the same way: they're a thread linked to a session.
-- Messages can mention contacts, projects, sessions and procedures by id, like
-  [links](#links-between-contacts-and-projects) in docs, and mentioning an
-  employee delivers the message to it.
+- Messages can mention projects, sessions and procedures by id, like
+  [links](#links-between-contacts-and-projects) in docs.
+
+#### Tagging
+
+Tags mark who should reply to a message or take it into account:
+
+| Tag                      | Delivered to                                          |
+|--------------------------|-------------------------------------------------------|
+| `@employee`              | that employee, which routes it to the right context (its triggers, procedures, or a new session) |
+| `@employee#session-slug` | that specific session of that employee, directly      |
+| `@person`                | that person, notified through their usual chat        |
+
+- **Tagged means expected to act.** A tagged employee, session or person is
+  expected to reply or take the message into account. Sessions that are
+  subscribed to the thread but not tagged still receive the message as context,
+  but they don't reply unless they have something that matters.
+- **No tags** means the usual routing: the thread's subscribed sessions, or the
+  channel's trigger for a new top-level message.
+- **Session slugs** are short, readable names that are unique within the
+  employee, e.g. `@billing-bot#pay-123-refund`. They make a session addressable
+  by people and by other employees without knowing its id.
+- Tags work the same in harness chat and, where the chat system allows it, in
+  company chat.
 
 #### People can join
 
@@ -506,6 +527,7 @@ Core fields, extendable the same way as contacts and projects:
 |---------------|-----------------------|-------------------------------------------|
 | `id`          | string                | stable, harness-assigned                  |
 | `title`       | string                |                                           |
+| `slug`        | string                | unique per employee, for [tagging](#tagging) as `@employee#slug` |
 | `status`      | string                | e.g. active / waiting / done / abandoned  |
 | `parent`      | {session id, point}, optional | where it was forked from          |
 | `template`    | template id, optional | the template it was created from          |
@@ -667,8 +689,9 @@ Open questions:
   them, run them in parallel, or batch them into one run?
 - Besides subscriptions, can a context create or change general triggers
   itself?
-- Can several sessions subscribe to the same thing, and if so, which one handles
-  each event?
+- Several sessions can subscribe to the same thread. In chat, [tags](#tagging)
+  decide which ones should act. For other things (a ticket, a PR), which
+  subscriber handles each event?
 
 ### Procedures
 
