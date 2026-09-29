@@ -32,9 +32,10 @@ correctly.
 - **Procedures as contexts.** Each company procedure has a context that
   already knows it. Work that needs the procedure runs in a fork of that
   context, with nothing to re-read.
-- **Images, both ways.** People attach screenshots in chat; employees attach
-  charts they made and look at an image only when they need to (`image.view`),
-  so images cost tokens only when they matter.
+- **Files and images, both ways.** People attach screenshots, logs and
+  scripts in chat; employees attach any file they made (a chart, a script)
+  and look at an image or read a file only when they need to (`image.view`,
+  `chat.attachment_text`), so attachments cost tokens only when they matter.
 - **Safe by construction.** AI employees open pull requests and never merge or
   deploy. Secrets are injected at call time and never shown to the model.
   Checklists need evidence before anything counts as done.
@@ -209,15 +210,22 @@ carries when it arrived, and `time.now` answers in the company timezone
 (the `timezone` setting, UTC by default). See
 [docs/spec.md](docs/spec.md#code-execution).
 
-### Images in chat
+### Files and images in chat
 
-People attach images to chat messages (the attach button, paste, or drag and
-drop), and employees attach files from their filesystem, such as a chart
-`code.run` saved. Messages name their images to employees
-(`[image: chart.png 800x600, attachment att_…]`), and an employee looks at one
-with `image.view` only when it needs to. Images are PNG, JPEG, GIF or WebP,
-checked by their content; they live on the files volume, and only people who
-can see the channel can open them.
+People attach any file to chat messages (the attach button, paste, or drag
+and drop), and employees attach any file from their filesystem, such as a
+chart or a script `code.run` saved (`/work/files/a.sh` in code is `/a.sh` for
+the file tools and attachments; both spellings work everywhere). Messages name
+attachments to employees (`[image: chart.png 800x600, attachment att_…]`,
+`[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment att_…]`), and an
+employee looks at an image with `image.view` or reads a text file with
+`chat.attachment_text` only when it needs to. Types are sniffed from the
+content: only PNG, JPEG, GIF and WebP are images, shown inline; everything
+else is always a download (HTML, SVG, XML, JavaScript and PDF as
+`application/octet-stream`), and small text files get a plain-text preview.
+Attachments live on the files volume, and only people who can see the channel
+can open them. An employee that posts the same text in the same thread twice
+within two minutes is told so instead of posting it again.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
@@ -226,8 +234,8 @@ can see the channel can open them.
 | `MODEL_IMAGE_MAX_BYTES` | 5 MB | larger images aren't sent to the model |
 | `IMAGE_DESCRIBE` | `view` | saved image descriptions, one model call per image, reused everywhere: `view` describes an image on its first look, `upload` in the background when it's posted, `off` never (needs vision) |
 | `IMAGE_DESCRIBE_MODEL` | `MODEL` | the model that describes images, on the same provider |
-| `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached image |
-| `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | images per message |
+| `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached file or image |
+| `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | attachments per message |
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`

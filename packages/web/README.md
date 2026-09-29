@@ -186,16 +186,21 @@ until the first news about its thread (30 s at most). The mock (`mock/chat-activ
 PAY-123, deploy and staging-disk threads; tagging an employee there (or posting in #billing) has its router pick
 the message up, hand it to a new session that answers in the thread, and a "thanks" gets a look and no reply.
 
-Images (`components/chat-attachments.tsx`): the composer (channels and threads) has an
-attach button and takes pasted and dropped images, uploading each at once
-(`usePendingAttachments`: thumbnails with progress and remove; only PNG, JPEG, GIF and
-WebP, at most 10); a message shows its images as thumbnails (`AttachmentGrid`, one image
-larger) and a click opens `Lightbox` (Esc closes, ←/→ move, download link). A saved
+Attachments (`components/chat-attachments.tsx`): the composer (channels and threads) has an
+attach button (a paperclip, "Attach files") and takes pasted and dropped files of any type,
+uploading each at once (`usePendingAttachments`: image thumbnails or file tiles with progress
+and remove; at most 10, 10 MB each, no empty files; the server types them by content). A message
+(`AttachmentGrid`) shows its images as thumbnails (one image larger; a click opens `Lightbox`:
+Esc closes, ←/→ move, download link) and other files as chips (`FileAttachment`: an icon by
+type, the name, the size, a Download link); a text file up to 256 KB also gets `TextPreview`
+(`api.attachmentText`): the first 8 lines in a `<pre>`, "Show all N lines" to expand, rendered
+as text, never HTML. A saved
 description is the image's alt text and the lightbox caption (`DescriptionCaption`:
 "Description (AI)", or edited by a person; the visible text behind a toggle; edit, clear and
 redo for whoever the server's `canEdit` allows). The mock keeps
-uploads as object URLs and seeds images on the PAY-123 thread and the staging disk incident,
-two of them with descriptions (`mock/attachments.ts`).
+uploads as object URLs (text files also as their text) and seeds images on the PAY-123 thread
+and the staging disk incident, two of them with descriptions, plus a `free-disk.sh` script on
+the incident (`mock/attachments.ts`).
 
 ## Screenshots (real server, seeded demo data)
 

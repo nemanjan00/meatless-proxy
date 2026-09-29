@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { UnavailableError, errorMessage, type Logger } from '@mp/core'
 import type { ContainerRuntime, EnvSpec, FileEntry, VolumeMount } from '@mp/containers'
-import type { FilesService, Share, StoredStat } from '@mp/files'
+import { type FilesService, type Share, type StoredStat, sandboxPath } from '@mp/files'
 import type { Actor } from '@mp/store'
 import { MANIFEST_SCRIPT } from './drivers.ts'
 
@@ -10,9 +10,13 @@ export const FILES_DIR = '/work/files'
 /** Where files shared with the employee appear: `/work/shared/<owner>/<path>`. */
 export const SHARED_DIR = '/work/shared'
 
-/** A file a cell created, changed or deleted, as the employee's fs.* tools name it (`/chart.png`, `/shared/<owner>/…`). */
+/**
+ * A file a cell created, changed or deleted. `path` is how the fs.* tools and chat attachments name it
+ * (`/chart.png`, `/shared/<owner>/…`); `sandboxPath` is the same file as code sees it (`/work/files/chart.png`).
+ */
 export interface FileChange {
   path: string
+  sandboxPath: string
   change: 'created' | 'modified' | 'deleted' | 'skipped'
   size?: number
   note?: string
@@ -99,10 +103,10 @@ function diff(before: Map<string, Stamp>, after: Map<string, Stamp>): FileChange
   const out: FileChange[] = []
   for (const [p, s] of after) {
     const b = before.get(p)
-    if (!b) out.push({ path: p, change: 'created', size: s[0] })
-    else if (b[0] !== s[0] || b[1] !== s[1]) out.push({ path: p, change: 'modified', size: s[0] })
+    if (!b) out.push({ path: p, sandboxPath: sandboxPath(p), change: 'created', size: s[0] })
+    else if (b[0] !== s[0] || b[1] !== s[1]) out.push({ path: p, sandboxPath: sandboxPath(p), change: 'modified', size: s[0] })
   }
-  for (const p of before.keys()) if (!after.has(p)) out.push({ path: p, change: 'deleted' })
+  for (const p of before.keys()) if (!after.has(p)) out.push({ path: p, sandboxPath: sandboxPath(p), change: 'deleted' })
   return out.sort((a, b) => (a.path < b.path ? -1 : 1))
 }
 

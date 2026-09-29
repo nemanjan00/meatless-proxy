@@ -133,6 +133,18 @@ describe.each(storages)('files service on %s storage', (_name, makeStorage) => {
       expect((await fs.write(a, '/u.txt', 'é')).size).toBe(2)
     })
 
+    it('takes code.run paths: /work/files/<p>, <p> and /<p> are one file', async () => {
+      await fs.write(a, '/work/files/ipwatch.sh', 'echo hi')
+      expect(await storage.read(a, '/ipwatch.sh')).toEqual(new TextEncoder().encode('echo hi'))
+      for (const p of ['/work/files/ipwatch.sh', 'ipwatch.sh', '/ipwatch.sh'])
+        expect(await fs.read(a, p), p).toMatchObject({ path: '/ipwatch.sh', content: 'echo hi' })
+      expect((await fs.list(a, '/work/files')).map((e) => e.path)).toContain('/ipwatch.sh')
+      await fs.move(a, '/work/files/ipwatch.sh', 'moved.sh')
+      await fs.delete(a, '/work/files/moved.sh')
+      expect(await fs.list(a, '/')).toEqual([])
+      await expect(fs.read(a, '/work/files/../../x')).rejects.toThrow(ValidationError)
+    })
+
     it('protects against traversal and invalid paths', async () => {
       await expect(fs.write(a, '../b/x', 'x')).rejects.toThrow(ValidationError)
       await expect(fs.read(a, `/shared/${b}/../../x`)).rejects.toThrow(ValidationError)
@@ -217,6 +229,19 @@ describe.each(storages)('files service on %s storage', (_name, makeStorage) => {
       })
       // The owner sees no /shared entry: nothing was shared with them.
       expect((await fs.list(a)).map((e) => e.name)).toEqual(['notes', 'private', 'reports'])
+    })
+
+    it('takes /work/shared/<owner>/<p> for /shared/<owner>/<p>, and shares /work/files paths', async () => {
+      await fs.share(a, '/work/files/notes', bC, 'read')
+      expect((await fs.sharesOf(a)).map((x) => x.data.path)).toEqual(['/notes'])
+      expect(await fs.read(b, `/work/shared/${a}/notes/a.md`)).toMatchObject({
+        path: `/shared/${a}/notes/a.md`,
+        content: 'A notes',
+      })
+      await expect(fs.read(b, `/work/shared/${a}/private/secret.md`)).rejects.toThrow()
+      await expect(fs.share(a, `/work/shared/${b}/x`, bC)).rejects.toThrow(ValidationError)
+      await fs.unshare(a, '/work/files/notes', bC)
+      expect(await fs.sharesOf(a)).toEqual([])
     })
 
     it('denies what is not shared, and writes without write permission', async () => {

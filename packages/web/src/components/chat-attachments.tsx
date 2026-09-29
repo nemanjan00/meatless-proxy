@@ -1,5 +1,22 @@
-import type { AttachmentDescription, ChatAttachment } from '@mp/api'
-import { ChevronLeft, ChevronRight, Download, ImageOff, Pencil, RefreshCw, Sparkles, Trash2, X } from 'lucide-react'
+import { type AttachmentDescription, type AttachmentText, type ChatAttachment, hasTextPreview, isImageAttachment } from '@mp/api'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Download,
+  File as FileIcon,
+  FileArchive,
+  FileCode,
+  FileSpreadsheet,
+  FileText,
+  ImageOff,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button.tsx'
@@ -7,9 +24,8 @@ import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi, useOptionalApi } from '@/lib/api.tsx'
 import { cn } from '@/lib/utils.ts'
 
-/** Image types the composer offers (the server checks the bytes again). */
-export const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
-export const ATTACHMENT_TYPES = ATTACHMENT_ACCEPT.split(',')
+/** Image types shown inline (the server decides by the bytes; other files are downloads). */
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 export function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
@@ -23,10 +39,130 @@ const sizeOf = (a: ChatAttachment) => (a.width && a.height ? `${a.width}×${a.he
 export const altOf = (a: ChatAttachment) => a.description || a.name
 
 /**
+ * A message's attachments: images as a grid of thumbnails, then other files as chips (with a text
+ * preview for small text files).
+ */
+export function AttachmentGrid({ attachments, className }: { attachments: ChatAttachment[]; className?: string }) {
+  const images = attachments.filter((a) => isImageAttachment(a))
+  const files = attachments.filter((a) => !isImageAttachment(a))
+  return (
+    <>
+      <ImageGrid attachments={images} className={className} />
+      {files.length > 0 && (
+        <div className={cn('mt-1.5 flex max-w-xl flex-col gap-1.5', className)} data-testid="file-attachments">
+          {files.map((a) => (
+            <FileAttachment key={a.id} attachment={a} />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** The icon for a file, by its type and name. */
+function fileIconOf(a: Pick<ChatAttachment, 'mime' | 'name'>) {
+  const m = a.mime
+  if (/zip|gzip|tar|7z|compressed/.test(m)) return FileArchive
+  if (m === 'text/csv' || m === 'text/tab-separated-values' || /spreadsheet/.test(m)) return FileSpreadsheet
+  if (m === 'text/plain' || m === 'text/markdown' || m === 'application/pdf' || /wordprocessing/.test(m)) return FileText
+  if (m.startsWith('text/') || /json|yaml|toml|sql|xml/.test(m)) return FileCode
+  return FileIcon
+}
+
+/** A file on a message: icon, name, size and a download link; small text files get a preview below. */
+export function FileAttachment({ attachment: a }: { attachment: ChatAttachment }) {
+  const api = useApi()
+  const Icon = fileIconOf(a)
+  return (
+    <div className="overflow-hidden rounded-md border bg-level-2" data-testid="file-attachment">
+      <div className="flex h-9 items-center gap-2 pr-1 pl-2.5">
+        <Icon className="size-4 shrink-0 text-fg-tertiary" aria-hidden />
+        <span className="min-w-0 truncate font-medium text-fg-secondary text-mini" title={a.name}>
+          {a.name}
+        </span>
+        <span className="shrink-0 text-fg-quaternary text-micro tabular-nums">{formatBytes(a.size)}</span>
+        <Button asChild variant="ghost" size="xs" className="ml-auto shrink-0 text-fg-tertiary">
+          <a href={api.attachmentUrl(a.id, { download: true })} download={a.name} aria-label={`Download ${a.name}`}>
+            <Download /> Download
+          </a>
+        </Button>
+      </div>
+      {hasTextPreview(a) && <TextPreview attachment={a} />}
+    </div>
+  )
+}
+
+/** Lines a collapsed preview shows. */
+export const PREVIEW_LINES = 8
+
+/**
+ * A text file's first lines as a code block, expandable to the whole preview. The text is rendered
+ * as text (React escapes it), never as HTML.
+ */
+function TextPreview({ attachment: a }: { attachment: ChatAttachment }) {
+  const api = useApi()
+  const [got, setGot] = useState<AttachmentText | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    let live = true
+    api.attachmentText(a.id).then(
+      (t) => live && setGot(t),
+      () => live && setFailed(true),
+    )
+    return () => {
+      live = false
+    }
+  }, [api, a.id])
+  if (failed) return null
+  if (!got)
+    return (
+      <div className="border-t px-2.5 py-2 text-fg-quaternary text-micro" data-testid="text-preview-loading">
+        Loading preview…
+      </div>
+    )
+  const lines = got.text.replace(/\n$/, '').split('\n')
+  const long = lines.length > PREVIEW_LINES
+  const shown = open || !long ? got.text.replace(/\n$/, '') : lines.slice(0, PREVIEW_LINES).join('\n')
+  return (
+    <div className="border-t" data-testid="text-preview">
+      <pre
+        className={cn(
+          'overflow-x-auto whitespace-pre px-2.5 py-2 font-mono text-fg-secondary text-micro leading-5',
+          open && 'max-h-[28rem] overflow-y-auto',
+        )}
+        data-testid="text-preview-body"
+      >
+        {shown}
+      </pre>
+      {(long || got.truncated) && (
+        <div className="flex items-center gap-2 border-t px-1 py-0.5">
+          {long && (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-fg-tertiary"
+              aria-expanded={open}
+              onClick={() => setOpen((v) => !v)}
+            >
+              {open ? <ChevronUp /> : <ChevronDown />}
+              {open ? 'Collapse' : `Show all ${lines.length}${got.truncated ? '+' : ''} lines`}
+            </Button>
+          )}
+          {got.truncated && open && (
+            <span className="text-fg-quaternary text-micro">The preview stops at 256 KB; download the file for the rest.</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * A message's images as a grid of thumbnails (one image shows larger). The browser scales them;
  * clicking one opens the lightbox.
  */
-export function AttachmentGrid({ attachments, className }: { attachments: ChatAttachment[]; className?: string }) {
+function ImageGrid({ attachments, className }: { attachments: ChatAttachment[]; className?: string }) {
   const api = useApi()
   const [open, setOpen] = useState<number | null>(null)
   if (!attachments.length) return null
@@ -351,18 +487,18 @@ const revoke = (url: string) => {
   if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
 }
 
-/** An image waiting in the composer: uploading, uploaded, or failed. */
+/** A file waiting in the composer: uploading, uploaded, or failed. */
 export interface PendingAttachment {
   key: string
   file: File
-  /** A local preview (an object URL). */
+  /** A local preview (an object URL), for images only. */
   preview: string
   progress: number
   attachment?: ChatAttachment
   error?: string
 }
 
-/** The composer's pending images, as thumbnails with upload progress and a remove button. */
+/** The composer's pending files, as thumbnails (images) or file tiles, with upload progress and a remove button. */
 export function PendingAttachments({ items, onRemove }: { items: PendingAttachment[]; onRemove(key: string): void }) {
   if (!items.length) return null
   return (
@@ -378,11 +514,15 @@ export function PendingAttachments({ items, onRemove }: { items: PendingAttachme
           data-testid="pending-attachment"
           data-state={p.error ? 'error' : p.attachment ? 'done' : 'uploading'}
         >
-          <img
-            src={p.preview || undefined}
-            alt={p.file.name}
-            className={cn('size-full object-cover', !p.attachment && 'opacity-60')}
-          />
+          {IMAGE_TYPES.includes(p.file.type) ? (
+            <img
+              src={p.preview || undefined}
+              alt={p.file.name}
+              className={cn('size-full object-cover', !p.attachment && 'opacity-60')}
+            />
+          ) : (
+            <PendingFileTile file={p.file} dim={!p.attachment} />
+          )}
           {!p.attachment && !p.error && (
             <div className="absolute inset-x-1.5 bottom-1.5 h-1 overflow-hidden rounded-full bg-black/40">
               <div
@@ -413,9 +553,23 @@ export function PendingAttachments({ items, onRemove }: { items: PendingAttachme
   )
 }
 
+function PendingFileTile({ file, dim }: { file: File; dim: boolean }) {
+  const Icon = fileIconOf({ mime: file.type, name: file.name })
+  return (
+    <div
+      className={cn('flex size-full flex-col items-center justify-center gap-1 px-1 text-fg-tertiary', dim && 'opacity-60')}
+      data-testid="pending-file"
+    >
+      <Icon className="size-4" aria-hidden />
+      <span className="w-full truncate text-center text-tiny">{file.name}</span>
+    </div>
+  )
+}
+
 /**
  * Uploads for the composer: add files (from the picker, a paste or a drop), each uploads right away
- * with progress; `ready` are the ids to send. Only images are taken, at most `max` at a time.
+ * with progress; `ready` are the ids to send. Any file is taken (the server types it by its content),
+ * at most `max` at a time and `maxBytes` each.
  */
 export function usePendingAttachments(opts: { max?: number; maxBytes?: number } = {}) {
   const api = useOptionalApi()
@@ -439,18 +593,18 @@ export function usePendingAttachments(opts: { max?: number; maxBytes?: number } 
 
   const add = (files: Iterable<File>) => {
     const list = [...files]
-    const images = list.filter((f) => ATTACHMENT_TYPES.includes(f.type))
     const problems: string[] = []
-    if (images.length < list.length) problems.push('only PNG, JPEG, GIF and WebP images can be attached')
-    const fits = images.filter((f) => f.size <= maxBytes)
-    if (fits.length < images.length) problems.push(`images can be at most ${formatBytes(maxBytes)}`)
+    const nonEmpty = list.filter((f) => f.size > 0)
+    if (nonEmpty.length < list.length) problems.push('empty files can’t be attached')
+    const fits = nonEmpty.filter((f) => f.size <= maxBytes)
+    if (fits.length < nonEmpty.length) problems.push(`files can be at most ${formatBytes(maxBytes)}`)
     const room = Math.max(0, max - items.length)
-    if (fits.length > room) problems.push(`at most ${max} images per message`)
+    if (fits.length > room) problems.push(`at most ${max} files per message`)
     setNotice(problems.length ? `${problems.join('; ')}.` : null)
     const added = fits.slice(0, room).map((file) => ({
       key: `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`,
       file,
-      preview: objectUrl(file),
+      preview: IMAGE_TYPES.includes(file.type) ? objectUrl(file) : '',
       progress: 0,
     }))
     if (!added.length) return

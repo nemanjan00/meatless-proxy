@@ -323,9 +323,9 @@ describe('files, copied in and out', () => {
 
     const r2 = await t.run('write("out/chart.png", "PNG"); write("data/in.csv", "a,b\\n1,3\\n"); remove("old.txt")')
     expect(r2.files_changed).toEqual([
-      { path: '/data/in.csv', change: 'modified', size: 8 },
-      { path: '/old.txt', change: 'deleted' },
-      { path: '/out/chart.png', change: 'created', size: 3 },
+      { path: '/data/in.csv', sandboxPath: '/work/files/data/in.csv', change: 'modified', size: 8 },
+      { path: '/old.txt', sandboxPath: '/work/files/old.txt', change: 'deleted' },
+      { path: '/out/chart.png', sandboxPath: '/work/files/out/chart.png', change: 'created', size: 3 },
     ])
     expect(str(await t.storage.read(t.me, '/out/chart.png'))).toBe('PNG')
     expect(str(await t.storage.read(t.me, '/data/in.csv'))).toBe('a,b\n1,3\n')
@@ -387,8 +387,14 @@ describe('files, copied in and out', () => {
     const r = await t.run('write("huge.txt", "y".repeat(100)); write("small.txt", "ok")')
     expect(r.notes?.join(' ')).toMatch(/big.bin is too large to copy into the sandbox/)
     expect(r.files_changed).toEqual([
-      { path: '/huge.txt', change: 'skipped', size: 100, note: 'larger than 10 bytes, not saved to your files' },
-      { path: '/small.txt', change: 'created', size: 2 },
+      {
+        path: '/huge.txt',
+        sandboxPath: '/work/files/huge.txt',
+        change: 'skipped',
+        size: 100,
+        note: 'larger than 10 bytes, not saved to your files',
+      },
+      { path: '/small.txt', sandboxPath: '/work/files/small.txt', change: 'created', size: 2 },
     ])
     expect(await t.storage.stat(t.me, '/huge.txt')).toBeNull()
   })
@@ -402,7 +408,12 @@ describe('files, copied in and out', () => {
     await t.files.write(t.me, '/keep.txt', 'v2') // e.g. fs.write from another session
     const r = await cell
     expect(r.files_changed).toEqual([
-      { path: '/keep.txt', change: 'skipped', note: 'changed outside the sandbox since, so it was kept' },
+      {
+        path: '/keep.txt',
+        sandboxPath: '/work/files/keep.txt',
+        change: 'skipped',
+        note: 'changed outside the sandbox since, so it was kept',
+      },
     ])
     expect(str(await t.storage.read(t.me, '/keep.txt'))).toBe('v2')
     // And it's back in the sandbox for the next cell.
@@ -441,9 +452,9 @@ describe('files, mounted from the volume', () => {
     )
     expect(r.result).toBe('"q3"')
     expect(r.files_changed).toEqual([
-      { path: '/chart.png', change: 'created', size: 3 },
-      { path: '/in.txt', change: 'deleted' },
-      { path: `/shared/${t.other}/notes/n.md`, change: 'modified', size: 6 },
+      { path: '/chart.png', sandboxPath: '/work/files/chart.png', change: 'created', size: 3 },
+      { path: '/in.txt', sandboxPath: '/work/files/in.txt', change: 'deleted' },
+      { path: `/shared/${t.other}/notes/n.md`, sandboxPath: `/work/shared/${t.other}/notes/n.md`, change: 'modified', size: 6 },
     ])
     expect(str(await t.storage.read(t.other, '/notes/n.md'))).toBe('edited')
     const ro = await t.run(`write("/work/shared/${t.other}/reports/q3.md", "hacked")`)

@@ -1,14 +1,17 @@
 import type { ApiErrorBody } from './errors.ts'
 
-// ─── Chat attachments: images on messages ───────────────────────────────────
+// ─── Chat attachments: files and images on messages ─────────────────────────
 //
-// Served by packages/server/src/http/chat-attachments.ts. Upload an image first (it is checked by
-// its content: PNG, JPEG, GIF or WebP), then post a message with its id in `attachments`. Only the
-// uploader can attach an upload, within an hour; unattached uploads are deleted after that.
+// Served by packages/server/src/http/chat-attachments.ts. Upload a file first (any type; its type is
+// sniffed from its content, and PNG, JPEG, GIF and WebP are images), then post a message with its id
+// in `attachments`. Only the uploader can attach an upload, within an hour; unattached uploads are
+// deleted after that. Images are shown inline; other files are always downloads.
 
-/** An image on a message. */
+/** A file or image on a message. */
 export interface ChatAttachment {
   id: string
+  /** `image` (PNG, JPEG, GIF, WebP: shown inline) or `file` (a download). Older messages lack it: go by `mime`. */
+  kind?: 'image' | 'file'
   name: string
   /** Sniffed from the bytes. */
   mime: string
@@ -50,11 +53,43 @@ export interface UploadedAttachment {
   expiresAt: string
 }
 
+/** `GET /api/chat/attachments/:id/text`: a text file's content (at most 256 KB), for a plain-text preview. */
+export interface AttachmentText {
+  attachment: ChatAttachment
+  text: string
+  /** The file is longer than what `text` holds. */
+  truncated: boolean
+}
+
+/** The image types shown inline (by content, on the server). */
+export const IMAGE_ATTACHMENT_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
+
+/** Text files up to this size have a preview (`attachmentText`). */
+export const TEXT_PREVIEW_MAX_BYTES = 256 * 1024
+
+const TEXT_APP_MIMES = [
+  'application/json',
+  'application/yaml',
+  'application/toml',
+  'application/sql',
+  'application/xml',
+  'image/svg+xml',
+]
+
+/** Whether an attachment is an image (shown inline), by its sniffed type. */
+export const isImageAttachment = (a: Pick<ChatAttachment, 'mime'>) =>
+  (IMAGE_ATTACHMENT_MIMES as readonly string[]).includes(a.mime)
+
+/** Whether an attachment is text small enough for a preview. */
+export const hasTextPreview = (a: Pick<ChatAttachment, 'mime' | 'size'>) =>
+  !isImageAttachment(a) && (a.mime.startsWith('text/') || TEXT_APP_MIMES.includes(a.mime)) && a.size <= TEXT_PREVIEW_MAX_BYTES
+
 /** The routes of this section (merged into `ROUTES`). */
 export const ATTACHMENT_ROUTES = {
   uploadAttachment: ['POST', '/api/chat/attachments'],
   getAttachment: ['GET', '/api/chat/attachments/:id'],
   attachmentDescription: ['GET', '/api/chat/attachments/:id/description'],
+  attachmentText: ['GET', '/api/chat/attachments/:id/text'],
   describeAttachment: ['POST', '/api/chat/attachments/:id/describe'],
   updateAttachment: ['PATCH', '/api/chat/attachments/:id'],
 } as const
@@ -70,15 +105,17 @@ export interface UploadOptions {
 /** The client methods of this section (part of `ApiClient`). */
 export interface AttachmentsApi {
   /**
-   * `POST /api/chat/attachments?name=` with the image as the raw body → the pending upload (201).
-   * 422 for anything that isn't a PNG, JPEG, GIF or WebP by content, or over the size limit.
+   * `POST /api/chat/attachments?name=` with the file as the raw body → the pending upload (201).
+   * Any type; 422 over the size limit, or for a file claiming to be an image whose content isn't one.
    */
   uploadAttachment(file: Blob, opts?: UploadOptions): Promise<UploadedAttachment>
   /**
-   * The URL of `GET /api/chat/attachments/:id` (the image, for anyone who can see its channel),
-   * for `<img src>`. `download` asks for `Content-Disposition: attachment`.
+   * The URL of `GET /api/chat/attachments/:id` (the bytes, for anyone who can see its channel), for
+   * `<img src>` or a download link. `download` asks for `Content-Disposition: attachment` (files always are).
    */
   attachmentUrl(id: string, opts?: { download?: boolean }): string
+  /** `GET /api/chat/attachments/:id/text`: a text file's content, at most 256 KB (same visibility). Show it as plain text. */
+  attachmentText(id: string): Promise<AttachmentText>
   /** `GET /api/chat/attachments/:id/description`: the saved description (same visibility as the image). */
   attachmentDescription(id: string): Promise<AttachmentDescription>
   /** `POST /api/chat/attachments/:id/describe`: makes, or redoes, the description (admins and the uploader). */
@@ -160,6 +197,7 @@ export function attachmentsMethods(
     attachmentUrl: (id, opts = {}) =>
       `${raw.base}/api/chat/attachments/${encodeURIComponent(id)}${opts.download ? '?download=1' : ''}`,
     attachmentDescription: (id) => call('attachmentDescription', { id }),
+    attachmentText: (id) => call('attachmentText', { id }),
     describeAttachment: (id) => call('describeAttachment', { id }, undefined, {}),
     updateAttachment: (id, body) => call('updateAttachment', { id }, undefined, body),
   }

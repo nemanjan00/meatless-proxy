@@ -31,6 +31,11 @@ add it later.
 - `forEmployee(employeeId)` and `forContact(contactId)` (a person: only `/shared` paths) return the same operations bound to a reader.
 - Every write, move and delete publishes `FILE_CHANGED` (`file.changed`): `{ ownerEmployeeId, op, path, from?, actor? }`.
 - Path helpers: `normalizePath` (absolute POSIX, rejects `..`, backslashes, control characters), `isWithin`, `ancestors`, ...
+- **One path convention:** `employeePath(p)` maps how code.run names files to the fs tools' form: `/work/files/<p>`, `/<p>`
+  and `<p>` are the same file (`/<p>`), and `/work/shared/<owner>/<p>` is `/shared/<owner>/<p>` (`SANDBOX_FILES_DIR`,
+  `SANDBOX_SHARED_DIR`). The service resolves every path through it (`read`, `write`, `list`, `move`, `delete`, `share`,
+  `unshare`), so every tool built on it takes all spellings; escapes are refused as by `normalizePath`. `sandboxPath(p)`
+  is the other way (`/a.txt` → `/work/files/a.txt`).
 - `encodeContent(bytes)` / `decodeContent(content, encoding)`.
 
 Access under `/shared` is checked against the reader's contact (`contactOf(employeeId)`, defaulting to the `employee`
@@ -61,6 +66,17 @@ than the replaced file's), `list`, `walk`, `delete`, `move`, and optional `local
   decode pass through unchanged.
 - `decodePng`, `encodePng`, `resizeRgba`, `solidPng(w, h, rgba)` (for tests), `sha256Hex`.
 
+### File types
+
+`src/sniff.ts`, for chat attachments and downloads:
+
+- `sniffFile(bytes, name?)` → `{ mime, kind: 'image' | 'file', text, width?, height? }`: images by `sniffImage`; PDF, zip
+  (and docx/xlsx/pptx by extension), gzip, 7z and tar by magic bytes; valid UTF-8 without NUL bytes is text, typed by the
+  extension (`.sh`, `.py`, `.ts`, `.js`, `.md`, `.json`, `.yaml`, `.csv`, `.html`, `.svg`, …) or a `#!` line, else
+  `text/plain`; anything else `application/octet-stream`. Never from a claimed type.
+- `isImageMime`, `isTextMime`, `downloadMime(mime)` (`application/octet-stream` for what a browser could run or render:
+  HTML, SVG, XML, JavaScript, CSS, PDF), `extensionFor(mime)`, `TEXT_PREVIEW_MAX_BYTES` (256 KB).
+
 ### Migration
 
 `migrateFileRecords({ records: store.records, storage, logger? })` moves deployments from when files were records
@@ -73,8 +89,9 @@ newer and kept). The server runs it at every start.
 `test/storage.test.ts` (the contract against both storages; links out of the root, an owner directory that is a link,
 temporary files, cleanup), `test/files.test.ts` (the service on both storages: own files, base64, compare-and-swap,
 files written by code, change events, moves, deletes, sharing and permissions, grants following moves and deletes,
-dangling grants, people), `test/migrate.test.ts` (the migration, interrupted runs, newer files, broken records) and
-`test/paths.test.ts`.
+dangling grants, people, `/work/files` and `/work/shared` paths), `test/migrate.test.ts` (the migration, interrupted
+runs, newer files, broken records), `test/paths.test.ts` (including `employeePath` and its escapes) and
+`test/sniff.test.ts`.
 
 ## Replacing it
 

@@ -344,3 +344,16 @@ describe('parseDescribeReply', () => {
     expect(parseDescribeReply('{"description":"a\\u0007b"}')).toEqual({ description: 'ab' })
   })
 })
+
+describe('files', () => {
+  it('are never described or given a description, and cost no model call', async () => {
+    const model = scriptedModel([REPLY])
+    const d = describer(model)
+    const up = await attachments.upload({ bytes: new TextEncoder().encode('echo hi'), name: 'a.sh', by: ana })
+    await chat.post({ channelId, author: ana, text: 'script', attachments: [up.id] })
+    const out = await d.describeAttachment(up.id)
+    expect(out).toEqual({ ok: false, reason: 'a.sh is a file, not an image' })
+    await expect(d.edit(up.id, 'a script', ana)).rejects.toBeInstanceOf(ValidationError)
+    expect(model.calls).toHaveLength(0)
+  })
+})

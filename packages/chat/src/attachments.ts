@@ -11,12 +11,23 @@ import {
   type KindSchema,
   type Logger,
 } from '@mp/core'
-import { type FileStorage, sha256Hex, sniffImage } from '@mp/files'
+import {
+  type FileStorage,
+  IMAGE_MIMES,
+  TEXT_PREVIEW_MAX_BYTES,
+  extensionFor,
+  isImageMime,
+  isTextMime,
+  sha256Hex,
+  sniffFile,
+} from '@mp/files'
 import type { Records } from '@mp/records'
 import type { Actor, Condition, Ref, StoredRecord } from '@mp/store'
 
 /**
- * Chat attachments: images people and employees attach to messages. The bytes live in a
+ * Chat attachments: files people and employees attach to messages. Any type can be attached; only
+ * PNG, JPEG, GIF and WebP (by their bytes) are images, shown inline and described. Everything else is
+ * a file, always served as a download. The bytes live in a
  * `FileStorage` (the files volume) under the owner `attachments`, apart from employees' own files:
  * `/pending/<id>` until a message claims them, then `/<channelId>/<id>`. The database keeps only
  * their metadata (a `chat_attachment` record, and a copy on the message).
@@ -25,8 +36,15 @@ import type { Actor, Condition, Ref, StoredRecord } from '@mp/store'
 /** The storage owner holding every chat attachment. Employee ids (`emp_…`) can't collide with it. */
 export const ATTACHMENTS_OWNER = 'attachments'
 
-/** Accepted types, checked by magic bytes. No SVG: it is a document that can run script. */
-export const ATTACHMENT_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
+/** The image types, checked by magic bytes. No SVG: it is a document that can run script (it is a file). */
+export const ATTACHMENT_MIMES = IMAGE_MIMES
+
+/** Whether an attachment is an image (shown inline, described, viewable), from its sniffed type. */
+export const isImageAttachment = (a: { mime: string }) => isImageMime(a.mime)
+
+/** Whether an attachment is text small enough for a preview (`chat.attachment_text`, `GET …/text`). */
+export const hasTextPreview = (a: { mime: string; size: number }) =>
+  !isImageMime(a.mime) && isTextMime(a.mime) && a.size <= TEXT_PREVIEW_MAX_BYTES
 
 export interface AttachmentLimits {
   /** Bytes per attachment. Default 10 MB. */
@@ -51,7 +69,7 @@ const refFields = [
 export const attachmentSchema: KindSchema = {
   kind: 'chat_attachment',
   prefix: 'att',
-  description: 'An image attached to a chat message. The bytes are on the files volume; this is its metadata.',
+  description: 'A file or image attached to a chat message. The bytes are on the files volume; this is its metadata.',
   titleField: 'name',
   core: [
     { name: 'name', type: 'string', required: true },
@@ -101,6 +119,8 @@ export type AttachmentRecord = StoredRecord<AttachmentData>
 /** An attachment as a message carries it. */
 export interface Attachment {
   id: string
+  /** `image` for PNG, JPEG, GIF and WebP (shown inline), `file` for anything else (a download). Older messages lack it: go by `mime`. */
+  kind?: 'image' | 'file'
   name: string
   mime: string
   size: number
@@ -116,15 +136,24 @@ export interface Attachment {
 
 export interface UploadInput {
   bytes: Uint8Array
-  /** A file name, e.g. `chart.png`. Cleaned; defaults to `image.<ext>`. */
+  /** A file name, e.g. `chart.png`. Cleaned; defaults to `image.<ext>` or `file.<ext>`. */
   name?: string
+  /**
+   * The type the uploader says it is (a Content-Type, an MCP `mime`). Never used as the type; a claimed
+   * image whose bytes aren't one is refused.
+   */
+  claimedMime?: string
   /** Who uploads: only they can attach it to a message. */
   by: Ref
 }
 
 export interface ChatAttachments {
   readonly limits: AttachmentLimits
-  /** Checks the bytes (an image by its magic bytes, within the size limit) and stores them as a pending upload. */
+  /**
+   * Checks the bytes (within the size limit; the type sniffed from them, an image by its magic bytes)
+   * and stores them as a pending upload. A file claiming to be an image (by `claimedMime` or its
+   * extension) whose bytes aren't one is refused.
+   */
   upload(input: UploadInput): Promise<AttachmentRecord>
   /**
    * Checks that `ids` can go on a message by `by`: at most `maxPerMessage`, each a pending upload of
@@ -157,6 +186,7 @@ export interface ChatAttachmentsOptions {
 /** Metadata as a message carries it. */
 export const attachmentView = (a: AttachmentRecord): Attachment => ({
   id: a.id,
+  kind: isImageMime(a.data.mime) ? 'image' : 'file',
   name: a.data.name,
   mime: a.data.mime,
   size: a.data.size,
@@ -169,8 +199,6 @@ export const attachmentView = (a: AttachmentRecord): Attachment => ({
     : {}),
 })
 
-const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
-
 /** A safe display name: the last path segment, no control characters, at most 120 characters. */
 export function cleanAttachmentName(raw: string | undefined, mime: string): string {
   const base = String(raw ?? '')
@@ -180,7 +208,9 @@ export function cleanAttachmentName(raw: string | undefined, mime: string): stri
     .replace(/[\u0000-\u001f\u007f"<>]/g, '')
     .trim()
     .slice(-120)
-  return base && base !== '.' && base !== '..' ? base : `image.${EXT[mime] ?? 'bin'}`
+  if (base && base !== '.' && base !== '..') return base
+  const ext = extensionFor(mime)
+  return `${isImageMime(mime) ? 'image' : 'file'}${ext ? `.${ext}` : ''}`
 }
 
 /** A description as the model sees it: one line, quoted (JSON string escaping), at most `max` characters. */
@@ -192,17 +222,27 @@ export function quoteForModel(s: string, max: number): string {
 /**
  * How an event or a tool shows an attachment to the model, e.g. `[image: chart.png 800x600, attachment att_…]`,
  * or with its saved description `[image: chart.png 800x600, attachment att_…: "A bar chart of …"]`. With
- * `text`, the text visible in it follows (`; text: "…"`).
+ * `text`, the text visible in it follows (`; text: "…"`). A file shows as
+ * `[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment att_…]`.
  */
 export function attachmentLine(a: Attachment, o: { text?: boolean } = {}): string {
+  if (!isImageMime(a.mime)) return `[file: ${a.name} ${formatBytes(a.size)} ${a.mime}, attachment ${a.id}]`
   const size = a.width && a.height ? ` ${a.width}x${a.height}` : ''
   const desc = a.description ? `: ${quoteForModel(a.description, 600)}` : ''
   const text = o.text && a.description && a.visibleText ? `; text: ${quoteForModel(a.visibleText, 400)}` : ''
   return `[image: ${a.name}${size}, attachment ${a.id}${desc}${text}]`
 }
 
-const formatBytes = (n: number) =>
-  n >= 1024 * 1024 ? `${Math.round((n / 1024 / 1024) * 10) / 10} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`
+/** `1.2 KB`, `3 MB`, `12 bytes`. */
+export const formatBytes = (n: number) =>
+  n >= 1024 * 1024
+    ? `${Math.round((n / 1024 / 1024) * 10) / 10} MB`
+    : n >= 1024
+      ? `${Math.round((n / 1024) * 10) / 10} KB`
+      : `${n} bytes`
+
+/** Image extensions: a file named like one must be one. */
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i
 
 const pendingPath = (id: string) => `/pending/${id}`
 const channelPath = (channelId: string, id: string) => `/${channelId}/${id}`
@@ -237,15 +277,19 @@ export function createChatAttachments(opts: ChatAttachmentsOptions): ChatAttachm
   const api: ChatAttachments = {
     limits,
 
-    async upload({ bytes, name, by }) {
+    async upload({ bytes, name, by, claimedMime }) {
       if (!(bytes instanceof Uint8Array) || !bytes.length) throw new ValidationError('the attachment is empty')
       if (bytes.length > limits.maxBytes)
         throw new ValidationError(`an attachment can be at most ${formatBytes(limits.maxBytes)}`, [], {
           size: bytes.length,
           maxBytes: limits.maxBytes,
         })
-      const info = sniffImage(bytes)
-      if (!info) throw new ValidationError('only images can be attached: PNG, JPEG, GIF or WebP (checked by content)')
+      const info = sniffFile(bytes, name)
+      const claimed = (claimedMime ?? '').toLowerCase().split(';')[0]!.trim()
+      if (info.kind !== 'image' && (isImageMime(claimed) || IMAGE_EXT.test(name ?? '')))
+        throw new ValidationError(
+          `${name ? cleanAttachmentName(name, info.mime) : 'the attachment'} says it is an image, but its content is not a PNG, JPEG, GIF or WebP`,
+        )
       if (!by?.kind || !by.id) throw new ValidationError('the uploader is required')
       const rec = await records.create<AttachmentData>(
         attachmentSchema.kind,
@@ -373,6 +417,17 @@ export function createChatAttachments(opts: ChatAttachmentsOptions): ChatAttachm
 /** The attachments of a message's data, tolerating older messages without any. */
 export function attachmentsOf(data: { attachments?: unknown }): Attachment[] {
   return Array.isArray(data.attachments) ? (data.attachments as Attachment[]) : []
+}
+
+/**
+ * A text attachment's content, at most `maxBytes` of it (cut at a character boundary). For previews:
+ * show it as plain text, never as HTML, and to the model as information from its uploader.
+ */
+export function attachmentText(bytes: Uint8Array, maxBytes = TEXT_PREVIEW_MAX_BYTES): { text: string; truncated: boolean } {
+  const truncated = bytes.length > maxBytes
+  let text = new TextDecoder('utf-8').decode(truncated ? bytes.subarray(0, maxBytes) : bytes)
+  if (truncated) text = text.replace(/\uFFFD+$/, '')
+  return { text, truncated }
 }
 
 /** Attachment metadata as JSON, for event payloads. */

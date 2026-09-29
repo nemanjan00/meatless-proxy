@@ -75,7 +75,8 @@ export const messageSchema: KindSchema = {
       name: 'attachments',
       type: 'list',
       of: { type: 'json' },
-      description: 'Images attached to it: `{ id, name, mime, size, width?, height? }`. The bytes are on the files volume.',
+      description:
+        'Files and images attached to it: `{ id, kind, name, mime, size, width?, height? }`. The bytes are on the files volume.',
     },
   ],
 }
@@ -165,7 +166,7 @@ export interface MessageData extends Record<string, unknown> {
   deleted?: boolean
   /** Emoji -> who reacted with it. */
   reactions?: Record<string, Ref[]>
-  /** Images attached to it (their bytes are chat attachments on the files volume). */
+  /** Files and images attached to it (their bytes are chat attachments on the files volume). */
   attachments?: Attachment[]
 }
 export type Message = StoredRecord<MessageData>
@@ -212,7 +213,7 @@ export interface ChatEventPayload {
   text: string
   tags: ChatTag[]
   author: ChatAuthor & AuthorInfo
-  /** Images attached to the message (metadata only; the model looks at one with `image.view`). */
+  /** Files and images attached to the message (metadata only; the model looks at an image with `image.view`, reads a text file with `chat.attachment_text`). */
   attachments?: Attachment[]
 }
 
@@ -230,7 +231,7 @@ export interface ChatOptions {
   resolveName: (name: string) => Promise<NameResolution>
   /** Resolves `@employee#slug` to a session id. */
   resolveSessionSlug: (employeeId: string, slug: string) => Promise<string | null>
-  /** Image attachments. Without it, messages can't have any. */
+  /** Attachments. Without it, messages can't have any. */
   attachments?: ChatAttachments
   /**
    * Called after a message with images is posted (and its event ingested), e.g. to describe them in
@@ -571,10 +572,10 @@ export function createChat(opts: ChatOptions): Chat {
       const limit = q.limit ?? 50
       let items = (await records.query<MessageData>('message', { where, orderBy: { field: 'id', dir: 'desc' } })).items
       if (text && opts.attachments) {
-        // Images match by their saved description and the text visible in them (on the attachment records).
+        // Attachments match by name, and images by their saved description and the text visible in them.
         const seen = new Set(items.map((m) => m.id))
         const extra: Message[] = []
-        for (const field of ['description', 'visibleText']) {
+        for (const field of ['name', 'description', 'visibleText']) {
           const found = await records.query<AttachmentData>(attachmentSchema.kind, {
             where: [
               { field, op: 'like', value: text },

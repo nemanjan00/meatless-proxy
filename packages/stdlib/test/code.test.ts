@@ -23,7 +23,7 @@ describe('code.run', () => {
       code: 'read("data/sales.csv").then((csv) => { const total = csv.trim().split("\\n").slice(1).reduce((s, l) => s + Number(l.split(",")[1]), 0); return write("report.txt", "total " + total).then(() => total) })',
     })
     expect(r.result).toBe('42')
-    expect(r.files_changed).toEqual([{ path: '/report.txt', change: 'created', size: 8 }])
+    expect(r.files_changed).toEqual([{ path: '/report.txt', sandboxPath: '/work/files/report.txt', change: 'created', size: 8 }])
     expect((await t.out('fs.read', { path: '/report.txt' })).content).toBe('total 42')
   })
 

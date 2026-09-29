@@ -638,11 +638,11 @@ never changes when someone assigns one. A failure only logs a warning.
   `services.describer` (`IMAGE_DESCRIBE`, `IMAGE_DESCRIBE_MODEL`, vision from
   `resolveVision`), recording each call in the usage ledger (a session's run,
   employee and root, or the requester). `upload` mode: chat's `onAttachments`
-  queues one `images` job per image (`describe:<id>`, 3 attempts), run by
+  queues one `images` job per image (`describe:<id>`, 3 attempts; files are skipped), run by
   `startDescribeWorker`. `describedEvent` is the router's `prepareEvent`: a
   chat event's image lines get the saved descriptions at delivery.
   `GET /api/chat/attachments/:id/description`, `POST …/describe` (redo; admins
-  and the uploader, 503 when descriptions can't be made) and `PATCH
+  and the uploader, 503 when descriptions can't be made, 422 for a file) and `PATCH
   /api/chat/attachments/:id { description }` (edit or clear; admins and the
   uploader). `chat_attachment` and `image_description` records are hidden from
   the generic records API.

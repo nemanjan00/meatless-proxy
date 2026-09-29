@@ -5,17 +5,58 @@ import {
   type AttachmentsApi,
   type ChatAttachment,
   type MessageData,
+  hasTextPreview,
+  IMAGE_ATTACHMENT_MIMES,
+  TEXT_PREVIEW_MAX_BYTES,
 } from '@mp/api'
 import { type MockDb, mockId } from './data.ts'
 
 /**
  * Chat attachments in the mock: uploads live in memory as object URLs; a couple of seeded messages
- * carry demo images (drawn as SVG, which the real server never serves: it takes PNG, JPEG, GIF and
- * WebP only).
+ * carry demo images (drawn as SVG, which the real server never shows inline: only PNG, JPEG, GIF and
+ * WebP are images there) and a demo script. Any file can be uploaded; the type comes from the
+ * browser's `File.type` or the extension (the server sniffs the bytes).
  */
 
-const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const TYPES: readonly string[] = IMAGE_ATTACHMENT_MIMES
 const MAX_BYTES = 10 * 1024 * 1024
+
+const TEXT_EXT: Record<string, string> = {
+  sh: 'text/x-shellscript',
+  py: 'text/x-python',
+  ts: 'text/typescript',
+  js: 'text/javascript',
+  md: 'text/markdown',
+  txt: 'text/plain',
+  log: 'text/plain',
+  json: 'application/json',
+  yaml: 'application/yaml',
+  yml: 'application/yaml',
+  csv: 'text/csv',
+  html: 'text/html',
+  svg: 'image/svg+xml',
+}
+
+/** The mock's type for an upload: an image by its declared type, text by extension, else the declared type. */
+function mimeOf(file: Blob, name: string): string {
+  const ext = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase()
+  if (ext && TEXT_EXT[ext]) return TEXT_EXT[ext]
+  return file.type || 'application/octet-stream'
+}
+
+/** A seeded script, as an employee would attach it. */
+const DEMO_SCRIPT = `#!/bin/sh
+# Frees disk on staging-eu-1: old WAL segments and docker leftovers.
+set -eu
+echo "before:"; df -h /var/lib/postgresql | tail -1
+docker system prune --force --filter "until=168h"
+docker image prune --all --force --filter "until=168h"
+find /var/lib/postgresql/wal-archive -type f -mtime +7 -delete
+find /tmp -maxdepth 1 -name 'build-*' -mtime +1 -exec rm -rf {} +
+journalctl --vacuum-time=7d
+apt-get clean
+echo "after:"; df -h /var/lib/postgresql | tail -1
+`
 
 const svg = (w: number, h: number, body: string) =>
   `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
@@ -72,6 +113,8 @@ function dashboard(): string {
 interface Stored {
   attachment: ChatAttachment
   url: string
+  /** A text file's content, for previews. */
+  text?: string
   owner: string
   claimed: boolean
   describedAt?: string
@@ -99,24 +142,29 @@ export function createMockAttachmentsApi(ctx: {
       size: number
       description?: string
       visibleText?: string
+      mime?: string
+      text?: string
     }[],
   ) => {
     const m = ctx.db.records.get('message')?.get(mockId('msg', messageNo)) as ApiRecord<MessageData> | undefined
     if (!m) return
     const list = items.map((it) => {
+      const mime = it.mime ?? 'image/png'
+      const image = TYPES.includes(mime)
       const attachment: ChatAttachment = {
         id: mockId('att', ++seq),
+        kind: image ? 'image' : 'file',
         name: it.name,
-        mime: 'image/png',
+        mime,
         size: it.size,
-        width: it.width,
-        height: it.height,
+        ...(image ? { width: it.width, height: it.height } : {}),
         ...(it.description ? { description: it.description } : {}),
         ...(it.visibleText ? { visibleText: it.visibleText } : {}),
       }
       store.set(attachment.id, {
         attachment,
         url: it.url,
+        ...(it.text !== undefined ? { text: it.text } : {}),
         owner: 'seed',
         claimed: true,
         ...(it.description ? { describedAt: new Date(ctx.db.now() - 3_600_000).toISOString() } : {}),
@@ -148,6 +196,15 @@ export function createMockAttachmentsApi(ctx: {
       description: 'A horizontal bar chart of disk usage on staging-eu-1: postgres uses by far the most, followed by docker.',
       visibleText: 'staging-eu-1 · disk by use\npostgres 212 G\ndocker 61 G\nlogs 18 G\nwal 9 G\nother 6 G',
     },
+    {
+      name: 'free-disk.sh',
+      url: `data:text/x-shellscript;charset=utf-8,${encodeURIComponent(DEMO_SCRIPT)}`,
+      width: 0,
+      height: 0,
+      size: new TextEncoder().encode(DEMO_SCRIPT).length,
+      mime: 'text/x-shellscript',
+      text: DEMO_SCRIPT,
+    },
   ])
 
   /** The same attachment object everywhere: in the store and on its message. */
@@ -177,6 +234,15 @@ export function createMockAttachmentsApi(ctx: {
   })
   const pause = () => (ctx.latencyMs ? new Promise((r) => setTimeout(r, ctx.latencyMs)) : Promise.resolve())
 
+  const readText = async (file: Blob): Promise<string | undefined> => {
+    try {
+      if (typeof file.text === 'function') return await file.text()
+      return await new Response(file).text()
+    } catch {
+      return undefined
+    }
+  }
+
   const dims = async (file: Blob): Promise<{ width?: number; height?: number }> => {
     if (typeof createImageBitmap !== 'function') return {}
     try {
@@ -191,8 +257,17 @@ export function createMockAttachmentsApi(ctx: {
 
   const api: AttachmentsApi = {
     async uploadAttachment(file, opts = {}) {
-      if (!TYPES.includes(file.type))
-        throw new ApiRequestError(422, 'validation', 'only images can be attached: PNG, JPEG, GIF or WebP (checked by content)')
+      const name = opts.name ?? (file as File).name ?? 'file'
+      const mime = mimeOf(file, name)
+      const image = TYPES.includes(mime)
+      // Like the server: a file named or typed as an image must be one (here: declared as one).
+      if (!image && /\.(png|jpe?g|gif|webp)$/i.test(name))
+        throw new ApiRequestError(
+          422,
+          'validation',
+          `${name} says it is an image, but its content is not a PNG, JPEG, GIF or WebP`,
+        )
+      if (!file.size) throw new ApiRequestError(422, 'validation', 'the attachment is empty')
       if (file.size > MAX_BYTES) throw new ApiRequestError(422, 'validation', 'an attachment can be at most 10 MB')
       // Progress in a few steps, like a real upload.
       for (const f of [0.2, 0.55, 0.85]) {
@@ -201,28 +276,40 @@ export function createMockAttachmentsApi(ctx: {
       }
       const attachment: ChatAttachment = {
         id: mockId('att', ++seq),
-        name: opts.name ?? (file as File).name ?? 'image',
-        mime: file.type,
+        kind: image ? 'image' : 'file',
+        name,
+        mime,
         size: file.size,
-        ...(await dims(file)),
+        ...(image ? await dims(file) : {}),
       }
+      const text = hasTextPreview(attachment) ? await readText(file) : undefined
       let url = ''
       try {
         if (typeof URL.createObjectURL === 'function') url = URL.createObjectURL(file)
       } catch {
         // jsdom: no object URLs.
       }
-      store.set(attachment.id, { attachment, url, owner: ctx.meId, claimed: false })
+      // jsdom has no object URLs: a text file can still be a data URL.
+      if (!url && text !== undefined) url = `data:${mime};charset=utf-8,${encodeURIComponent(text)}`
+      store.set(attachment.id, { attachment, url, ...(text !== undefined ? { text } : {}), owner: ctx.meId, claimed: false })
       opts.onProgress?.(1)
       return { attachment, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     attachmentUrl: (id) => store.get(id)?.url ?? '',
+    async attachmentText(id) {
+      const s = visible(id)
+      if (s.text === undefined) throw new ApiRequestError(422, 'validation', `${s.attachment.name} is not a text file`)
+      await pause()
+      const truncated = s.text.length > TEXT_PREVIEW_MAX_BYTES
+      return { attachment: s.attachment, text: truncated ? s.text.slice(0, TEXT_PREVIEW_MAX_BYTES) : s.text, truncated }
+    },
     async attachmentDescription(id) {
       await pause()
       return view(visible(id))
     },
     async describeAttachment(id) {
       const s = visible(id)
+      if (!TYPES.includes(s.attachment.mime)) throw new ApiRequestError(422, 'validation', 'only images have descriptions')
       if (!canEdit(s))
         throw new ApiRequestError(403, 'denied', "only an admin or the image's uploader can change its description")
       await pause()

@@ -9,6 +9,7 @@ export const REVIEWER_ONLY_TOOLS = ['checklist.record_review'] as const
 export const DEFAULT_TOOLSET: readonly string[] = [
   'chat.add_member',
   'chat.archive',
+  'chat.attachment_text',
   'chat.create_channel',
   'chat.invite',
   'chat.post',
@@ -122,6 +123,7 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'docs.write_chapter',
   'chat.add_member',
   'chat.archive',
+  'chat.attachment_text',
   'chat.create_channel',
   'chat.delete',
   'chat.edit',

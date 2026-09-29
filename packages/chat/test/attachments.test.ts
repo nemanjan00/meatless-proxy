@@ -15,6 +15,9 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   ATTACHMENTS_OWNER,
   attachmentLine,
+  attachmentText,
+  hasTextPreview,
+  isImageAttachment,
   cleanAttachmentName,
   createChat,
   createChatAttachments,
@@ -72,7 +75,11 @@ describe('uploads', () => {
     const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')
     await expect(attachments.upload({ bytes: svg, name: 'cute.png', by: ana })).rejects.toBeInstanceOf(ValidationError)
     const html = new TextEncoder().encode('<!doctype html><script>alert(1)</script>')
-    await expect(attachments.upload({ bytes: html, name: 'x.gif', by: ana })).rejects.toThrow(/only images/)
+    await expect(attachments.upload({ bytes: html, name: 'x.gif', by: ana })).rejects.toThrow(/says it is an image/)
+    // A claimed image type is checked against the bytes too.
+    await expect(attachments.upload({ bytes: html, name: 'page', claimedMime: 'image/png', by: ana })).rejects.toThrow(
+      /says it is an image/,
+    )
     // A real PNG named .jpg is stored as what it is.
     expect((await attachments.upload({ bytes: png(), name: 'photo.jpg', by: ana })).data.mime).toBe('image/png')
     await expect(attachments.upload({ bytes: new Uint8Array(), by: ana })).rejects.toThrow(/empty/)
@@ -95,6 +102,64 @@ describe('uploads', () => {
   })
 })
 
+describe('file attachments', () => {
+  const enc = (t: string) => new TextEncoder().encode(t)
+
+  it('takes any file, typed by content and extension, never an image unless the bytes are one', async () => {
+    const sh = await attachments.upload({ bytes: enc('#!/bin/sh\necho hello\n'), name: 'ipwatch.sh', by: ana })
+    expect(sh.data).toMatchObject({ name: 'ipwatch.sh', mime: 'text/x-shellscript', size: 21 })
+    expect(isImageAttachment(sh.data)).toBe(false)
+    expect(hasTextPreview(sh.data)).toBe(true)
+    // A script without an extension is typed by its #! line.
+    expect((await attachments.upload({ bytes: enc('#!/usr/bin/env python3\nprint(1)\n'), name: 'run', by: ana })).data.mime).toBe(
+      'text/x-python',
+    )
+    // HTML and SVG are files (text), never images; a claimed text type isn't trusted either.
+    const svg = await attachments.upload({ bytes: enc('<svg xmlns="http://www.w3.org/2000/svg"/>'), name: 'logo.svg', by: ana })
+    expect(svg.data.mime).toBe('image/svg+xml')
+    expect(isImageAttachment(svg.data)).toBe(false)
+    const pdf = await attachments.upload({
+      bytes: enc('%PDF-1.7\n\u0000\u0001'),
+      name: 'r.txt',
+      claimedMime: 'text/plain',
+      by: ana,
+    })
+    expect(pdf.data.mime).toBe('application/pdf')
+    expect(hasTextPreview(pdf.data)).toBe(false)
+    const bin = await attachments.upload({ bytes: new Uint8Array([0, 1, 2, 255, 254]), by: ana })
+    expect(bin.data).toMatchObject({ name: 'file', mime: 'application/octet-stream' })
+    const txt = await attachments.upload({ bytes: enc('plain'), by: ana })
+    expect(txt.data).toMatchObject({ name: 'file.txt', mime: 'text/plain' })
+  })
+
+  it('names files in events and messages, with size and type', async () => {
+    const sh = await attachments.upload({ bytes: enc('x'.repeat(1229)), name: 'ipwatch.sh', by: ana })
+    const m = await chat.post({ channelId, author: ana, text: 'here', attachments: [sh.id] })
+    expect(m.data.attachments![0]).toMatchObject({ kind: 'file', name: 'ipwatch.sh', mime: 'text/x-shellscript' })
+    const ev = (await events.query({ source: 'chat', type: 'message.posted' })).at(-1)!
+    expect(ev.data.text).toContain(`[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment ${sh.id}]`)
+  })
+
+  it('matches files by name in search', async () => {
+    const sh = await attachments.upload({ bytes: enc('echo'), name: 'ipwatch.sh', by: ana })
+    const m = await chat.post({ channelId, author: ana, text: 'the script', attachments: [sh.id] })
+    expect((await chat.search('ipwatch')).map((x) => x.id)).toEqual([m.id])
+  })
+
+  it('cuts text at a character boundary', () => {
+    const t = attachmentText(enc('aé'), 2)
+    expect(t).toEqual({ text: 'a', truncated: true })
+    expect(attachmentText(enc('abc'))).toEqual({ text: 'abc', truncated: false })
+    // Previews stop at 256 KB, and bigger text files have no preview at all.
+    const big = attachmentText(enc('y'.repeat(300 * 1024)))
+    expect(big.text.length).toBe(256 * 1024)
+    expect(big.truncated).toBe(true)
+    expect(hasTextPreview({ mime: 'text/plain', size: 256 * 1024 })).toBe(true)
+    expect(hasTextPreview({ mime: 'text/plain', size: 256 * 1024 + 1 })).toBe(false)
+    expect(hasTextPreview({ mime: 'image/png', size: 10 })).toBe(false)
+  })
+})
+
 describe('messages with attachments', () => {
   it('attaches uploads: metadata on the message, bytes moved under the channel, named in the event text', async () => {
     const a = await attachments.upload({ bytes: png(), name: 'a.png', by: ana })
@@ -103,6 +168,7 @@ describe('messages with attachments', () => {
     expect(m.data.attachments!.map((x) => x.id)).toEqual([a.id, b.id])
     expect(m.data.attachments![1]).toEqual({
       id: b.id,
+      kind: 'image',
       name: 'b.png',
       mime: 'image/png',
       size: png(16, 16).length,

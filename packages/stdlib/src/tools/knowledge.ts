@@ -5,6 +5,7 @@ import { snippet } from '@mp/sessions'
 import type { Ref, StoredRecord } from '@mp/store'
 import type { ToolContext } from '@mp/tools'
 import { checkRef, clip, fail, line, ok, str, type Kit } from '../kit.ts'
+import { SANDBOX_PATHS_NOTE } from './chat.ts'
 
 const OWNER_KINDS = ['project', 'session', 'procedure', 'contact', 'memory', 'employee']
 const REF_KINDS = ['contact', 'project', 'session', 'memory', 'procedure', 'doc']
@@ -387,7 +388,7 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.list',
-      description: 'List a directory of your own filesystem (default /). What others share with you is under /shared/<owner>/….',
+      description: `List a directory of your own filesystem (default /). What others share with you is under /shared/<owner>/…. ${SANDBOX_PATHS_NOTE}`,
       effect: 'read',
       params: { properties: { path: { type: 'string' } } },
     },
@@ -405,8 +406,7 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.read',
-      description:
-        'Read a file from your filesystem (or one shared with you under /shared/<owner>/…). To look at an image, use image.view instead.',
+      description: `Read a file from your filesystem (or one shared with you under /shared/<owner>/…). To look at an image, use image.view instead. ${SANDBOX_PATHS_NOTE}`,
       effect: 'read',
       params: { properties: { path: { type: 'string' } }, required: ['path'] },
     },
@@ -426,8 +426,7 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.write',
-      description:
-        "Create or replace a file in your filesystem. Writing under /shared/<owner>/… needs a write share. Binary files, e.g. a PNG to attach to a chat message, go in as base64 with encoding: 'base64'.",
+      description: `Create or replace a file in your filesystem. Writing under /shared/<owner>/… needs a write share. Binary files, e.g. a PNG to attach to a chat message, go in as base64 with encoding: 'base64'. ${SANDBOX_PATHS_NOTE}`,
       effect: 'idempotent',
       params: {
         properties: {
@@ -498,8 +497,7 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.share',
-      description:
-        'Share a file or directory of your filesystem with a person (contact id) or another employee (name or id), read-only (default) or read-write. They see it under /shared/<your employee id>/….',
+      description: `Share a file or directory of your filesystem with a person (contact id) or another employee (name or id), read-only (default) or read-write. They see it under /shared/<your employee id>/…. ${SANDBOX_PATHS_NOTE}`,
       effect: 'idempotent',
       params: {
         properties: {

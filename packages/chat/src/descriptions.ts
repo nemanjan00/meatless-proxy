@@ -10,7 +10,7 @@ import {
   type KindSchema,
   type Logger,
 } from '@mp/core'
-import { prepareImage, sha256Hex } from '@mp/files'
+import { isImageMime, prepareImage, sha256Hex } from '@mp/files'
 import type { ModelClient, Usage } from '@mp/model'
 import type { Records } from '@mp/records'
 import type { Actor, Ref } from '@mp/store'
@@ -372,6 +372,7 @@ export function createImageDescriber(o: ImageDescriberOptions): ImageDescriber {
         try {
           const a = await attachments.get(id)
           if (!a) return { ok: false, reason: `attachment ${id} not found` }
+          if (!isImageMime(a.data.mime)) return { ok: false, reason: `${a.data.name} is a file, not an image` }
           const have = saved(a)
           if (have && !opt.force) return { ok: true, description: have, reused: true }
           const cached = opt.force ? null : await forSha(a.data.sha256)
@@ -414,6 +415,7 @@ export function createImageDescriber(o: ImageDescriberOptions): ImageDescriber {
       serial(`att:${id}`, async () => {
         const a = await attachments.get(id)
         if (!a) throw new NotFoundError('attachment', id)
+        if (!isImageMime(a.data.mime)) throw new ValidationError('only images have descriptions')
         if (description === null) {
           // The saved one for the same bytes goes too (unless someone else's edit is what's there): a new one is made next time.
           const cached = await records.getByKey<ImageDescriptionData>(imageDescriptionSchema.kind, a.data.sha256)

@@ -417,7 +417,7 @@ export class HarnessMcpServer {
       'chat_post',
       {
         description:
-          'Post a message in a harness chat channel, or reply in a thread. Tag employees with @name to ask them to act. Attach images (PNG, JPEG, GIF or WebP, base64) with attachments; the text may then be empty.',
+          'Post a message in a harness chat channel, or reply in a thread. Tag employees with @name to ask them to act. Attach files of any type (base64) with attachments: PNG, JPEG, GIF and WebP show as images, anything else as a download. The text may then be empty.',
         inputSchema: {
           channel: z.string().describe('Channel name (e.g. requests) or id'),
           text: z.string(),
@@ -425,9 +425,12 @@ export class HarnessMcpServer {
           attachments: z
             .array(
               z.object({
-                name: z.string().optional().describe('File name, e.g. screenshot.png'),
-                mime: z.string().optional().describe('image/png, image/jpeg, image/gif or image/webp'),
-                data: z.string().describe('The image, base64'),
+                name: z.string().optional().describe('File name, e.g. screenshot.png or deploy.sh'),
+                mime: z
+                  .string()
+                  .optional()
+                  .describe('Optional; the type comes from the content. An image type the bytes do not match is refused.'),
+                data: z.string().describe('The file, base64'),
               }),
             )
             .optional(),
@@ -454,7 +457,7 @@ export class HarnessMcpServer {
       'chat_attachment',
       {
         description:
-          'Look at an image attached to a chat message you can see (the id from chat_read, chat_search or a notification), with its saved description. describe_only: true returns just the description and the text visible in it (cheap; made once if there is none yet).',
+          'Get an attachment of a chat message you can see (the id from chat_read, chat_search or a notification). An image comes with its saved description (describe_only: true returns just the description and the text visible in it: cheap, made once if there is none yet); a text file comes back as text, any other file as an embedded resource (base64).',
         inputSchema: {
           id: z.string().describe('The attachment id (att_…)'),
           describe_only: z.boolean().optional().describe('Only the description and visible text, not the image'),

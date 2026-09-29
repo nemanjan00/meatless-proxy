@@ -22,8 +22,10 @@ to `createChat` as `attachments`. The bytes live in a `FileStorage` (the files v
 metadata: `name`, `mime` (sniffed), `size`, `width`, `height`, `sha256`, `uploadedBy`, `createdAt`, `channelId`,
 `messageId`.
 
-- `upload({ bytes, name?, by })`: PNG, JPEG, GIF or WebP by magic bytes (`sniffImage` from `@mp/files`), at most
-  `limits.maxBytes` (default 10 MB); the name is cleaned (last path segment, no control characters).
+- `upload({ bytes, name?, claimedMime?, by })`: any file, at most `limits.maxBytes` (default 10 MB), typed by its content
+  (`sniffFile` from `@mp/files`): only PNG, JPEG, GIF and WebP are images; a file claiming to be an image (`claimedMime`
+  or an image extension) whose bytes aren't one is refused. The name is cleaned (last path segment, no control
+  characters; default `image.<ext>` or `file.<ext>`).
 - `check(ids, by)` / `claim(ids, { by, channelId, messageId })`: at most `limits.maxPerMessage` (10), each a pending upload
   of `by` within `limits.claimWindowMs` (1 hour). Someone else's upload is `DeniedError`, one already on a message
   `ConflictError`, an unknown or expired one `NotFoundError`. Claims are compare-and-swap, and a failed claim puts back
@@ -32,10 +34,14 @@ metadata: `name`, `mime` (sniffed), `size`, `width`, `height`, `sha256`, `upload
   window, and claims whose message never appeared).
 - `post({ …, attachments: [id…] })` claims them for the new message (pre-generated id), stores `attachments` on the message
   (the text may then be empty), adds them to the event payload, and names them in the event text, one line each:
-  `attachmentLine(a)` → `[image: chart.png 800x600, attachment att_…]`. `delete` removes them.
-- Helpers: `attachmentView(record)`, `attachmentsOf(messageData)`, `cleanAttachmentName`. `attachmentLine(a, { text? })`
+  `attachmentLine(a)` → `[image: chart.png 800x600, attachment att_…]`, or for a file
+  `[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment att_…]`. `delete` removes them.
+- Helpers: `attachmentView(record)` (with `kind: 'image' | 'file'`), `attachmentsOf(messageData)`, `cleanAttachmentName`,
+  `isImageAttachment(a)`, `hasTextPreview(a)` (text up to 256 KB), `attachmentText(bytes, maxBytes?)` (cut at a character
+  boundary, `truncated`), `formatBytes`. `attachmentLine(a, { text? })`
   adds a saved description, quoted (`…, attachment att_…: "A bar chart …"]`), and with `text` the visible text.
-- `search(text)` also matches images: attachment records whose `description` or `visibleText` contains the text.
+- `search(text)` also matches attachments: records whose `name`, `description` or `visibleText` contains the text.
+- The image describer refuses files: `describeAttachment` returns `{ ok: false }` without a model call, `edit` throws.
 - `onAttachments(message, attachments)` (an option) is called after a message with images is posted, e.g. to queue
   background descriptions; its errors don't fail the post.
 

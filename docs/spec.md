@@ -532,23 +532,33 @@ Harness chat should feel like Slack to the people using it:
   proposal. Reactions are events too, so a subscribed session can treat ✅ as
   an approval.
 - **Starting a DM** with any employee or person from the UI.
-- **Images** on messages ([attachments](#attachments)), shown inline and in
-  a lightbox.
+- **Files and images** on messages ([attachments](#attachments)): images
+  shown inline and in a lightbox, other files as a chip with a download link
+  (and a preview for small text files).
 
 #### Attachments
 
-A message can have images: `attachments: [{ id, name, mime, size, width?,
-height? }]` on the message record. Their bytes live on the
+A message can have files of any type: `attachments: [{ id, kind, name, mime,
+size, width?, height? }]` on the message record (`kind` is `image` or `file`;
+older messages lack it, so readers go by `mime`). Their bytes live on the
 [files volume](#employee-filesystem), apart from employees' own files
 (`<FILES_DIR>/attachments/<channel id>/<attachment id>`, and
 `attachments/pending/<id>` until a message claims them); a `chat_attachment`
 record holds each one's metadata and sha256. Nothing of the bytes is in
 Postgres.
 
-- **Only images:** PNG, JPEG, GIF and WebP, recognised by their magic bytes,
-  never by the name or the claimed type. SVG and HTML are refused. At most
-  `CHAT_ATTACHMENT_MAX_BYTES` (10 MB) each and
-  `CHAT_ATTACHMENTS_PER_MESSAGE` (10) per message.
+- **Any file.** At most `CHAT_ATTACHMENT_MAX_BYTES` (10 MB) each and
+  `CHAT_ATTACHMENTS_PER_MESSAGE` (10) per message. The type is sniffed from
+  the content, never taken from the uploader: images, PDF, zip, gzip, 7z and
+  tar by their magic bytes; valid UTF-8 without NUL bytes is text, typed by its
+  extension (`.sh` → `text/x-shellscript`, `.py`, `.ts`, `.md`, `.json`,
+  `.yaml`, `.csv`, …) or its `#!` line; anything else is
+  `application/octet-stream`.
+- **Only PNG, JPEG, GIF and WebP are images** (by their magic bytes): shown
+  inline, described and viewable by `image.view`. Everything else, SVG and
+  HTML included, is a **file**. A file claiming to be an image (an image
+  `Content-Type` or MCP `mime`, or an image extension such as `.png`) whose
+  bytes aren't one is refused.
 - **Upload, then post.** `POST /api/chat/attachments` (a raw body or a
   multipart `file`) stores a pending upload and returns its id; the message is
   posted with `attachments: [id…]`, and may then have no text. Only the
@@ -621,9 +631,21 @@ everywhere.
   result (quoted, and marked as made from the image), never as instructions.
   An image is never described for a caller who can't see it.
 
-`chat.post` and `chat.reply` take `attachments: [{ path }]`: images from the
-employee's filesystem (its own files, or ones shared with it that it can
-read), copied into chat attachments.
+Descriptions are for images only: files are never described, and the
+describe and edit endpoints refuse them.
+
+`chat.post` and `chat.reply` take `attachments: [{ path }]`: any file from
+the employee's filesystem (its own files, or ones shared with it that it can
+read), copied into chat attachments; images are shown inline, other files as
+downloads. Paths follow the [one path convention](#employee-filesystem):
+`/work/files/ipwatch.sh`, `/ipwatch.sh` and `ipwatch.sh` are the same file.
+
+**Repeats aren't posted twice.** When the same session posts identical text
+(after trimming, with the same attachment names) in the same thread, or at
+the top level of the same channel, within 2 minutes, `chat.post` and
+`chat.reply` don't post it again: they return `{ duplicate: true, messageId,
+threadId, note }`, the note telling the model it already posted it. (A model
+confused by a tool error otherwise tends to post the same answer again.)
 
 #### People can join
 
@@ -1545,7 +1567,9 @@ files, notes, drafts, exports and scratch data, separate from any project's
 repository.
 
 - **Private by default.** An employee's files are visible only to that
-  employee's sessions.
+  employee's sessions, and to admins, who manage them in the web UI and the
+  API. Everyone else sees only what was shared with them (below), in the web
+  UI and the API alike.
 - **Sharing.** A file or a directory can be shared with another employee or a
   person, read-only or read-write. Shared files show up under
   `/shared/<owner>/…` for the recipient.
@@ -1589,6 +1613,16 @@ repository.
 | fs.write      | write a file (binary files, e.g. a PNG, as base64 with `encoding: 'base64'`) |
 | fs.move / fs.delete | move or delete a file                             |
 | fs.share      | share a file or directory with an employee or person   |
+
+**One path convention.** Every tool that takes an employee-file path (`fs.*`,
+`chat.post`/`chat.reply` attachments, `image.view`, `fs.share`, and the MCP
+equivalents) accepts `/work/files/<p>`, `/<p>` and `<p>` as the same file, and
+`/work/shared/<owner>/<p>` as `/shared/<owner>/<p>`: `/work/files` in
+`code.run` is the employee's filesystem root. One helper (`employeePath` in
+`@mp/files`) normalizes them, refusing `..` escapes, backslashes and control
+characters as before. Tool descriptions say it in one sentence. (An own
+directory literally named `/work` is therefore reached as `/work/…` only for
+paths outside `/work/files` and `/work/shared`.)
 
 Open questions:
 
@@ -1638,7 +1672,10 @@ hand.
   employee are under `/work/shared/<owner>/<path>`, read-only unless the grant
   allows writing. After each cell, `files_changed` lists what the cell created,
   changed or deleted (from a before-and-after scan of sizes and modification
-  times), and `file.changed` is published for each.
+  times), and `file.changed` is published for each. Each change is
+  `{ path, sandboxPath, change, size?, note? }`: `path` in the fs-tools form
+  (`/ipwatch.sh`, `/shared/<owner>/…`), the form attachments and `fs.*` take,
+  and `sandboxPath` as code sees it (`/work/files/ipwatch.sh`).
 - **Mounted or copied.** With the files volume (`FILES_VOLUME`) and Docker
   Engine 26+, the sandbox mounts only this employee's directory of the volume
   (a volume subpath) at `/work/files`, and each share's path at
@@ -2268,9 +2305,12 @@ All of these update live over the WebSocket.
   current rows, and `chat.activity` / `chat.activity.done` on the channel's
   live topic keep them current, for people who may see the channel only.
   Reduced motion shows a static dot instead of the spinner.
-- Images: the composer (channel and thread) has an attach button, takes pasted
-  and dropped images, and shows pending ones as thumbnails with upload
-  progress and a remove button. Messages show their images as a grid of
+- Attachments: the composer (channel and thread) has an attach button, takes
+  pasted and dropped files of any type, and shows pending ones as thumbnails
+  (images) or file tiles with upload progress and a remove button. Messages
+  show files as a chip (an icon by type, the name, the size and a Download
+  link); a text file up to 256 KB also gets a collapsed preview of its first
+  lines, expandable, rendered as plain text. Messages show their images as a grid of
   thumbnails; clicking one opens a lightbox (Esc closes it, ← and → move
   between the message's images) with a download link. An image's
   [saved description](#image-descriptions) is its alt text and the lightbox's

@@ -5,6 +5,7 @@ import {
   type ImageDescriber,
   type ImageDescribeMode,
   attachmentLine,
+  isImageAttachment,
   attachmentView,
   createImageDescriber,
 } from '@mp/chat'
@@ -85,7 +86,7 @@ export function enqueueDescriptions(queue: Queue, describer: () => ImageDescribe
     const d = describer()
     if (d?.mode !== 'upload' || !d.available) return
     for (const a of attachments) {
-      if (a.description) continue
+      if (a.description || !isImageAttachment(a)) continue
       await queue
         .add(DESCRIBE_QUEUE, { attachmentId: a.id }, { jobId: `describe:${a.id}`, attempts: 3, backoffMs: 5000 })
         .catch((err) => logger.warn('describe job not queued', { attachmentId: a.id, err: errorMessage(err) }))

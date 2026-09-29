@@ -1,6 +1,6 @@
-import { ImagePlus, Send } from 'lucide-react'
+import { Paperclip, Send } from 'lucide-react'
 import { type DragEvent, forwardRef, type KeyboardEvent, useImperativeHandle, useRef, useState } from 'react'
-import { ATTACHMENT_ACCEPT, PendingAttachments, usePendingAttachments } from '@/components/chat-attachments.tsx'
+import { PendingAttachments, usePendingAttachments } from '@/components/chat-attachments.tsx'
 import { AuthorAvatar } from '@/components/people.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
@@ -20,7 +20,7 @@ export const Composer = forwardRef<
   ComposerHandle,
   {
     placeholder: string
-    /** `attachments` are the ids of uploaded images (only with `attachments` on). */
+    /** `attachments` are the ids of uploaded files and images (only with `attachments` on). */
     onSend(text: string, attachments: string[]): Promise<void>
     /** Images: an attach button, paste and drag and drop, uploaded as they are added. */
     attachments?: boolean
@@ -195,7 +195,6 @@ export const Composer = forwardRef<
             <input
               ref={picker}
               type="file"
-              accept={ATTACHMENT_ACCEPT}
               multiple
               hidden
               data-testid="attach-input"
@@ -207,12 +206,12 @@ export const Composer = forwardRef<
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Attach images"
-              title="Attach images (or paste, or drop them here)"
+              aria-label="Attach files"
+              title="Attach files or images (or paste, or drop them here)"
               onClick={() => picker.current?.click()}
               className="text-fg-tertiary"
             >
-              <ImagePlus />
+              <Paperclip />
             </Button>
           </>
         )}

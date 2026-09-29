@@ -70,7 +70,7 @@ describe('images in chat', () => {
     await within(thread).findByRole('button', { name: 'Open refund-proof.png' })
   })
 
-  it('takes pasted images, refuses other files, and lets a pending image be removed', async () => {
+  it('takes pasted images, refuses empty files, and lets a pending image be removed', async () => {
     renderAt(`/chat/${CHN.billing}`)
     const composer = (await screen.findAllByTestId('composer'))[0]!
     const box = within(composer).getByLabelText('Message')
@@ -80,10 +80,10 @@ describe('images in chat', () => {
     expect(await within(composer).findByTestId('pending-attachment')).toBeInTheDocument()
     await act(async () => {
       fireEvent.change(within(composer).getByTestId('attach-input'), {
-        target: { files: [new File(['<svg/>'], 'x.svg', { type: 'image/svg+xml' })] },
+        target: { files: [new File([], 'empty.txt', { type: 'text/plain' })] },
       })
     })
-    expect(within(composer).getByTestId('attach-notice')).toHaveTextContent('only PNG, JPEG, GIF and WebP')
+    expect(within(composer).getByTestId('attach-notice')).toHaveTextContent('empty files')
     expect(within(composer).getAllByTestId('pending-attachment')).toHaveLength(1)
     fireEvent.click(within(composer).getByRole('button', { name: 'Remove pasted.png' }))
     expect(within(composer).queryByTestId('pending-attachment')).not.toBeInTheDocument()
@@ -103,7 +103,13 @@ describe('images in chat', () => {
 
   it('the mock checks uploads like the server', async () => {
     const { api } = createMockDataLayer({ now: Date.now() })
-    await expect(api.uploadAttachment(new File(['x'], 'x.html', { type: 'text/html' }))).rejects.toMatchObject({ status: 422 })
+    await expect(api.uploadAttachment(new File(['<svg/>'], 'x.png', { type: 'text/plain' }))).rejects.toMatchObject({
+      status: 422,
+    })
+    expect((await api.uploadAttachment(new File(['<p>'], 'x.html', { type: 'text/html' }))).attachment).toMatchObject({
+      kind: 'file',
+      mime: 'text/html',
+    })
     const up = await api.uploadAttachment(png())
     const m = await api.postMessage(CHN.billing, { text: '', attachments: [up.attachment.id] })
     expect(m.data.attachments).toHaveLength(1)
@@ -171,5 +177,81 @@ describe('images in chat', () => {
     // The message has it too.
     expect(withImages(await data.api.thread(THREAD)).data.attachments![0]!.description).toBe('New.')
     await expect(data.api.attachmentDescription('att_nope')).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('files in chat', () => {
+  const INC_THREAD = 'msg_01JB0000000000000000000020'
+
+  it('shows a file as a chip with its name, size and a download link, and no image thumbnail', async () => {
+    renderAt(`/chat/${CHN.inc42}/${INC_THREAD}`)
+    const thread = await screen.findByTestId('thread')
+    const chip = await within(thread).findByTestId('file-attachment')
+    expect(within(chip).getByText('free-disk.sh')).toBeInTheDocument()
+    expect(within(chip).getByText(/\d+ B$/)).toBeInTheDocument()
+    const link = within(chip).getByRole('link', { name: 'Download free-disk.sh' })
+    expect(link).toHaveAttribute('download', 'free-disk.sh')
+    expect(within(chip).queryByRole('img')).not.toBeInTheDocument()
+    // The chart on the same message stays an image thumbnail.
+    expect(within(within(thread).getByTestId('attachments')).getAllByTestId('attachment-thumb')).toHaveLength(1)
+  })
+
+  it('previews a text file as plain text: the first lines, then all of it', async () => {
+    renderAt(`/chat/${CHN.inc42}/${INC_THREAD}`)
+    const thread = await screen.findByTestId('thread')
+    const preview = await within(thread).findByTestId('text-preview')
+    const body = within(preview).getByTestId('text-preview-body')
+    expect(body.tagName).toBe('PRE')
+    expect(body.textContent).toMatch(/^#!\/bin\/sh\n/)
+    expect(body.textContent).not.toContain('apt-get clean')
+    expect(body.textContent!.split('\n')).toHaveLength(8)
+    fireEvent.click(within(preview).getByRole('button', { name: /Show all \d+ lines/ }))
+    expect(body.textContent).toContain('apt-get clean')
+    fireEvent.click(within(preview).getByRole('button', { name: /Collapse/ }))
+    expect(body.textContent).not.toContain('apt-get clean')
+  })
+
+  it('renders markup in a preview as text, never as HTML', async () => {
+    const data = createMockDataLayer({ now: Date.now() })
+    const up = await data.api.uploadAttachment(
+      new File(['<img src=x onerror="alert(1)"><b>bold</b>'], 'page.html', { type: 'text/html' }),
+    )
+    await data.api.postMessage(CHN.billing, { text: 'markup', attachments: [up.attachment.id] })
+    render(
+      <MemoryRouter initialEntries={[`/chat/${CHN.billing}`]}>
+        <App data={data} />
+      </MemoryRouter>,
+    )
+    const body = await screen.findByTestId('text-preview-body')
+    expect(body.textContent).toBe('<img src=x onerror="alert(1)"><b>bold</b>')
+    expect(body.querySelector('img, b')).toBeNull()
+  })
+
+  it('attaches any file from the composer and posts it as a file', async () => {
+    const { data } = renderAt(`/chat/${CHN.billing}/${THREAD}`)
+    const thread = await screen.findByTestId('thread')
+    await within(thread).findByText(/Found it/)
+    expect(within(thread).getByRole('button', { name: 'Attach files' })).toBeInTheDocument()
+    expect(within(thread).getByTestId('attach-input')).not.toHaveAttribute('accept')
+    await act(async () => {
+      fireEvent.change(within(thread).getByTestId('attach-input'), {
+        target: { files: [new File(['echo hello\n'], 'hello.sh', { type: 'application/x-sh' })] },
+      })
+    })
+    const pending = await within(thread).findByTestId('pending-attachment')
+    expect(within(pending).getByTestId('pending-file')).toHaveTextContent('hello.sh')
+    await waitFor(() => expect(pending).toHaveAttribute('data-state', 'done'))
+    await act(async () => {
+      fireEvent.click(within(thread).getByRole('button', { name: /Send/ }))
+    })
+    const t = await data.api.thread(THREAD)
+    expect(t.replies.at(-1)!.data.attachments).toEqual([
+      expect.objectContaining({ kind: 'file', name: 'hello.sh', mime: 'text/x-shellscript' }),
+    ])
+    expect(await data.api.attachmentText(t.replies.at(-1)!.data.attachments![0]!.id)).toMatchObject({
+      text: 'echo hello\n',
+      truncated: false,
+    })
+    await within(thread).findByRole('link', { name: 'Download hello.sh' })
   })
 })

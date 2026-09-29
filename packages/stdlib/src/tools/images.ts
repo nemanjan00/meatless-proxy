@@ -1,5 +1,5 @@
 import { NotFoundError, ValidationError } from '@mp/core'
-import { attachmentView, type Attachment, type DescribeAttribution, type ImageDescription } from '@mp/chat'
+import { attachmentView, isImageAttachment, type Attachment, type DescribeAttribution, type ImageDescription } from '@mp/chat'
 import { basename, decodeContent, prepareImage, sha256Hex, sniffImage } from '@mp/files'
 import type { ImageRef } from '@mp/model'
 import { VISION_TAG } from '@mp/runner'
@@ -36,7 +36,10 @@ export async function employeeSeesChannel(kit: Kit, employeeId: string, channelI
   return false
 }
 
-/** Copies files of the employee's filesystem into chat uploads by `author`, returning their ids. */
+/**
+ * Copies files of the employee's filesystem (any type; paths as `employeePath` takes them) into chat
+ * uploads by `author`, returning their ids.
+ */
 export async function uploadFiles(kit: Kit, ctx: ToolContext, specs: unknown, author: Ref): Promise<string[]> {
   if (specs === undefined || specs === null) return []
   if (!Array.isArray(specs)) throw new ValidationError('attachments must be a list of { path }')
@@ -49,8 +52,9 @@ export async function uploadFiles(kit: Kit, ctx: ToolContext, specs: unknown, au
   for (const s of specs) {
     const path = typeof s === 'string' ? s : (s as { path?: unknown } | null)?.path
     if (typeof path !== 'string' || !path.trim()) throw new ValidationError('each attachment needs a path')
-    const img = await readImageFile(kit, ctx, path)
-    ids.push((await store.upload({ bytes: img.bytes, name: img.name, by: author })).id)
+    const f = await kit.deps.files.forEmployee(ctx.employeeId).read(path)
+    const bytes = decodeContent(f.content, f.encoding)
+    ids.push((await store.upload({ bytes, name: basename(f.path), by: author })).id)
   }
   return ids
 }
@@ -95,7 +99,7 @@ export function registerImageTools(kit: Kit): void {
     {
       name: 'image.view',
       description:
-        'Look at an image: an attachment of a chat message you can see (attachment: att_…, as messages show them), or an image file in your filesystem (path, e.g. /chart.png or /shared/<owner>/…). Try describe_only: true first: it returns only the saved description of the image and the text visible in it (made once, then reused), which is cheap. Without it, the image is attached to the result, next to its description; look at the image itself only when you need details: images cost context.',
+        'Look at an image: an attachment of a chat message you can see (attachment: att_…, as messages show them), or an image file in your filesystem (path, e.g. /chart.png or /shared/<owner>/…; /work/files in code.run is your filesystem root: /work/files/a.png is /a.png). Try describe_only: true first: it returns only the saved description of the image and the text visible in it (made once, then reused), which is cheap. Without it, the image is attached to the result, next to its description; look at the image itself only when you need details: images cost context.',
       effect: 'read',
       tags: [VISION_TAG],
       params: {
@@ -126,6 +130,8 @@ export function registerImageTools(kit: Kit): void {
         // Unknown, not on a message yet, or in a DM it isn't in: all look the same.
         if (!rec?.data.messageId || !rec.data.channelId || !(await employeeSeesChannel(kit, ctx.employeeId, rec.data.channelId)))
           throw new NotFoundError('attachment', attachment)
+        if (!isImageAttachment(rec.data))
+          return fail(`${rec.data.name} is a file (${rec.data.mime}), not an image: read a text file with chat.attachment_text`)
         desc = describer?.saved(rec) ?? null
         if (!desc && describer) {
           // The first look describes it (once: concurrent looks wait for the same call).

@@ -9,7 +9,9 @@ sandbox container per employee, with the employee's files at hand. Behind `code.
 - `createSandbox({ runtime, files, image, clock?, logger?, filesVolume?, user?, limits?, egress?, idleMs?, reapIntervalMs?,
   maxOutputChars?, maxFileBytes?, nameFor?, namePrefix? })` returns a `Sandbox`:
   - `run({ employeeId, sessionId, language: 'python' | 'node', code, timeoutMs?, fresh?, signal?, actor? })` →
-    `{ stdout, stderr, result?, error?, files_changed, duration_ms, state_lost?, notes? }`.
+    `{ stdout, stderr, result?, error?, files_changed, duration_ms, state_lost?, notes? }`. Each change is
+    `{ path, sandboxPath, change, size?, note? }`: `path` as the fs tools and chat attachments take it (`/chart.png`,
+    `/shared/<owner>/…`), `sandboxPath` as code sees it (`/work/files/chart.png`).
   - `reset(sessionId, language?)`, `endSession(sessionId)`, `hasSession(sessionId)`, `reapIdle()`, `close()`, `mode()`.
 - `Kernel` (one interpreter over `ContainerRuntime.spawn`), `kernelCommand`, `LANGUAGES`.
 - `mountWorkspace` / `copyWorkspace`: the two ways files get into the sandbox, behind the `Workspace` interface.

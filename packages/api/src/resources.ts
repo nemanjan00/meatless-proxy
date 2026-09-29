@@ -698,7 +698,7 @@ export interface MessageData extends Record<string, unknown> {
   deleted?: boolean
   /** Emoji → who reacted with it (`contact`, `session` or `employee` refs). */
   reactions?: Record<string, ApiRef[]>
-  /** Images attached to it; fetch one from `GET /api/chat/attachments/:id`. */
+  /** Files and images attached to it; fetch one from `GET /api/chat/attachments/:id`. */
   attachments?: ChatAttachment[]
 }
 export type Message = ApiRecord<MessageData>

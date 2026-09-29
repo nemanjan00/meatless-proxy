@@ -14,7 +14,15 @@ describe('chat.post and chat.reply with attachments', () => {
     const out = await h.out('chat.post', { channel: 'reports', text: 'Q3 chart', attachments: [{ path: '/charts/q3.png' }] })
     const m = (await h.chat.getMessage(out.messageId))!
     expect(m.data.attachments).toEqual([
-      { id: expect.stringMatching(/^att_/), name: 'q3.png', mime: 'image/png', size: red.length, width: 20, height: 10 },
+      {
+        id: expect.stringMatching(/^att_/),
+        kind: 'image',
+        name: 'q3.png',
+        mime: 'image/png',
+        size: red.length,
+        width: 20,
+        height: 10,
+      },
     ])
     const att = (await h.attachments.read(m.data.attachments![0]!.id))!
     expect(att.bytes).toEqual(red)
@@ -54,7 +62,7 @@ describe('chat.post and chat.reply with attachments', () => {
     await h.chat.createChannel({ name: 'design', createdBy: { kind: 'contact', id: h.ana.id } })
     const r = await h.call('chat.post', { channel: 'design', text: 'x', attachments: [{ path: '/fake.png' }] })
     expect(r.isError).toBe(true)
-    expect(JSON.stringify(r.output)).toContain('not an image')
+    expect(JSON.stringify(r.output)).toContain('says it is an image')
     expect((await h.call('chat.post', { channel: 'design', text: '' })).isError).toBe(true)
     expect(await h.chat.messages((await h.chat.channelByName('design'))!.id)).toHaveLength(0)
   })

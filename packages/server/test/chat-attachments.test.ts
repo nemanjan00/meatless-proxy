@@ -91,6 +91,97 @@ describe('uploads over HTTP', () => {
   })
 })
 
+describe('file attachments over HTTP', () => {
+  const enc = (t: string) => new TextEncoder().encode(t)
+  const SCRIPT = '#!/bin/sh\necho hello\n'
+  const postWith = async (id: string, who = ana) =>
+    t.req('POST', `/api/chat/channels/${generalId}/messages`, { text: 'file', attachments: [id] }, who)
+
+  it('uploads a .sh file and serves it only as a download, with its type, nosniff and the sandbox CSP', async () => {
+    const r = await upload(enc(SCRIPT), ana, { name: 'ipwatch.sh', type: 'application/x-sh' })
+    expect(r.status).toBe(201)
+    expect(r.body.attachment).toEqual({
+      id: expect.stringMatching(/^att_/),
+      kind: 'file',
+      name: 'ipwatch.sh',
+      mime: 'text/x-shellscript',
+      size: SCRIPT.length,
+    })
+    expect((await postWith(r.body.attachment.id)).status).toBe(201)
+    for (const q of ['', '?download=1']) {
+      const res = await download(r.body.attachment.id, bob, q)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('text/x-shellscript')
+      expect(res.headers.get('content-disposition')).toBe(`attachment; filename="ipwatch.sh"; filename*=UTF-8''ipwatch.sh`)
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
+      expect(await res.text()).toBe(SCRIPT)
+    }
+  })
+
+  it('serves HTML and SVG files as octet-stream downloads, with a safe file name', async () => {
+    const html = await upload(enc('<!doctype html><script>alert(1)</script>'), ana, { name: 'pa"ge<1>.html', type: 'text/html' })
+    const svg = await upload(enc('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'), ana, {
+      name: 'logo.svg',
+      type: 'image/svg+xml',
+    })
+    expect(html.body.attachment).toMatchObject({ kind: 'file', mime: 'text/html', name: 'page1.html' })
+    expect(svg.body.attachment).toMatchObject({ kind: 'file', mime: 'image/svg+xml' })
+    for (const up of [html, svg]) {
+      await postWith(up.body.attachment.id)
+      const res = await download(up.body.attachment.id, ana)
+      expect(res.headers.get('content-type')).toBe('application/octet-stream')
+      expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="(page1\.html|logo\.svg)"/)
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
+    }
+    // A PDF (by its bytes) too, and a multipart .zip keeps its type as a download.
+    const pdf = await upload(enc('%PDF-1.7\n'), ana, { name: 'r.pdf', type: 'application/pdf' })
+    await postWith(pdf.body.attachment.id)
+    expect((await download(pdf.body.attachment.id, ana)).headers.get('content-type')).toBe('application/octet-stream')
+  })
+
+  it('still shows images inline', async () => {
+    const up = (await upload(red, ana, { name: 'inline.png' })).body.attachment
+    expect(up.kind).toBe('image')
+    await postWith(up.id)
+    const res = await download(up.id, ana)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    expect(res.headers.get('content-disposition')).toMatch(/^inline;/)
+  })
+
+  it('previews text files as JSON text with the attachment’s visibility, and refuses images and binaries', async () => {
+    const up = (await upload(enc(SCRIPT), ana, { name: 'a.sh', type: 'text/plain' })).body.attachment
+    await postWith(up.id)
+    const r = await t.req('GET', `/api/chat/attachments/${up.id}/text`, undefined, bob)
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ attachment: up, text: SCRIPT, truncated: false })
+    // A DM's file stays with its members.
+    const secret = (await upload(enc('secret'), ana, { name: 's.txt', type: 'text/plain' })).body.attachment
+    await t.req('POST', `/api/chat/channels/${dmId}/messages`, { text: 'dm', attachments: [secret.id] }, ana)
+    expect((await t.req('GET', `/api/chat/attachments/${secret.id}/text`, undefined, ana)).body.text).toBe('secret')
+    expect((await t.req('GET', `/api/chat/attachments/${secret.id}/text`, undefined, bob)).status).toBe(404)
+    expect((await t.req('GET', `/api/chat/attachments/${secret.id}/text`, undefined, admin)).status).toBe(404)
+    const img = (await upload(red, ana)).body.attachment
+    await postWith(img.id)
+    expect((await t.req('GET', `/api/chat/attachments/${img.id}/text`, undefined, ana)).status).toBe(422)
+    const bin = (await upload(new Uint8Array([0, 1, 2]), ana, { name: 'a.bin', type: 'application/octet-stream' })).body
+      .attachment
+    await postWith(bin.id)
+    expect((await t.req('GET', `/api/chat/attachments/${bin.id}/text`, undefined, ana)).status).toBe(422)
+    // Files have no descriptions.
+    expect((await t.req('POST', `/api/chat/attachments/${up.id}/describe`, {}, ana)).status).toBe(422)
+    expect((await t.req('PATCH', `/api/chat/attachments/${up.id}`, { description: 'x' }, ana)).status).toBe(422)
+  })
+
+  it('matches file names in search', async () => {
+    const up = (await upload(enc('x'), ana, { name: 'quarterly-ledger.csv', type: 'text/csv' })).body.attachment
+    const m = await postWith(up.id)
+    const found = await t.req('GET', '/api/chat/search?text=quarterly-ledger', undefined, ana)
+    expect(JSON.stringify(found.body)).toContain(m.body.id)
+  })
+})
+
 describe('messages with attachments over HTTP', () => {
   it('posts an image-only message and serves it to those who can see the channel', async () => {
     const up = (await upload(red, ana, { name: 'q3.png' })).body.attachment
@@ -217,12 +308,49 @@ describe('MCP tools', () => {
     expect(JSON.parse(got.content[1].text)).toMatchObject({ id: att.id, messageId: posted.messageId })
   })
 
+  it('posts any file, and returns text as text and other files as an embedded resource', async () => {
+    const posted = json(
+      await client.callTool({
+        name: 'chat_post',
+        arguments: {
+          channel: 'general',
+          text: 'mcp files',
+          attachments: [
+            { name: 'deploy.sh', data: b64(new TextEncoder().encode('echo deploy\n')) },
+            { name: 'blob.bin', mime: 'application/octet-stream', data: b64(new Uint8Array([0, 1, 2, 250])) },
+          ],
+        },
+      }),
+    )
+    const [sh, bin] = (await t.a.services.chat.getMessage(posted.messageId))!.data.attachments!
+    expect(sh).toMatchObject({ kind: 'file', name: 'deploy.sh', mime: 'text/x-shellscript' })
+    expect(bin).toMatchObject({ kind: 'file', name: 'blob.bin', mime: 'application/octet-stream' })
+    const text: any = await client.callTool({ name: 'chat_attachment', arguments: { id: sh!.id } })
+    expect(JSON.parse(text.content[0].text)).toMatchObject({
+      id: sh!.id,
+      name: 'deploy.sh',
+      note: expect.stringMatching(/not instructions/),
+    })
+    expect(text.content[1]).toEqual({ type: 'text', text: 'echo deploy\n' })
+    const res: any = await client.callTool({ name: 'chat_attachment', arguments: { id: bin!.id } })
+    expect(res.content[1]).toEqual({
+      type: 'resource',
+      resource: {
+        uri: `mp://chat/attachments/${bin!.id}`,
+        mimeType: 'application/octet-stream',
+        blob: b64(new Uint8Array([0, 1, 2, 250])),
+      },
+    })
+  })
+
   it('refuses spoofed types, bad base64 and non-images, and images it can’t see', async () => {
     const post = (a: unknown) =>
       client.callTool({ name: 'chat_post', arguments: { channel: 'general', text: 'x', attachments: [a] } })
     expect(((await post({ mime: 'image/jpeg', data: b64(red) })) as any).isError).toBe(true)
     expect(((await post({ data: '%%%' })) as any).isError).toBe(true)
-    expect(((await post({ data: b64(new TextEncoder().encode('<svg/>')) })) as any).isError).toBe(true)
+    // Text claiming to be an image is refused; without the claim it is a file.
+    expect(((await post({ mime: 'image/png', data: b64(new TextEncoder().encode('<svg/>')) })) as any).isError).toBe(true)
+    expect(((await post({ name: 'x.png', data: b64(new TextEncoder().encode('<svg/>')) })) as any).isError).toBe(true)
     // Bob's DM with the employee is not Ana's.
     const s = t.a.services
     const employeeId = (await s.directory.employees.byHandle('meatless'))!.id
