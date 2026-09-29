@@ -82,12 +82,13 @@ export function employeeGit(opts: EmployeeGitOptions): EmployeeGit {
       if (!ctx) throw new ValidationError('git needs an employee: it is only available inside a run')
       return join(opts.root, safeDir(ctx.employeeId), mirrorKey(url))
     },
-    ensureMirror: async (url) => (await current()).ensureMirror(url),
-    fetch: async (url) => (await current()).fetch(url),
+    // `auth` (the employee's SSH key) must reach the cache: without it SSH remotes fail for everyone.
+    ensureMirror: async (url, auth) => (await current()).ensureMirror(url, auth),
+    fetch: async (url, auth) => (await current()).fetch(url, auth),
     createWorktree: async (url, o) => (await current()).createWorktree(url, o),
     removeWorktree: async (url, path) => (await current()).removeWorktree(url, path),
     commitAll: async (path, o) => (await current()).commitAll(path, o),
-    push: async (path, branch, policy) => (await current()).push(path, branch, policy),
+    push: async (path, branch, policy, auth) => (await current()).push(path, branch, policy, auth),
     diff: async (path, base) => (await current()).diff(path, base),
     log: async (path, limit) => (await current()).log(path, limit),
     status: async (path) => (await current()).status(path),
