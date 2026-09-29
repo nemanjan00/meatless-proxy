@@ -118,6 +118,38 @@ describe('fakeRuntime egress', () => {
     )
     await expect(rt.createEnv({ name: 'x', image: 'i', egress: { allow: [] } })).resolves.toMatchObject({ name: 'x' })
   })
+
+  it('a direct network reaches anything, unlogged, and excludes egress and allowInternet', async () => {
+    const rt = fakeRuntime()
+    const direct = await rt.createEnv({ name: 'd', image: 'i', direct: { network: 'ana-direct' } })
+    expect(rt.envs()[0]!.spec.direct).toEqual({ network: 'ana-direct' })
+    expect(rt.egressAllowed(direct.id, 'db.example.com', 5432)).toBe(true)
+    expect(rt.egressAllowed(direct.id, '1.1.1.1', 53)).toBe(true)
+    expect(await rt.egressLog(direct.id)).toEqual([])
+
+    await expect(
+      rt.createEnv({ name: 'x', image: 'i', direct: { network: 'ana-direct' }, egress: { allow: ['a.test'] } }),
+    ).rejects.toThrow(/egress and direct exclude each other/)
+    await expect(rt.createEnv({ name: 'x', image: 'i', direct: { network: 'ana-direct' }, allowInternet: true })).rejects.toThrow(
+      /allowInternet and direct/,
+    )
+    for (const network of ['', 'Ana', '-x', 'a b', 'x'.repeat(57), 'mp_dev/default'])
+      await expect(rt.createEnv({ name: 'x', image: 'i', direct: { network } }), network).rejects.toBeInstanceOf(ValidationError)
+    await expect(rt.createEnv({ name: 'x', image: 'i', direct: null as never })).rejects.toBeInstanceOf(ValidationError)
+  })
+})
+
+describe('invalidNetworkSpec', () => {
+  it('lists every conflict', async () => {
+    const { invalidNetworkSpec } = await import('../src/index.ts')
+    expect(invalidNetworkSpec({})).toEqual([])
+    expect(invalidNetworkSpec({ direct: { network: 'a-direct' } })).toEqual([])
+    expect(invalidNetworkSpec({ egress: { allow: [] }, allowInternet: true, direct: { network: 'a' } })).toEqual([
+      'egress and allowInternet exclude each other',
+      'egress and direct exclude each other',
+      'allowInternet and direct exclude each other',
+    ])
+  })
 })
 
 describe('intersectEgress', () => {

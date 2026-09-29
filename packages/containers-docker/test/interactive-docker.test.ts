@@ -34,7 +34,7 @@ describe('hardened environments', () => {
       .map((a) => a[0] as any)
       .find((o) => o.name === 'mp-bot-sandbox')
     expect(main.User).toBe('1000:1000')
-    expect(main.Volumes).toEqual({ '/work': {} })
+    expect(main.Volumes).toBeUndefined()
     expect(main.HostConfig).toMatchObject({
       ReadonlyRootfs: true,
       Tmpfs: { '/tmp': 'rw,nosuid,nodev,size=128m' },
@@ -44,6 +44,14 @@ describe('hardened environments', () => {
       Privileged: false,
       SecurityOpt: ['no-new-privileges:true'],
       Mounts: [
+        // A fresh anonymous volume, labelled with the environment and the deployment.
+        {
+          Type: 'volume',
+          Target: '/work',
+          VolumeOptions: {
+            Labels: expect.objectContaining({ 'mp.deployment': 'mp-', 'mp.managed': 'true', 'mp.env': 'bot-sandbox' }),
+          },
+        },
         {
           Type: 'volume',
           Source: 'mp-files',

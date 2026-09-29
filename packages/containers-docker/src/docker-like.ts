@@ -5,6 +5,7 @@
 export interface DockerLike {
   createNetwork(opts: Record<string, any>): Promise<unknown>
   getNetwork(id: string): {
+    inspect(opts?: Record<string, any>): Promise<NetworkInspectLike>
     remove(opts?: Record<string, any>): Promise<unknown>
     connect(opts: Record<string, any>): Promise<unknown>
     disconnect(opts: Record<string, any>): Promise<unknown>
@@ -21,6 +22,14 @@ export interface DockerLike {
     demuxStream(stream: NodeJS.ReadableStream, stdout: NodeJS.WritableStream, stderr: NodeJS.WritableStream): void
     followProgress(stream: NodeJS.ReadableStream, onFinished: (err: Error | null, output: any[]) => void): void
   }
+}
+
+export interface NetworkInspectLike {
+  Name: string
+  Internal?: boolean
+  Options?: Record<string, string> | null
+  Labels?: Record<string, string> | null
+  Containers?: Record<string, unknown> | null
 }
 
 export interface ContainerLike {

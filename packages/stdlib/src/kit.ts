@@ -40,6 +40,12 @@ export interface WorktreeMeta {
 export interface EnvMeta {
   id: string
   name: string
+  /** What env.up said about its network (`via`: proxy, direct or none). */
+  network?: Json
+  /** What the network setting gave when it started, to tell when it has changed since. */
+  networkKey?: string
+  /** The project whose allowlist it started with. */
+  projectId?: string
 }
 
 export interface ParamSpec {

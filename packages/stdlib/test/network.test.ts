@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { networkFor } from '../src/index.ts'
+import { directNetworkName, networkFor } from '../src/index.ts'
 
 describe('networkFor', () => {
   it("defaults to the project's list, then the deployment default, then nothing, saying why", () => {
@@ -33,5 +33,37 @@ describe('networkFor', () => {
       allow: [],
       source: 'employee-none',
     })
+  })
+
+  it("direct: a real network, never narrowed by the project's allowlist or the default", () => {
+    const d = { allow: [], direct: true, source: 'employee-direct' }
+    expect(networkFor({ network: 'direct' })).toEqual(d)
+    expect(networkFor({ network: 'direct', projectAllow: ['registry.npmjs.org'], fallback: ['pypi.org'] })).toEqual(d)
+    expect(networkFor({ network: 'direct', direct: true })).toEqual(d)
+  })
+
+  it('direct turned off by the deployment falls back to no network, saying why', () => {
+    const off = networkFor({ network: 'direct', projectAllow: ['registry.npmjs.org'], fallback: ['pypi.org'], direct: false })
+    expect(off).toMatchObject({ allow: [], source: 'direct-disabled' })
+    expect(off.direct).toBeUndefined()
+    expect(off.reason).toMatch(/^no network: .*DOCKER_DIRECT_NETWORK=false/)
+    // Turning direct off changes nothing for the other settings.
+    expect(networkFor({ projectAllow: ['a.test'], direct: false })).toEqual({ allow: ['a.test'], source: 'project' })
+    expect(networkFor({ network: { allow: ['*'] }, direct: false }).allow).toEqual(['*'])
+  })
+})
+
+describe('directNetworkName', () => {
+  it('is <handle>-direct, cleaned, short and distinct', () => {
+    expect(directNetworkName('ana')).toBe('ana-direct')
+    expect(directNetworkName('Billing Bot!')).toBe('billing-bot-direct')
+    expect(directNetworkName('')).toBe('employee-direct')
+    const a = directNetworkName('x'.repeat(80))
+    const b = directNetworkName(`${'x'.repeat(79)}y`)
+    expect(a).not.toBe(b)
+    for (const n of [a, b]) {
+      expect(n).toMatch(/^[a-z0-9][a-z0-9-]*-direct$/)
+      expect(n.length).toBeLessThanOrEqual(47)
+    }
   })
 })

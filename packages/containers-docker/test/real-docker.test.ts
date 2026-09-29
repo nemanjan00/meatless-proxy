@@ -197,4 +197,81 @@ describe.skipIf(!ENABLED)('docker runtime against a real daemon', () => {
     await runtime.destroyEnv(env.id)
     expect(await leftovers()).toEqual([])
   }, 300_000)
+
+  it('a direct network: raw TCP out, no other environment or harness network, and the default gets nothing', async () => {
+    // A stand-in for the harness's compose network, with a service called `postgres` listening on it.
+    const appNet = `${PREFIX}app`
+    await docker.createNetwork({ Name: appNet, Driver: 'bridge' })
+    const db = await docker.createContainer({
+      name: `${PREFIX}app-db`,
+      Image: IMAGE,
+      Cmd: ['nc', '-lk', '-p', '5432', '-e', 'echo', 'hi'],
+      HostConfig: { NetworkMode: appNet },
+      NetworkingConfig: { EndpointsConfig: { [appNet]: { Aliases: ['postgres'] } } },
+    })
+    await db.start()
+    const dbIp = (await db.inspect()).NetworkSettings.Networks[appNet]!.IPAddress
+    try {
+      const a = await runtime.createEnv({ name: 'direct-a', image: IMAGE, direct: { network: 'ana-direct' }, user: '1000:1000' })
+      created.push(a.id)
+      const b = await runtime.createEnv({
+        name: 'direct-b',
+        image: IMAGE,
+        direct: { network: 'ana-direct' },
+        services: [{ name: 'db', image: 'redis:7-alpine' }],
+      })
+      created.push(b.id)
+      const plain = await runtime.createEnv({ name: 'plain-net', image: IMAGE })
+      created.push(plain.id)
+      const proxied = await runtime.createEnv({ name: 'proxied', image: IMAGE, egress: { allow: ['example.com'] } })
+      created.push(proxied.id)
+      const sh = (id: string, script: string) => runtime.exec(id, ['sh', '-c', script], { timeoutMs: 30_000 })
+      const tcp = (id: string, host: string, port: number) =>
+        sh(id, `nc -z -w 5 ${host} ${port} >/dev/null 2>&1 && echo open || echo closed`).then((r) => r.stdout.trim())
+
+      // Out: raw TCP and the resolver, as a non-root user.
+      expect(await tcp(a.id, '1.1.1.1', 53)).toBe('open')
+      expect((await sh(a.id, 'nslookup example.com >/dev/null 2>&1 && echo ok')).stdout.trim()).toBe('ok')
+      expect((await sh(a.id, 'id -u')).stdout.trim()).toBe('1000')
+      // The default and the proxy get no raw TCP.
+      expect(await tcp(plain.id, '1.1.1.1', 53)).toBe('closed')
+      expect(await tcp(proxied.id, '1.1.1.1', 53)).toBe('closed')
+
+      // Not the harness network: by name or by address (it's listening: its own network reaches it).
+      expect((await sh(a.id, 'nslookup postgres >/dev/null 2>&1 && echo found || echo none')).stdout.trim()).toBe('none')
+      expect((await sh(a.id, `nslookup ${PREFIX}app-db >/dev/null 2>&1 && echo found || echo none`)).stdout.trim()).toBe('none')
+      expect(await tcp(a.id, dbIp, 5432)).toBe('closed')
+
+      // Not another environment on the same direct network, while its own services stay reachable.
+      await sh(b.id, 'nohup nc -lk -p 8080 -e echo hi >/dev/null 2>&1 &')
+      const bIp = (await docker.getContainer(b.id).inspect()).NetworkSettings.Networks[`${PREFIX}ana-direct`]!.IPAddress
+      expect(bIp).toBeTruthy()
+      expect(await tcp(b.id, '127.0.0.1', 8080)).toBe('open')
+      expect(await tcp(a.id, bIp, 8080)).toBe('closed')
+      expect(await tcp(b.id, 'db', 6379)).toBe('open')
+
+      const net = await docker.getNetwork(`${PREFIX}ana-direct`).inspect()
+      expect(net.Internal).toBe(false)
+      expect(net.Options?.['com.docker.network.bridge.enable_icc']).toBe('false')
+      // Nothing published on the host.
+      for (const id of [a.id, b.id]) expect((await docker.getContainer(id).inspect()).HostConfig.PortBindings ?? {}).toEqual({})
+
+      for (const id of [a.id, b.id, plain.id, proxied.id]) await runtime.destroyEnv(id)
+      // The direct network is kept for the next environment.
+      expect((await leftovers()).sort()).toEqual([`/${PREFIX}app-db`, `${PREFIX}ana-direct`, appNet].sort())
+    } finally {
+      for (const name of ['direct-a', 'direct-b', 'plain-net', 'proxied'])
+        await runtime.destroyEnv(`${PREFIX}${name}`).catch(() => undefined)
+      await docker
+        .getContainer(`${PREFIX}app-db`)
+        .remove({ force: true })
+        .catch(() => undefined)
+      for (const n of [appNet, `${PREFIX}ana-direct`])
+        await docker
+          .getNetwork(n)
+          .remove()
+          .catch(() => undefined)
+    }
+    expect(await leftovers()).toEqual([])
+  }, 300_000)
 })

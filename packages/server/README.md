@@ -36,6 +36,8 @@ first by a small built-in loader; variables already set win.
 | `WORKTREES_DIR` | `$DATA_DIR/worktrees` | Session worktrees |
 | `DOCKER_ENABLED` | `false` (`true` in compose) | Use the Docker runtime for project environments (`env.*` tools) |
 | `DOCKER_SOCKET` | dockerode default | Docker socket path |
+| `DOCKER_NAME_PREFIX` | `mp-` | Prefix of every container and network this deployment makes (sandboxes, environments, their sidecars, direct networks), also its `mp.deployment` label on every container, network and volume. Starts with `mp-`, ends with `-`, a-z, 0-9 and `-`, at most 12 characters; checked at start. Give each deployment on one Docker host its own (e.g. `mp-e2e-`): a deployment only lists and cleans up resources with its own label. `FILES_VOLUME` keeps its configured name |
+| `DOCKER_DIRECT_NETWORK` | `true` | Whether an employee's `direct` network setting gives its sandbox and environments a real network with no proxy. `false` turns it into no network, with a reason |
 | `FILES_DIR` | `$DATA_DIR/files` | Employee files, `<dir>/<employeeId>/<path>` (only sharing grants are in the database) |
 | `FILES_VOLUME` | none | The named Docker volume mounted at `FILES_DIR` (`mp-files`). With it, `code.run` sandboxes mount each employee's directory of it (Docker Engine 26+) instead of copying files |
 | `SANDBOX_ENABLED` | `true` | `code.run`/`code.reset` (needs `DOCKER_ENABLED`) |
@@ -123,6 +125,8 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   get paused runs nobody asked for. Never their own messages or hidden DMs. The rule is `messageItemType` and
   `runItemType`, shared with the live stream (`itemForMessage`, `itemForRun`). Read ids and `clearedAt` live in an
   `inbox_state` record keyed by the contact id (any signed-in person); marking read publishes `inbox.read` on the bus.
+- `GET /api/chat/channels/:id/activity` (`src/chat-activity.ts`, `chatActivityRoutes`): who is working on the
+  channel's threads now (`ChatActivityItem[]`, oldest first); 404 for an unknown channel or a DM you're not in.
 - `GET /api/me/notifications` and `PUT /api/me/notifications { toasts?, desktop?, sound?, hideDmText?, mutedChannels? }`
   (`src/notification-prefs.ts`): the signed-in person's own notification preferences (viewers too), one
   `notification_prefs` record keyed by the contact id, defaults until changed; unknown fields and wrong types are 400.
@@ -204,7 +208,10 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   (`/webhooks/*`, their signature is the auth), `/mcp` (its own bearer check),
   `/metrics`, `/healthz`, `/readyz`, `/auth/*`, `GET /api/auth/config` and the web
   UI are public. Two checks need the body and live in the handlers: only admins
-  set `access`, and members edit only a session's document and title.
+  set `access`, and members edit only a session's document and title. An
+  employee's `network` (including `direct`, a real unproxied network) is on
+  the employee record, so only admins set it, and the records API checks its
+  value (`invalidNetwork`) like the directory does: 422 otherwise.
 - **DMs** are visible to their members only, admins included: the channel
   list, messages, threads, reactions, search, unread counts, the inbox, events,
   session threads and the records API (`channel`, `message`, `event`) leave them
@@ -318,7 +325,8 @@ The `@mp/api` live protocol: `subscribe` / `unsubscribe` / `ping`, answered by
 `subscribed`, `pong` and `event` messages. Bus topics (`record.changed`,
 `link.changed`, `entry.appended`, `run.state`, `session.head`, `model.delta`,
 `tool.called`, `tool.result`, `usage.recorded`, `checklist.changed`,
-`chat.message`, `event.ingested`, `event.routed`, `control.changed`, `inbox.read`) are mapped
+`chat.message`, `chat.activity`, `chat.activity.done`, `event.ingested`, `event.routed`, `control.changed`,
+`inbox.read`) are mapped
 to the API payloads and fanned out with `channelsFor`. Messages are forwarded in
 order; a socket that stops draining (buffer over 1 MiB and 500 queued messages)
 is closed with 1013.
@@ -419,8 +427,9 @@ claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp --header "Author
   and at every start `migrateFileRecords` moves file contents left in the
   database by older versions onto it. The `@mp/sandbox` sandbox (when
   containers are on and `SANDBOX_ENABLED`) gets the runtime, the files and the
-  `SANDBOX_*` settings, and each employee's allowlist from `networkFor` (its
-  `network` setting, else `DEFAULT_EGRESS`; a sandbox has no project); it picks mount mode with `FILES_VOLUME` and a daemon
+  `SANDBOX_*` settings and `DOCKER_NAME_PREFIX`, and each employee's network from `networkFor` (its
+  `network` setting, else `DEFAULT_EGRESS`; a sandbox has no project; `direct` gives `{ direct: '<handle>-direct' }`
+  unless `DOCKER_DIRECT_NETWORK=false`); it picks mount mode with `FILES_VOLUME` and a daemon
   with volume subpaths, else copy mode, and logs which. `services.sandbox` is
   closed on shutdown. The stdlib gets `defaultTimezone` from the `timezone`
   setting (`SettingNames.timezone`, default `DEFAULT_SETTINGS.timezone`, UTC).
@@ -633,6 +642,23 @@ never changes when someone assigns one. A failure only logs a warning.
 employee: `{ type: 'employee', id, name, handle }`, never `@employee#router`. Other sessions stay
 `@employee#slug`; employee authors carry their `handle`.
 
+## Chat activity (`src/chat-activity.ts`)
+
+`ChatActivity` knows which runs work on which chat thread, so the web UI can show who a message set to work
+(docs/spec.md, "Web UI › Chat"). It follows the bus in order: a new run record (`record.changed`, `op: create`)
+is attributed by its cause (a chat event's thread and message; a `sessions.message` event from a session whose
+run works on a thread; a parent run it tracks), else by its session's subscription to an `mp` thread;
+`event.routed` (whose deliveries carry `runId`) moves a run that got the message in its inbox under the newest
+message; `run.state` and `tool.called` update the state (`queued`, `running`, `waiting` with `waitingOn`,
+`paused` with `pauseReason`) and the step in plain words (`describeStep`). Live runs are kept in memory by run
+id; at start it reads the live runs once, so nothing scans runs per request. It publishes
+`chat.activity { channelId, item }` and, when a run ends, `chat.activity.done` with the outcome: `failed`
+(with the run's error), `handed_off` (a run it started in another session, then tracked too, or the target of
+its last `sessions.message`), `replied` (it called `chat.post`/`chat.reply`, or it was asked in chat and ended
+with a final answer the auto-reply posts), else `no_reply`. A person's message whose routing started nothing,
+though it tagged an employee or session or a trigger matches it, gets `chat.activity.done { outcome: 'unrouted' }`.
+The live hub sends both on `chat:<channelId>`, to people who may see the channel only.
+
 ## Memory at session start
 
 `src/session-memory.ts` handles the router's `afterFork` hook. When a context
@@ -752,6 +778,10 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 - `sandbox-docker.test.ts` (`MP_DOCKER_TEST=1`): builds `docker/sandbox` as `mp-sandbox:test` and runs `code.run` for real,
   in mount mode (a bind-backed `mp-itest-…-files` volume standing in for the files volume) and copy mode: state across
   cells, Node, sympy, pandas, matplotlib, files both ways, read-only shares, no network, the hardening, timeouts.
+- `chat-activity.test.ts`: the router's run, then the session it handed the thread to, then a subscribed session's
+  run for a follow-up (end to end); outcomes (replied, handed_off by a started session and by `sessions.message`,
+  no_reply, failed, unrouted, nothing for plain chat); states, steps and pause reasons on the endpoint; a DM's
+  activity hidden from non-members on the endpoint and live; runs found again after a restart.
 - `live.test.ts`: the real server on port 0 and a WebSocket client (run.state, entry.appended, model.delta), slow clients.
 - `mcp-server.test.ts`: the MCP SDK client over streamable HTTP with a token; tools and notifications.
 - `scenarios.test.ts`: end-to-end scenarios with a scripted model (routing to a worker and back through a

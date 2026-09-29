@@ -185,8 +185,11 @@ export interface EmployeeData extends Record<string, unknown> {
   toolAllow?: string[]
   toolDeny?: string[]
   model?: string
-  /** Where its environments and sandbox may connect: `none`, `project` (default) or its own allowlist. */
-  network?: 'none' | 'project' | { allow: string[] }
+  /**
+   * Where its environments and sandbox may connect: `none`, `project` (default) or its own allowlist,
+   * through the egress proxy; or `direct`, a real network with no proxy (admins only, not logged).
+   */
+  network?: 'none' | 'project' | 'direct' | { allow: string[] }
   /** The employee's router session, for input nothing else claims. */
   routerSessionId?: string
   paused?: boolean

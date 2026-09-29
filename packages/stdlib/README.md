@@ -86,12 +86,22 @@ Notes on behaviour:
   (which may create tasks in an outside task system), `sessions.save_template`,
   `triggers.create`, `env.exec` and `code.run` are `non_idempotent`
   (`code.reset` is `idempotent`, `time.now` is `read`).
-- **Network.** `env.up` takes its egress allowlist from `networkFor({ network,
-  projectAllow, fallback })`: the employee's `network` setting (`none`,
-  `project` by default, or `{ allow }`, intersected with a project's list),
-  the project's list, else `config.defaultEgress`. `env.up { egress }` can
-  only narrow it. The result's `network` is `{ via: 'proxy', allow, note }`
-  or `{ via: 'none', reason }` saying why and what to ask an admin for.
+- **Network.** `env.up` takes its network from `networkFor({ network,
+  projectAllow, fallback, direct })`: the employee's `network` setting (`none`,
+  `project` by default, `{ allow }` intersected with a project's list, or
+  `direct`), the project's list, else `config.defaultEgress`. `direct` is
+  never narrowed by the project (its list only applies to the proxy); with
+  `config.directNetwork: false` (`DOCKER_DIRECT_NETWORK=false`) it is no
+  network, with a reason. `env.up { egress }` can only narrow: fewer hosts,
+  or a direct network to proxied hosts, never to direct. The result's
+  `network` is `{ via: 'proxy', allow, note }`, `{ via: 'direct', note:
+  DIRECT_NOTE }` (`'unrestricted network, not logged'`, on
+  `EnvSpec.direct: { network: directNetworkName(<handle>) }`, i.e.
+  `<handle>-direct`, one per employee) or `{ via: 'none', reason }` saying
+  why and what to ask an admin for. The session meta keeps what the
+  environment started with (`meta.env.network`, `networkKey`, `projectId`):
+  a running environment keeps it, and `env.up` says when the setting has
+  changed since (`env.down`, then `env.up`, to use the new one).
 - **Time.** The prompt says that every message carries when it arrived (the
   router stamps event headers) and to call `time.now` for the time now; the
   prompt itself holds no clock time beyond the session's start, so its cached
@@ -175,7 +185,10 @@ and `test/e2e.test.ts` runs sessions with the real runner and router and a
 scripted model (fork + wait, chat replies through subscriptions, procedures
 with the checklist gate, git with a denied push and the docs policy, commit on
 stop, memory, files, session messages). `test/env-egress.test.ts` covers env
-naming, egress allowlists and narrowing, and the SSH key passed to git.
+naming, egress allowlists and narrowing, and the SSH key passed to git;
+`test/env-direct.test.ts` direct networks (not narrowed by the project, the
+model can't ask for or widen to one, turned off by the deployment, running
+environments keep what they started with).
 `test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
 project, `you`, role order, the limit), skipping a repeat, new sessions and forks
 getting the current list with the system prompt byte-identical after an

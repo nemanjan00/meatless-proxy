@@ -274,6 +274,16 @@
 .animate-status {
   animation: mp-pulse 1.6s var(--ease-out-quad) infinite;
 }
+/* A small spinner (chat activity): a ring with a gap. With reduced motion the UI shows a static dot instead. */
+@keyframes mp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.mp-spinner {
+  border-top-color: transparent;
+  animation: mp-spin 0.8s linear infinite;
+}
 @keyframes mp-caret {
   50% {
     opacity: 0;

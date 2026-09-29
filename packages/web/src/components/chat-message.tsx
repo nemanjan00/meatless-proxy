@@ -1,6 +1,6 @@
 import type { ApiRef, Message } from '@mp/api'
 import { MessageSquare, MoreHorizontal, Pencil, SmilePlus, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { AttachmentGrid } from '@/components/chat-attachments.tsx'
 import { Markdown } from '@/components/markdown.tsx'
 import { AuthorAvatar } from '@/components/people.tsx'
@@ -81,6 +81,7 @@ export function MessageItem({
   onOpenThread,
   active,
   highlight,
+  footer,
 }: {
   m: Message
   /** You, to know your own messages and reactions. */
@@ -90,6 +91,8 @@ export function MessageItem({
   active?: boolean
   /** Scrolled to and ringed, e.g. from a search result. */
   highlight?: boolean
+  /** Shown under the message, e.g. who it set to work. */
+  footer?: ReactNode
 }) {
   const d = m.data
   const own = !!me && d.author.type === 'person' && d.author.id === me.id
@@ -200,6 +203,7 @@ export function MessageItem({
             {d.lastReplyAt && <span className="text-fg-quaternary">· last {timeAgo(d.lastReplyAt)} ago</span>}
           </button>
         )}
+        {footer}
       </div>
       {actions && !d.deleted && !editing && (
         <div

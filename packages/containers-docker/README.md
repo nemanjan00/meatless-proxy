@@ -5,11 +5,20 @@ Docker adapter (L2) for `@mp/containers`, using dockerode.
 ## API
 
 `dockerRuntime({ docker?, socketPath?, logger?, clock?, namePrefix = 'mp-', labels?, capDrop?, pidsLimit?, maxOutputBytes?, proxyImage?, selfContainer? })`
-returns a `ContainerRuntime`. Also exported: `mapError`, `demuxBuffer`, `NotImplementedError`, the `mp.*` label names and the
+returns a `ContainerRuntime`. Also exported: `mapError`, `demuxBuffer`, `NotImplementedError`, the `mp.*` label names
+(`LABEL_DEPLOYMENT`, ...), `DEFAULT_NAME_PREFIX`, `DIRECT_ROLE`, `ICC_OPTION`, and the
 `DockerLike` interface (the slice of dockerode used), `parseEgressLog`, and the egress proxy: `createEgressProxy`,
 `EGRESS_PROXY_SOURCE`, `egressProxyDecision`, `EGRESS_PROXY_PORT` (3128), `DEFAULT_PROXY_IMAGE` (`node:26-alpine`),
 `PROXY_URL`, and the preview forwarder: `createPreviewForwarder`, `PREVIEW_FORWARDER_SOURCE`, `PREVIEW_READY_MARKER`,
 `LABEL_EXPOSE`, `PREVIEW_SUFFIX`.
+
+**Deployments.** `namePrefix` (the server's `DOCKER_NAME_PREFIX`) starts every container, network and build image name,
+and every container, network and volume carries `mp.deployment=<prefix>` (with `labels` and `mp.managed=true`).
+`listEnvs`, `getEnv` and `destroyEnv` only see and remove resources with this runtime's label: before removing a
+container or network by name it inspects it and leaves it alone when it belongs to another deployment, so a deployment
+with prefix `mp-` never touches `mp-e2e-…` even though the names look alike. Unlabelled resources from before the label
+count as the default `mp-` deployment's. `createEnv` on a name another deployment holds is a `ConflictError` that says
+to give each deployment its own prefix.
 
 Per environment `<name>`:
 
@@ -24,12 +33,22 @@ Per environment `<name>`:
   services get `HTTP_PROXY`/`HTTPS_PROXY`/`http_proxy`/`https_proxy=http://proxy:3128` and
   `NO_PROXY`/`no_proxy=localhost,127.0.0.1,<services>` (overriding the spec's own). `egress` excludes `allowInternet`,
   and no service may be called `proxy` then. `egressLog(envId)` reads the proxy's stdout and parses its JSON lines.
+- with `direct: { network }`: the shared network `<prefix><network>`, a plain bridge (`Internal: false`, the host's NAT
+  is its route out) with `com.docker.network.bridge.enable_icc=false`, labelled `mp.role=direct`, `mp.managed=true` and
+  the deployment. It is made on first use (another environment making it at the same moment is fine) and kept for the
+  next one: destroying an environment leaves it. The main container and the services are connected to it before they
+  start; they keep the environment's own internal network for each other. No proxy, no proxy variables, nothing
+  published. A network of that name that isn't this deployment's direct network, or has lost `Internal: false` or
+  the ICC setting, is refused with a `ConflictError` (so it can never join, say, the harness's compose network).
+  Excludes `egress` and `allowInternet`. What it can still reach (the host's LAN, published ports, cloud metadata) and
+  that it isn't logged is up to the caller to say: see the spec's direct network section.
 - main container `<prefix><name>` (this is the env id): binds, env, workdir, `NanoCpus`/`Memory` limits, labels
-  `mp.env=<name>`, `mp.managed=true`, `mp.role=main`, command default `sleep infinity`. Never privileged, never host
+  `mp.env=<name>`, `mp.managed=true`, `mp.role=main`, `mp.deployment=<prefix>`, command default `sleep infinity`. Never privileged, never host
   network, `no-new-privileges`, a few capabilities dropped (`DEFAULT_CAP_DROP`), pids limit, runs as the image's user.
-- sandbox hardening: `user` -> `User`, `readOnlyRootfs` -> `ReadonlyRootfs`, `volumes` -> anonymous volumes (removed with
-  the container), `tmpfs` -> `Tmpfs` (`rw,nosuid,nodev,size=<n>m`), `limits.pids` -> `PidsLimit`, `volumeMounts` ->
-  `Mounts` of type `volume` with `VolumeOptions.Subpath` (and `NoCopy`). Only volumes named `<prefix>*` may be mounted,
+- sandbox hardening: `user` -> `User`, `readOnlyRootfs` -> `ReadonlyRootfs`, `volumes` -> anonymous volumes (`Mounts`
+  of type `volume` without a source, labelled like the container, removed with it), `tmpfs` -> `Tmpfs`
+  (`rw,nosuid,nodev,size=<n>m`), `limits.pids` -> `PidsLimit`, `volumeMounts` -> `Mounts` of type `volume` with
+  `VolumeOptions.Subpath` (and `NoCopy`). Only volumes named `<prefix>*` or `mp-*` (the compose-declared `mp-files`) may be mounted,
   and subpaths need Docker API `VOLUME_SUBPATH_API` (1.45, Engine 26) or later; `features()` reads `docker.version()`
   once (`apiAtLeast`).
 - spawn: `sh -c 'echo <marker><pid> >&2; exec "$@"'` with stdin attached (`hijack`), so the process reports its pid on
@@ -48,8 +67,9 @@ Per environment `<name>`:
   the forwarder's address on the preview network. With `selfContainer` (the harness's own container, when it runs in
   Docker) that container is first connected to the preview network (once; already connected is fine) and disconnected
   on destroy. No service may be called `preview` then.
-- destroy: removes every container labelled `mp.env=<name>` (with anonymous volumes), the proxy, and both networks. Idempotent, and
-  also cleans up half-created environments. A failed `createEnv` cleans up after itself.
+- destroy: removes every container labelled `mp.env=<name>` and this deployment (with anonymous volumes), the proxy, and
+  the environment's networks (not a shared direct network). Idempotent, and also cleans up half-created environments. A
+  failed `createEnv` cleans up after itself.
 
 Errors: 404 -> `NotFoundError` (`getEnv` returns null), 409 -> `ConflictError`, 400 -> `ValidationError`, 5xx and
 connection errors (`ECONNREFUSED`, `ECONNRESET`, ...: the daemon restarting) -> `UnavailableError`, which is retried. A
@@ -89,9 +109,15 @@ checks the egress networks, the sidecar, aliases, proxy variables, cleanup and `
 `node -e` child process. `test/preview-docker.test.ts` checks the forwarder, its networks, `previewTarget`,
 `selfContainer` connects and disconnects and cleanup against the mock, and runs `createPreviewForwarder` and
 `PREVIEW_FORWARDER_SOURCE` against real local servers. `test/interactive-docker.test.ts` checks the sandbox hardening, volume mounts, features, archives, tar and spawn
-against the mock. `test/real-docker.test.ts` (`MP_DOCKER_TEST=1`) runs `runtimeContract` (spawn, copies, kill) and also serves
+against the mock. `test/direct-docker.test.ts` checks the direct network (options, labels, connects before start, reuse,
+the creation race, refusing foreign or weakened networks) and `test/deployment-docker.test.ts` two deployments on one
+mock daemon (labels on everything, listing, lookups and cleanup that leave the other alone, unlabelled legacy resources).
+`test/real-docker.test.ts` (`MP_DOCKER_TEST=1`) runs `runtimeContract` (spawn, copies, kill) and also serves
 `python3 -m http.server` through the forwarder, once reached from the host and once from a stand-in harness container
-that the project container can't reach on any of its addresses.
+that the project container can't reach on any of its addresses. It also checks a direct network for real: a raw TCP
+connect to 1.1.1.1:53 and DNS work (the default and the proxy modes can't), a stand-in harness network's `postgres` is
+neither resolvable nor reachable, and a second environment on the same direct network is unreachable while its own
+services still are.
 
 ## Replacing it
 

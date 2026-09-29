@@ -9,6 +9,7 @@ import {
   invalidEgressEntries,
   invalidEntryPath,
   invalidExpose,
+  invalidNetworkSpec,
   invalidVolumeMounts,
   type ContainerRuntime,
   type EgressLogEntry,
@@ -35,7 +36,7 @@ import {
   type Logger,
 } from '@mp/core'
 import Docker from 'dockerode'
-import type { ContainerInspectLike, ContainerSummaryLike, DockerLike } from './docker-like.ts'
+import type { ContainerInspectLike, ContainerSummaryLike, DockerLike, NetworkInspectLike } from './docker-like.ts'
 import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
 import { PREVIEW_FORWARDER_SOURCE, PREVIEW_READY_MARKER } from './preview-forwarder.ts'
 import { packTar, unpackTar } from './tar.ts'
@@ -47,9 +48,12 @@ export interface DockerRuntimeOptions {
   socketPath?: string
   logger?: Logger
   clock?: Clock
-  /** Prefix for container, network and image names. Default `mp-`. */
+  /**
+   * Prefix for container, network and image names, and this deployment's `mp.deployment` label: two
+   * deployments on one Docker host need different prefixes. Default `mp-`.
+   */
   namePrefix?: string
-  /** Labels added to every container and network this runtime creates. */
+  /** Labels added to every container, network and volume this runtime creates. */
   labels?: Record<string, string>
   /** Capabilities dropped from every container. Default: a set a normal build or test run doesn't need. */
   capDrop?: string[]
@@ -79,6 +83,13 @@ export const PROXY_URL = `http://${PROXY_ALIAS}:${EGRESS_PROXY_PORT}`
 
 export const DEFAULT_CAP_DROP = ['NET_RAW', 'MKNOD', 'AUDIT_WRITE', 'SYS_CHROOT', 'SETFCAP']
 
+export const DEFAULT_NAME_PREFIX = 'mp-'
+/**
+ * On every container, network and volume: the name prefix of the deployment that made it. A runtime
+ * only lists and removes its own (with the default prefix, also the unlabelled ones made before the
+ * label existed), so deployments sharing a Docker host never touch each other's resources.
+ */
+export const LABEL_DEPLOYMENT = 'mp.deployment'
 export const LABEL_ENV = 'mp.env'
 export const LABEL_MANAGED = 'mp.managed'
 export const LABEL_ROLE = 'mp.role'
@@ -87,6 +98,10 @@ export const LABEL_SERVICE = 'mp.service'
 export const LABEL_EXPOSE = 'mp.expose'
 /** The preview forwarder's name suffix (container and network), and the service name it takes. */
 export const PREVIEW_SUFFIX = 'preview'
+/** `mp.role` of a shared direct network (`EnvSpec.direct`). */
+export const DIRECT_ROLE = 'direct'
+/** The bridge driver option that turns traffic between containers on one network off. */
+export const ICC_OPTION = 'com.docker.network.bridge.enable_icc'
 
 /** The requested feature isn't implemented by this adapter. */
 export class NotImplementedError extends MpError {
@@ -106,15 +121,21 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 /**
  * `ContainerRuntime` on Docker. Each environment is a main container plus service
  * containers on a private network of its own (internal, so no route out, unless
- * `allowInternet`). The environment id is the main container's name, `<prefix><name>`.
+ * `allowInternet`). With `egress` a proxy sidecar is the only way out; with `direct` the
+ * containers also join a shared bridge network with inter-container traffic off, whose
+ * route out is the host's NAT. The environment id is the main container's name, `<prefix><name>`.
  */
 export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime {
   const docker: DockerLike =
     opts.docker ?? (new Docker(opts.socketPath ? { socketPath: opts.socketPath } : undefined) as DockerLike)
   const log = opts.logger ?? silentLogger
   const clock = opts.clock ?? systemClock
-  const prefix = opts.namePrefix ?? 'mp-'
-  const baseLabels = opts.labels ?? {}
+  const prefix = opts.namePrefix ?? DEFAULT_NAME_PREFIX
+  const baseLabels = { ...opts.labels, [LABEL_DEPLOYMENT]: prefix }
+  /** Whether a resource is this deployment's, by its labels. */
+  const owns = (labels: Record<string, string> | null | undefined) =>
+    labels?.[LABEL_MANAGED] === 'true' &&
+    (labels[LABEL_DEPLOYMENT] === prefix || (labels[LABEL_DEPLOYMENT] === undefined && prefix === DEFAULT_NAME_PREFIX))
   const capDrop = opts.capDrop ?? DEFAULT_CAP_DROP
   const pidsLimit = opts.pidsLimit ?? 4096
   const maxOutput = opts.maxOutputBytes ?? 10 * 1024 * 1024
@@ -132,6 +153,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const proxyName = (name: string) => `${prefix}${name}-proxy`
   const previewName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
   const previewNetworkName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
+  const directNetworkName = (network: string) => `${prefix}${network}`
 
   const hardening = {
     Privileged: false,
@@ -295,6 +317,44 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     await waitForProxy(name, PREVIEW_READY_MARKER, 'preview forwarder')
   }
 
+  /** Refuses a network that isn't a direct network this runtime made, or has lost its settings. */
+  function checkDirect(n: NetworkInspectLike): void {
+    if (!owns(n.Labels) || n.Labels?.[LABEL_ROLE] !== DIRECT_ROLE)
+      throw new ConflictError(`network ${n.Name} exists and is not a direct network made by this deployment`)
+    if (n.Internal || n.Options?.[ICC_OPTION] !== 'false')
+      throw new ConflictError(
+        `direct network ${n.Name} lets containers reach each other or has no route out: remove it and it is made again`,
+      )
+  }
+
+  /**
+   * The shared direct network: a plain bridge (the host's NAT is the way out) with inter-container
+   * traffic off, so environments on it can't reach each other. Made on first use and kept.
+   */
+  async function ensureDirectNetwork(net: string): Promise<void> {
+    try {
+      checkDirect(await docker.getNetwork(net).inspect())
+      return
+    } catch (e) {
+      if (e instanceof MpError || statusOf(e) !== 404) throw mapError(e, `network ${net}`)
+    }
+    try {
+      await docker.createNetwork({
+        Name: net,
+        Driver: 'bridge',
+        Internal: false,
+        CheckDuplicate: true,
+        Options: { [ICC_OPTION]: 'false' },
+        Labels: { ...baseLabels, [LABEL_MANAGED]: 'true', [LABEL_ROLE]: DIRECT_ROLE },
+      })
+      log.info('direct network created', { network: net })
+    } catch (e) {
+      // Another environment made it at the same time.
+      if (statusOf(e) !== 409) throw mapError(e, `network ${net}`)
+      checkDirect(await docker.getNetwork(net).inspect())
+    }
+  }
+
   /** Connects the harness container to a preview network, once. Already being connected is fine. */
   async function attachSelf(previewNet: string): Promise<void> {
     if (!self || attached.has(previewNet)) return
@@ -321,6 +381,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Labels: labels,
     })
     if (spec.egress) await createProxy(spec, net, labels)
+    const direct = spec.direct ? directNetworkName(spec.direct.network) : null
+    if (direct) await ensureDirectNetwork(direct)
     const viaProxy = proxyEnv(spec)
     for (const svc of spec.services ?? []) {
       const c = await docker.createContainer({
@@ -331,6 +393,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         HostConfig: { ...hardening, NetworkMode: net, ...limits(spec) },
         NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: [svc.name] } } },
       })
+      if (direct) await docker.getNetwork(direct).connect({ Container: serviceName(spec.name, svc.name) })
       await c.start()
     }
     const main = await docker.createContainer({
@@ -339,22 +402,25 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Cmd: spec.command ?? ['sleep', 'infinity'],
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
       ...(spec.user ? { User: spec.user } : {}),
-      ...(spec.volumes?.length ? { Volumes: Object.fromEntries(spec.volumes.map((v) => [v, {}])) } : {}),
       Env: envList({ ...spec.env, ...viaProxy }),
       Labels: { ...labels, [LABEL_ROLE]: 'main', ...(spec.expose?.length ? { [LABEL_EXPOSE]: spec.expose.join(',') } : {}) },
       HostConfig: {
         ...hardening,
         NetworkMode: net,
         Binds: (spec.mounts ?? []).map((m) => `${m.hostPath}:${m.containerPath}${m.readOnly ? ':ro' : ''}`),
-        ...(spec.volumeMounts?.length
+        ...(spec.volumes?.length || spec.volumeMounts?.length
           ? {
-              Mounts: spec.volumeMounts.map((m) => ({
-                Type: 'volume',
-                Source: m.volume,
-                Target: m.containerPath,
-                ReadOnly: m.readOnly === true,
-                VolumeOptions: { NoCopy: true, ...(m.subpath ? { Subpath: m.subpath } : {}) },
-              })),
+              Mounts: [
+                // Fresh anonymous volumes, labelled, removed with the container.
+                ...(spec.volumes ?? []).map((v) => ({ Type: 'volume', Target: v, VolumeOptions: { Labels: labels } })),
+                ...(spec.volumeMounts ?? []).map((m) => ({
+                  Type: 'volume',
+                  Source: m.volume,
+                  Target: m.containerPath,
+                  ReadOnly: m.readOnly === true,
+                  VolumeOptions: { NoCopy: true, ...(m.subpath ? { Subpath: m.subpath } : {}) },
+                })),
+              ],
             }
           : {}),
         ...(spec.readOnlyRootfs ? { ReadonlyRootfs: true } : {}),
@@ -370,6 +436,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       },
       NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: ['main'] } } },
     })
+    if (direct) await docker.getNetwork(direct).connect({ Container: mainName(spec.name) })
     await main.start()
     if (spec.expose?.length) await createForwarder(spec, net, labels)
   }
@@ -384,10 +451,17 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     } catch (e) {
       throw mapError(e, `environment ${name}`)
     }
-    const ids = new Set(containers.map((c) => c.Id))
-    // The main container and the proxy are also removed by name, in case a listing missed them.
-    const targets = [...ids, mainName(name), proxyName(name), previewName(name)]
-    for (const id of targets) {
+    const ids = new Set(containers.filter((c) => owns(c.Labels)).map((c) => c.Id))
+    // The main container and the proxy are also removed by name, in case a listing missed them, but
+    // only when they are this deployment's.
+    for (const n of [mainName(name), proxyName(name), previewName(name)]) {
+      try {
+        if (owns((await docker.getContainer(n).inspect()).Config.Labels)) ids.add(n)
+      } catch (e) {
+        if (statusOf(e) !== 404) throw mapError(e, `container ${n}`)
+      }
+    }
+    for (const id of ids) {
       try {
         await docker.getContainer(id).remove({ force: true, v: true })
       } catch (e) {
@@ -404,6 +478,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     }
     for (const net of [networkName(name), egressNetworkName(name), previewNetworkName(name)]) {
       try {
+        if (!owns((await docker.getNetwork(net).inspect()).Labels)) continue
         await docker.getNetwork(net).remove()
       } catch (e) {
         if (statusOf(e) !== 404) throw mapError(e, `network ${net}`)
@@ -414,15 +489,28 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const runtime: ContainerRuntime = {
     async createEnv(spec) {
       validate(spec)
-      const foreign = (spec.volumeMounts ?? []).filter((m) => !m.volume.startsWith(prefix)).map((m) => m.volume)
-      if (foreign.length) throw new ValidationError(`only volumes named ${prefix}* can be mounted`, foreign)
+      // The harness's own volumes: this deployment's, or the family's (e.g. the compose-declared mp-files).
+      const foreign = (spec.volumeMounts ?? [])
+        .filter((m) => !m.volume.startsWith(prefix) && !m.volume.startsWith(DEFAULT_NAME_PREFIX))
+        .map((m) => m.volume)
+      if (foreign.length) throw new ValidationError(`only volumes named ${DEFAULT_NAME_PREFIX}* can be mounted`, foreign)
       if (spec.volumeMounts?.some((m) => m.subpath) && !(await runtime.features!()).volumeSubpath)
         throw new ValidationError(`volume subpaths need Docker Engine 26 (API ${VOLUME_SUBPATH_API}) or later`)
-      const labels = { ...baseLabels, ...spec.labels, [LABEL_ENV]: spec.name, [LABEL_MANAGED]: 'true' }
+      const labels = {
+        ...baseLabels,
+        ...spec.labels,
+        [LABEL_ENV]: spec.name,
+        [LABEL_MANAGED]: 'true',
+        [LABEL_DEPLOYMENT]: prefix,
+      }
       const id = mainName(spec.name)
       try {
-        await docker.getContainer(id).inspect()
-        throw new ConflictError(`environment ${spec.name} already exists`)
+        const existing = await docker.getContainer(id).inspect()
+        throw new ConflictError(
+          owns(existing.Config.Labels)
+            ? `environment ${spec.name} already exists`
+            : `container ${id} exists and belongs to another deployment: give each deployment on this Docker host its own name prefix (DOCKER_NAME_PREFIX)`,
+        )
       } catch (e) {
         if (e instanceof ConflictError) throw e
         if (statusOf(e) !== 404) throw mapError(e, `environment ${spec.name}`)
@@ -443,7 +531,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     async getEnv(id) {
       try {
         const c = await docker.getContainer(id).inspect()
-        if (c.Config.Labels?.[LABEL_MANAGED] !== 'true' || c.Config.Labels?.[LABEL_ROLE] !== 'main') return null
+        if (!owns(c.Config.Labels) || c.Config.Labels?.[LABEL_ROLE] !== 'main') return null
         return infoFromInspect(c)
       } catch (e) {
         if (statusOf(e) === 404) return null
@@ -455,7 +543,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       const filters = [`${LABEL_MANAGED}=true`, `${LABEL_ROLE}=main`, ...Object.entries(labels).map(([k, v]) => `${k}=${v}`)]
       try {
         const list = await docker.listContainers({ all: true, filters: { label: filters } })
-        return list.map(infoFromSummary)
+        return list.filter((c) => owns(c.Labels)).map(infoFromSummary)
       } catch (e) {
         throw mapError(e, 'environments')
       }
@@ -762,8 +850,8 @@ function validate(spec: EnvSpec) {
   if (spec.user !== undefined && !USER_RE.test(spec.user)) issues.push(`bad user: ${spec.user}`)
   if (spec.limits?.pids !== undefined && !(Number.isInteger(spec.limits.pids) && spec.limits.pids > 0))
     issues.push('limits.pids must be a positive integer')
+  issues.push(...invalidNetworkSpec(spec))
   if (spec.egress) {
-    if (spec.allowInternet) issues.push('egress and allowInternet exclude each other')
     if (!Array.isArray(spec.egress.allow)) issues.push('egress.allow must be a list')
     else for (const bad of invalidEgressEntries(spec.egress.allow)) issues.push(`bad egress entry: ${bad}`)
   }

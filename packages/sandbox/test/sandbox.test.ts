@@ -102,6 +102,36 @@ describe('kernels', () => {
     expect(t.rt.envs()[0]!.spec.egress).toBeUndefined()
   })
 
+  it('join a direct network when the setting says so, keeping the rest of the hardening', async () => {
+    const t = await setup({ sandbox: { egress: async () => ({ direct: 'ana-direct' }) } })
+    await t.run('1')
+    const [env] = t.rt.envs()
+    expect(env!.spec.direct).toEqual({ network: 'ana-direct' })
+    expect(env!.spec.egress).toBeUndefined()
+    expect(env!.spec.allowInternet).toBeUndefined()
+    expect(env!.spec).toMatchObject({ user: '1000:1000', readOnlyRootfs: true, limits: { cpus: 1, memoryMb: 1024, pids: 256 } })
+    expect(env!.spec.env).toBeUndefined()
+    expect(env!.spec.mounts).toBeUndefined()
+    expect(t.rt.egressAllowed(env!.info.id, 'db.example.com', 5432)).toBe(true)
+  })
+
+  it('restart when the setting changes to or from direct', async () => {
+    let net: string[] | { direct: string } = ['pypi.org']
+    const t = await setup({ sandbox: { egress: async () => net } })
+    await t.run('var x = 1')
+    net = { direct: 'ana-direct' }
+    expect((await t.run('typeof x')).notes?.join(' ')).toMatch(/network access changed, so the sandbox restarted/)
+    expect(t.rt.envs()).toHaveLength(1)
+    expect(t.rt.envs()[0]!.spec).toMatchObject({ direct: { network: 'ana-direct' } })
+    expect(t.rt.envs()[0]!.spec.egress).toBeUndefined()
+    // The same setting again: no restart.
+    expect((await t.run('1')).notes).toBeUndefined()
+    net = []
+    expect((await t.run('1')).notes?.join(' ')).toMatch(/network access changed/)
+    expect(t.rt.envs()[0]!.spec.direct).toBeUndefined()
+    expect(t.rt.envs()[0]!.spec.egress).toBeUndefined()
+  })
+
   it('run node too, in a kernel of its own', async () => {
     const t = await setup()
     await t.run('var x = 1')
@@ -256,6 +286,20 @@ describe('kernels', () => {
     expect(long.length).toBeLessThanOrEqual(45)
     expect(long).toMatch(/-[0-9a-f]{6}-sandbox$/)
     expect(sandboxName('***', 'EMP_X')).toBe('emp-x-sandbox')
+  })
+
+  it("keep names within limits with a longer deployment prefix, and pass the prefix's length on", async () => {
+    expect(sandboxName('meatless', 'emp_1', 'mp-e2e-')).toBe('meatless-sandbox')
+    for (const prefix of ['mp-', 'mp-e2e-', 'mp-staging1-']) {
+      const long = sandboxName('a'.repeat(80), 'emp_1', prefix)
+      expect((prefix + long).length, prefix).toBeLessThanOrEqual(48)
+      expect(long).toMatch(/^a+-[0-9a-f]{6}-sandbox$/)
+    }
+    // The default prefix keeps the names it always had.
+    expect(sandboxName('a'.repeat(80), 'emp_1', 'mp-')).toBe(sandboxName('a'.repeat(80), 'emp_1'))
+    const t = await setup({ sandbox: { namePrefix: 'mp-staging1-', nameFor: () => 'b'.repeat(60) } })
+    await t.run('1')
+    expect(`mp-staging1-${t.rt.envs()[0]!.info.name}`.length).toBeLessThanOrEqual(48)
   })
 })
 

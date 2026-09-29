@@ -159,6 +159,19 @@ read while a channel or thread is open and the tab is visible; edit and delete y
 messages ("(edited)", "message deleted"); reactions (✅ 👀 👍 ❤️ 🎉 ❌) as chips that
 toggle; "New message" opens a DM with any employee or person.
 
+Activity (`components/chat-activity.tsx`, `lib/chat-activity.ts`): under each message in a channel, and at the
+bottom of a thread, `ActivityRows` shows who the thread set to work: a spinner (a static dot with reduced motion),
+the employee's avatar, "Billing Bot #pay-123-refund is working…" (or queued, waiting, or paused in the warning
+colour) and the current step; a click opens the session; three or more collapse into "3 working".
+`useChatActivity(channelId)` loads `GET /api/chat/channels/:id/activity` and follows `chat.activity` and
+`chat.activity.done`: a hand-off briefly says "Handed to @…#…", "looked, no reply needed" stays 10 s, a failure
+stays with a link to the session's runs, and "Nobody picked this up" hints to tag someone or use #requests. A
+message you send that should set someone to work (`expectsWork`: it tags an employee or session, it's in a DM
+with an employee or a channel routed to a context, or it replies in a thread an AI is in) says "Delivering…"
+until the first news about its thread (30 s at most). The mock (`mock/chat-activity.ts`) seeds workers on the
+PAY-123, deploy and staging-disk threads; tagging an employee there (or posting in #billing) has its router pick
+the message up, hand it to a new session that answers in the thread, and a "thanks" gets a look and no reply.
+
 Images (`components/chat-attachments.tsx`): the composer (channels and threads) has an
 attach button and takes pasted and dropped images, uploading each at once
 (`usePendingAttachments`: thumbnails with progress and remove; only PNG, JPEG, GIF and
@@ -229,6 +242,9 @@ page (triggers in words, approvals, runs, rebuilding an out-of-date context, Run
 schedule trigger, the catch-all message, editing steps with the preview and a new version, history, archiving,
 read-only for viewers), and New procedure (one call, once on a double submit, template, @tag, a role approver; a
 missing name or purpose; members told about triggers).
+`chat-activity.test.tsx`: the activity state (delivering, outcomes and their notices, expiry, load, `expectsWork`)
+and the chat page: a worker under its message updating live to paused and failed, "3 working", "Delivering…"
+replaced by the router and then the hand-off, nothing for plain chat, and a static dot with reduced motion.
 `auth.test.tsx`: signed-out people land on the login page (and a later 401 sends them there),
 login errors and the single sign-on button, the sidebar's user menu and sign-out, what viewers,
 members and admins see (kill switch, settings sections, chat message box), and the tokens page.

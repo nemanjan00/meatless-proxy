@@ -7,25 +7,31 @@ sandbox container per employee, with the employee's files at hand. Behind `code.
 ## API
 
 - `createSandbox({ runtime, files, image, clock?, logger?, filesVolume?, user?, limits?, egress?, idleMs?, reapIntervalMs?,
-  maxOutputChars?, maxFileBytes?, nameFor? })` returns a `Sandbox`:
+  maxOutputChars?, maxFileBytes?, nameFor?, namePrefix? })` returns a `Sandbox`:
   - `run({ employeeId, sessionId, language: 'python' | 'node', code, timeoutMs?, fresh?, signal?, actor? })` →
     `{ stdout, stderr, result?, error?, files_changed, duration_ms, state_lost?, notes? }`.
   - `reset(sessionId, language?)`, `endSession(sessionId)`, `hasSession(sessionId)`, `reapIdle()`, `close()`, `mode()`.
 - `Kernel` (one interpreter over `ContainerRuntime.spawn`), `kernelCommand`, `LANGUAGES`.
 - `mountWorkspace` / `copyWorkspace`: the two ways files get into the sandbox, behind the `Workspace` interface.
 - `PYTHON_DRIVER`, `NODE_DRIVER`, `MANIFEST_SCRIPT`, `FRAME_MARK`: the programs run inside the container.
-- `sandboxName(base, employeeId)`, `truncate(text, max, total?)`, `LABEL_SANDBOX`, `LABEL_MOUNTS`, the defaults.
+- `sandboxName(base, employeeId, prefix = 'mp-')` (`<base>-sandbox`, cut with a hash so that the runtime's prefix plus
+  the name stay within 48 characters), `truncate(text, max, total?)`, `LABEL_SANDBOX`, `LABEL_MOUNTS`, the defaults.
+- `SandboxNetwork`: `string[]` (hosts through the egress proxy; empty: none) or `{ direct: string }` (the employee's
+  direct network, `EnvSpec.direct`).
 - `fakeSandboxRuntime({ storage?, features?, ... })`: a `fakeRuntime` whose kernels speak the protocol and run cells as
   JavaScript in the test process, with `print`, `write`, `read`, `remove`, `sleep`, `hang`, `die`, `raw` and `rawErr`
   helpers. For tests only.
 
 ## How it works
 
-- **Container.** One per employee, `mp-<name>-sandbox` (`nameFor`, e.g. the employee's handle), from `image`: user
+- **Container.** One per employee, `<prefix><name>-sandbox` (`nameFor`, e.g. the employee's handle; `namePrefix` is the
+  runtime's, `mp-` by default), from `image`: user
   `1000:1000` by default, read-only root, a fresh volume at `/work` and a tmpfs at `/tmp`, CPU, memory and pids limits, no
   environment variables (no secrets), no host paths. No network unless `egress` (a list, or a function of the employee:
   the server gives its network setting, else `DEFAULT_EGRESS`) names hosts, which then go through the runtime's
-  allowlisting egress proxy. A changed list recreates the container at its next idle run. Labelled `mp.sandbox=<employeeId>` and with the signature of its file mounts. A
+  allowlisting egress proxy, or returns `{ direct: '<handle>-direct' }`: the container then joins the employee's direct
+  network (unrestricted, not logged) with the rest of the hardening unchanged. A changed network (hosts, or to or from
+  direct) recreates the container at its next idle run. Labelled `mp.sandbox=<employeeId>` and with the signature of its file mounts. A
   container that stopped is recreated on the next run; ones left by an earlier process are removed first (their kernels
   and copied files are unknown).
 - **Kernels.** A driver (`python3 -u -c PYTHON_DRIVER` or `node --expose-internals -e NODE_DRIVER`) reads one JSON

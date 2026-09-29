@@ -117,6 +117,18 @@ export class MockDocker implements DockerLike {
 
   getNetwork(id: string) {
     return {
+      inspect: async () => {
+        this.record('network.inspect', id)
+        const net = this.networks.get(id)
+        if (!net) throw new HttpError(404, 'no such network')
+        return {
+          Name: id,
+          Internal: net.Internal === true,
+          Options: net.Options ?? {},
+          Labels: net.Labels ?? {},
+          Containers: Object.fromEntries((net.connected ?? []).map((c: string) => [c, {}])),
+        }
+      },
       remove: async () => {
         this.record('network.remove', id)
         if (!this.networks.delete(id)) throw new HttpError(404, 'no such network')

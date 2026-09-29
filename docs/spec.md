@@ -1202,8 +1202,17 @@ person follows a project's contributing guide.
 - **Names and labels.** Every container, network and volume is named
   `mp-<employee>-<session>-…` and labelled with the employee and session, so
   one employee's or one session's environments are easy to find and clean up.
+  - **Several deployments on one Docker host** need different name prefixes,
+    `DOCKER_NAME_PREFIX` (default `mp-`, e.g. `mp-e2e-`): it replaces `mp-` in
+    every container and network name (the compose-declared files volume keeps
+    its configured name).
+  - Every container, network and volume is labelled `mp.deployment=<prefix>`.
+    A deployment only lists, reuses or removes resources with its own label,
+    never another deployment's, even when the names look alike. Resources made
+    before the label existed count as the default `mp-` deployment's.
 - **Network access through a proxy.** Project containers have no direct
-  network access. Each environment's private network has an **egress proxy**,
+  network access, unless an admin gives the employee a
+  [direct network](#direct-network). Each environment's private network has an **egress proxy**,
   and containers get `HTTP_PROXY`/`HTTPS_PROXY` pointing at it. The proxy only
   lets through an allowlist of destinations (e.g. the npm registry, the git
   host, the project's own staging services), and logs every request to the
@@ -1213,6 +1222,9 @@ person follows a project's contributing guide.
 - **Who decides the allowlist.** The project's `egress.allow` and the
   employee's **network** setting, both:
   - `none`: never any network, whatever the project allows.
+  - `direct`: a [direct network](#direct-network), with no proxy and no
+    allowlist. The project's allowlist doesn't narrow it: it only applies to
+    the proxy.
   - `project` (the default): the project's allowlist.
   - `{ allow: [hosts] }`: the employee's own hosts. With a project allowlist,
     only what both allow (the narrower host and port of each pair).
@@ -1223,11 +1235,53 @@ person follows a project's contributing guide.
     for one employee, never a default. IP literals and private, loopback and
     link-local addresses stay blocked unless listed exactly, and every request
     is still logged.
-  - The model can only narrow the result, with `env.up { egress }`.
+  - The model can only narrow the result, with `env.up { egress }`: fewer
+    hosts, or from a direct network to proxied hosts. It can never ask for a
+    direct network or widen a proxied one to it.
   - `env.up` says what it got: the allowed hosts (curl, wget, npm, pip and git
-    work through `HTTP_PROXY`/`HTTPS_PROXY` as they are), or no network and
-    why, with what to ask an admin for.
+    work through `HTTP_PROXY`/`HTTPS_PROXY` as they are), a direct network
+    (`{ via: 'direct', note: 'unrestricted network, not logged' }`), or no
+    network and why, with what to ask an admin for.
+  - A running environment keeps the network it started with. When the setting
+    has changed since, `env.up` says so: `env.down` and `env.up` again to use
+    the new one.
   - The [code sandbox](#code-execution) follows the same setting.
+
+##### Direct network
+
+Some work needs a real network: SSH (`git@…`), database clients, raw TCP, UDP
+and DNS tools. The proxy only carries HTTP(S), so an admin can set an
+employee's network to **direct** ("Direct network (no proxy)" on the employee
+page). It's for trusted employees only.
+
+- **What it gives.** The employee's code sandbox and environments join a
+  bridge network of its own, `mp-<employee>-direct`, made on first use and
+  kept. Its route out is the Docker host's NAT: any host, any protocol, no
+  allowlist.
+- **What stays isolated.**
+  - The network never joins the harness's own (compose) network, so the app,
+    Postgres, Redis and the preview listener can't be reached by name, and
+    Docker keeps separate bridges apart by address too.
+  - Inter-container traffic on it is off
+    (`com.docker.network.bridge.enable_icc=false`), so containers of different
+    environments and the sandbox can't reach each other on it. One
+    environment's containers still talk over its own private network.
+  - Nothing is published on the host's ports.
+  - The rest of the container hardening is unchanged: non-root where
+    configured, no new privileges, dropped capabilities (no raw sockets, so no
+    `ping`), limits, no Docker socket, and no secrets in the environment.
+- **What it doesn't stop, and the UI says so.** A direct network can reach the
+  Docker host's LAN, other hosts' published ports and cloud metadata endpoints
+  (169.254.169.254), and none of its traffic is logged. Blocking those would
+  need firewall rules on the host, which the harness doesn't manage.
+- **Admins only.** The setting is on the employee's record, which only admins
+  can change (every API route that could set it refuses members). The model
+  can't request it.
+- **Turning it off.** `DOCKER_DIRECT_NETWORK=false` in the deployment turns
+  every direct setting into no network, and `env.up` and the sandbox say why.
+- **Changes.** Switching to or from direct recreates the code sandbox at its
+  next idle run, like any network change. Running environments keep what they
+  started with.
 - Output from builds, tests and running services (logs, exit codes, artifacts)
   is captured and available to the model and in the task's
   [audit trail](employee.md#4-boundaries).
@@ -1600,15 +1654,19 @@ hand.
 #### Sandbox security model
 
 - Code never runs in the harness process. Each employee has one sandbox
-  container, `mp-<employee>-sandbox`, from `SANDBOX_IMAGE` (default: the
+  container, `mp-<employee>-sandbox` (with `DOCKER_NAME_PREFIX`,
+  `<prefix><employee>-sandbox`), from `SANDBOX_IMAGE` (default: the
   published image built from `docker/sandbox/Dockerfile`: Python 3 with numpy,
   pandas, sympy and matplotlib, and Node). Sessions share it, each with
   kernels of its own.
 - **No network** by default: the container's network is internal. Hosts come
   from the employee's network setting (a sandbox has no project, so its own
   list, else `DEFAULT_EGRESS`), and then go through the same allowlisting,
-  logging egress proxy as [environments](#docker-orchestration). When the
-  setting changes, the container is recreated at its next idle run.
+  logging egress proxy as [environments](#docker-orchestration). With a
+  [direct network](#direct-network) the container joins the employee's direct
+  network instead: unrestricted and not logged, with everything below
+  unchanged. When the setting changes, the container is recreated at its next
+  idle run.
 - A non-root user (uid 1000, the app's own, so both can write the files
   volume), a read-only root filesystem with only `/work` and `/tmp` writable,
   CPU, memory and process limits, no new privileges, dropped capabilities, no
@@ -1617,7 +1675,8 @@ hand.
   employee can see another's files.
 - A container that died is recreated on the next run. Containers left by an
   earlier harness process are replaced (their kernels are gone anyway). Only
-  Docker resources named `mp-*` are ever touched.
+  Docker resources named `mp-*` and labelled with this deployment are ever
+  touched.
 
 ### Checklists
 
@@ -2170,6 +2229,28 @@ All of these update live over the WebSocket.
   them into a thread.
 - From a thread, you can jump to the session handling it, and from a session to
   its threads.
+- **Activity: who a message set to work.** Under a message (and at the bottom
+  of its thread), a small live row shows each run working on the thread: a
+  spinner, the employee's avatar and "Meatless is working…" (or "is queued",
+  "is waiting on a reply", or "paused: needs approval" in the warning colour),
+  with what it's doing now in plain words ("reading the thread", "running
+  code"). A click opens the session. Three or more workers collapse into
+  "3 working". The runs counted are the ones caused by the thread's messages
+  (the router's ephemeral run included, and a run whose inbox got the
+  message), the runs of sessions they handed the thread to (a session the
+  router started, or messaged), and the live runs of sessions subscribed to
+  the thread. When a run ends, a reply shows nothing more (the reply itself
+  appears); a hand-off briefly says "Handed to @meatless#pay-refund" and the
+  row follows that session; "looked, no reply needed" stays about 10 s; a
+  failure stays as a small error row linking to the run. A message that tagged
+  someone, or was posted where a trigger listens, and that nobody picked up
+  says "Nobody picked this up" with a hint (tag someone, or post in
+  #requests); plain chat between people shows nothing. Right after sending, a
+  message that should set someone to work says "delivering…" until the first
+  activity or outcome arrives. `GET /api/chat/channels/:id/activity` gives the
+  current rows, and `chat.activity` / `chat.activity.done` on the channel's
+  live topic keep them current, for people who may see the channel only.
+  Reduced motion shows a static dot instead of the spinner.
 - Images: the composer (channel and thread) has an attach button, takes pasted
   and dropped images, and shows pending ones as thumbnails with upload
   progress and a remove button. Messages show their images as a grid of

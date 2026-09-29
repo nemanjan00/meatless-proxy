@@ -32,7 +32,7 @@ import { afterModelCall, createRunner, type Runner } from '@mp/runner'
 import type { SecretStore } from '@mp/secrets'
 import { storeSecretStore } from '@mp/secrets-store'
 import { createSandbox, type Sandbox } from '@mp/sandbox'
-import { networkFor, type ProcedureContexts } from '@mp/stdlib'
+import { directNetworkName, networkFor, type ProcedureContexts } from '@mp/stdlib'
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
 import { createSkills, type SkillsService } from '@mp/skills'
 import { memoryStore, type Store } from '@mp/store'
@@ -215,6 +215,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     (config.DOCKER_ENABLED
       ? dockerRuntime({
           ...(config.DOCKER_SOCKET ? { socketPath: config.DOCKER_SOCKET } : {}),
+          namePrefix: config.DOCKER_NAME_PREFIX,
           ...selfContainer(config),
           logger,
           clock,
@@ -275,11 +276,19 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
           ...(config.FILES_VOLUME ? { filesVolume: config.FILES_VOLUME } : {}),
           user: config.SANDBOX_USER,
           limits: { cpus: config.SANDBOX_CPUS, memoryMb: config.SANDBOX_MEMORY_MB, pids: config.SANDBOX_PIDS },
-          // No project: the employee's own list, or DEFAULT_EGRESS.
-          egress: async (id) =>
-            networkFor({ network: (await directory.employees.get(id))?.data.network, fallback: config.DEFAULT_EGRESS }).allow,
+          // No project: the employee's own list, its direct network, or DEFAULT_EGRESS.
+          egress: async (id) => {
+            const emp = await directory.employees.get(id)
+            const net = networkFor({
+              network: emp?.data.network,
+              fallback: config.DEFAULT_EGRESS,
+              direct: config.DOCKER_DIRECT_NETWORK,
+            })
+            return net.direct ? { direct: directNetworkName(emp?.key ?? id) } : net.allow
+          },
           idleMs: config.SANDBOX_IDLE_MINUTES * 60_000,
           nameFor: async (id) => (await directory.employees.get(id))?.key ?? id,
+          namePrefix: config.DOCKER_NAME_PREFIX,
         })
       : null
   const usage = createUsage({ records, clock, bus, ...(config.PRICING ? { pricing: config.PRICING } : {}) })
@@ -527,6 +536,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         worktreesRoot: config.WORKTREES_DIR,
         pushPolicy: { protected: ['main', 'master', 'production', 'release/**'], allow: ['mp/**'] },
         defaultEgress: config.DEFAULT_EGRESS,
+        directNetwork: config.DOCKER_DIRECT_NETWORK,
       },
     }
     const names = stdlib.registerStdlib(tools, deps)

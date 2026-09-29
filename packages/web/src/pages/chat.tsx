@@ -13,6 +13,7 @@ import { Hash, MessagesSquare, PenSquare, Plus, Search, UserPlus, Users, Workflo
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { ActivityRows, type ChatActivityView, useChatActivity } from '@/components/chat-activity.tsx'
 import { Composer } from '@/components/chat-composer.tsx'
 import { type MessageActions, MessageItem } from '@/components/chat-message.tsx'
 import { EmptyState, LoadingRows } from '@/components/empty.tsx'
@@ -38,6 +39,7 @@ import {
   tagExamples,
   upsertMessage,
 } from '@/lib/chat.ts'
+import { expectsWork } from '@/lib/chat-activity.ts'
 import { plainDoc } from '@/lib/doclinks.ts'
 import { clockOrDate, pluralize } from '@/lib/format.ts'
 import { isTypingTarget } from '@/lib/shortcuts.ts'
@@ -327,6 +329,8 @@ function ChannelList({
 function ThreadPanel({
   threadId,
   channelId,
+  channel,
+  activity,
   me,
   suggestions,
   highlight,
@@ -335,6 +339,9 @@ function ThreadPanel({
 }: {
   threadId: string
   channelId: string
+  channel?: Channel
+  /** Who is working on the channel's threads. */
+  activity: ChatActivityView
   me?: ApiRef
   suggestions: TagSuggestion[]
   highlight?: string | null
@@ -423,6 +430,7 @@ function ThreadPanel({
             {thread.data.replies.map((m) => (
               <MessageItem key={m.id} m={m} me={me} actions={actions} highlight={highlight === m.id} />
             ))}
+            <ActivityRows view={activity.thread(threadId)} className="pr-4 pl-14 md:pr-6 md:pl-16" />
           </div>
           <Can fallback={<ReadOnlyNote />}>
             <Composer
@@ -433,6 +441,12 @@ function ThreadPanel({
               onSend={async (text, attachments) => {
                 const m = await api.postMessage(channelId, { text, threadId, ...(attachments.length ? { attachments } : {}) })
                 onChange(m)
+                const all = [thread.data!.root, ...thread.data!.replies]
+                const aiInThread =
+                  thread.data!.sessions.length > 0 ||
+                  !!thread.data!.root.data.sessionId ||
+                  all.some((x) => x.data.author.type !== 'person')
+                if (expectsWork(m, channel, { aiInThread })) activity.sent(m)
               }}
             />
           </Can>
@@ -631,6 +645,7 @@ export function ChatPage() {
   })
   const onChange = useCallback((m: Message) => messages.setData((prev) => (prev ? upsertMessage(prev, m) : prev)), [messages])
   const actions = useMessageActions(onChange)
+  const activity = useChatActivity(currentId)
   useMarkRead(currentId, messages.data?.length ?? 0, unread.reload)
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages, not to a highlighted one
   useEffect(() => {
@@ -836,6 +851,7 @@ export function ChatPage() {
                         active={m.id === threadId}
                         highlight={m.id === highlight && !threadId}
                         onOpenThread={() => navigate(`/chat/${channel.id}/${m.id}`)}
+                        footer={<ActivityRows view={activity.thread(m.id)} />}
                       />
                     ))
                   )}
@@ -850,6 +866,7 @@ export function ChatPage() {
                     onSend={async (text, attachments) => {
                       const m = await api.postMessage(channel.id, { text, ...(attachments.length ? { attachments } : {}) })
                       onChange(m)
+                      if (expectsWork(m, channel)) activity.sent(m)
                     }}
                   />
                 </Can>
@@ -862,6 +879,8 @@ export function ChatPage() {
             <ThreadPanel
               threadId={threadId}
               channelId={currentId}
+              channel={channel}
+              activity={activity}
               me={meRef}
               suggestions={suggestions}
               highlight={highlight}

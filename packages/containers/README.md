@@ -10,7 +10,14 @@ The containers port (L1): isolated project environments and commands run in them
   globs with optional ports (`registry.npmjs.org`, `*.github.com`, `host:443`); `*` matches any run of characters (so
   `*.github.com` doesn't match `github.com`), and an entry without a port allows every port. IP literals, `localhost` and
   private/loopback/link-local addresses are reachable only through an exact entry, never a wildcard. Network modes:
-  `egress` set -> proxy only; neither -> no network at all; `allowInternet: true` -> unrestricted (excludes `egress`).
+  `egress` set -> proxy only; none of them -> no network at all; `allowInternet: true` -> unrestricted;
+  `direct: { network }` -> a real network shared by name (see below). They exclude each other: `invalidNetworkSpec(spec)`
+  names the conflicts.
+- `EnvSpec.direct?: { network: string }`: a real, unproxied network. The containers also join the shared network
+  `network` (the runtime adds its prefix; names match `DIRECT_NETWORK_RE`), made on first use and kept. It routes out
+  through the host (any host, any protocol) with no allowlist and no log. Containers of different environments on it
+  can't reach each other, and it never joins the harness's own networks. Used for an employee's `direct` network
+  setting: `<handle>-direct`, one per employee.
 - `EnvSpec.expose?: number[]`: ports the main container serves (a dev server on 5173), for live previews. Nothing is
   published on the host. `invalidExpose(list)` names the problems (integers 1-65535, distinct, at most
   `MAX_EXPOSED_PORTS` = 16).
@@ -40,7 +47,7 @@ The containers port (L1): isolated project environments and commands run in them
   answers scripted responses: `runtime.on(/npm test/, { exitCode: 1, stdout: '...' })` or a function
   `(call, env) => response`. Responses can set `delayMs`, `hang`, `chunks` (streamed via `onOutput`), or `error`.
   Also `appendLog`, `stop`, `failNextCreate`, `envs()`, `created`. `egressAllowed(envId, host, port)` answers what the real
-  runtime would allow (allowlist with `egress`, anything with `allowInternet`, else nothing) and adds proxied decisions to
+  runtime would allow (allowlist with `egress`, anything with `allowInternet` or `direct`, else nothing) and adds proxied decisions to
   `egressLog(envId)`. `previewTarget` points exposed ports at `127.0.0.1:<port>` (or the `previewTarget` option's
   answer), and `servePreview(envId, port, target)` points one at a local test server. `spawn` plays processes:
   `onSpawn(match, host => …)` scripts them (`host.stdout`, `stderr`, `exit`, `onInput`, `onEnd`, `onKill`, `env`); without a

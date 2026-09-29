@@ -20,6 +20,30 @@ export function normalizePath(p: string): string {
   return `/${parts.join('/')}`
 }
 
+/** Where code.run sees the employee's own files: `/work/files/a.txt` is `/a.txt` for the fs tools. */
+export const SANDBOX_FILES_DIR = '/work/files'
+/** Where code.run sees files shared with the employee: `/work/shared/<owner>/p` is `/shared/<owner>/p`. */
+export const SANDBOX_SHARED_DIR = '/work/shared'
+
+/**
+ * An employee-file path as any tool takes it, in the fs tools' form. `/work/files/a.txt`, `a.txt` and
+ * `/a.txt` are the same file (`/a.txt`); `/work/shared/<owner>/p` is `/shared/<owner>/p`. Rejects what
+ * `normalizePath` rejects (`..` included), so nothing escapes the employee's tree.
+ */
+export function employeePath(p: string): string {
+  const n = normalizePath(p)
+  if (isWithin(SANDBOX_FILES_DIR, n)) return n.slice(SANDBOX_FILES_DIR.length) || '/'
+  if (isWithin(SANDBOX_SHARED_DIR, n)) return `${SHARED_DIR}${n.slice(SANDBOX_SHARED_DIR.length)}`
+  return n
+}
+
+/** The other way: a fs-tools path as code.run sees it (`/a.txt` -> `/work/files/a.txt`, `/shared/o/p` -> `/work/shared/o/p`). */
+export function sandboxPath(p: string): string {
+  const n = normalizePath(p)
+  if (isWithin(SHARED_DIR, n)) return `${SANDBOX_SHARED_DIR}${n.slice(SHARED_DIR.length)}`
+  return n === '/' ? SANDBOX_FILES_DIR : `${SANDBOX_FILES_DIR}${n}`
+}
+
 /** `/a/b/c` -> `['/a', '/a/b']`. */
 export function ancestors(path: string): string[] {
   const parts = path.split('/').filter(Boolean)

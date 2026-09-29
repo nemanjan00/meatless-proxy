@@ -119,12 +119,9 @@ describe('egress through a proxy', () => {
     expect([...docker.containers.values()].every((c) => c.removed)).toBe(true)
     expect(docker.networks.size).toBe(0)
     const removed = docker.callsTo('network.remove').map((a) => a[0])
-    // The preview network is tried too (it may exist); a missing one is fine.
-    expect(removed).toEqual([
-      'mp-billing-bot-fix-refunds',
-      'mp-billing-bot-fix-refunds-egress',
-      'mp-billing-bot-fix-refunds-preview',
-    ])
+    // The preview network is looked for too (it may exist); a missing one is fine.
+    expect(removed).toEqual(['mp-billing-bot-fix-refunds', 'mp-billing-bot-fix-refunds-egress'])
+    expect(docker.callsTo('network.inspect').map((a) => a[0])).toContain('mp-billing-bot-fix-refunds-preview')
     await r.destroyEnv(env.id) // idempotent
   })
 

@@ -1,7 +1,8 @@
 import type * as Api from '@mp/api'
 import type { Message as DomainMessage } from '@mp/chat'
 import type { Checklist as DomainChecklist } from '@mp/checklists'
-import { ConflictError, DeniedError, NotFoundError, isMpError, type Json } from '@mp/core'
+import { ConflictError, DeniedError, NotFoundError, ValidationError, isMpError, type Json } from '@mp/core'
+import { invalidNetwork } from '@mp/directory'
 import type { MpEvent } from '@mp/events'
 import type { SecretScope as DomainScope } from '@mp/secrets'
 import { TERMINAL_RUN_STATES, type RunState, type SessionStatus } from '@mp/sessions'
@@ -125,6 +126,13 @@ export function apiRoutes(deps: ApiDeps): Hono {
       throw new DeniedError("members can edit a session's document and title only")
   }
 
+  /** An employee's network setting is checked here too: the generic records API bypasses the directory. */
+  const checkNetwork = (kind: string, data: Record<string, unknown>) => {
+    if (kind !== 'employee' || !('network' in data) || data.network === null) return
+    const bad = invalidNetwork(data.network)
+    if (bad) throw new ValidationError(bad)
+  }
+
   const visibleKind = (kind: string) => {
     if (HIDDEN_KINDS.has(kind) || !s.records.kinds.has(kind)) throw new NotFoundError('record kind', kind)
     return kind
@@ -161,6 +169,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       throw new BadRequestError('data must be an object')
     if (body.key !== undefined && typeof body.key !== 'string') throw new BadRequestError('key must be a string')
     guardAccessField(c, kind, body.data as Record<string, unknown>)
+    checkNetwork(kind, body.data as Record<string, unknown>)
     const r = await s.records.create(kind, body.data as Record<string, unknown>, {
       actor: await actor(c),
       ...(typeof body.key === 'string' ? { key: body.key } : {}),
@@ -176,6 +185,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       throw new BadRequestError('data must be an object')
     if (body.version !== undefined && typeof body.version !== 'number') throw new BadRequestError('version must be a number')
     guardAccessField(c, kind, body.data as Record<string, unknown>)
+    checkNetwork(kind, body.data as Record<string, unknown>)
     await requireVisible(c, await s.records.get(kind, id))
     const patch: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(body.data as Record<string, unknown>)) patch[k] = v === null ? undefined : v

@@ -86,7 +86,7 @@ export const employeeSchema: KindSchema = {
       name: 'network',
       type: 'json',
       description:
-        "Where this employee's environments and sandbox may connect, through the egress proxy: 'none', 'project' (the default: the project's egress allowlist), or { allow: [hosts] } (its own list; with a project, only hosts both allow). ['*'] allows any public host and is an admin's explicit choice.",
+        "Where this employee's environments and sandbox may connect: 'none', 'project' (the default: the project's egress allowlist, through the egress proxy), { allow: [hosts] } (its own list through the proxy; with a project, only hosts both allow; ['*'] allows any public host), or 'direct' (a real network with no proxy, no allowlist and no log, for trusted employees). ['*'] and 'direct' are an admin's explicit choice.",
     },
     {
       name: 'git',
@@ -111,19 +111,20 @@ export interface EmployeeScope {
 }
 
 /**
- * An employee's network: `none` (never any), `project` (the default: the session's project allowlist) or
- * its own hostname allowlist (see `EnvSpec.egress` in `@mp/containers`).
+ * An employee's network: `none` (never any), `project` (the default: the session's project allowlist),
+ * its own hostname allowlist (both through the egress proxy, see `EnvSpec.egress` in `@mp/containers`),
+ * or `direct`: a real network with no proxy, no allowlist and nothing logged (see `EnvSpec.direct`).
  */
-export type EmployeeNetwork = 'none' | 'project' | { allow: string[] }
+export type EmployeeNetwork = 'none' | 'project' | 'direct' | { allow: string[] }
 
 /** Why a network setting is unusable, or null when it's fine. Entries are checked where they're used. */
 export function invalidNetwork(v: unknown): string | null {
-  if (v === undefined || v === 'none' || v === 'project') return null
+  if (v === undefined || v === 'none' || v === 'project' || v === 'direct') return null
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     const allow = (v as { allow?: unknown }).allow
     if (Object.keys(v).length === 1 && Array.isArray(allow) && allow.every((e) => typeof e === 'string' && e.trim())) return null
   }
-  return "network must be 'none', 'project' or { allow: [hosts] }"
+  return "network must be 'none', 'project', 'direct' or { allow: [hosts] }"
 }
 
 export interface EmployeeData extends Record<string, unknown> {

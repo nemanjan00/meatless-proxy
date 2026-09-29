@@ -303,12 +303,17 @@ describe('project egress', () => {
 })
 
 describe('employee network setting', () => {
-  it('takes none, project or an allowlist, and refuses anything else', async () => {
+  it('takes none, project, direct or an allowlist, and refuses anything else', async () => {
     const { invalidNetwork } = await import('../src/index.ts')
     const e = await dir.employees.create({ name: 'Net', network: { allow: ['pypi.org'] } })
     expect(e.data.network).toEqual({ allow: ['pypi.org'] })
     expect((await dir.employees.update(e.id, { network: 'none' })).data.network).toBe('none')
     expect((await dir.employees.update(e.id, { network: 'project' })).data.network).toBe('project')
+    expect((await dir.employees.update(e.id, { network: 'direct' })).data.network).toBe('direct')
+    expect((await dir.employees.create({ name: 'Direct', network: 'direct' })).data.network).toBe('direct')
+    expect(invalidNetwork('direct')).toBeNull()
+    for (const bad of ['Direct', 'host', { direct: true }, { allow: ['*'], direct: true }])
+      expect(invalidNetwork(bad), JSON.stringify(bad)).toMatch(/network must be 'none', 'project', 'direct' or/)
     await expect(dir.employees.update(e.id, { network: 'all' as never })).rejects.toBeInstanceOf(ValidationError)
     await expect(dir.employees.create({ name: 'Bad', network: { allow: [''] } })).rejects.toBeInstanceOf(ValidationError)
     expect(invalidNetwork(undefined)).toBeNull()

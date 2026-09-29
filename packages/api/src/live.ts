@@ -1,3 +1,4 @@
+import type { ChatActivityDone, ChatActivityItem } from './chat-activity.ts'
 import type { ApiActor, ApiEntry, ApiEvent, Checklist, InboxItem, Json, Message, Run, RunState, TokenUsage } from './resources.ts'
 
 /**
@@ -10,7 +11,7 @@ import type { ApiActor, ApiEntry, ApiEvent, Checklist, InboxItem, Json, Message,
  * - `now`: everything the Now page shows (run states, steps, deltas, tool calls, usage, checklists)
  * - `session:<sessionId>`: entries, run states, deltas, tool calls, usage and checklist of one session
  * - `run:<runId>`: the same, for one run
- * - `chat:<channelId>`: messages in a channel (including thread replies)
+ * - `chat:<channelId>`: messages in a channel (including thread replies), and who is working on its threads
  * - `records:<kind>`: record changes of one kind
  * - `events`: newly ingested events
  * - `person:<contactId>`: your new inbox items and read marks (only you may subscribe to yours)
@@ -67,6 +68,10 @@ export interface LiveTopics {
   'checklist.changed': { sessionId: string; checklist: Checklist }
   /** A chat message was posted (top-level or reply). */
   'chat.message': { channelId: string; message: Message }
+  /** A run working on one of the channel's threads started, or changed state or step. */
+  'chat.activity': { channelId: string; item: ChatActivityItem }
+  /** A run working on one of the channel's threads ended, or a message nobody picked up finished routing. */
+  'chat.activity.done': ChatActivityDone
   /** An event was stored. */
   'event.ingested': { event: ApiEvent }
   /** The commit a session's environment runs changed (a live preview should reload). */
@@ -120,6 +125,8 @@ export function channelsFor<T extends LiveTopic>(topic: T, payload: LiveTopics[T
       return out
     }
     case 'chat.message':
+    case 'chat.activity':
+    case 'chat.activity.done':
       return [channels.chat((p as LiveTopics['chat.message']).channelId)]
     case 'event.ingested':
       return [channels.events]

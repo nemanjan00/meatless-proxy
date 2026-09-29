@@ -178,23 +178,30 @@ stdio servers, which run a command on the host, can only be set in the
 Employees run Python and Node for math, data and charts with `code.run`, like
 a notebook: variables and imports stay between runs in a session, and the last
 expression's value comes back. Code runs in a sandbox container per employee
-(`mp-<employee>-sandbox`: no network, non-root, read-only root, CPU, memory
-and process limits, no secrets), never in the app. The employee's files are
+(`mp-<employee>-sandbox`: no network unless its setting gives one, non-root,
+read-only root, CPU, memory and process limits, no secrets), never in the app. The employee's files are
 its working directory, so a chart it saves is a file it can share.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
 | `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
+| `DOCKER_DIRECT_NETWORK` | `true` | `false` turns every employee's "Direct network (no proxy)" setting into no network |
+| `DOCKER_NAME_PREFIX` | `mp-` | prefix of every container and network (and their `mp.deployment` label); give each deployment on one Docker host its own, e.g. `mp-e2e-` |
 | `SANDBOX_ENABLED` | `true` | turn code execution off (it also needs `DOCKER_ENABLED`) |
 | `SANDBOX_CPUS`, `SANDBOX_MEMORY_MB`, `SANDBOX_PIDS` | 1, 1024, 256 | limits per employee's container |
 | `SANDBOX_IDLE_MINUTES` | 15 | idle kernels, then containers, are stopped |
 | `FILES_DIR` | `<DATA_DIR>/files` | where employee files live, one directory per employee |
 | `FILES_VOLUME` | none | the named volume mounted at `FILES_DIR` (`mp-files`); with it, sandboxes mount the employee's files instead of copying them |
 
-Network access follows each employee's **network** setting (on its page:
-the project's allowlist, the default; none; or hosts of its own, narrowed to
-what the project allows too), always through the logging egress proxy.
+Network access follows each employee's **network** setting, on its page:
+
+| Setting | Code sandbox and environments get |
+|---------|-----------------------------------|
+| Only the project's allowlist (default) | the project's hosts through the logging egress proxy; the sandbox has no project, so `DEFAULT_EGRESS` or nothing |
+| Package registries, Any public host, These hosts… | those hosts through the proxy, narrowed to what the project allows too |
+| Direct network (no proxy) | a real network of the employee's own, for SSH, database clients, raw TCP, UDP and DNS. Unrestricted and not logged: it can reach your LAN, cloud metadata and any host, but not the harness's own containers. Admins only, for employees you trust |
+| No network | nothing |
 
 Build the image yourself with `docker build -t mp-sandbox docker/sandbox` and
 set `SANDBOX_IMAGE=mp-sandbox`. Employees also know the time: every message

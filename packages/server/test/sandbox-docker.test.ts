@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path'
 import { dockerRuntime } from '@mp/containers-docker'
 import { createFiles, directoryStorage, memoryStorage, type FileStorage } from '@mp/files'
 import { createRecords } from '@mp/records'
-import { createSandbox, type Sandbox } from '@mp/sandbox'
+import { createSandbox, type Sandbox, type SandboxOptions } from '@mp/sandbox'
 import { memoryStore } from '@mp/store'
 import Docker from 'dockerode'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -29,7 +29,11 @@ const REPO = resolve(import.meta.dirname, '../../..')
 const uid = process.getuid?.() ?? 1000
 const gid = process.getgid?.() ?? 1000
 
-async function world(storage: FileStorage, filesVolume?: string) {
+async function world(
+  storage: FileStorage,
+  filesVolume?: string,
+  o: { prefix?: string; egress?: SandboxOptions['egress']; nameFor?: SandboxOptions['nameFor'] } = {},
+) {
   const records = createRecords({ store: memoryStore() })
   records.kinds.define({ kind: 'contact', prefix: 'con', core: [{ name: 'name', type: 'string' }] })
   records.kinds.define({ kind: 'employee', prefix: 'emp', core: [{ name: 'contactId', type: 'ref' }] })
@@ -38,16 +42,18 @@ async function world(storage: FileStorage, filesVolume?: string) {
   const me = (await records.create('employee', { contactId: meC })).id
   const other = (await records.create('employee', { contactId: otherC })).id
   const files = createFiles({ records, storage })
-  const runtime = dockerRuntime({ namePrefix: PREFIX })
+  const runtime = dockerRuntime({ namePrefix: o.prefix ?? PREFIX })
   const sandbox = createSandbox({
     runtime,
+    namePrefix: o.prefix ?? PREFIX,
+    ...(o.egress ? { egress: o.egress } : {}),
     files,
     image: IMAGE,
     user: `${uid}:${gid}`,
     reapIntervalMs: 0,
     limits: { cpus: 1, memoryMb: 512, pids: 128 },
     ...(filesVolume ? { filesVolume } : {}),
-    nameFor: (id) => `itest-${id.slice(-6).toLowerCase()}`,
+    nameFor: o.nameFor ?? ((id) => `itest-${id.slice(-6).toLowerCase()}`),
   })
   let n = 0
   const run = (code: string, o: { language?: 'python' | 'node'; timeoutMs?: number; sessionId?: string } = {}) =>
@@ -59,7 +65,7 @@ async function world(storage: FileStorage, filesVolume?: string) {
       timeoutMs: o.timeoutMs ?? 60_000,
       actor: { type: 'session', id: `ses_${n++}` },
     })
-  return { records, files, sandbox, me, other, meC, run }
+  return { records, files, sandbox, runtime, me, other, meC, run }
 }
 
 describe.skipIf(!ENABLED)('code.run in the real sandbox image', () => {
@@ -78,6 +84,16 @@ describe.skipIf(!ENABLED)('code.run in the real sandbox image', () => {
 
   afterAll(async () => {
     for (const s of sandboxes) await s.close().catch(() => undefined)
+    for (const c of await docker.listContainers({ all: true }))
+      if (c.Names.some((n) => n.includes(`${PREFIX}app`))) await docker.getContainer(c.Id).remove({ force: true })
+    // Direct networks are kept for the next sandbox; the test removes its own.
+    for (const n of await docker.listNetworks())
+      if (n.Name.startsWith(PREFIX))
+        await docker
+          .getNetwork(n.Id)
+          .remove()
+          .catch(() => undefined)
+    const nets = (await docker.listNetworks()).map((n) => n.Name).filter((n) => n.startsWith(PREFIX))
     await docker
       .getVolume(VOLUME)
       .remove()
@@ -87,7 +103,83 @@ describe.skipIf(!ENABLED)('code.run in the real sandbox image', () => {
     for (const d of dirs) rmSync(d, { recursive: true, force: true })
     expect(left).toEqual([])
     expect(vols).toEqual([])
+    expect(nets).toEqual([])
   }, 120_000)
+
+  /** A stand-in for the harness's compose network: a database container called `postgres` on it. */
+  const appNetwork = async () => {
+    const name = `${PREFIX}app`
+    await docker.createNetwork({ Name: name, Driver: 'bridge', Labels: { 'mp.itest': 'app' } })
+    const db = await docker.createContainer({
+      name: `${PREFIX}app-db`,
+      Image: 'python:3-alpine',
+      Cmd: ['python3', '-m', 'http.server', '5432'],
+      HostConfig: { NetworkMode: name },
+      NetworkingConfig: { EndpointsConfig: { [name]: { Aliases: ['postgres'] } } },
+    })
+    await db.start()
+    const ip = (await db.inspect()).NetworkSettings.Networks[name]!.IPAddress
+    return { name, db: `${PREFIX}app-db`, ip }
+  }
+
+  const TCP = (host: string, port: number) =>
+    `import socket\ns = socket.create_connection((${JSON.stringify(host)}, ${port}), timeout=5)\ns.close()\n"connected"`
+
+  it('direct network: raw TCP and DNS out, but not the harness network; the default and the proxy get neither', async () => {
+    const app = await appNetwork()
+    const storage = memoryStorage()
+    const direct = await world(storage, undefined, { egress: () => ({ direct: 'direct' }), nameFor: () => 'direct' })
+    sandboxes.push(direct.sandbox)
+    const tcp = await direct.run(TCP('1.1.1.1', 53), { timeoutMs: 30_000 })
+    expect(tcp.error).toBeUndefined()
+    expect(tcp.result).toBe("'connected'")
+    const dns = await direct.run('import socket\nlen(socket.getaddrinfo("example.com", 443)) > 0', { timeoutMs: 30_000 })
+    expect(dns.result).toBe('True')
+    // The harness's own services: not by name, not by address.
+    for (const name of ['postgres', app.db]) {
+      const r = await direct.run(`import socket\nsocket.gethostbyname(${JSON.stringify(name)})`, { timeoutMs: 30_000 })
+      expect(r.error, name).toMatch(/gaierror|Name or service not known|Temporary failure/)
+    }
+    // It listens (reachable from its own network), and a direct network doesn't get there.
+    expect((await direct.run(TCP(app.ip, 5432), { timeoutMs: 30_000 })).error).toMatch(/timed out|unreachable/i)
+    // The rest of the hardening stays.
+    expect((await direct.run('import os\nopen("/etc/x", "w")')).error).toMatch(/Read-only file system|Permission denied/)
+    expect((await direct.run('os.getuid()')).result).toBe(String(uid))
+    expect((await direct.run('sorted(k for k in os.environ if "PROXY" in k.upper())')).result).toBe('[]')
+    const net = (await docker.listNetworks()).find((n) => n.Name === `${PREFIX}direct`)!
+    expect(net.Internal).toBe(false)
+    expect(net.Options?.['com.docker.network.bridge.enable_icc']).toBe('false')
+    expect(net.Labels?.['mp.deployment']).toBe(PREFIX)
+
+    // The default setting: no network at all.
+    const none = await world(storage, undefined, { nameFor: () => 'none' })
+    sandboxes.push(none.sandbox)
+    expect((await none.run(TCP('1.1.1.1', 53), { timeoutMs: 30_000 })).error).toMatch(/unreachable|timed out|refused/i)
+    // Through the proxy: HTTP(S) to allowed hosts only, no raw TCP.
+    const proxied = await world(storage, undefined, { egress: ['example.com'], nameFor: () => 'proxied' })
+    sandboxes.push(proxied.sandbox)
+    expect((await proxied.run(TCP('1.1.1.1', 53), { timeoutMs: 30_000 })).error).toMatch(/unreachable|timed out|refused/i)
+  }, 600_000)
+
+  it('two deployments with the same employee handle: separate sandboxes, and neither cleans up the other', async () => {
+    const storage = memoryStorage()
+    const other = `${PREFIX}b-`
+    const a = await world(storage, undefined, { nameFor: () => 'meatless' })
+    const b = await world(storage, undefined, { prefix: other, nameFor: () => 'meatless' })
+    sandboxes.push(a.sandbox, b.sandbox)
+    expect((await a.run('x = "a"; x')).result).toBe("'a'")
+    expect((await b.run('x = "b"; x')).result).toBe("'b'")
+    const names = (await docker.listContainers({ all: true })).flatMap((c) => c.Names.map((n) => n.slice(1)))
+    expect(names).toEqual(expect.arrayContaining([`${PREFIX}meatless-sandbox`, `${other}meatless-sandbox`]))
+    // `${PREFIX}b-meatless-sandbox` also reads as a's environment "b-meatless-sandbox": a still leaves it alone.
+    expect((await a.runtime.listEnvs()).map((e) => e.id)).not.toContain(`${other}meatless-sandbox`)
+    await a.runtime.destroyEnv(`${other}meatless-sandbox`)
+    await a.sandbox.close()
+    expect((await b.run('x')).result).toBe("'b'")
+    const after = (await docker.listContainers({ all: true })).flatMap((c) => c.Names.map((n) => n.slice(1)))
+    expect(after).toContain(`${other}meatless-sandbox`)
+    expect(after).not.toContain(`${PREFIX}meatless-sandbox`)
+  }, 600_000)
 
   it('mount mode: state across cells, node, sympy, files and shares on the volume, no network', async () => {
     const storage = directoryStorage({ root })

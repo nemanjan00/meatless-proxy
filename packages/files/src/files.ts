@@ -1,7 +1,7 @@
 import { ConflictError, DeniedError, NotFoundError, ValidationError, type EventBus, type KindSchema } from '@mp/core'
 import type { Records } from '@mp/records'
 import type { Actor, StoredRecord } from '@mp/store'
-import { SHARED_DIR, basename, guessMime, isWithin, normalizePath } from './paths.ts'
+import { SHARED_DIR, basename, employeePath, guessMime, isWithin } from './paths.ts'
 import { memoryStorage, type FileStorage, type StoredStat } from './storage.ts'
 
 export type Encoding = 'utf8' | 'base64'
@@ -202,7 +202,7 @@ export function createFiles({ records, storage = memoryStorage(), bus, contactOf
   }
 
   const resolve = (reader: Reader, raw: string): Target => {
-    const path = normalizePath(raw)
+    const path = employeePath(raw)
     if (path === SHARED_DIR) return { virtual: true }
     if (isWithin(SHARED_DIR, path)) {
       const [, , owner, ...rest] = path.split('/')
@@ -405,7 +405,7 @@ export function createFiles({ records, storage = memoryStorage(), bus, contactOf
     delete: async (employeeId, path, opts) => del(await readerOf(employeeId), path, opts),
 
     async share(owner, rawPath, withContactId, perm = 'read', opts = {}) {
-      const path = normalizePath(rawPath)
+      const path = employeePath(rawPath)
       if (isWithin(SHARED_DIR, path)) throw new ValidationError(`only your own files can be shared, not ${SHARED_DIR}`)
       if (!withContactId) throw new ValidationError('withContactId is required')
       if ((await resolveContact(owner)) === withContactId) throw new ValidationError("can't share with yourself")
@@ -425,7 +425,7 @@ export function createFiles({ records, storage = memoryStorage(), bus, contactOf
     },
 
     async unshare(owner, rawPath, withContactId, opts = {}) {
-      const s = await records.getByKey<ShareData>('fs_share', shareKey(owner, normalizePath(rawPath), withContactId))
+      const s = await records.getByKey<ShareData>('fs_share', shareKey(owner, employeePath(rawPath), withContactId))
       if (s) await records.delete('fs_share', s.id, { cascade: true, ...(opts.actor ? { actor: opts.actor } : {}) })
     },
 

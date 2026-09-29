@@ -463,7 +463,12 @@ export function createRouter(opts: RouterOptions): Router {
       await opts.events.markRouted(eventId)
       opts.bus?.publish('event.routed', {
         eventId,
-        deliveries: results.map((r) => ({ sessionId: r.sessionId, reason: r.reason, outcome: r.outcome.type })),
+        deliveries: results.map((r) => ({
+          sessionId: r.sessionId,
+          reason: r.reason,
+          outcome: r.outcome.type,
+          ...('runId' in r.outcome ? { runId: r.outcome.runId } : {}),
+        })),
       })
       logger.info('event routed', { eventId, deliveries: results.length })
       return { eventId, deliveries: results }

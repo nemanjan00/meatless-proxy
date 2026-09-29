@@ -13,7 +13,7 @@ describe('env.up with expose', () => {
       { port: 8000, url: `/sessions/${t.session.id}?tab=preview&port=8000` },
     ])
     const s = await t.sessions.require(t.session.id)
-    expect(s.data.meta?.env).toEqual({ id: up.envId, name: up.name, expose: [5173, 8000] })
+    expect(s.data.meta?.env).toEqual({ id: up.envId, name: up.name, expose: [5173, 8000], network: up.network, networkKey: '' })
     expect(await t.containers.previewTarget(up.envId, 5173)).toEqual({ host: '127.0.0.1', port: 5173 })
   })
 
@@ -22,7 +22,12 @@ describe('env.up with expose', () => {
     const up = await t.out('env.up', { image: 'node:22' })
     expect(t.containers.created[0]!.expose).toBeUndefined()
     expect(up.previews).toBeUndefined()
-    expect((await t.sessions.require(t.session.id)).data.meta?.env).toEqual({ id: up.envId, name: up.name })
+    expect((await t.sessions.require(t.session.id)).data.meta?.env).toEqual({
+      id: up.envId,
+      name: up.name,
+      network: up.network,
+      networkKey: '',
+    })
   })
 
   it('refuses bad port lists without creating anything', async () => {

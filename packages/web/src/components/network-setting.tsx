@@ -1,4 +1,5 @@
 import type { EmployeeData } from '@mp/api'
+import { CircleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button.tsx'
@@ -6,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi } from '@/lib/api.tsx'
 
-type Mode = 'project' | 'registries' | 'any' | 'own' | 'none'
+type Mode = 'project' | 'registries' | 'any' | 'own' | 'direct' | 'none'
 
 /** Package registries, for `pip install` and `npm install` in the code sandbox and environments. */
 export const REGISTRY_HOSTS = ['pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org'] as const
@@ -14,8 +15,13 @@ export const REGISTRY_HOSTS = ['pypi.org', 'files.pythonhosted.org', 'registry.n
 const sameHosts = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && [...a].sort().every((h, i) => h === [...b].sort()[i])
 
+/** What an employee with a direct network is warned about. */
+export const DIRECT_WARNING =
+  'Unrestricted and not logged: it can reach your LAN, cloud metadata and any host. Only for employees you trust.'
+
 const modeOf = (n: EmployeeData['network']): Mode => {
   if (n === 'none') return 'none'
+  if (n === 'direct') return 'direct'
   if (n && typeof n === 'object') {
     if (n.allow.length === 1 && n.allow[0] === '*') return 'any'
     if (sameHosts(n.allow, REGISTRY_HOSTS)) return 'registries'
@@ -29,6 +35,8 @@ export function describeNetwork(n: EmployeeData['network']): string {
   switch (modeOf(n)) {
     case 'none':
       return 'none'
+    case 'direct':
+      return 'direct network (no proxy)'
     case 'any':
       return 'any public host'
     case 'registries':
@@ -47,6 +55,8 @@ export function networkEffect(n: EmployeeData['network']): { sandbox: string; en
   switch (modeOf(n)) {
     case 'none':
       return { sandbox: 'no network', environments: 'no network' }
+    case 'direct':
+      return { sandbox: 'direct network, unrestricted and not logged', environments: 'the same' }
     case 'project':
       return {
         sandbox: 'no network (code runs belong to no project), unless the deployment sets DEFAULT_EGRESS',
@@ -64,12 +74,24 @@ const MODE_LABELS: Record<Mode, string> = {
   registries: 'Package registries (PyPI, npm)',
   any: 'Any public host',
   own: 'These hosts…',
+  direct: 'Direct network (no proxy)',
   none: 'No network',
+}
+
+/** The warning shown with a direct network, in the stylebook's warning colour. */
+function DirectWarning() {
+  return (
+    <p className="flex items-start gap-1.5 text-micro text-[var(--orange)]" role="alert" data-testid="network-direct-warning">
+      <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span>{DIRECT_WARNING}</span>
+    </p>
+  )
 }
 
 /**
  * The employee's network: what its code sandbox and environments can reach, through the logging egress
- * proxy. Admins change it; everyone sees what it means for the sandbox and for environments.
+ * proxy or, as an admin's choice, a direct network. Admins change it; everyone sees what it means for the
+ * sandbox and for environments.
  */
 export function NetworkSetting({
   employee,
@@ -102,6 +124,7 @@ export function NetworkSetting({
         <span className="text-micro text-fg-tertiary" data-testid="network-effect">
           Code sandbox: {effect.sandbox}. Environments: {effect.environments}.
         </span>
+        {modeOf(current) === 'direct' && <DirectWarning />}
       </span>
     )
 
@@ -166,9 +189,13 @@ export function NetworkSetting({
       <p className="text-micro text-fg-tertiary" data-testid="network-preview">
         Code sandbox: {preview.sandbox}. Environments: {preview.environments}.
       </p>
-      <p className="text-micro text-fg-quaternary">
-        Everything goes through the logging egress proxy. IP and private addresses stay blocked unless listed exactly.
-      </p>
+      {mode === 'direct' ? (
+        <DirectWarning />
+      ) : (
+        <p className="text-micro text-fg-quaternary">
+          Everything goes through the logging egress proxy. IP and private addresses stay blocked unless listed exactly.
+        </p>
+      )}
       <div className="flex gap-2">
         <Button size="xs" onClick={save} disabled={busy}>
           Save

@@ -124,6 +124,16 @@ export const configSchema = z.object({
   WORKTREES_DIR: optStr,
   DOCKER_ENABLED: bool(false),
   DOCKER_SOCKET: optStr,
+  /**
+   * Prefix of every Docker container and network this deployment makes (and its `mp.deployment` label): two
+   * deployments on one Docker host need different ones, e.g. `mp-e2e-`. Default `mp-`.
+   */
+  DOCKER_NAME_PREFIX: optStr
+    .transform((v) => v ?? 'mp-')
+    .refine(
+      (v) => /^mp-[a-z0-9-]*$/.test(v) && v.endsWith('-') && v.length <= 12,
+      'must start with mp-, end with -, use a-z, 0-9 and - only, and be at most 12 characters (e.g. mp-e2e-)',
+    ),
   /** Employee files: `<FILES_DIR>/<employeeId>/<path>`. Default `<DATA_DIR>/files`. */
   FILES_DIR: optStr,
   /**
@@ -149,6 +159,12 @@ export const configSchema = z.object({
       .map((x) => x.trim())
       .filter(Boolean),
   ),
+  /**
+   * Whether an employee's `direct` network setting gives its sandbox and environments a real network with
+   * no proxy (a bridge of its own, out through the host's NAT). `false` turns every direct setting into no
+   * network. Default true.
+   */
+  DOCKER_DIRECT_NETWORK: bool(true),
   /** The sandbox user, `uid:gid`: the same as the app's, so both can write the files volume. */
   SANDBOX_USER: optStr.transform((v) => v ?? '1000:1000').refine((v) => /^\d+:\d+$/.test(v), 'must be uid:gid'),
   SANDBOX_CPUS: z.coerce.number().positive().default(1),
@@ -343,8 +359,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
       : 'none',
     secretsKey: c.SECRETS_KEY ? 'set' : 'ephemeral',
     dataDir: c.DATA_DIR,
-    docker: c.DOCKER_ENABLED,
+    docker: c.DOCKER_ENABLED ? { namePrefix: c.DOCKER_NAME_PREFIX } : false,
     defaultEgress: c.DEFAULT_EGRESS.length ? c.DEFAULT_EGRESS : 'none',
+    directNetwork: c.DOCKER_DIRECT_NETWORK,
     files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
     vision: c.MODEL_VISION,
     imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },

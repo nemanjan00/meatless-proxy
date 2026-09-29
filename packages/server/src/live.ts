@@ -114,6 +114,8 @@ export const LIVE_TOPICS = [
   'usage.recorded',
   'checklist.changed',
   'chat.message',
+  'chat.activity',
+  'chat.activity.done',
   'event.ingested',
   'event.routed',
   'control.changed',
@@ -268,7 +270,7 @@ export class LiveHub {
 
   /** The chat channel a live event is about (to hide DMs from non-members), if any. */
   private async chatChannelOf(topic: string, payload: Record<string, any>): Promise<string | null | undefined> {
-    if (topic === 'chat.message') return payload.channelId
+    if (topic === 'chat.message' || topic === 'chat.activity' || topic === 'chat.activity.done') return payload.channelId
     if (topic === 'event.ingested') {
       const e = payload.event as { data?: { source?: string; payload?: { channelId?: unknown } } } | undefined
       return e?.data?.source === 'chat' && typeof e.data.payload?.channelId === 'string' ? e.data.payload.channelId : null

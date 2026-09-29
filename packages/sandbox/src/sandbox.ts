@@ -18,6 +18,12 @@ export const DEFAULT_IDLE_MS = 15 * 60_000
 export const DEFAULT_MAX_OUTPUT = 20_000
 export const DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024
 
+/**
+ * A sandbox's network: hosts reachable through the egress proxy (empty: none), or `{ direct }`, the
+ * name of the employee's direct network (`EnvSpec.direct`: no proxy, no allowlist, not logged).
+ */
+export type SandboxNetwork = string[] | { direct: string }
+
 export interface SandboxOptions {
   runtime: ContainerRuntime
   files: FilesService
@@ -34,19 +40,21 @@ export interface SandboxOptions {
   user?: string
   limits?: { cpus?: number; memoryMb?: number; pids?: number }
   /**
-   * Hosts an employee's sandbox may reach through the egress proxy (e.g. PyPI): a list, or the list for
-   * an employee (its network setting). Default: no network at all. A change recreates the container at
-   * its next run.
+   * Hosts an employee's sandbox may reach through the egress proxy (e.g. PyPI): a list, or the network
+   * for an employee (its network setting), which may be a direct network. Default: no network at all.
+   * A change recreates the container at its next idle run.
    */
-  egress?: string[] | ((employeeId: string) => Promise<string[]> | string[])
+  egress?: string[] | ((employeeId: string) => Promise<SandboxNetwork> | SandboxNetwork)
   /** Kernels (and then containers) unused this long are stopped. Default 15 minutes. */
   idleMs?: number
   /** How often idle kernels are looked for. Default one minute; 0 turns the timer off (call `reapIdle`). */
   reapIntervalMs?: number
   maxOutputChars?: number
   maxFileBytes?: number
-  /** A readable, unique name for an employee's container (`mp-<name>-sandbox`). Default: the employee id. */
+  /** A readable, unique name for an employee's container (`<prefix><name>-sandbox`). Default: the employee id. */
   nameFor?: (employeeId: string) => Promise<string> | string
+  /** The container runtime's name prefix (`DOCKER_NAME_PREFIX`), so names stay short enough. Default `mp-`. */
+  namePrefix?: string
 }
 
 export interface RunRequest {
@@ -114,12 +122,16 @@ const clean = (s: string) =>
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
 
-/** `<name>-sandbox`, at most 45 characters, so `mp-<…>-proxy` and friends fit Docker's limits. */
-export function sandboxName(base: string, employeeId: string): string {
+/**
+ * `<name>-sandbox`, short enough that `<prefix><…>-egress` and friends fit Docker's limits: at most
+ * 48 characters with the runtime's name prefix (45 without it for `mp-`).
+ */
+export function sandboxName(base: string, employeeId: string, prefix = 'mp-'): string {
+  const max = Math.max(24, 48 - prefix.length) - '-sandbox'.length
   const b = clean(base) || clean(employeeId) || 'employee'
-  if (b.length <= 37) return `${b}-sandbox`
+  if (b.length <= max) return `${b}-sandbox`
   const h = createHash('sha256').update(employeeId).digest('hex').slice(0, 6)
-  return `${b.slice(0, 30).replace(/-+$/, '')}-${h}-sandbox`
+  return `${b.slice(0, max - 7).replace(/-+$/, '')}-${h}-sandbox`
 }
 
 /** Keeps the start of long output and says how much was cut. */
@@ -145,8 +157,8 @@ function lockMap() {
 }
 
 /**
- * Runs code for employees in sandbox containers: one container per employee (`mp-<employee>-sandbox`,
- * no network unless `egress`, read-only root, non-root user, CPU, memory and process limits, no
+ * Runs code for employees in sandbox containers: one container per employee (`<prefix><employee>-sandbox`,
+ * no network unless `egress` (proxied, or a direct network), read-only root, non-root user, CPU, memory and process limits, no
  * secrets), one long-lived kernel per session and language inside it. The employee's files are at
  * /work/files and shares under /work/shared.
  */
@@ -211,20 +223,22 @@ export function createSandbox(opts: SandboxOptions): Sandbox {
         .catch((e) => log.warn('sandbox: could not remove a container', { err: errorMessage(e) }))
   }
 
-  const egressOf = async (employeeId: string): Promise<string[]> =>
-    typeof opts.egress === 'function' ? [...(await opts.egress(employeeId))] : [...(opts.egress ?? [])]
+  const egressOf = async (employeeId: string): Promise<SandboxNetwork> => {
+    const n = typeof opts.egress === 'function' ? await opts.egress(employeeId) : (opts.egress ?? [])
+    return Array.isArray(n) ? [...n] : { direct: n.direct }
+  }
 
   const createBox = async (
     employeeId: string,
     ws: Workspace,
     spec: Partial<EnvSpec>,
     signature: string,
-    egress: string[],
+    egress: SandboxNetwork,
   ): Promise<BoxState> => {
     const contactId = await files.contactOf(employeeId)
     // Containers left by an earlier process: their kernels and copied files are unknown, so start over.
     for (const e of await runtime.listEnvs({ [LABEL_SANDBOX]: employeeId })) await runtime.destroyEnv(e.id)
-    const name = sandboxName(String((await opts.nameFor?.(employeeId)) ?? employeeId), employeeId)
+    const name = sandboxName(String((await opts.nameFor?.(employeeId)) ?? employeeId), employeeId, opts.namePrefix)
     const info = await runtime.createEnv({
       name,
       image: opts.image,
@@ -234,7 +248,7 @@ export function createSandbox(opts: SandboxOptions): Sandbox {
       tmpfs: { '/tmp': { sizeMb: 256 } },
       workdir: FILES_DIR,
       limits: { cpus: opts.limits?.cpus ?? 1, memoryMb: opts.limits?.memoryMb ?? 1024, pids: opts.limits?.pids ?? 256 },
-      ...(egress.length ? { egress: { allow: egress } } : {}),
+      ...(Array.isArray(egress) ? (egress.length ? { egress: { allow: egress } } : {}) : { direct: { network: egress.direct } }),
       ...spec,
       labels: { [LABEL_SANDBOX]: employeeId, 'mp.employee': employeeId, [LABEL_MOUNTS]: signature },
     })

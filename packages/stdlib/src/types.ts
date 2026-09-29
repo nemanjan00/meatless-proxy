@@ -121,6 +121,11 @@ export interface StdlibConfig {
    * session's project names any (`DEFAULT_EGRESS`). Default: none.
    */
   defaultEgress?: string[]
+  /**
+   * Whether an employee's `direct` network setting gives a real, unproxied network
+   * (`DOCKER_DIRECT_NETWORK`). Default true; false turns it into no network.
+   */
+  directNetwork?: boolean
   /** Default limits used when none are configured. */
   defaults?: { maxFanOut?: number; maxDepth?: number; maxConcurrentSessions?: number }
 }

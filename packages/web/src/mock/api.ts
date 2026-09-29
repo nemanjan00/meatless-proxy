@@ -51,6 +51,7 @@ import { createMockAttachmentsApi } from './attachments.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
 import { createMockNotificationsApi } from './notifications.ts'
+import { createMockChatActivity } from './chat-activity.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -368,6 +369,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     emit('chat.message', { channelId: m.data.channelId, message: next })
     return delay(next)
   }
+  const chatActivity = createMockChatActivity({ db, iso, delay, emit, write, get, all })
   const employeeSlug = (id: string) =>
     (get<EmployeeData>('employee', id)?.data.name ?? id)
       .toLowerCase()
@@ -972,6 +974,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
           })
       }
       emit('chat.message', { channelId, message })
+      chatActivity.onPosted(message)
       return delay(message)
     },
     addMember: (channelId, member) => {
@@ -1258,6 +1261,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Notification preferences (./notifications.ts).
     ...createMockNotificationsApi({ delay }),
+
+    // Who is working on chat threads, and a small simulation when you post (./chat-activity.ts).
+    channelActivity: chatActivity.channelActivity,
   }
   return api
 }

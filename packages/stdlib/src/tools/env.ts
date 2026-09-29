@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { Json } from '@mp/core'
 import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
+import type { Session } from '@mp/sessions'
+import type { ToolContext } from '@mp/tools'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
-import { PROXY_NOTE, networkFor } from '../network.ts'
+import { DIRECT_NOTE, PROXY_NOTE, directNetworkName, networkFor, type NetworkDecision } from '../network.ts'
 import { worktreeFor } from './git.ts'
 
 /**
@@ -43,16 +45,36 @@ const exposedOf = (env: object | null): number[] => {
 export const previewLink = (sessionId: string, port: number) =>
   `/sessions/${encodeURIComponent(sessionId)}?tab=preview&port=${port}`
 
+/** What a network decision gave, to tell whether the setting changed since an environment started. */
+const networkKey = (net: NetworkDecision) => (net.direct ? 'direct' : [...net.allow].sort().join(','))
+
 /** Keeps the end of long output, which is usually where the error is. */
 const tail = (text: string, max = 8000) =>
   text.length <= max ? text : `[… ${text.length - max} earlier characters truncated]\n${text.slice(-max)}`
 
 export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
+  /**
+   * The network from the employee's setting with the project (the checkout's, else the session's
+   * first linked one), or the deployment default.
+   */
+  const decideNetwork = async (session: Session, ctx: ToolContext, projectId: string | undefined) => {
+    const pid = projectId ?? (await kit.projectsOf(session))[0]
+    const project = pid ? await kit.deps.directory.projects.get(pid) : null
+    const emp = await kit.employee(ctx.employeeId)
+    const net = networkFor({
+      network: emp.data.network,
+      projectAllow: project?.data.egress?.allow,
+      fallback: kit.deps.config.defaultEgress ?? [],
+      direct: kit.deps.config.directNetwork ?? true,
+    })
+    return { net, emp, projectId: pid }
+  }
+
   kit.tool(
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -72,7 +94,8 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           egress: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Narrow the allowed hosts to these (a subset of them). Default: all of them.',
+            description:
+              'Narrow the allowed hosts to these (a subset of them), through the proxy. Default: all of them (or your direct network).',
           },
           expose: {
             type: 'array',
@@ -89,15 +112,28 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         const info = await runtime.getEnv(current.id)
         if (info?.status === 'running') {
           const exposed = exposedOf(current)
+          // Running environments keep the network they started with.
+          const started = current.networkKey
+          const changed =
+            typeof started === 'string' && started !== networkKey((await decideNetwork(session, ctx, current.projectId)).net)
+          const notes = [
+            ...(a.expose !== undefined && JSON.stringify(a.expose) !== JSON.stringify(exposed)
+              ? ['the environment is already running with its own ports: env.down first to change them']
+              : []),
+            ...(changed
+              ? [
+                  'your network setting changed since this environment started: it keeps the network it started with. env.down, then env.up, to use the new one',
+                ]
+              : []),
+          ]
           return ok({
             envId: info.id,
             name: info.name,
             status: info.status,
             existing: true,
+            ...(current.network ? { network: current.network } : {}),
             ...(exposed.length ? { previews: exposed.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
-            ...(a.expose !== undefined && JSON.stringify(a.expose) !== JSON.stringify(exposed)
-              ? { note: 'the environment is already running with its own ports: env.down first to change them' }
-              : {}),
+            ...(notes.length ? { note: notes.join('; ') } : {}),
           })
         }
       }
@@ -107,28 +143,32 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
       if (!str(a.image) && !w) return fail('give an image, or check out a repository first (git.checkout) to build it')
 
-      // Egress: the employee's network setting with the checkout's project (else the session's first
-      // linked project), or the deployment default. The model can only narrow it.
-      const projectId = w?.projectId ?? (await kit.projectsOf(session))[0]
-      const project = projectId ? await kit.deps.directory.projects.get(projectId) : null
-      const emp = await kit.employee(ctx.employeeId)
-      const net = networkFor({
-        network: emp.data.network,
-        projectAllow: project?.data.egress?.allow,
-        fallback: kit.deps.config.defaultEgress ?? [],
-      })
+      // The employee's network setting with the project, or the deployment default. The model can
+      // only narrow it: a direct network to proxied hosts, proxied hosts to fewer. Never to direct.
+      const { net, emp, projectId } = await decideNetwork(session, ctx, w?.projectId)
       let egress: EnvSpec['egress'] = net.allow.length ? { allow: [...net.allow] } : undefined
+      let direct = net.direct === true
       if (a.egress !== undefined) {
         if (!Array.isArray(a.egress)) return fail('egress must be a list of hosts')
         const requested = (a.egress as unknown[]).map(String)
-        const wider = requested.filter((e) => !egressEntryCovered(e, net.allow))
+        // A direct network allows any public host; through the proxy, as any other list.
+        const allowed = direct ? ['*'] : net.allow
+        const wider = requested.filter((e) => !egressEntryCovered(e, allowed))
         if (wider.length)
           return fail(
-            net.allow.length ? 'egress can only narrow the allowed hosts' : `there is no network to narrow (${net.reason})`,
-            { notAllowed: wider, allowed: net.allow },
+            allowed.length ? 'egress can only narrow the allowed hosts' : `there is no network to narrow (${net.reason})`,
+            { notAllowed: wider, allowed: direct ? ['any public host (direct network)'] : net.allow },
           )
-        if (net.allow.length) egress = { allow: requested }
+        if (allowed.length) {
+          egress = { allow: requested }
+          direct = false
+        }
       }
+      const network: Json = direct
+        ? { via: 'direct', note: DIRECT_NOTE }
+        : egress
+          ? { via: 'proxy', allow: egress.allow, note: PROXY_NOTE }
+          : { via: 'none', reason: net.reason ?? 'no network: env.up was asked for no hosts' }
 
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
@@ -139,22 +179,28 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
         ...(egress ? { egress } : {}),
+        ...(direct ? { direct: { network: directNetworkName(emp.key ?? emp.data.name) } } : {}),
         ...(expose.length ? { expose } : {}),
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
       await kit.patchMeta(session.id, (m) => ({
         ...m,
-        env: { id: info.id, name: info.name, ...(expose.length ? { expose } : {}) },
+        env: {
+          id: info.id,
+          name: info.name,
+          ...(expose.length ? { expose } : {}),
+          network,
+          networkKey: networkKey(net),
+          ...(projectId ? { projectId } : {}),
+        },
       }))
       return ok({
         envId: info.id,
         name: info.name,
         status: info.status,
         ...(w ? { workspace: '/workspace' } : {}),
-        network: egress
-          ? { via: 'proxy', allow: egress.allow, note: PROXY_NOTE }
-          : { via: 'none', reason: net.reason ?? 'no network: env.up was asked for no hosts' },
+        network,
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
       })
     },

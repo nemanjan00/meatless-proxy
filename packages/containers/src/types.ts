@@ -54,14 +54,23 @@ export interface EnvSpec {
   /**
    * Network access through an allowlisting egress proxy: containers get no direct route out, only
    * `HTTP_PROXY`/`HTTPS_PROXY` pointing at a proxy that lets through `allow` (hostname globs with
-   * optional ports, see `checkEgress`). Can't be combined with `allowInternet`.
+   * optional ports, see `checkEgress`). Can't be combined with `allowInternet` or `direct`.
    */
   egress?: { allow: string[] }
   /**
-   * Unrestricted internet access, the escape hatch. Default false: without `egress` there is no
-   * network beyond the environment's own private network (no internet, no harness services).
+   * Unrestricted internet access, the escape hatch. Default false: without `egress` or `direct` there
+   * is no network beyond the environment's own private network (no internet, no harness services).
    */
   allowInternet?: boolean
+  /**
+   * A real, unproxied network: the environment's containers also join the shared network `network`
+   * (the runtime adds its name prefix), created on demand and kept for the next environment that
+   * names it. It routes out through the host (any host, any protocol: SSH, databases, UDP, DNS), with
+   * no allowlist and nothing logged. Containers of different environments on it can't reach each
+   * other; one environment's containers talk over its own private network. It never joins the
+   * harness's own networks. Can't be combined with `egress` or `allowInternet`.
+   */
+  direct?: { network: string }
   /**
    * Ports the main container serves, e.g. a dev server on 5173, for live previews. Nothing is
    * published on the host: the harness reaches them through `previewTarget`.
@@ -90,6 +99,22 @@ export function invalidExpose(expose: unknown): string[] {
     if (!Number.isInteger(p) || (p as number) < 1 || (p as number) > 65535) issues.push(`bad port: ${String(p)}`)
     else if (seen.has(p as number)) issues.push(`duplicate port: ${p}`)
     else seen.add(p as number)
+  }
+  return issues
+}
+
+/** What a direct network's name may be (before the runtime's prefix). */
+export const DIRECT_NETWORK_RE = /^[a-z0-9][a-z0-9_.-]{0,55}$/
+
+/** Problems with a spec's network settings: `egress`, `allowInternet` and `direct` exclude each other. */
+export function invalidNetworkSpec(spec: Pick<EnvSpec, 'egress' | 'allowInternet' | 'direct'>): string[] {
+  const issues: string[] = []
+  if (spec.egress && spec.allowInternet) issues.push('egress and allowInternet exclude each other')
+  if (spec.direct !== undefined) {
+    if (spec.egress) issues.push('egress and direct exclude each other')
+    if (spec.allowInternet) issues.push('allowInternet and direct exclude each other')
+    if (!spec.direct || typeof spec.direct.network !== 'string' || !DIRECT_NETWORK_RE.test(spec.direct.network))
+      issues.push(`direct.network must match ${DIRECT_NETWORK_RE}`)
   }
   return issues
 }

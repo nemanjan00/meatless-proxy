@@ -17,6 +17,7 @@ import { webhookRoutes } from './http/webhooks.ts'
 import { mcpServerRoutes } from './http/mcp-servers.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
+import { ChatActivity, chatActivityRoutes } from './chat-activity.ts'
 import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
@@ -50,6 +51,8 @@ export interface App {
   app: Hono
   services: Services
   live: LiveHub
+  /** Who is working on each chat thread (src/chat-activity.ts). */
+  activity: ChatActivity
   mcp: HarnessMcpServer
   /** Live previews: tokens, the preview listener, and the harness's refusal of preview origins. */
   previews: Previews
@@ -92,6 +95,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   const setup = createSetup(services, { integrations: overrides.integrations, provisioning: () => hookProvisioning })
 
   const tracker = new NowTracker(services)
+  // Who is working on each chat thread (src/chat-activity.ts), before the live hub that forwards it.
+  const activity = new ChatActivity(services)
   const live = new LiveHub(services)
   const mcp = new HarnessMcpServer(services)
   let boundPort: number | null = null
@@ -143,6 +148,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', procedureRoutes(services))
   app.route('/', notificationPrefsRoutes(services))
   app.route('/', chatAttachmentRoutes(services, auth.visibility))
+  app.route('/', chatActivityRoutes(activity, auth.visibility))
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })
@@ -155,6 +161,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     app,
     services,
     live,
+    activity,
     mcp,
     previews,
     hookProvisioning,
@@ -188,6 +195,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
         metrics.close()
         await mcp.close()
         tracker.close()
+        activity.close()
         const closing = server
           ? new Promise<void>((resolve) => {
               server!.close(() => resolve())

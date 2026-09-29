@@ -41,7 +41,9 @@ exactly its trigger through `events.triggers.match`.
 
 ## API
 
-- `createRouter(opts)` returns `{ plan(event), route(eventId), deliver(event, delivery) }`.
+- `createRouter(opts)` returns `{ plan(event), route(eventId), deliver(event, delivery) }`. `route` publishes
+  `event.routed { eventId, deliveries: [{ sessionId, reason, outcome, runId? }] }` on the bus (`runId` for a new
+  run, and for the run whose inbox got the event).
 - `chatTags(event)` and `renderEvent(event)`. A rendered event's header ends
   with when it arrived, `eventTime(receivedAt)`, e.g. `Tue 2026-09-29 12:07 UTC`,
   so sessions know the time without a clock in the (cached) system prompt.

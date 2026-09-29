@@ -14,6 +14,7 @@ import {
   type SpawnOptions,
   invalidEntryPath,
   invalidExpose,
+  invalidNetworkSpec,
   invalidVolumeMounts,
 } from './types.ts'
 import { checkEgress, invalidEgressEntries, type EgressLogEntry } from './egress.ts'
@@ -130,7 +131,8 @@ export interface FakeRuntime extends ContainerRuntime {
   failNextCreate(err: Error): void
   /**
    * Whether a container of the environment could reach `host:port`, as the real runtime would decide
-   * it: through the egress allowlist when `egress` is set, anything with `allowInternet`, else nothing.
+   * it: through the egress allowlist when `egress` is set, anything with `allowInternet` or `direct` (not
+   * logged), else nothing.
    * Decisions for proxied environments are added to `egressLog`.
    */
   egressAllowed(envId: string, host: string, port: number): boolean
@@ -198,8 +200,9 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       }
       if (!spec.name) throw new ValidationError('environment needs a name')
       if (!spec.image && !spec.build) throw new ValidationError('environment needs an image or a build')
+      const badNetwork = invalidNetworkSpec(spec)
+      if (badNetwork.length) throw new ValidationError(badNetwork[0]!, badNetwork.length > 1 ? badNetwork : undefined)
       if (spec.egress) {
-        if (spec.allowInternet) throw new ValidationError('egress and allowInternet exclude each other')
         const bad = invalidEgressEntries(spec.egress.allow ?? [])
         if (!Array.isArray(spec.egress.allow) || bad.length)
           throw new ValidationError('invalid egress allowlist', bad.length ? bad : undefined)
@@ -505,7 +508,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
 
     egressAllowed(envId, host, port) {
       const env = live(envId)
-      if (!env.spec.egress) return env.spec.allowInternet === true
+      if (!env.spec.egress) return env.spec.allowInternet === true || env.spec.direct !== undefined
       const d = checkEgress(env.spec.egress.allow, host, port)
       env.egress.push({
         at: clock.iso(),
