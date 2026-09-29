@@ -70,6 +70,7 @@ module to it:
 | Module            | Section                                       |
 |-------------------|-----------------------------------------------|
 | identity          | [Identity](#identity)                         |
+| permissions       | [Permissions](#permissions)                   |
 | harness chat      | [Harness chat](#harness-chat)                 |
 | chat, tasks       | [MCP](#mcp)                                   |
 | contacts          | [Contacts](#contacts)                         |
@@ -135,7 +136,8 @@ session.
 - **Git identity.** Commits are authored under the employee's own name and
   email, optionally signed with its own key. Every commit is traceable to the
   session that made it and to the contact who asked for the work, e.g. through
-  commit trailers.
+  commit trailers. Commits only go to the employee's own branches and reach
+  production through a PR ([no production access](#no-production-access)).
 - **Accounts.** The employee has its own accounts and credentials in each
   system, scoped per [least privilege](employee.md#4-boundaries). It never uses
   a person's account.
@@ -198,6 +200,47 @@ Open questions:
 - Which trailer format links a commit to its session and requester?
 - Can people tune the personality for themselves, e.g. "less chatty with me",
   through their contact preferences?
+
+### Permissions
+
+#### Who can ask for what
+
+A person's [contact](#contacts) defines who they are and what they may ask for.
+Their role, team, manager, project links and the plain-language `permissions`
+field together describe what they're allowed to request.
+
+- **The AI decides.** When a request comes in, the employee decides whether it's
+  allowed, based on the requester's contact, the [links](#links-between-contacts-and-projects)
+  to the project involved, and any [procedure](#procedures) that applies. There's
+  no rule engine.
+- **Non-deterministic, for now.** Because the decision is the model's judgment,
+  the same request may not always get the same answer. This is accepted for
+  now. The hard limits below are enforced outside the model, so a wrong
+  judgment can't cross them.
+- **Traceable.** Every decision records who asked, what was decided and why, in
+  the [audit trail](employee.md#4-boundaries), and can be reviewed in the
+  [web UI](#web-ui).
+- When it's unsure, the employee asks the owner (of the project, procedure or
+  area) rather than deciding.
+
+#### No production access
+
+**Employees cannot change production.** They cannot push to production or to
+protected branches, cannot merge, and cannot deploy.
+
+- An employee's changes always end as a **pull request**.
+- Getting a PR into production is up to **automated CI merges** or **people**,
+  under the project's usual rules.
+- This is enforced by the employee's credentials on the git host and in CI (no
+  merge or push rights on protected branches, no production deploy rights).
+  It doesn't depend on the model's judgment.
+
+Open questions:
+
+- Is the plain-language `permissions` field enough, or should there also be
+  structured permissions (e.g. per project, per procedure) that the model reads?
+- Which requests always need a person's approval, whatever the requester's
+  permissions are?
 
 ### Harness chat
 
@@ -333,6 +376,7 @@ Core fields:
 | `role`     | string, optional      | job title                                        |
 | `team`     | string, optional      |                                                  |
 | `manager`  | contact id, optional  |                                                  |
+| `permissions` | string, optional   | what this person may ask for, in plain words; see [permissions](#permissions) |
 
 Extension:
 
@@ -474,6 +518,9 @@ and can run it.
 - Access is scoped: the harness uses credentials that allow what the project
   needs (read by default, write only where tasks need it), and it follows the
   project's branch and review rules.
+- **PRs only.** Employees push to their own branches and open pull requests.
+  They cannot push to or merge into protected branches
+  ([no production access](#no-production-access)).
 
 #### Docker orchestration
 
