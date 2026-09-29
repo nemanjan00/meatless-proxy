@@ -86,6 +86,7 @@ module to it:
 | triggers          | [Triggers](#triggers)                         |
 | procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
+| checklists        | [Checklists](#checklists)                     |
 | supervision, limits | [Runaway protection](#runaway-protection)   |
 
 ## Terminology
@@ -840,6 +841,40 @@ Open questions:
 - How does a session choose its rewind point: by itself, at run and task
   boundaries, or when a context size threshold is reached?
 
+### Checklists
+
+A **checklist** says what "done" means for a piece of work, in items that can
+each be checked off. Checklists make the employee's
+[verify step](employee.md#3-how-it-handles-assigned-tasks) structural instead
+of a promise in the prompt.
+
+- **Attached to work.** A checklist belongs to a session, and through it to a
+  task or procedure run. Procedures and templates can define **checklist
+  templates**, which are copied into every session that runs them.
+- **Default: not done.** Every item starts unchecked. A session can't report
+  its work as done, or finish a continuing run as successful, while required
+  items are unchecked.
+- **Evidence required.** Checking an item needs **evidence**: a reference to
+  something the session actually observed in this run, such as a tool result
+  (a test run, a CI status, a screenshot, a reply). The harness refuses to
+  check an item whose evidence isn't in the session's history.
+- **Fresh-context evaluator.** An item can be marked *needs review*. It's then
+  checked by a fresh session with read-only tools, which has never seen the
+  work being done and looks only at the evidence and the result. The builder
+  doesn't grade its own work.
+- **Adding items.** A session can add items as it learns more, e.g. "also
+  update the migration docs". Removing a required item needs the requester or
+  owner.
+- **Visible.** Checklist progress is shown live in the [web UI](#web-ui), next
+  to the session, and in any linked task in the task system.
+
+| Tool             | What it does                                            |
+|------------------|---------------------------------------------------------|
+| checklist        | show the session's checklist                            |
+| add item         | add an item (required or optional)                      |
+| check            | check an item, with evidence (entry ids)                |
+| request review   | have a fresh-context evaluator check an item            |
+
 ### Runaway protection
 
 Self-scripting, loops and employees chatting with each other make it easy for
@@ -1097,11 +1132,14 @@ It is built with shadcn/ui and styled after Linear. See the
 
 #### Activity
 
-- **Now.** Live view of running sessions: what each one is working on, its
-  latest messages and tool calls, and what it's waiting on (a child, a person,
-  a container). Updates stream in without a page reload.
+- **Now.** Live monitoring of running sessions: what each one is working on,
+  its messages and tool calls as they happen, model output while it streams,
+  token use growing, checklist progress, and what it's waiting on (a child, a
+  person, a container). Updates arrive over a **WebSocket**, without a page
+  reload.
 - **History.** Everything it has done, searchable and filterable by project,
-  contact, status, template and time. Every session can be opened and read in
+  contact, status, template and time. A session that's still running can be
+  opened from history and watched live. Every session can be opened and read in
   full: messages, tool calls with their inputs and outputs, container logs, and
   git changes.
 - **Session trees.** Forks and loops are shown as a tree. You can navigate from
