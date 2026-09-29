@@ -233,3 +233,19 @@ describe('router', () => {
     expect(text).toContain('truncated')
   })
 })
+
+describe('router pause into a busy session', () => {
+  it('a pause decision pauses a suspended continuing run instead of waking it', async () => {
+    const t = await setup()
+    t.hooks.on(beforeDeliver, () => ({ pause: 'AI streak' }))
+    const work = await t.mk('busy')
+    const subject = { system: 'mp', id: 'msg_t' }
+    await t.events.subscriptions.subscribe(work.id, subject, { primary: true })
+    const active = await t.sessions.createRun({ sessionId: work.id, cause: { type: 'manual' } })
+    await t.sessions.transition(active.id, 'queued', 'running')
+    await t.sessions.suspend(active.id, { type: 'delivery' })
+    const ev = await t.ingest({ source: 'chat', type: 'message.replied', subject, text: 'ping' })
+    await t.router.route(ev.id)
+    expect((await t.sessions.requireRun(active.id)).data).toMatchObject({ state: 'paused', pauseReason: 'AI streak' })
+  })
+})

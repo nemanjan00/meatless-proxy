@@ -116,6 +116,14 @@ export function createRunner(opts: RunnerOptions): Runner {
       { jobId: o.delayMs ? `${WAKE_PREFIX}${runId}:${clock.now() + o.delayMs}` : runId, ...o },
     )
   }
+  let wakeSeq = 0
+  /**
+   * Re-queues a woken run under a fresh job id: its previous job may still be
+   * active (it suspended moments ago), and a queue drops jobs whose id is still
+   * in use. Running twice is safe: only one `queued -> running` transition wins.
+   */
+  const requeue = (runId: string, priority: number) =>
+    queue.add(RUNS_QUEUE, { runId }, { jobId: `${WAKE_PREFIX}${runId}:${clock.now()}:${++wakeSeq}`, priority })
 
   const wake: Runner['wake'] = async (runId) => {
     const run = await sessions.getRun(runId)
@@ -127,7 +135,7 @@ export function createRunner(opts: RunnerOptions): Runner {
       if (isMpError(err, 'conflict')) return false
       throw err
     }
-    await enqueue(runId, { priority: run.data.priority })
+    await requeue(runId, run.data.priority)
     return true
   }
 

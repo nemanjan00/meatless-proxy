@@ -229,6 +229,10 @@ export function createRouter(opts: RouterOptions): Router {
   })
 
   const enqueue = (runId: string, priority: number) => opts.queue.add(QUEUES.runs, { runId }, { jobId: runId, priority })
+  let seq = 0
+  /** A woken run's previous job may still be active; a fresh job id makes sure it's picked up. */
+  const requeue = (runId: string, priority: number) =>
+    opts.queue.add(QUEUES.runs, { runId }, { jobId: `wake:${runId}:${Date.now()}:${++seq}`, priority })
 
   const deliver = async (event: MpEvent, d: Delivery): Promise<DeliveryOutcome> => {
     const decision = opts.hooks ? await opts.hooks.decide(beforeDeliver, { event, delivery: d }) : undefined
@@ -259,10 +263,19 @@ export function createRouter(opts: RouterOptions): Router {
           source: event.data.source,
           type: event.data.type,
         })
+        if (decision && 'pause' in decision && (active.data.state === 'suspended' || active.data.state === 'queued')) {
+          // e.g. the AI-to-AI streak limit: stop the conversation until a person looks at it.
+          try {
+            await opts.sessions.transition(active.id, active.data.state, 'paused', { pauseReason: decision.pause })
+          } catch (err) {
+            if (!isMpError(err, 'conflict')) throw err
+          }
+          return { type: 'inbox', inboxId: item.id, sessionId, runId: active.id }
+        }
         if (active.data.state === 'suspended' && active.data.wait?.type === 'delivery') {
           try {
             await opts.sessions.transition(active.id, 'suspended', 'queued')
-            await enqueue(active.id, Math.max(d.priority, active.data.priority))
+            await requeue(active.id, Math.max(d.priority, active.data.priority))
             return { type: 'woke', runId: active.id, sessionId, inboxId: item.id }
           } catch (err) {
             if (!isMpError(err, 'conflict')) throw err

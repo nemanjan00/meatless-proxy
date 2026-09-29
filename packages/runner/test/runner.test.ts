@@ -336,3 +336,33 @@ describe('renderMessages', () => {
     expect(JSON.stringify(renderMessages(entries))).toBe(JSON.stringify(renderMessages(entries)))
   })
 })
+
+describe('wake race', () => {
+  it('a run woken while its own job is still active is picked up again', async () => {
+    const h = harness((req) => {
+      const last = String(req.messages.at(-1)?.content ?? '')
+      if (last.startsWith('fast child')) return reply('child done')
+      if (last.startsWith('[wait finished]')) return reply('parent resumed')
+      return callTools([{ name: 'spawn' }])
+    })
+    h.tool({ name: 'spawn', effect: 'idempotent' }, async (_a, ctx) => {
+      const child = await h.sessions.fork(ctx.sessionId, { title: 'fast' })
+      const run = await h.sessions.createRun({
+        sessionId: child.id,
+        cause: { type: 'fork', parentRunId: ctx.runId },
+        input: [{ kind: 'user', content: { text: 'fast child' } }],
+      })
+      // The child finishes before the parent suspends.
+      await h.runner.execute(run.id)
+      return { output: 'spawned', control: [{ type: 'suspend', wait: { type: 'runs', runIds: [run.id], mode: 'all' } }] }
+    })
+    const w = h.work()
+    const s = await h.session(['spawn'])
+    const run = await h.start(s.id)
+    await h.runner.enqueue(run.id)
+    for (let i = 0; i < 200 && (await h.sessions.requireRun(run.id)).data.state !== 'completed'; i++)
+      await new Promise((r) => setTimeout(r, 5))
+    await w.close()
+    expect((await h.sessions.requireRun(run.id)).data.result?.output).toBe('parent resumed')
+  })
+})
