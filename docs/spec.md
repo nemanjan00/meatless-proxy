@@ -16,6 +16,27 @@ systems and tasks.
    needed context up front, ask everything in one go, and resolve as much as
    possible without extra hops.
 
+## A self-scripting engine
+
+The harness is a **self-scripting engine**. The model doesn't just answer
+inside one conversation: it scripts its own work using a set of primitives. It
+creates, forks and loops sessions, waits for them or leaves them running, and
+works with people, projects, code and memory.
+
+Those primitives make up a **standard library** that covers what a person in
+the [employee role](employee.md) needs, plus memory. Each feature below adds a
+module to it:
+
+| Module            | Section                                       |
+|-------------------|-----------------------------------------------|
+| chat, tasks       | [MCP](#mcp)                                   |
+| contacts          | [Contacts](#contacts)                         |
+| projects, docs    | [Projects](#projects)                         |
+| links             | [Links](#links-between-contacts-and-projects) |
+| repos, runtime    | [Project code and runtime](#project-code-and-runtime) |
+| sessions          | [Sessions](#sessions)                         |
+| memory            | not yet specified                             |
+
 ## Structure
 
 This document is written incrementally. Common harness features come first,
@@ -321,15 +342,28 @@ The model has tools for working with sessions:
 | save metadata  | set or update metadata fields and the session's document      |
 | link / unlink  | add or remove links to contacts, projects and other sessions  |
 | save template  | turn a session into a template                                |
+| wait           | block until the given children (one, some or all) finish, and return their results |
+
+#### Waiting
+
+After a fork or a loop, **the parent decides whether to wait**:
+
+- It can call `wait` and block until the children it names have finished. It
+  then gets their results.
+- Or it can carry on without waiting. The children keep running, and the parent
+  can check on them later with `tree` or `look up`, or call `wait` whenever it
+  needs their results.
+
+Each child's result is its final output together with its session document.
 
 Open questions:
 
-- In a loop, how do children report back to the parent: does the parent wait
-  for all of them and get their results, or do results arrive as they finish?
 - What is a "point" in a session's history when forking: a message, a tool
   call, or any turn?
 - Can two sessions in a tree be merged back together?
 - Are forks limited, e.g. by depth or by how many children one loop can have?
+- Does `wait` take a timeout, and can the parent cancel children it no longer
+  needs?
 
 ## Unique features
 
