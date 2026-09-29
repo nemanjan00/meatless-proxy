@@ -518,7 +518,6 @@ export function scenarioSuite(backend: Backend) {
         },
       },
     })
-    const s = t.a.services
     const requests = await requestsChannel(t)
     const finished = async (n: number) =>
       until(
