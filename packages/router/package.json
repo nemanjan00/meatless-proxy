@@ -1,0 +1,20 @@
+{
+  "name": "@mp/router",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Turns events into deliveries, and deliveries into runs or inbox items, deterministically.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/queue": "0.0.0",
+    "@mp/events": "0.0.0",
+    "@mp/sessions": "0.0.0"
+  },
+  "devDependencies": {
+    "@mp/records": "0.0.0"
+  }
+}

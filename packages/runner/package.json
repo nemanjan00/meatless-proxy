@@ -1,0 +1,23 @@
+{
+  "name": "@mp/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Executes runs: context assembly, model calls, tool calls, journaling, crash recovery, secrets and redaction, suspend and wake, commit.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/queue": "0.0.0",
+    "@mp/model": "0.0.0",
+    "@mp/secrets": "0.0.0",
+    "@mp/sessions": "0.0.0",
+    "@mp/tools": "0.0.0"
+  },
+  "devDependencies": {
+    "@mp/records": "0.0.0",
+    "@mp/secrets": "0.0.0"
+  }
+}
