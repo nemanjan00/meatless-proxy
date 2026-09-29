@@ -190,6 +190,13 @@ and can run it.
 - The harness keeps a **local cache** of every linked repository, so reading
   code doesn't need a network round trip and a fresh clone isn't needed for each
   task.
+- For now the cache is **local to the harness host**. Like Go's module cache,
+  its layout comes from the remote URL. Each repository is a bare mirror under
+  `<cache root>/<host>/<path>`, for example
+  `<cache root>/github.com/acme/billing`. The same remote therefore always maps
+  to the same place, and different projects that link to one repo share it. The
+  cache root is configurable and defaults to a directory in the harness's data
+  directory.
 - The cache is kept up to date by fetching: on a schedule, when a task starts,
   and when the task system or chat reports new changes (e.g. a push or a merged
   PR).
@@ -219,8 +226,8 @@ and can run it.
 
 Open questions:
 
-- Where does the cache live and how big can it get: one host, or shared between
-  several harness hosts?
+- How is the cache size limited, and when are unused mirrors removed?
+- Sharing the cache between several harness hosts is left for later.
 - How are secrets the project needs at runtime provided to its containers?
 - Is Docker the only runtime, or should the orchestration layer also allow
   others (Podman, Kubernetes, remote runners)?
