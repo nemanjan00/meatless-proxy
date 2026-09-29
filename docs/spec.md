@@ -272,6 +272,30 @@ Open questions:
 - Which requests always need a person's approval, whatever the requester's
   permissions are?
 
+### Sign-in and roles
+
+Everyone using the web UI, the API or the MCP server is signed in as a
+[contact](#contacts). Nothing trusts a caller's word for who they are.
+
+- **Sign-in.** People sign in to the web UI with a one-time link, from
+  `npm run login-link -- --contact <id>` or sent to their email by an admin.
+  The link starts a session cookie (httpOnly, SameSite=Lax, rotating). Signing
+  in through an identity provider (OIDC) is optional and configured with
+  `OIDC_*` variables.
+- **API tokens** for scripts and other agents, per contact, created and
+  revoked in the UI. They're stored hashed, like MCP tokens, and are in fact
+  the same tokens.
+- **Roles** on a contact: `admin` (secrets, employees, limits, triggers, kill
+  switch), `member` (chat, sessions, knowledge, starting and steering work) and
+  `viewer` (read only). AI employees act with their own
+  [permissions](#permissions), not a role.
+- **Every write is attributed** to the signed-in contact, in revisions and in
+  chat. The WebSocket and the MCP server require the same sign-in.
+- **What people see** follows the confidentiality rules: DMs only for their
+  members, and secrets never.
+- **Bootstrap.** The first start prints a one-time admin sign-in link to the
+  log.
+
 ### Untrusted input
 
 Tickets, chat messages, emails, PR comments, docs and repo contents all end up
@@ -509,6 +533,22 @@ message, or a new or changed task. The harness turns each notification into an
 server. Triggers and subscriptions then route it like any other event. For
 servers that can't push, a poller calls a list tool on a schedule and turns
 what's new into events.
+
+#### Integrations
+
+Worked, tested examples for the systems most companies use, in
+[docs/integrations.md](integrations.md):
+
+- **Linear** (task system): the MCP server config, mapping notifications to
+  `task.*` events with the issue as subject, a trigger for new assigned
+  issues, and `taskSystem` settings for real forks.
+- **GitHub** (git host and PRs): PR creation after `git.push`, and PR and CI
+  events as subscription targets.
+- **Slack** (company chat): posting through MCP, and Slack events bridged in
+  through the webhook ingest.
+
+Each comes with a ready JSON snippet for `MCP_SERVERS` and the triggers to
+create.
 
 #### The harness as an MCP server
 
@@ -1043,6 +1083,80 @@ When a policy blocks, the run gets the reason as a message and carries on:
 it fixes the problem (updates the docs, checks the item) and tries again, like
 a Stop hook that says "not yet". Policies are ordinary code registered on
 hooks, so adding one needs no change to the runner.
+
+### Schedules
+
+Triggers can fire on a **schedule** as well as on events. For example,
+"every weekday at 9:00, triage new Linear issues" or "every Friday, write the
+weekly summary".
+
+- A schedule trigger has a cron expression and a time zone. At each firing it
+  ingests a `schedule.fired` [event](execution.md#events) and routes it like
+  any other event, to its context or a fork of it.
+- Firings are deduplicated by trigger and time, so a restart or two app
+  instances never fire twice. Missed firings while the harness was down are
+  not replayed, except the latest one if it was within the trigger's grace
+  period.
+- Schedules are created and edited in the UI, and by employees themselves
+  through `triggers.*` tools.
+
+### Housekeeping
+
+Nothing accumulates without bound:
+
+- **Environments** idle longer than their TTL (default 2 hours) are torn
+  down, and so are environments of ended sessions.
+- **Worktrees** of ended sessions are removed after their changes are
+  committed. `git worktree prune` runs on every mirror.
+- **Git mirrors** nobody has used for a long time (default 30 days) are
+  removed.
+- **Ephemeral runs** keep their record and usage forever, but their entries
+  can be dropped after a retention period (default 90 days, off by default).
+  Committed history is never dropped.
+- Housekeeping runs as a scheduled job and reports what it did to the log and
+  the web UI.
+
+### Observability
+
+- **Metrics** at `/metrics` in Prometheus format, only for admins or a
+  metrics token:
+  - runs by state
+  - queue depth and age
+  - model calls, tokens and latency by model
+  - tool calls and errors by tool
+  - events by source
+  - environments
+- **Health:** `/healthz` and `/readyz` (built).
+- **Alerts** through chat: failed runs, paused runs that wait longer than a
+  threshold, and a provider or MCP server that keeps failing post to an
+  `#alerts` channel. The owner or the requester is tagged.
+
+### Evals
+
+The harness keeps a small **eval suite** that runs against a real model:
+scenarios with checks on the outcome, not the wording.
+
+- Scenarios:
+  - answer in the thread
+  - hand off to a fork
+  - use a procedure
+  - refuse an injected instruction
+  - respect a checklist
+  - keep answers short
+- Run with `npm run eval` against the configured model. The report is a pass
+  rate per scenario, with tokens and cost.
+- It's run before changing the default model or the employee prompt, and
+  after model upgrades: turn harness pieces off one at a time and see what's
+  still needed.
+
+### Import and export
+
+- **Import** contacts, projects, memberships and procedures from CSV or JSON,
+  with a dry run that shows what would change. Existing records are matched by
+  email, handle or name.
+- **Export** the company's knowledge (contacts, projects, procedures, skills,
+  docs and memories) as a folder of markdown with frontmatter, for backups or
+  to keep in git. The same folder can be imported back.
 
 ### Runaway protection
 
