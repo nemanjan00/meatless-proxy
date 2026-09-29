@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { ConflictError, MpError, NotFoundError, ValidationError, errorMessage, globMatch } from '@mp/core'
+import { ConflictError, MpError, NotFoundError, ValidationError, errorMessage, globMatch, type Json } from '@mp/core'
 import type { ToolSpec } from '@mp/model'
 import {
   RETHROWN_ERROR_CODES,
@@ -71,6 +71,37 @@ export function checkArgs(schema: Record<string, unknown>, args: unknown): strin
   return issues
 }
 
+/** Placeholder values of an example call: what a model that sent the wrong arguments should send. */
+const EXAMPLE_VALUES: Record<string, Json> = { string: '…', number: 0, integer: 0, boolean: true, array: [], object: {} }
+
+/**
+ * An example of valid arguments for a schema: its required fields, with placeholder values. Shown with
+ * an invalid call, next to what was received: live, a model sent `{}` sixteen times, sure that it had
+ * sent the text, because the error only said "text is required".
+ */
+export function exampleArgs(schema: Record<string, unknown>): Record<string, Json> {
+  const props = (schema.properties ?? {}) as Record<string, { type?: unknown }>
+  const required = Array.isArray(schema.required) ? (schema.required as unknown[]).filter((r) => typeof r === 'string') : []
+  const out: Record<string, Json> = {}
+  for (const r of required as string[]) {
+    const t = props[r]?.type
+    const first = Array.isArray(t) ? t[0] : t
+    out[r] = typeof first === 'string' && first in EXAMPLE_VALUES ? EXAMPLE_VALUES[first]! : '…'
+  }
+  return out
+}
+
+/** Arguments as received, for an error message: short, and never more than a line or two. */
+const received = (args: unknown) => {
+  let text: string
+  try {
+    text = JSON.stringify(args) ?? String(args)
+  } catch {
+    text = String(args)
+  }
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text
+}
+
 const allowedBy = (name: string, lists: ToolLists) =>
   (lists.allow ?? []).some((p) => globMatch(p, name)) && !(lists.deny ?? []).some((p) => globMatch(p, name))
 
@@ -116,7 +147,16 @@ export function createToolRegistry(): ToolRegistry {
       const t = tools.get(name)
       if (!t) throw new NotFoundError('tool', name)
       const issues = checkArgs(t.def.parameters, args)
-      if (issues.length) return { output: { error: `invalid arguments for ${name}: ${issues.join('; ')}` }, isError: true }
+      if (issues.length)
+        return {
+          output: {
+            error: `invalid arguments for ${name}: ${issues.join('; ')}`,
+            received: received(args),
+            example: exampleArgs(t.def.parameters),
+            hint: 'Your call arrived with exactly the arguments under "received". Send the call again with every required field filled in, like "example".',
+          },
+          isError: true,
+        }
       try {
         const res = await t.handler(args, ctx)
         if (!res || typeof res !== 'object' || !('output' in res))

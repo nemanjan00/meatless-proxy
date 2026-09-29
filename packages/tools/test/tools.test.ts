@@ -196,13 +196,24 @@ describe('execute', () => {
 
   it('returns invalid arguments as a tool error without calling the handler', async () => {
     let called = false
-    reg.register(def('a.b', { parameters: { type: 'object', required: ['x'] } }), async () => {
-      called = true
-      return { output: null }
-    })
+    reg.register(
+      def('a.b', {
+        parameters: { type: 'object', properties: { x: { type: 'string' }, n: { type: 'number' } }, required: ['x', 'n'] },
+      }),
+      async () => {
+        called = true
+        return { output: null }
+      },
+    )
     const res = await reg.execute('a.b', {}, ctx())
     expect(res.isError).toBe(true)
-    expect(res.output).toEqual({ error: 'invalid arguments for a.b: x is required' })
+    // What arrived and what to send: a model repeating `{}` couldn't tell from "x is required" alone.
+    expect(res.output).toMatchObject({
+      error: 'invalid arguments for a.b: x is required; n is required',
+      received: '{}',
+      example: { x: '…', n: 0 },
+    })
+    expect((res.output as { hint: string }).hint).toContain('received')
     expect(called).toBe(false)
   })
 
