@@ -1,0 +1,261 @@
+# @mp/integration-slack
+
+The first-party Slack integration ([spec](../../docs/spec.md#integrations)). It has three parts:
+
+- An MCP server with Slack tools. They act as the app's bot, over the Slack Web API.
+- Events API webhooks, which it turns into events.
+- User lookup, for matching Slack users to contacts.
+
+It implements `Integration` from `@mp/mcp`. The server connects to the MCP server in-process and mounts the webhook at
+`/webhooks/slack`.
+
+## API
+
+`createSlackIntegration({ secrets: { botToken, signingSecret }, fetch?, baseUrl?, clock?, logger?, retry?, sleep?, channelNameTtlMs? })`
+returns an `Integration` named `slack`:
+
+- `createMcpServer()`: a fresh SDK `McpServer` with the [tools](#tools). The tools are `mcp.slack.<tool>`.
+- `handleWebhook(req)`: verifies the signature and returns `{ status, body?, headers?, events }`. See [events](#events-in).
+- `resolveUser(userId)`: calls `users.info` and returns `{ handle: { system: 'slack', id }, email?, name? }`. The name is
+  the user's `real_name`. An unknown user returns `null`. Any other failure throws.
+
+The package also exports these building blocks:
+
+- `createSlackClient({ token, baseUrl?, fetch?, clock?, logger?, retry?, sleep? })`. Its one method is
+  `call(method, params, { write?, json? })`.
+- `verifySlackSignature(...)` and `signSlackRequest(secret, ts, body)`.
+- `mapSlackEvent(envelope, ctx)`.
+- `createSlackMcpServer(client, logger)`.
+- `parseRetryAfter`, `slackErrorCode`, `compactMessage` and `compactUser`.
+
+### Web API client
+
+- Every method is sent as a `POST` to `{baseUrl}/{method}`. The default `baseUrl` is `https://slack.com/api`.
+- Write methods send a JSON body. Everything else sends a form body.
+- The token goes only in the `Authorization: Bearer` header. It is redacted from error messages and never logged.
+- `ok: false` throws `MpError('integration_request')` with `details.error` (Slack's code, e.g. `channel_not_found`),
+  `details.status` and `details.method`. Other 4xx responses and non-JSON replies throw the same error.
+- **Rate limits**: a `429` or the `ratelimited` error waits out `Retry-After` (seconds or an HTTP date), then retries. This
+  applies to writes too, because Slack didn't execute a rate-limited call. If the wait is longer than `retry.maxDelayMs`
+  (default 30 s), or no attempts are left (`retry.attempts`, default 3), the call throws `UnavailableError`.
+- **5xx and network errors** are retried with exponential backoff (`retry.baseDelayMs`, default 500 ms), but only on
+  reads. A write fails at once with `UnavailableError`, because it may already have been executed. The harness journal
+  decides what happens next, so a message is never posted twice.
+
+## Tools
+
+Results are compact JSON. Failures are `isError` results of the form `{ error, message, hint?, retryable? }`, where
+`error` is Slack's code and `hint` says what to do about it (e.g. `not_in_channel` → invite the app).
+
+| Tool | Slack method | Arguments | Result |
+|------|--------------|-----------|--------|
+| `post_message` | `chat.postMessage` (mrkdwn) | `channel`, `text`, `thread_ts?` | `{ channel, ts, thread_ts? }` |
+| `reply` | `chat.postMessage` | `channel`, `thread_ts`, `text` | `{ channel, ts, thread_ts }` |
+| `read_channel` | `conversations.history` | `channel`, `limit?` (20, max 200), `cursor?`, `oldest?`, `latest?` | `{ messages, next_cursor }`, newest first |
+| `read_thread` | `conversations.replies` | `channel`, `thread_ts`, `limit?` (50, max 200), `cursor?` | `{ messages, next_cursor }`, root first |
+| `react` | `reactions.add` | `channel`, `ts`, `name` (colons optional) | `{ ok }`; `already_reacted` → `{ ok, already }` |
+| `unreact` | `reactions.remove` | `channel`, `ts`, `name` | `{ ok }`; `no_reaction` → `{ ok, already }` |
+| `lookup_user` | `users.info` / `users.lookupByEmail` | exactly one of `user` or `email` | `{ id, name, real_name, display_name, email, title, tz, is_bot?, deleted? }` |
+| `open_dm` | `conversations.open` | `user` or `users` (up to 8, for a group DM) | `{ channel }` |
+| `list_channels` | `conversations.list` (public and private, not archived) | `member_only?` (default true), `limit?` (200), `cursor?` | `{ channels: [{ id, name, is_private?, is_member, topic?, purpose?, members? }], next_cursor }` |
+| `update_message` | `chat.update` | `channel`, `ts`, `text` | `{ channel, ts }`. The app can only edit its own messages (`cant_update_message`). |
+
+A message looks like `{ ts, user?, bot_id?, subtype?, text, thread_ts?, reply_count?, reactions?: [{ name, count }], files?: [name], edited? }`.
+
+With `member_only`, `list_channels` filters the page client-side, so a page may come back short or even empty while
+`next_cursor` is still set.
+
+## Events in
+
+`POST /webhooks/slack` receives the Events API.
+
+1. **Signature**: the request must have an `X-Slack-Signature` header of the form `v0=` + hex HMAC-SHA256 of
+   `v0:<X-Slack-Request-Timestamp>:<raw body>`, keyed with the signing secret. The signature is compared in constant time.
+   The timestamp must be within 5 minutes of now, in either direction. Otherwise the response is `401` with no events.
+   A request that isn't a POST gets `405`. A body that isn't a JSON envelope gets `400`.
+2. `url_verification` is answered with its `challenge`, as `text/plain`. It is signed too, and verified first.
+3. `event_callback` is mapped to at most one event. Everything else (`app_rate_limited`, unknown types) returns `200` with
+   no events. Unmapped callbacks also return `200`, so Slack doesn't retry them.
+
+Every event has:
+
+- `source: 'integration:slack'`.
+- `dedupeKey: 'slack:<event_id>'`. Slack's retries (`X-Slack-Retry-Num`) carry the same `event_id`, so they dedupe.
+- `subject: { system: 'slack', id: '<channel>/<thread ts, or the message ts>' }`.
+- `actor: { system: 'slack', id: <user id> }`, when a user caused the event.
+- `text` like `Slack #general U123: hello`, clipped to 1000 characters. The full text is in the payload.
+
+The channel name comes from a cached `conversations.info` (1 hour; failures are remembered for 1 minute, and the id is
+shown instead). Lookups on the webhook path don't retry, because Slack wants an answer within 3 seconds.
+
+| Slack event | Event type | Subject ts | Payload |
+|-------------|------------|------------|---------|
+| `message` in a channel, top level (or `thread_ts == ts`) | `message.posted` | `ts` | `team_id, channel, channel_type, channel_name?, user, bot_id?, subtype?, text, ts, thread_ts?, is_reply, mentions_app, files?` |
+| `message` with `thread_ts != ts` | `message.replied` | `thread_ts` | same |
+| `message` with `channel_type: im` (a DM to the app, threaded or not) | `message.direct` | `thread_ts` or `ts` | same, without `channel_name` |
+| `message` / `message_changed` | `message.edited` | the edited message's thread | `channel, user, ts, thread_ts?, text, previous_text` |
+| `message` / `message_deleted` | `message.deleted` | the deleted message's thread | `channel, user?, ts, thread_ts?, previous_text?` |
+| `app_mention` | `message.mentioned` | `thread_ts` or `ts` | `channel, user, text, ts, thread_ts?, is_reply` |
+| `reaction_added` on a message | `reaction.added` | the reacted message's `ts` | `channel, user, reaction, ts, item_user, item_is_own` |
+
+Some events are ignored:
+
+- **The app's own activity**: messages whose `user` is the bot user (taken from the envelope's `authorizations`, or from
+  `auth.test`, looked up once), whose `bot_id` is the app's bot, or whose `app_id` / `bot_profile.app_id` is the
+  envelope's `api_app_id`. The same goes for edits and deletions of such messages, and for the bot's own reactions.
+- **Subtypes other than** `thread_broadcast`, `file_share`, `me_message` and `bot_message`: for example `channel_join` and
+  `channel_topic`.
+- **`message_changed` with unchanged text**, which is what link unfurls send.
+- **Reactions to files.**
+
+Other bots' messages come through as `message.posted` with `bot_id` and no actor.
+
+Notes:
+
+- A mention in a channel arrives twice: as `message.mentioned`, and as `message.posted` or `message.replied` with
+  `mentions_app: true`. They have different `event_id`s. Trigger on the mention, and filter the other one out of general
+  triggers.
+- `reaction.added` uses the reacted message's own `ts`. For a reply in a thread, that isn't the thread root, because the
+  event doesn't say which thread the message is in.
+
+## Setup
+
+### 1. Create the Slack app from a manifest
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**, and pick your workspace.
+2. Paste the manifest below (YAML). Replace `harness.example.com` with the harness's public host.
+3. **Install to Workspace**, and approve the scopes.
+
+```yaml
+display_information:
+  name: Meatless
+  description: AI employees, through meatless-proxy
+  background_color: "#1f2937"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: meatless
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:write
+      - mpim:history
+      - mpim:write
+      - reactions:read
+      - reactions:write
+      - users:read
+      - users:read.email
+settings:
+  event_subscriptions:
+    request_url: https://harness.example.com/webhooks/slack
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - reaction_added
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+```
+
+What the scopes are for:
+
+| Scope | Needed for |
+|-------|------------|
+| `chat:write` | `post_message`, `reply`, `update_message` |
+| `channels:history`, `groups:history`, `im:history`, `mpim:history` | `read_channel` and `read_thread`, and the `message.*` events |
+| `channels:read`, `groups:read` | `list_channels`, and channel names in events |
+| `im:write`, `mpim:write` | `open_dm`. `mpim:write` is only needed for group DMs. |
+| `reactions:read`, `reactions:write` | `reaction_added` events, `react`, `unreact` |
+| `users:read`, `users:read.email` | `lookup_user`, `resolveUser`, and contact matching by email |
+| `app_mentions:read` | `app_mention` events |
+
+Slack verifies the request URL when you save the manifest, so the harness must already be running with the signing
+secret set. If it isn't, save the manifest anyway, then retry the URL under **Event Subscriptions** once the harness is up.
+
+### 2. Set the secrets
+
+| Secret | Where to find it |
+|--------|------------------|
+| `botToken` | **OAuth & Permissions** → *Bot User OAuth Token* (`xoxb-…`) |
+| `signingSecret` | **Basic Information** → *App Credentials* → *Signing Secret* |
+
+Both are harness [secrets](../../docs/spec.md#secrets). The integration is enabled when they are set.
+
+### 3. Invite the app
+
+The bot only sees channels it is a member of. Run `/invite @meatless` in each channel it should read or post in. DMs to
+the app work without an invite.
+
+### Recommended triggers
+
+This trigger routes mentions and DMs to the employee's router:
+
+```json
+{
+  "name": "Slack: mentions and DMs",
+  "employeeId": "emp_…",
+  "match": { "source": "integration:slack", "filter": { "type": { "$in": ["message.mentioned", "message.direct"] } } },
+  "target": { "type": "router" },
+  "mode": "continuing"
+}
+```
+
+To act on every new top-level message in one channel (e.g. `#access-requests`), without double-handling mentions:
+
+```json
+{
+  "name": "Slack: #access-requests",
+  "employeeId": "emp_…",
+  "match": {
+    "source": "integration:slack",
+    "type": "message.posted",
+    "where": { "payload.channel": "C0123ABCD", "payload.mentions_app": false }
+  },
+  "target": { "type": "procedure", "procedureId": "prc_…" },
+  "fork": true
+}
+```
+
+A session working on a thread subscribes to its subject, e.g. `{ system: 'slack', id: 'C0123ABCD/1712345678.123456' }`
+with types `["message.replied", "message.mentioned", "message.edited"]`, and answers with `mcp.slack.reply`.
+
+## Tests
+
+`npx vitest run --project node packages/integration-slack` runs against `test/fake-slack.ts`, a local `node:http` fake of
+the Web API. The fake has Slack's payload shapes, the `ok: false` convention, cursor pagination and bearer-token auth. The
+tests cover:
+
+- The client: 429 with Retry-After, `ratelimited`, 5xx backoff, no retry for writes after a 5xx, 4xx and network errors,
+  and token redaction.
+- Every tool, through a real MCP client over `InMemoryTransport`.
+- Signature verification, including Slack's documented example, bad and stale signatures, and replays.
+- Every event mapping.
+- Channel-name caching.
+- `resolveUser`.
+
+The live smoke test is opt-in. It makes one read call (`list_channels`):
+
+```sh
+MP_LIVE_SLACK=1 SLACK_BOT_TOKEN=xoxb-… npx vitest run packages/integration-slack/test/live.test.ts
+```
+
+## Replacing
+
+Implement `Integration` from `@mp/mcp` in another package, or point the harness at any other Slack MCP server, then
+switch the server's integration wiring.

@@ -1,0 +1,16 @@
+{
+  "name": "@mp/integration-slack",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "First-party Slack integration: an MCP server over the Slack Web API, Events API webhooks in, and user lookup.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/mcp": "0.0.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "zod": "^4.6.5"
+  }
+}
