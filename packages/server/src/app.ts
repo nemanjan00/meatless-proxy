@@ -25,7 +25,7 @@ import { procedureRoutes } from './procedures/index.ts'
 import { projectRoutes } from './projects/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { registerThreadContext } from './thread-context.ts'
-import { upgradeEmployees } from './upgrade.ts'
+import { upgradeEmployees, watchEmployeePrompts } from './upgrade.ts'
 import { registerSessionProjects } from './session-projects.ts'
 import { createSetup, type Setup, setupRoutes } from './setup/index.ts'
 import { ensureSshKey } from './ssh.ts'
@@ -78,11 +78,13 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
-  // Employees from before a provisioning step existed (router instructions, routing toolset, trigger shape) get it now.
-  await upgradeEmployees(services)
   // Employees from older versions: the old default personality, projects in `scope` instead of links.
-  // After the upgrade, whose one-time router reset would otherwise drop the personality note.
   await migrateEmployees(services)
+  // Then provisioning they may have missed (router instructions, routing toolset, trigger shape), and a router
+  // context rebuilt with the current employee prompt when it changed.
+  await upgradeEmployees(services)
+  // An edited employee (personality, instructions, name, role) gets a router context with its current prompt.
+  watchEmployeePrompts(services)
   // Router contexts created before a stdlib tool existed (time.now, code.run) get it now.
   await addStdlibToolsToRouters(services)
   const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)

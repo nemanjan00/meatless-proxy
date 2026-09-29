@@ -2,7 +2,7 @@ import { callTools, type ModelRequest, reply, type ScriptResult } from '@mp/mode
 import { afterEach, describe, expect, it } from 'vitest'
 import { THREAD_CONTEXT_HEADER } from '../src/thread-context.ts'
 import { migrateEmployees, OLD_DEFAULT_PERSONALITIES } from '../src/bootstrap.ts'
-import { upgradeEmployees } from '../src/upgrade.ts'
+import { refreshRouterPrompt, upgradeEmployees } from '../src/upgrade.ts'
 import { type TestApp, testApp, until } from './helpers.ts'
 
 let t: TestApp | undefined
@@ -101,24 +101,27 @@ describe('upgrading employees from earlier versions', () => {
     expect((await s.sessions.history(routerId)).length).toBe(history.length)
   })
 
-  it('keeps the personality note when an old router is reset, and replaces older router instructions', async () => {
+  it('rebuilds an old router with the migrated personality, and replaces older router instructions', async () => {
     t = await testApp({ script: () => reply('ok') })
     const s = t.a.services
     const employee = (await s.directory.employees.byHandle('meatless'))!
     const routerId = employee.data.routerSessionId!
     await s.directory.employees.update(employee.id, { personality: OLD_DEFAULT_PERSONALITIES[0]! })
     await s.records.update('session', routerId, { meta: { role: 'router' } })
-    // The same order as a start: the upgrade (with its one-time reset), then the migration.
-    await upgradeEmployees(s)
+    // The same order as a start: the migration fixes the personality, then the upgrade (the one-time reset,
+    // and a router context rebuilt with the current prompt).
     await migrateEmployees(s)
-    const texts = (await s.sessions.history(routerId)).map((e) => JSON.stringify(e.content))
-    expect(texts.some((x) => x.includes("Don't sign off your messages"))).toBe(true)
+    await upgradeEmployees(s)
+    const current = (await s.directory.employees.require(employee.id)).data.routerSessionId!
+    const first = JSON.stringify((await s.sessions.history(current))[0]!.content)
+    expect(first).not.toContain('Signs off')
+    expect(first).toContain('Dry, friendly and brief.')
 
     // A router on an older instructions version gets the new ones, marked as replacing the old.
-    const cur = await s.sessions.require(routerId)
-    await s.records.update('session', routerId, { meta: { ...cur.data.meta, routerInstructions: 1 } })
+    const cur = await s.sessions.require(current)
+    await s.records.update('session', current, { meta: { ...cur.data.meta, routerInstructions: 1 } })
     await upgradeEmployees(s)
-    const last = (await s.sessions.history(routerId)).filter((e) => e.kind === 'system').at(-1)!
+    const last = (await s.sessions.history(current)).filter((e) => e.kind === 'system').at(-1)!
     expect(JSON.stringify(last.content)).toContain('replace your earlier router instructions')
     expect(JSON.stringify(last.content)).toContain("You don't answer requests yourself")
   })
@@ -178,5 +181,42 @@ describe('work the router starts', () => {
     // It owns the thread, so it keeps its work even when the router asked for an ephemeral run (Kimi did).
     const workRuns = await s.sessions.runs({ sessionId: work.id })
     expect(workRuns.map((r) => r.data.mode)).toEqual(['continuing'])
+  })
+})
+
+describe('rebuilding a router context when the employee prompt changes', () => {
+  it('starts a fresh router with the current prompt and the decision log, and repoints everything', async () => {
+    t = await testApp({ script: () => reply('ok') })
+    const s = t.a.services
+    const employee = (await s.directory.employees.byHandle('meatless'))!
+    const oldId = employee.data.routerSessionId!
+    // One decision in the old router's log.
+    const actor = { type: 'system' as const, id: 'test' }
+    const run = await s.sessions.createRun({ sessionId: oldId, mode: 'ephemeral', cause: { type: 'manual' }, actor })
+    await s.sessions.transition(run.id, 'queued', 'running')
+    await s.sessions.commitSummary(run.id, 'thread msg_x (#general, from Ana): a script → started @meatless#script (ses_x)')
+    await s.sessions.transition(run.id, 'running', 'completed', { result: { status: 'completed', output: 'ok' } })
+
+    // Unchanged prompt: nothing happens.
+    expect(await refreshRouterPrompt(s, employee.id)).toBe(false)
+
+    await s.directory.employees.update(employee.id, { personality: 'Cheerful and thorough.' })
+    expect(await refreshRouterPrompt(s, employee.id)).toBe(true)
+    const newId = (await s.directory.employees.require(employee.id)).data.routerSessionId!
+    expect(newId).not.toBe(oldId)
+    const fresh = await s.sessions.require(newId)
+    expect(fresh.data.slug).toBe('router')
+    expect(fresh.data.meta?.role).toBe('router')
+    const history = (await s.sessions.history(newId)).map((e) => JSON.stringify(e.content))
+    expect(history[0]).toContain('Cheerful and thorough.')
+    expect(history.some((x) => x.includes('a script → started @meatless#script'))).toBe(true)
+    const old = await s.sessions.require(oldId)
+    expect(old.data.status).toBe('done')
+    expect(old.data.meta?.role).toBe('router-retired')
+    expect(await s.routerSessionFor()).toBe(newId)
+    const requests = (await s.chat.channelByName('requests'))!
+    expect(requests.data.contextSessionId).toBe(newId)
+    // Idempotent.
+    expect(await refreshRouterPrompt(s, employee.id)).toBe(false)
   })
 })
