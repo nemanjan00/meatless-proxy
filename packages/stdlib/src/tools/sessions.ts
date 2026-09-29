@@ -1,3 +1,4 @@
+import { subscriptionScope } from '../subscription-presets.ts'
 import { ValidationError, type Json } from '@mp/core'
 import { internalSubject } from '@mp/events'
 import {
@@ -327,7 +328,11 @@ export function registerSessionTools(kit: Kit): void {
         await linkRequester(child, ctx)
         const task = tasks[i]
         if (task) {
-          await deps.events.subscriptions.subscribe(child.id, task, { primary: true, actor: kit.actor(ctx) })
+          await deps.events.subscriptions.subscribe(child.id, task, {
+            primary: true,
+            ...subscriptionScope(task.system),
+            actor: kit.actor(ctx),
+          })
           await kit.patchMeta(child.id, (m) => ({ ...m, realTask: task }))
         }
         const run = await kit.startRun(child.id, ctx, { type: 'loop', ...(mode ? { mode } : {}) })

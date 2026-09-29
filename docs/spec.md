@@ -1391,6 +1391,23 @@ forward it.
   to another session.
 - **Any session can subscribe.** It's part of the session library, like fork
   and loop.
+- **Subscriptions never overreach by default.** A subscription without
+  explicit event types gets the usual ones for its kind of subject:
+  - a chat thread: replies, edits, deletions and reactions (not the root
+    message)
+  - a Linear issue: comments, state and assignment changes
+  - a GitLab MR: comments, pipelines, failed jobs, and MR state
+  - Slack: replies, edits, deletions, mentions and reactions
+
+  Every subscription the harness makes on its own uses these defaults: when a
+  session starts a thread, replies in one, is handed a subject by a router, or
+  owns a real fork's task. Sessions can narrow further with **presets**
+  (`people_only`, `conversation`, `outcomes`, `failures`) or their own filter.
+  Subscribing to everything is an explicit `all: true`.
+- **No catch-all triggers.** A trigger must match something specific: a
+  source, a type, a subject or a filter. A trigger matching `{}` (or only
+  wildcards) is refused, because catching whatever nothing else claims is the
+  job of the fallback, the employee's router.
 
 | Tool         | What it does                                               |
 |--------------|------------------------------------------------------------|

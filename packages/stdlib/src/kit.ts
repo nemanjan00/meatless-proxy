@@ -1,3 +1,4 @@
+import { subscriptionScope } from './subscription-presets.ts'
 import { ConflictError, NotFoundError, ValidationError, isMpError, type Json } from '@mp/core'
 import type { Employee } from '@mp/directory'
 import type { AssistantContent, Run, Session, SessionData } from '@mp/sessions'
@@ -176,6 +177,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     if (!subject) return
     await deps.events.subscriptions.subscribe(newSessionId, subject, {
       primary: true,
+      ...subscriptionScope(subject.system),
       actor: { type: 'session', id: ctx.sessionId },
     })
   }

@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_PRESETS, subscriptionScope } from '../subscription-presets.ts'
 import { NotFoundError, ValidationError, type Json } from '@mp/core'
 import type { Subject, Trigger, TriggerPatch, TriggerTarget } from '@mp/events'
 import type { ToolContext } from '@mp/tools'
@@ -65,26 +66,55 @@ export function registerEventTools(kit: Kit): void {
     {
       name: 'subscriptions.subscribe',
       description:
-        'Have events about a thing (a ticket, a PR, a thread, a running environment, another session) delivered straight to this session, without routing. primary: true means you are the one expected to act on untagged events. Optionally only some event types, or a filter (MongoDB-style query over the event).',
+        'Have events about a thing (a ticket, a PR, a thread, a running environment, another session) delivered straight to this session, without routing. primary: true means you are the one expected to act on untagged events. By default you get the events that matter for that kind of thing (e.g. replies, comments, pipeline results), not everything: narrow further with types, a preset or a filter (MongoDB-style query), or pass all: true for every event.',
       effect: 'idempotent',
       params: {
         properties: {
           subject: subjectProp,
-          types: { type: 'array', items: { type: 'string' }, description: 'Event type globs, e.g. ["comment.*"]. Default: all.' },
+          types: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Event type globs, e.g. ["comment.*"]. Default: the usual ones for this kind of subject.',
+          },
+          preset: {
+            type: 'string',
+            enum: Object.keys(SUBSCRIPTION_PRESETS),
+            description: Object.entries(SUBSCRIPTION_PRESETS)
+              .map(([k, v]) => `${k}: ${v.description}`)
+              .join(' '),
+          },
           filter: { type: 'object', description: 'e.g. {"payload.author.kind": "contact"}' },
+          all: { type: 'boolean', description: 'Every event about the subject. Rarely what you want.' },
           primary: { type: 'boolean' },
         },
         required: ['subject'],
       },
     },
     async (a, ctx) => {
-      const sub = await events.subscriptions.subscribe(ctx.sessionId, subjectOf(a.subject), {
+      const subject = subjectOf(a.subject)
+      let scope: ReturnType<typeof subscriptionScope>
+      try {
+        scope = subscriptionScope(subject.system, {
+          ...(a.types ? { types: a.types } : {}),
+          ...(a.filter !== undefined ? { filter: a.filter } : {}),
+          ...(a.preset ? { preset: String(a.preset) } : {}),
+          ...(a.all ? { all: true } : {}),
+        })
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err))
+      }
+      const sub = await events.subscriptions.subscribe(ctx.sessionId, subject, {
         ...(a.primary !== undefined ? { primary: !!a.primary } : {}),
-        ...(a.types ? { types: a.types } : {}),
-        ...(a.filter !== undefined ? { filter: a.filter } : {}),
+        ...scope,
         actor: kit.actor(ctx),
       })
-      return ok({ subscriptionId: sub.id, subject: sub.data.subject as unknown as Json, primary: sub.data.primary })
+      return ok({
+        subscriptionId: sub.id,
+        subject: sub.data.subject as unknown as Json,
+        primary: sub.data.primary,
+        types: (sub.data.types ?? 'all') as Json,
+        ...(sub.data.filter !== undefined ? { filter: sub.data.filter } : {}),
+      })
     },
   )
 

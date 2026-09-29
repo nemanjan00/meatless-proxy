@@ -1,3 +1,4 @@
+import { subscriptionScope } from '../subscription-presets.ts'
 import { DeniedError, NotFoundError, ValidationError, type Json } from '@mp/core'
 import type { Channel, Message } from '@mp/chat'
 import type { Ref } from '@mp/store'
@@ -92,7 +93,7 @@ export function registerChatTools(kit: Kit): void {
       await deps.events.subscriptions.subscribe(
         ctx.sessionId,
         { system: 'mp', id: thread },
-        { primary: true, actor: kit.actor(ctx) },
+        { primary: true, ...subscriptionScope('mp'), actor: kit.actor(ctx) },
       )
     return { messageId: msg.id, threadId: thread }
   }
@@ -146,6 +147,7 @@ export function registerChatTools(kit: Kit): void {
         if (!subs.some((x) => x.data.sessionId === ctx.sessionId)) {
           await deps.events.subscriptions.subscribe(ctx.sessionId, subject, {
             primary: !subs.some((x) => x.data.primary),
+            ...subscriptionScope('mp'),
             actor: kit.actor(ctx),
           })
         }

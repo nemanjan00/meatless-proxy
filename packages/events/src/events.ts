@@ -180,7 +180,8 @@ export interface Subscriptions {
   subscribe(
     sessionId: string,
     subject: Subject,
-    opts?: { primary?: boolean; types?: string[]; filter?: Json; actor?: Actor },
+    /** `types: null` / `filter: null` clear them (every event type / no filter). */
+    opts?: { primary?: boolean; types?: string[] | null; filter?: Json | null; actor?: Actor },
   ): Promise<Subscription>
   /** Ends the subscription (kept as a record with `endedReason: 'unsubscribed'`). No-op if there is none. */
   unsubscribe(sessionId: string, subject: Subject): Promise<void>
@@ -504,16 +505,16 @@ export function createEvents(opts: EventsOptions): Events {
     async subscribe(sessionId, subject, o = {}) {
       if (!sessionId) throw new ValidationError('sessionId is required')
       const subj = checkSubject(subject, 'subject')
-      if (o.types !== undefined && (!Array.isArray(o.types) || o.types.some((t) => typeof t !== 'string')))
+      if (o.types !== undefined && o.types !== null && (!Array.isArray(o.types) || o.types.some((t) => typeof t !== 'string')))
         throw new ValidationError('types must be a list of strings')
-      if (o.filter !== undefined) eventFilter(o.filter)
+      if (o.filter !== undefined && o.filter !== null) eventFilter(o.filter)
       const data: SubscriptionData = {
         sessionId,
         subject: subj,
         subjectKey: subjectKey(subj),
         primary: o.primary ?? false,
         ...(o.types ? { types: o.types } : {}),
-        ...(o.filter !== undefined ? { filter: o.filter } : {}),
+        ...(o.filter !== undefined && o.filter !== null ? { filter: o.filter } : {}),
         active: true,
       }
       validateRecord(records.kinds.get('subscription'), data)
@@ -534,8 +535,10 @@ export function createEvents(opts: EventsOptions): Events {
           patch.endedReason = undefined
         }
         if (o.primary !== undefined && o.primary !== cur.data.primary) patch.primary = o.primary
-        if (o.filter !== undefined) patch.filter = o.filter
-        if (o.types !== undefined && JSON.stringify(o.types) !== JSON.stringify(cur.data.types)) patch.types = o.types
+        if (o.filter === null) patch.filter = undefined
+        else if (o.filter !== undefined) patch.filter = o.filter
+        if (o.types === null) patch.types = undefined
+        else if (o.types !== undefined && JSON.stringify(o.types) !== JSON.stringify(cur.data.types)) patch.types = o.types
         else if (o.types === undefined && !cur.data.active && cur.data.types !== undefined) patch.types = undefined
         return Object.keys(patch).length ? patch : null
       })

@@ -1,3 +1,4 @@
+import { subscriptionScope } from './subscription-presets.ts'
 import { errorMessage, globMatch, type Hooks } from '@mp/core'
 import type { ChatEventPayload } from '@mp/chat'
 import { beforeDeliver } from '@mp/router'
@@ -202,7 +203,10 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
           const subject = { system: 'mp', id: threadId }
           const subs = await deps.events.subscriptions.forSubject(subject)
           if (!subs.some((x) => x.data.sessionId === session.id))
-            await deps.events.subscriptions.subscribe(session.id, subject, { primary: !subs.some((x) => x.data.primary) })
+            await deps.events.subscriptions.subscribe(session.id, subject, {
+              primary: !subs.some((x) => x.data.primary),
+              ...subscriptionScope('mp'),
+            })
         } catch (err) {
           deps.logger.warn('answer where asked: could not post the reply', { runId: run.id, err: errorMessage(err) })
         }
