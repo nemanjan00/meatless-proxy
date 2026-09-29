@@ -194,6 +194,53 @@ describe('chat activity in the chat page', () => {
     expect(notice).toHaveAttribute('href', `/sessions/${SES.pay123}?tab=runs`)
   })
 
+  it('"Handled by" in the thread panel follows hand-offs live', async () => {
+    const root = mockId('msg', 1)
+    const data = await renderChat(`/chat/${CHN.billing}/${root}`)
+    const panel = await screen.findByTestId('thread')
+    const before = within(panel).queryAllByRole('link', { name: /refund follow-up/i }).length
+    // A new session takes the thread (the router's hand-off subscribes it), and its work shows up live.
+    const db = data.api.db
+    const at = new Date(db.now()).toISOString()
+    const sessions = db.records.get('session')!
+    const any = [...sessions.values()][0]!
+    sessions.set('ses_handoff', {
+      ...any,
+      id: 'ses_handoff',
+      data: { ...(any.data as object), slug: 'refund-follow-up', title: 'Refund follow-up' },
+      createdAt: at,
+      updatedAt: at,
+    } as any)
+    const subs = db.records.get('subscription') ?? new Map()
+    db.records.set('subscription', subs)
+    subs.set('sub_handoff', {
+      id: 'sub_handoff',
+      kind: 'subscription',
+      version: 1,
+      createdAt: at,
+      updatedAt: at,
+      data: { sessionId: 'ses_handoff', subject: { system: 'chat', ref: root }, primary: false },
+    } as any)
+    act(() =>
+      data.live.emit('chat.activity', {
+        channelId: CHN.billing,
+        item: {
+          channelId: CHN.billing,
+          threadId: root,
+          sessionId: 'ses_handoff',
+          employee: { id: EMP.billing, name: 'Billing Bot' },
+          sessionLabel: '@billing-bot#refund-follow-up',
+          runId: RUN.r2,
+          state: 'running',
+          since: at,
+        } as ChatActivityItem,
+      }),
+    )
+    await waitFor(() =>
+      expect(within(panel).queryAllByRole('link', { name: /refund follow-up/i }).length).toBeGreaterThan(before),
+    )
+  })
+
   it('collapses three or more workers into "3 working"', async () => {
     const data = await renderChat()
     const root = mockId('msg', 6)

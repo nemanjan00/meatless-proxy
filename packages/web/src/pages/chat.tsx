@@ -350,7 +350,23 @@ function ThreadPanel({
 }) {
   const api = useApi()
   const thread = useLoad((a) => a.thread(threadId), [threadId])
+  // "Handled by" follows the work live: when someone starts, hands off or finishes work on this thread,
+  // its sessions are fetched again (debounced), without reloading the messages.
+  const refreshSessions = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => void (refreshSessions.current && clearTimeout(refreshSessions.current)), [])
   useLive([`chat:${channelId}`], (e) => {
+    if (e.topic === 'chat.activity' || e.topic === 'chat.activity.done') {
+      const about = e.topic === 'chat.activity' ? e.payload.item.threadId : e.payload.threadId
+      if (about !== threadId) return
+      if (refreshSessions.current) clearTimeout(refreshSessions.current)
+      refreshSessions.current = setTimeout(() => {
+        api
+          .thread(threadId)
+          .then((t) => thread.setData((prev) => (prev ? { ...prev, sessions: t.sessions } : t)))
+          .catch(() => {})
+      }, 400)
+      return
+    }
     if (e.topic !== 'chat.message') return
     const m = e.payload.message
     if (m.id === threadId || m.data.threadId === threadId) {
