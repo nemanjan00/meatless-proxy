@@ -164,6 +164,11 @@ export const projectSchema: KindSchema = {
           { name: 'httpUrl', type: 'string', description: 'The https URL of the same repository, when url is ssh.' },
           { name: 'defaultBranch', type: 'string' },
           { name: 'path', type: 'string' },
+          {
+            name: 'previousUrl',
+            type: 'string',
+            description: "The repository's earlier url, e.g. its local repository (local:<slug>) before a remote was attached.",
+          },
         ],
       },
     },
@@ -202,6 +207,8 @@ export interface Repository {
   httpUrl?: string
   defaultBranch?: string
   path?: string
+  /** The earlier url, e.g. `local:<slug>` before a remote was attached (the local repository is kept). */
+  previousUrl?: string
 }
 
 export interface ProjectData extends Record<string, unknown> {

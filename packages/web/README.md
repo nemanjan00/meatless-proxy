@@ -66,11 +66,18 @@ the demo employee.
 
 The employee page's **Projects** section (`src/components/employee-projects.tsx`) lists the projects the employee
 works on (`GET /api/employees/:id/projects`) with its roles, each owner and repository; members and admins add one
-with the `RecordPicker` and a role (`RoleSelect`: member or owner), remove one, or press **New project**.
+with the `RecordPicker` and a role (`RoleSelect`: member, reviewer or owner), remove one, or press **New project**.
 `src/components/new-project-dialog.tsx` is that dialog (name, description, repository URLs, docs links, an employee
 owner, preset to the page's employee) over `POST /api/projects`; the Projects list's **New project** opens it too,
 instead of the generic record form. A project's page shows `ProjectPeopleSection`
 (`src/components/project-people.tsx`): the employees and people on it, owners first, with the same add and remove.
+Admins can pick **Local repository** in the dialog (`POST /api/projects/local`): the harness hosts the repository. A
+local project's page then has `LocalRepositorySection` (`src/components/local-repository.tsx`,
+docs/spec.md#local-projects): **To review** lists the branches ahead of `main`, each opening its commits, changed files
+and coloured diff with **Merge** (a 409 shows the conflicting files) and **Delete branch** (confirmed) for those who
+can merge; merged branches fold away; **Files** browses `main` read-only; admins get **Attach a remote** (URL, optional
+https URL, whose SSH key pushes). The mock (`src/mock/projects.ts`) models local repositories in memory;
+`mockPushBranch` adds a branch as an employee's push would.
 In GitLab's setup, the projects step (`src/components/gitlab-projects.tsx`) shows which GitLab projects are already
 harness projects of the employee, with **Add as project** per row and **Add selected** (`add-projects`). Admins get
 the whole list from `gitlabProjects` (a debounced server-side search, **Load more** with the total, an All / Not added

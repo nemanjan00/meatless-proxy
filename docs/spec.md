@@ -320,6 +320,13 @@ protected branches, cannot merge, and cannot deploy.
 - This is enforced by the employee's credentials on the git host and in CI (no
   merge or push rights on protected branches, no production deploy rights).
   It doesn't depend on the model's judgment.
+- **No merge tool exists.** Not in the standard library, not in the GitLab
+  integration, not for [local projects](#local-projects). The harness's own
+  push policy refuses protected branches (`main`, `master`, `production`,
+  `release/**`) and anything but the employee's own `mp/**` branches, before
+  git is asked, for every repository. In a [local project](#local-projects)
+  merging is a person's action on the project's page in the web UI; AI
+  employees never sign in, so no route merges for them.
 
 Open questions:
 
@@ -1241,6 +1248,9 @@ webhooks.
   and an employee as owner, created and linked in one step. A name or a
   repository another project already has is refused. `owner` replaces the
   current owner; other roles add to what someone already holds.
+- **Local repository** (admins): "New project → Local repository" (`POST
+  /api/projects/local`) creates the project on a new repository the harness
+  hosts itself, with no git host at all. See [local projects](#local-projects).
 - **From GitLab**, in the employee's [guided setup](#guided-setup): "Add as
   project" on each GitLab project its account reaches.
 - **Who.** Members and admins, like any link on the records API; everyone
@@ -1357,6 +1367,71 @@ and can run it.
 - **PRs only.** Employees push to their own branches and open pull requests.
   They cannot push to or merge into protected branches
   ([no production access](#no-production-access)).
+
+#### Local projects
+
+A project can live without a git host: its repository is a **bare git
+repository the harness hosts itself**. For quick internal tools, experiments,
+and work that has no GitLab project yet.
+
+- **Storage.** `<LOCAL_REPOS_DIR>/<slug>.git` (default `<DATA_DIR>/repos`),
+  one bare repository per project. The project's repository is
+  `{ url: 'local:<slug>', defaultBranch: 'main' }`; its mirror key is
+  `harness/<slug>`. A slug is lowercase letters, digits and inner dashes, at
+  most 64 characters: nothing from input can name a path outside the
+  directory.
+- **Only the harness uses it.** No git-over-SSH, no HTTP clone URL. Employees'
+  checkouts fetch from it and push to it by path, with no credentials; the
+  directory is never mounted into environments (a checkout's `.git` points
+  outside the container, as for every checkout).
+- **Creating one.** An admin, with **New project → Local repository** (or
+  `POST /api/projects/local` with a name, description, owner and members), or
+  an employee with `projects.create_local { name, description? }`, which makes
+  it a `member`. A new repository has one empty commit on `main`, so a
+  checkout works at once. Linking a `local:` URL to another project is
+  refused: local repositories are only made with their project, and only
+  admins change which one a project has (records API included).
+- **Pushing.** `git.checkout` and `git.push` work as for any repository, under
+  the same push policy: the employee's own `mp/**` branches, never `main`,
+  `master`, `production` or `release/**`. The repository also refuses
+  non-fast-forward pushes and deletions. There are no merge requests: after a
+  push, `git.push` says a person reviews it in the web UI, and subscribes the
+  session to the branch (subject `local-git:<slug>/<branch>`, types
+  `branch.*`).
+- **Review and merge** (people only). The project's page has a
+  **Repository** section: the branches ahead of `main` (commits ahead and
+  behind), each opened with its commits, changed files and diff against the
+  merge base; **Merge** fast-forwards when it can and otherwise writes a merge
+  commit by the person merging (`git merge-tree` in the bare repository, the
+  branch moved with a compare-and-swap). Conflicts are reported with the
+  conflicting files and change nothing: they're resolved on the branch.
+  **Delete branch** removes a branch (never `main`). Both send the subscribed
+  session an event (`branch.merged` / `branch.deleted`, source `local-git`),
+  so the employee learns what happened, like a GitLab MR event.
+- **Who merges.** Admins, and members who are the project's `owner`, `backup`
+  or `reviewer` (`MERGE_ROLES`). Everyone signed in can read the branches,
+  diffs and files. Because project roles are knowledge members can edit, on a
+  local project those three roles are only handed out by someone who can
+  already merge there.
+- **Browsing.** A **Files** tab browses `main` read-only (binary and very large
+  files are named, not shown).
+- **Attaching a remote later** (admins): **Attach a remote** (`POST
+  /api/projects/:id/local/remote { url, httpUrl?, employeeId? }`) pushes every
+  branch and tag to a new, empty repository on a git host, with the chosen
+  employee's SSH key (default: the project's owner, else its first employee
+  member with a key; else the harness's own credentials). Then the project's
+  repository becomes that remote, with the local one kept as its
+  `previousUrl`: checkouts fetch from the remote and reviews move to merge
+  requests there. Refused credentials and a remote that already has other
+  history are clear errors; credentials in the URL are refused. Checkouts
+  made before keep pushing to the local repository until their session ends.
+
+| Route | Who |
+|-------|-----|
+| `POST /api/projects/local` | admins |
+| `GET /api/projects/:id/local`, `…/compare?branch=`, `…/tree?path=`, `…/file?path=` | everyone signed in |
+| `POST /api/projects/:id/local/merge`, `…/branches/delete` | admins, the project's owners, backups and reviewers |
+| `POST /api/projects/:id/local/remote` | admins |
 
 #### Agent instructions in repositories
 
@@ -2324,6 +2399,7 @@ forward it.
     message)
   - a Linear issue: comments, state and assignment changes
   - a GitLab MR: comments, pipelines, failed jobs, and MR state
+  - a [local project](#local-projects) branch: merged and deleted
   - Slack: replies, edits, deletions, mentions and reactions
 
   Every subscription the harness makes on its own uses these defaults: when a
@@ -2896,7 +2972,8 @@ the section it links to.
 
 ### Safety that doesn't depend on the model
 
-- **Hard limits outside the model.** No merging or deploying, only PRs.
+- **Hard limits outside the model.** No merging or deploying, only PRs (in a
+  local project, a person merges in the web UI). No tool merges.
   Secrets are injected at call time and never shown to it. Containers can only
   reach allowlisted destinations through a proxy.
 - **Policies as hooks.** Checklist evidence, docs maintenance, commit on stop,

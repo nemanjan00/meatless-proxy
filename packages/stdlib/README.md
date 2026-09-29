@@ -12,7 +12,8 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
 
 - `registerStdlib(registry, deps: StdlibDeps): string[]` registers the tools
   and returns their names. `git.*` needs `deps.git`, `env.*` needs
-  `deps.containers`, `code.*` needs `deps.sandbox` (`@mp/sandbox`).
+  `deps.containers`, `code.*` needs `deps.sandbox` (`@mp/sandbox`),
+  `projects.create_local` needs `deps.localProjects`.
   `deps.defaultTimezone()` gives `time.now` the company timezone (default UTC).
 - `employeePrompt({ employee, contact, procedures?, skills?, memories?, now })`:
   the system prompt (identity, personality, the employee rules, how to use the
@@ -68,6 +69,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
+| `projects.create_local` | a project on a repository the harness hosts (docs/spec.md#local-projects), the employee a member (`deps.localProjects.create`, once per call). No tool merges |
 | `env.*` | up (with `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
 | `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
 | `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
@@ -173,7 +175,10 @@ Notes on behaviour:
   in `session.meta.worktrees`. Commits carry `Session:` and `Requested-by:`
   trailers. Pushes go through `assertPushAllowed` with `config.pushPolicy`.
   `git.checkout` (fetch, worktree) and `git.push` pass `{ sshPrivateKey }` from
-  `deps.sshKeyFor(employeeId)` when it returns a key, else no auth.
+  `deps.sshKeyFor(employeeId)` when it returns a key, else no auth. A local
+  repository (`local:<slug>`) gets no auth; `git.push` to one says a person
+  merges it in the web UI and subscribes the session to the branch
+  (`localBranchSubject`, types `branch.*`: `branch.merged`, `branch.deleted`).
 - **Environments**: `env.up` names the environment `envNameFor(<employee slug>,
   <session slug>)` (`[a-z0-9-]`, at most `MAX_ENV_NAME` = 40 characters, cut with
   a 6-hex hash suffix), so Docker names are `mp-<employee>-<session>-…` and stay
@@ -219,6 +224,9 @@ naming, egress allowlists and narrowing, and the SSH key passed to git;
 `test/env-direct.test.ts` direct networks (not narrowed by the project, the
 model can't ask for or widen to one, turned off by the deployment, running
 environments keep what they started with).
+`test/local-projects.test.ts` covers `projects.create_local` (membership, once per call, the toolsets), checkout and
+push of a local repository without the SSH key and the branch subscription, protected branches refused, and that no
+tool merges.
 `test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
 project, `you`, role order, the limit), skipping a repeat, new sessions and forks
 getting the current list with the system prompt byte-identical after an

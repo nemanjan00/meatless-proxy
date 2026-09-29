@@ -27,6 +27,7 @@ import { EnvironmentMonitor, EnvironmentViews, environmentRoutes } from './envir
 import { procedureRoutes } from './procedures/index.ts'
 import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
 import { projectRoutes } from './projects/index.ts'
+import { localProjectRoutes } from './local-projects/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { registerThreadContext } from './thread-context.ts'
 import { backfillPrivateWork, upgradeEmployees, watchEmployeePrompts } from './upgrade.ts'
@@ -157,6 +158,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', identityRoutes(services)) // integration users and their contacts (src/integrations/identity-routes.ts)
   app.route('/', mcpServerRoutes(services))
   app.route('/', projectRoutes(services))
+  app.route('/', localProjectRoutes(services)) // repositories the harness hosts (src/local-projects)
   app.route('/', procedureRoutes(services))
   app.route('/', knowledgeRoutes(services, auth.visibility)) // Memory, Skills and People (src/knowledge)
   app.route('/', notificationPrefsRoutes(services))

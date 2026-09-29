@@ -1,6 +1,15 @@
 import { join } from 'node:path'
 import { NotFoundError, ValidationError, type Json } from '@mp/core'
-import { assertPushAllowed, mirrorKey, type Author, type GitAuth, type GitCache } from '@mp/git'
+import {
+  assertPushAllowed,
+  isLocalRepoUrl,
+  localBranchSubject,
+  localRepoSlug,
+  mirrorKey,
+  type Author,
+  type GitAuth,
+  type GitCache,
+} from '@mp/git'
 import type { Session } from '@mp/sessions'
 import type { ToolContext } from '@mp/tools'
 import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type WorktreeMeta } from '../kit.ts'
@@ -67,6 +76,10 @@ export function accessFailure(err: unknown, url: string, hasKey: boolean): strin
     "Ask an admin to add your git host account to the project (the harness can't grant it). Meanwhile, if you have the git host's tools (e.g. mcp.gitlab.get_file, mcp.gitlab.list_tree), read the files through them, or ask a colleague who has access to do the part that needs the checkout.",
   ].join(' ')
 }
+
+/** What git.push says after pushing to a repository the harness hosts (a local project). */
+export const LOCAL_REVIEW_NOTE =
+  "This repository is hosted by the harness: there are no merge requests. Tell the requester the branch is ready for review; a person with a merge role reviews and merges it on the project's page in the web UI. You can't merge it yourself. This session is told when it is merged or deleted."
 
 /** git.read_file: the most lines one call returns. */
 const READ_MAX_LINES = 2000
@@ -147,7 +160,8 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const emp = await kit.employee(ctx.employeeId)
       const branch = branchFor(emp, session.data.slug)
       const path = join(deps.config.worktreesRoot, session.id, key)
-      const auth = await gitAuthFor(deps, ctx.employeeId)
+      // A repository the harness hosts itself (local:<slug>) is read from disk: no key needed.
+      const auth = isLocalRepoUrl(repo.url) ? undefined : await gitAuthFor(deps, ctx.employeeId)
       try {
         await git.fetch(repo.url, auth)
       } catch (err) {
@@ -271,7 +285,7 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
     {
       name: 'git.push',
       description:
-        'Push your branch to the remote so you can open a pull request (with the task system or git host tools). Only your own branches can be pushed; protected branches (main, releases) never.',
+        "Push your branch to the remote so you can open a pull request (with the task system or git host tools). Only your own branches can be pushed; protected branches (main, releases) never. For a project hosted by the harness (a local project) there's no pull request: a person merges the branch in the web UI.",
       effect: 'idempotent',
       params: { properties: { repo: repoProp, branch: { type: 'string', description: 'Default: your checkout branch.' } } },
     },
@@ -279,8 +293,22 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const w = await worktree(ctx, a.repo)
       const branch = str(a.branch) ?? w.branch
       assertPushAllowed(branch, deps.config.pushPolicy)
-      await git.push(w.path, branch, deps.config.pushPolicy, await gitAuthFor(deps, ctx.employeeId))
-      return ok({ key: w.key, pushed: branch, url: w.url })
+      const slug = localRepoSlug(w.url)
+      await git.push(w.path, branch, deps.config.pushPolicy, slug ? undefined : await gitAuthFor(deps, ctx.employeeId))
+      if (!slug) return ok({ key: w.key, pushed: branch, url: w.url })
+      // A local project: no merge request to open. A person merges it in the web UI; this session hears about it.
+      const name = branch.replace(/^refs\/heads\//, '')
+      await deps.events.subscriptions.subscribe(ctx.sessionId, localBranchSubject(slug, name), {
+        primary: true,
+        types: ['branch.*'],
+        actor: kit.actor(ctx),
+      })
+      return ok({
+        key: w.key,
+        pushed: name,
+        url: w.url,
+        review: LOCAL_REVIEW_NOTE,
+      })
     },
   )
 

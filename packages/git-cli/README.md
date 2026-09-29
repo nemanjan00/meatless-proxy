@@ -4,7 +4,9 @@ git CLI adapter (L2) for `@mp/git`. Runs `git` with `execFile` (no shell).
 
 ## API
 
-`gitCliCache({ root, git = 'git', env?, logger?, clock?, timeoutMs? })` returns a `GitCache`. Also `GitError`.
+`gitCliCache({ root, git = 'git', env?, logger?, clock?, timeoutMs?, localReposDir? })` returns a `GitCache`. Also
+`GitError`. With `localReposDir`, a `local:<slug>` url is fetched from and pushed to `<localReposDir>/<slug>.git` by
+path (no auth; a missing repository is a `NotFoundError`); without it such urls are refused.
 
 - Layout like Go's module cache: `mirrorPath(url) = <root>/<mirrorKey(url)>`, one bare repository per remote, created
   atomically (in a temp dir, then renamed).
@@ -29,8 +31,28 @@ git CLI adapter (L2) for `@mp/git`. Runs `git` with `execFile` (no shell).
   Credentials in URLs are masked in error messages.
 - Every operation on one cache repo and its worktrees is serialised in-process.
 
+`gitCliLocalRepos({ root, git?, env?, logger?, clock?, timeoutMs? })` returns a `LocalRepos` (docs/spec.md#local-projects):
+
+- `create`: `init --bare --initial-branch=main` in a temp dir, hooks off, `receive.denyNonFastForwards` and
+  `receive.denyDeletes`, an empty tree and one commit by the given author, then renamed into place (atomic; a taken
+  slug is a `ConflictError`).
+- `merge`: a fast-forward when the default branch is an ancestor; else `git merge-tree --write-tree` (git 2.38+) in
+  the bare repository, `commit-tree` with both parents, by the person. Conflicts (exit 1) are a `ConflictError` with
+  `details.files` and change nothing. The default branch moves with `update-ref <new> <old>`, a compare-and-swap.
+- `compare` (log, `--name-status`, the diff against the merge base, cut at 400 KB), `branches` (`for-each-ref`, ahead
+  and behind with `rev-list --left-right --count`), `tree`/`readFile` (`ls-tree` and `cat-file` on `<sha>:<path>`,
+  paths normalised and refused outside the repository), `deleteBranch` (never the default branch).
+- `pushAll`: pushes `refs/heads/*` and `refs/tags/*` to a remote with the given `GitAuth`; refused access is a
+  `DeniedError`, a remote with other history a `ConflictError`.
+- Every write to one repository runs one at a time; a bad slug is refused before anything touches disk.
+
+`src/exec.ts` holds the shared git runner (`gitRunner`, `withAuth`, `GitError`, `BASE_CONFIG`).
+
 ## Tests
 
+`test/local.test.ts` covers local repositories: slugs and path escapes, create, an employee's checkout and push (and
+protected branches refused), compare, fast-forward, merge commit, conflicts, concurrent merges, delete, browsing, and
+attaching a remote (an empty one, one with other history, refused credentials through a fake `ssh`).
 `test/git-cli.test.ts` uses real git against local `file://` repositories in a temp dir, with
 `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. `test/ssh.test.ts` puts a fake `ssh` first on the PATH that
 records its arguments and the key file (mode, content, dir mode) and runs the remote command locally, so `ssh://`

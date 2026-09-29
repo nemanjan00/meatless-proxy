@@ -15,6 +15,7 @@ import type { Docs, Records } from '@mp/records'
 import type { Sandbox } from '@mp/sandbox'
 import type { Sessions } from '@mp/sessions'
 import type { SkillsService } from '@mp/skills'
+import type { Actor } from '@mp/store'
 import type { UsageService } from '@mp/usage'
 
 export interface StdlibDeps {
@@ -59,6 +60,18 @@ export interface StdlibDeps {
    * for the duration of each command. Optional: without it git runs with the harness's own credentials.
    */
   sshKeyFor?: (employeeId: string) => Promise<string | undefined>
+  /**
+   * Creates a project on a new repository the harness hosts itself (`local:<slug>`), with the employee as a
+   * member (`projects.create_local`). Optional: without it that tool isn't registered.
+   */
+  localProjects?: {
+    create(input: {
+      name: string
+      description?: string
+      employeeId: string
+      actor: Actor
+    }): Promise<{ projectId: string; name: string; url: string; defaultBranch: string }>
+  }
   /**
    * The company timezone (an IANA name, the `timezone` setting), used by `time.now` when the call
    * names none. Optional: without it, or when it returns nothing, `UTC`.

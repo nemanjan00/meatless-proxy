@@ -222,7 +222,7 @@ export interface ProjectData extends Record<string, unknown> {
   status: string
   owner?: string
   /** `httpUrl` is the https URL of a repository whose `url` is ssh. */
-  repositories?: { url: string; httpUrl?: string; defaultBranch?: string; path?: string }[]
+  repositories?: { url: string; httpUrl?: string; defaultBranch?: string; path?: string; previousUrl?: string }[]
   links?: { system: string; ref: string }[]
   document?: string
 }

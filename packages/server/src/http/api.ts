@@ -35,6 +35,7 @@ import {
 } from './views.ts'
 import type { NowTracker } from '../live.ts'
 import { canSeeMemoryRecord } from '../knowledge/memory-access.ts'
+import { assertLocalReposUnchanged, assertMayGrantRole } from '../local-projects/access.ts'
 
 /** Kinds the generic records API never exposes: secrets and credentials, and MCP servers (their own admin API). */
 // A person's inbox state and notification preferences are theirs alone (src/inbox.ts, src/notification-prefs.ts).
@@ -183,6 +184,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (body.key !== undefined && typeof body.key !== 'string') throw new BadRequestError('key must be a string')
     guardAccessField(c, kind, body.data as Record<string, unknown>)
     checkNetwork(kind, body.data as Record<string, unknown>)
+    if (kind === 'project' && 'repositories' in body.data)
+      await assertLocalReposUnchanged(s, principalOf(c), null, (body.data as Record<string, unknown>).repositories)
     const r = await s.records.create(kind, body.data as Record<string, unknown>, {
       actor: await actor(c),
       ...(typeof body.key === 'string' ? { key: body.key } : {}),
@@ -199,6 +202,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (body.version !== undefined && typeof body.version !== 'number') throw new BadRequestError('version must be a number')
     guardAccessField(c, kind, body.data as Record<string, unknown>)
     checkNetwork(kind, body.data as Record<string, unknown>)
+    // Who merges into a local project follows from it (src/local-projects/access.ts): admins only re-point it.
+    if (kind === 'project' && 'repositories' in body.data)
+      await assertLocalReposUnchanged(s, principalOf(c), id, (body.data as Record<string, unknown>).repositories)
     await requireVisible(c, await s.records.get(kind, id))
     const patch: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(body.data as Record<string, unknown>)) patch[k] = v === null ? undefined : v
@@ -259,6 +265,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const toId = requireString(body.to?.id, 'to.id')
     const role = requireString(body.role, 'role')
     visibleKind(toKind)
+    // A role that merges into a local project is given only by someone who can merge there (src/local-projects/access.ts).
+    if (kind === 'contact' && toKind === 'project') await assertMayGrantRole(s, principalOf(c), toId, role.trim().toLowerCase())
     const link = await s.records.link(
       { kind, id },
       { kind: toKind, id: toId },

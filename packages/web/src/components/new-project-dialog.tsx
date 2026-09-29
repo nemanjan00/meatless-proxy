@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 
 function Row({ id, label, hint, children }: { id: string; label: string; hint?: string; children: ReactNode }) {
   return (
@@ -38,7 +39,8 @@ export interface OwnerChoice {
 /**
  * "New project": name, description, repository URLs, optional docs links, and an employee as its
  * owner. The server creates the project and links the owner in one step (`POST /api/projects`),
- * which is what tells the employee it works on it.
+ * which is what tells the employee it works on it. Admins can pick **Local repository** instead of
+ * URLs: the harness hosts a new repository for it (`POST /api/projects/local`, docs/spec.md#local-projects).
  */
 export function NewProjectDialog({
   open,
@@ -53,6 +55,9 @@ export function NewProjectDialog({
   onCreated?(r: CreatedProject): void
 }) {
   const api = useApi()
+  const { can } = useAuth()
+  const canLocal = can('admin')
+  const [local, setLocal] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [repos, setRepos] = useState('')
@@ -66,6 +71,7 @@ export function NewProjectDialog({
     setRepos('')
     setDocs('')
     setOwner(initialOwner)
+    setLocal(false)
     setError(null)
   }
   const submit = async (e: FormEvent) => {
@@ -75,13 +81,19 @@ export function NewProjectDialog({
     setBusy(true)
     setError(null)
     try {
-      const r = await api.createProject({
+      const common = {
         name: name.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
-        ...(lines(repos).length ? { repositories: lines(repos) } : {}),
-        ...(lines(docs).length ? { docs: lines(docs) } : {}),
         ...(owner ? { owner: { employeeId: owner.employeeId } } : {}),
-      })
+      }
+      const r =
+        local && canLocal
+          ? await api.createLocalProject(common)
+          : await api.createProject({
+              ...common,
+              ...(lines(repos).length ? { repositories: lines(repos) } : {}),
+              ...(lines(docs).length ? { docs: lines(docs) } : {}),
+            })
       toast(`${r.project.data.name} created`, {
         description: owner ? `${owner.name} owns it and sees it in its projects from its next piece of work.` : undefined,
       })
@@ -123,26 +135,58 @@ export function NewProjectDialog({
               placeholder="Card payments, refunds and payouts."
             />
           </Row>
-          <Row id="np-repos" label="Repositories" hint="One URL per line, https or ssh">
-            <Textarea
-              id="np-repos"
-              value={repos}
-              onChange={(e) => setRepos(e.target.value)}
-              rows={2}
-              className="font-mono text-micro"
-              placeholder="git@gitlab.example.com:acme/payments.git"
-            />
-          </Row>
-          <Row id="np-docs" label="Docs links" hint="Optional, one per line">
-            <Textarea
-              id="np-docs"
-              value={docs}
-              onChange={(e) => setDocs(e.target.value)}
-              rows={1}
-              className="font-mono text-micro"
-              placeholder="https://docs.example.com/payments"
-            />
-          </Row>
+          {canLocal && (
+            <div className="flex flex-col gap-1">
+              <span className="text-micro font-medium text-fg-secondary">Repository</span>
+              <div role="radiogroup" aria-label="Repository" className="flex w-fit gap-1">
+                {[
+                  { value: false, label: 'On a git host' },
+                  { value: true, label: 'Local repository' },
+                ].map((o) => (
+                  <Button
+                    key={o.label}
+                    type="button"
+                    size="xs"
+                    role="radio"
+                    aria-checked={local === o.value}
+                    variant={local === o.value ? 'secondary' : 'ghost'}
+                    onClick={() => setLocal(o.value)}
+                  >
+                    {o.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+          {local && canLocal ? (
+            <p className="text-micro text-fg-tertiary" data-testid="np-local-hint">
+              The harness hosts a new git repository for it, with an empty first commit on main. Employees push their branches
+              there; people review and merge them on the project's page. You can attach a remote later.
+            </p>
+          ) : (
+            <>
+              <Row id="np-repos" label="Repositories" hint="One URL per line, https or ssh">
+                <Textarea
+                  id="np-repos"
+                  value={repos}
+                  onChange={(e) => setRepos(e.target.value)}
+                  rows={2}
+                  className="font-mono text-micro"
+                  placeholder="git@gitlab.example.com:acme/payments.git"
+                />
+              </Row>
+              <Row id="np-docs" label="Docs links" hint="Optional, one per line">
+                <Textarea
+                  id="np-docs"
+                  value={docs}
+                  onChange={(e) => setDocs(e.target.value)}
+                  rows={1}
+                  className="font-mono text-micro"
+                  placeholder="https://docs.example.com/payments"
+                />
+              </Row>
+            </>
+          )}
           <Row id="np-owner" label="Owner" hint="The employee accountable for it">
             {owner ? (
               <div className="flex h-8 items-center gap-2 rounded-md border px-2" data-testid="np-owner">

@@ -34,6 +34,7 @@ first by a small built-in loader; variables already set win.
 | `DATA_DIR` | `./.data/app` | Harness data (git stores, worktrees) |
 | `GIT_CACHE_DIR` | `$DATA_DIR/git` | Git stores, one per employee: `<dir>/<employeeId>/<host>/<path>` |
 | `WORKTREES_DIR` | `$DATA_DIR/worktrees` | Session worktrees |
+| `LOCAL_REPOS_DIR` | `$DATA_DIR/repos` | The harness's own bare repositories ([local projects](#local-projects)), `<dir>/<slug>.git`. Keep it on a persistent volume: until a remote is attached it is the only copy |
 | `DOCKER_ENABLED` | `false` (`true` in compose) | Use the Docker runtime for project environments (`env.*` tools) |
 | `DOCKER_SOCKET` | dockerode default | Docker socket path |
 | `DOCKER_NAME_PREFIX` | `mp-` | Prefix of every container and network this deployment makes (sandboxes, environments, their sidecars, direct networks), also its `mp.deployment` label on every container, network and volume. Starts with `mp-`, ends with `-`, a-z, 0-9 and `-`, at most 12 characters; checked at start. Give each deployment on one Docker host its own (e.g. `mp-e2e-`): a deployment only lists and cleans up resources with its own label. `FILES_VOLUME` keeps its configured name |
@@ -159,7 +160,9 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   `GET /api/employees/:id/integrations/slack/manifest`.
 - Projects and who works on them (`@mp/api` `PROJECT_ROUTES`, served by `src/projects`, see [Projects and
   assignments](#projects-and-assignments)): `POST /api/projects`, `GET|POST /api/projects/:id/people`,
-  `DELETE /api/projects/:id/people/:contactId`, `GET /api/employees/:id/projects`.
+  `DELETE /api/projects/:id/people/:contactId`, `GET /api/employees/:id/projects`; local projects (`src/local-projects`,
+  see [Local projects](#local-projects)): `POST /api/projects/local`, `GET /api/projects/:id/local` (and `/compare`,
+  `/tree`, `/file`), `POST /api/projects/:id/local/merge`, `/branches/delete`, `/remote`.
 - Procedures (`@mp/api` `PROCEDURE_ROUTES`, served by `src/procedures`, see [Procedures](#procedures)):
   `GET|POST /api/procedures`, `GET /api/procedures/:id`, `POST /api/procedures/:id/run`, `…/context/rebuild`,
   `…/archive`, `POST /api/procedures/:id/triggers`, `PATCH|DELETE /api/procedures/:id/triggers/:triggerId`.
@@ -767,7 +770,33 @@ from its AI contact, with a role, the same link GitLab hook provisioning and the
 `addProjectPerson` (`owner` replaces the owner), `removeProjectPerson` (one role or all; an employee losing its last
 role also loses the project from its older `scope.projects`), `projectPeople`, `employeeProjects`,
 `projectByRepository`. `projectRoutes(s)` serves them; writes need a member (`GUARD_RULES`), like links.
-`createEmployee` links its `projects` as `member`.
+`createEmployee` links its `projects` as `member`. A `local:` URL is refused there: local repositories are made with
+their project (below), and `assertMayGrantRole` refuses handing out a merge role on a local project to anyone who
+can't merge there already.
+
+## Local projects
+
+`src/local-projects` (docs/spec.md#local-projects): projects whose repository is a bare repository the harness hosts
+(`local:<slug>` at `<LOCAL_REPOS_DIR>/<slug>.git`, `Services.localRepos`, the git CLI adapter's `gitCliLocalRepos`).
+The employee git stores get `LOCAL_REPOS_DIR` too, so checkouts and pushes reach it by path, without keys.
+
+- `createLocalProject(s, body, actor, author)`: a free slug from the name (or `slug`), the repository with an empty
+  first commit on `main`, then `createProject` on it; the repository is removed again if the project fails.
+  `createLocalProjectForEmployee` is the stdlib's `localProjects.create` (`projects.create_local`): the employee is a
+  `member`, and the first commit is its.
+- `localProject`, `mergeLocalBranch` (fast-forward or merge commit by the person; conflicts are a 409 with
+  `details.files`), `deleteLocalBranch`: both write a `local-git` event (`branch.merged` / `branch.deleted`) on the
+  branch's subject, which `git.push` subscribed the pushing session to.
+- `attachRemote` (admins): refuses credentials in the URL and a repository another project has, picks the SSH key
+  (`employeeId`, else the owner, else the first employee member with a key), pushes every branch and tag, then
+  replaces the repository with the remote (`previousUrl: local:<slug>`). Access problems are a 403, a remote with
+  other history a 409.
+- `access.ts`: `MERGE_ROLES` (owner, backup, reviewer), `canMerge` (admins, or members with one of them),
+  `mergeGuard` (the merge and delete-branch rules in `GUARD_RULES`), `assertMayGrantRole` and
+  `assertLocalReposUnchanged` (the records API: only admins point a project at a local repository).
+- Routes: `POST /api/projects/local` and `POST …/:id/local/remote` (admins), `POST …/:id/local/merge` and
+  `…/branches/delete` (`mergeGuard`), `GET …/:id/local`, `…/compare?branch=`, `…/tree?path=&ref=`,
+  `…/file?path=&ref=` (everyone signed in). AI employees never sign in, so none of them is open to an employee.
 
 ## Procedures
 

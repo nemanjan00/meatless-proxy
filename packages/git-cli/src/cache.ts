@@ -1,20 +1,20 @@
-import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { ConflictError, NotFoundError, ValidationError, silentLogger, systemClock, type Clock, type Logger } from '@mp/core'
 import {
-  ConflictError,
-  MpError,
-  NotFoundError,
-  UnavailableError,
-  ValidationError,
-  silentLogger,
-  systemClock,
-  type Clock,
-  type Logger,
-} from '@mp/core'
-import { assertPushAllowed, isValidBranchName, mirrorKey, type GitAuth, type GitCache, type WorktreeInfo } from '@mp/git'
+  assertPushAllowed,
+  isValidBranchName,
+  localRepoSlug,
+  mirrorKey,
+  type GitAuth,
+  type GitCache,
+  type WorktreeInfo,
+} from '@mp/git'
+import { GitError, gitRunner, withAuth } from './exec.ts'
+
+export { GitError } from './exec.ts'
 
 export interface GitCliOptions {
   /** Cache root. Mirrors live at `<root>/<host>/<path>`. */
@@ -28,61 +28,17 @@ export interface GitCliOptions {
   clock?: Clock
   /** Kills a git command that runs longer than this. Default 10 minutes. */
   timeoutMs?: number
-}
-
-/** A git command failed. `details` has the exit code and stderr (credentials in URLs are masked). */
-export class GitError extends MpError {
-  constructor(message: string, details: { args: string[]; exitCode: number | null; stderr: string }) {
-    super('git', message, details)
-  }
+  /**
+   * Where the harness's own repositories are (`LOCAL_REPOS_DIR`): a `local:<slug>` url is fetched from
+   * and pushed to `<localReposDir>/<slug>.git` directly, without auth. Without it `local:` urls are refused.
+   */
+  localReposDir?: string
 }
 
 /** Remote-tracking layout: remote branches under `refs/remotes/origin/*`, session branches are local `refs/heads/*`. */
 const FETCH_REFSPECS = ['+refs/heads/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*']
 
-/** Always on: no hooks (repo content is untrusted), no signing prompts, no command-running transports. */
-const BASE_CONFIG = ['core.hooksPath=/dev/null', 'commit.gpgSign=false', 'tag.gpgSign=false', 'protocol.ext.allow=never']
-
 const TRAILER_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/
-
-const maskUrl = (s: string) => s.replace(/(\w+:\/\/)[^/@\s]+@/g, '$1***@')
-
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
-
-/**
- * Runs `fn` with the environment that makes git use `auth` for SSH: the key (and known hosts)
- * in a private temp dir, `GIT_SSH_COMMAND` pointing at them. The files are removed afterwards,
- * whatever happens. Without `auth`, `fn` gets no extra environment.
- */
-async function withAuth<T>(auth: GitAuth | undefined, fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
-  if (!auth) return fn({})
-  const dir = await mkdtemp(join(tmpdir(), 'mp-git-ssh-')) // mode 0700
-  try {
-    const args = ['ssh']
-    if (auth.sshPrivateKey) {
-      const key = join(dir, 'id')
-      const text = auth.sshPrivateKey.endsWith('\n') ? auth.sshPrivateKey : `${auth.sshPrivateKey}\n`
-      await writeFile(key, text, { mode: 0o600 })
-      args.push('-i', shellQuote(key), '-o', 'IdentitiesOnly=yes')
-    }
-    let knownHosts = '/dev/null'
-    if (auth.knownHosts) {
-      knownHosts = join(dir, 'known_hosts')
-      await writeFile(knownHosts, auth.knownHosts.endsWith('\n') ? auth.knownHosts : `${auth.knownHosts}\n`, { mode: 0o600 })
-    }
-    args.push(
-      '-o',
-      `UserKnownHostsFile=${shellQuote(knownHosts)}`,
-      '-o',
-      `StrictHostKeyChecking=${auth.strictHostKeyChecking ? 'yes' : 'accept-new'}`,
-      '-o',
-      'BatchMode=yes',
-    )
-    return await fn({ GIT_SSH_COMMAND: args.join(' ') })
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-}
 
 /**
  * `GitCache` on the git CLI. Each remote gets one bare cache repository (the "mirror"),
@@ -112,33 +68,19 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
     return run
   }
 
-  function git(
-    args: string[],
-    o: { cwd?: string; env?: Record<string, string>; allowFail?: boolean } = {},
-  ): Promise<{ stdout: string; stderr: string; code: number }> {
-    const full = [...BASE_CONFIG.flatMap((c) => ['-c', c]), ...args]
-    return new Promise((res, rej) => {
-      execFile(
-        gitBin,
-        full,
-        { cwd: o.cwd, env: { ...baseEnv, ...o.env }, maxBuffer: 256 * 1024 * 1024, timeout, encoding: 'utf8' },
-        (err, stdout, stderr) => {
-          if (!err) return res({ stdout, stderr, code: 0 })
-          const e = err as NodeJS.ErrnoException & { code?: number | string; killed?: boolean }
-          if (e.code === 'ENOENT') return rej(new UnavailableError(`git binary not found: ${gitBin}`))
-          const code = typeof e.code === 'number' ? e.code : null
-          if (o.allowFail && code !== null) return res({ stdout, stderr, code })
-          const safeArgs = args.map(maskUrl)
-          const msg = e.killed
-            ? `git ${args[0]} timed out`
-            : `git ${safeArgs.join(' ')} failed: ${maskUrl(stderr.trim()) || e.message}`
-          rej(new GitError(msg, { args: safeArgs, exitCode: code, stderr: maskUrl(stderr) }))
-        },
-      )
-    })
-  }
+  const git = gitRunner({ git: gitBin, env: baseEnv, timeoutMs: timeout })
 
   const mirrorPath = (url: string) => join(root, mirrorKey(url))
+
+  /** What git fetches from and pushes to for a repository url: a local repository's path, else the url itself. */
+  const remoteOf = async (url: string): Promise<string> => {
+    const slug = localRepoSlug(url)
+    if (!slug) return url
+    if (!opts.localReposDir) throw new ValidationError('local repositories are not configured here')
+    const path = join(resolve(opts.localReposDir), `${slug}.git`)
+    if (!(await exists(join(path, 'HEAD')))) throw new NotFoundError('local repository', slug)
+    return path
+  }
 
   async function exists(p: string) {
     try {
@@ -153,11 +95,12 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
     const path = mirrorPath(url)
     if (await exists(join(path, 'HEAD'))) return path
     if (url.startsWith('-')) throw new ValidationError(`not a repository url: ${url}`)
+    const remote = await remoteOf(url)
     await mkdir(dirname(path), { recursive: true })
     const tmp = `${path}.tmp-${randomBytes(4).toString('hex')}`
     try {
       await git(['init', '--bare', '--quiet', tmp])
-      await git(['--git-dir', tmp, 'config', 'remote.origin.url', url])
+      await git(['--git-dir', tmp, 'config', 'remote.origin.url', remote])
       for (const spec of FETCH_REFSPECS) await git(['--git-dir', tmp, 'config', '--add', 'remote.origin.fetch', spec])
       await git(['--git-dir', tmp, 'config', 'gc.worktreePruneExpire', 'now'])
       await withAuth(auth, async (env) => {

@@ -19,7 +19,8 @@ import {
 import { createDirectory, type Directory, type Employee } from '@mp/directory'
 import { createEvents, type Events } from '@mp/events'
 import { createFiles, directoryStorage, migrateFileRecords, type FileStorage, type FilesService } from '@mp/files'
-import type { GitCache } from '@mp/git'
+import type { GitCache, LocalRepos } from '@mp/git'
+import { gitCliLocalRepos } from '@mp/git-cli'
 import { isManagedHub, type McpHub } from '@mp/mcp'
 import { createMcpHub } from '@mp/mcp-sdk'
 import { createMemory, type MemoryService } from '@mp/memory'
@@ -58,6 +59,7 @@ import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
 import { McpServers } from './mcp-servers/index.ts'
 import { privateEvents, privateSessions, watchDmLinks } from './private-work.ts'
+import { createLocalProjectForEmployee } from './local-projects/index.ts'
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -66,6 +68,8 @@ export interface AppOverrides {
   model?: ModelClient
   mcpHub?: McpHub
   git?: GitCache
+  /** The harness's own repositories (local projects). Default: the git CLI on LOCAL_REPOS_DIR. */
+  localRepos?: LocalRepos
   containers?: ContainerRuntime
   /** Where employee files live. Default: `directoryStorage` on FILES_DIR. */
   fileStorage?: FileStorage
@@ -96,6 +100,8 @@ export interface Services {
   git: GitCache
   /** The per-employee git stores behind `git` (null when a git cache was injected). */
   gitStores: EmployeeGit | null
+  /** The harness's own bare repositories, for local projects (src/local-projects). */
+  localRepos: LocalRepos
   containers: ContainerRuntime | null
   /** code.run's sandboxes, when containers are enabled and SANDBOX_ENABLED. */
   sandbox: Sandbox | null
@@ -210,11 +216,14 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     mkdirSync(config.GIT_CACHE_DIR, { recursive: true })
     gitStores = employeeGit({
       root: config.GIT_CACHE_DIR,
+      localReposDir: config.LOCAL_REPOS_DIR,
       logger: logger.child({ component: 'git' }),
       clock,
     })
     git = gitStores
   }
+  const localRepos =
+    o.localRepos ?? gitCliLocalRepos({ root: config.LOCAL_REPOS_DIR, logger: logger.child({ component: 'local-repos' }), clock })
   const containers =
     o.containers ??
     (config.DOCKER_ENABLED
@@ -524,6 +533,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     mcpHub,
     git,
     gitStores,
+    localRepos,
     containers,
     sandbox,
     secrets,
@@ -594,6 +604,10 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       toolsetFor: async (employeeId: string) => tools.allowed(await toolListsFor(employeeId)).map((t) => t.name),
       ...(sandbox ? { sandbox } : {}),
       sshKeyFor: async (employeeId: string) => (await sshPrivateKey({ secrets }, employeeId)) ?? undefined,
+      // projects.create_local: a project on a repository the harness hosts, the employee a member (src/local-projects).
+      localProjects: {
+        create: (input: Parameters<typeof createLocalProjectForEmployee>[1]) => createLocalProjectForEmployee(services, input),
+      },
       defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
       enqueueRun: (runId: string, opts?: { priority?: number }) => runner.enqueue(runId, opts ?? {}),
       wakeRun: (runId: string) => runner.wake(runId),

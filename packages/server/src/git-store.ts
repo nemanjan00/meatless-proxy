@@ -16,6 +16,8 @@ export function asEmployee<T>(employeeId: string | undefined, fn: () => Promise<
 export interface EmployeeGitOptions {
   /** `<root>/<employeeId>/<host>/<path>`. */
   root: string
+  /** Where the harness's own repositories are (`local:<slug>` urls), for the default git CLI caches. */
+  localReposDir?: string
   logger: Logger
   clock: Clock
   /** Builds a cache for one employee (default: the git CLI adapter). */
@@ -48,7 +50,12 @@ export function employeeGit(opts: EmployeeGitOptions): EmployeeGit {
     opts.make ??
     ((o) => {
       mkdirSync(o.root, { recursive: true })
-      return gitCliCache({ root: o.root, logger: opts.logger, clock: opts.clock })
+      return gitCliCache({
+        root: o.root,
+        logger: opts.logger,
+        clock: opts.clock,
+        ...(opts.localReposDir ? { localReposDir: opts.localReposDir } : {}),
+      })
     })
 
   const build = async (employeeId: string): Promise<GitCache> => make({ root: join(opts.root, safeDir(employeeId)) })

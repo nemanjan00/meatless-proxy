@@ -1,4 +1,5 @@
 import { DeniedError, ValidationError, globMatch } from '@mp/core'
+import { LOCAL_MIRROR_HOST, localRepoSlug } from './local.ts'
 
 export interface Author {
   name: string
@@ -71,10 +72,13 @@ export function assertPushAllowed(branch: string, policy: PushPolicy): void {
 
 /**
  * `https://github.com/acme/billing.git` -> `github.com/acme/billing`. Also handles `git@host:path`,
- * `ssh://`, `file://` (under `local/`) and plain paths. The result is always a safe relative path:
+ * `ssh://`, `file://` (under `local/`), plain paths, and the harness's own `local:<slug>` (under `harness/`). The result is always a safe relative path:
  * no empty, `.` or `..` segments, and only `[A-Za-z0-9._~@:+-]` characters in each segment.
  */
 export function mirrorKey(url: string): string {
+  // A repository the harness hosts itself: `local:<slug>` -> `harness/<slug>` (the slug is validated).
+  const slug = localRepoSlug(url)
+  if (slug) return `${LOCAL_MIRROR_HOST}/${slug}`
   let u = url.trim().replace(/\\/g, '/')
   let host = ''
   let path: string

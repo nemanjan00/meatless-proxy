@@ -1,11 +1,13 @@
 import type * as Api from '@mp/api'
 import { ConflictError, NotFoundError, ValidationError } from '@mp/core'
 import type { Contact, Project, ProjectData, Repository } from '@mp/directory'
+import { LOCAL_MIRROR_HOST, isLocalRepoUrl, isValidRepoSlug } from '@mp/git'
 import type { Actor } from '@mp/store'
 import { type Context, Hono } from 'hono'
 import { principalOf } from '../auth/guard.ts'
 import { BadRequestError, jsonBody, requireString } from '../http/util.ts'
 import { actorOf } from '../http/views.ts'
+import { assertMayGrantRole } from '../local-projects/access.ts'
 import type { Services } from '../services.ts'
 
 /**
@@ -27,11 +29,16 @@ const roleRank = (roles: string[]) => Math.min(...roles.map((r) => (ROLE_ORDER.i
 /**
  * A repository URL reduced to `host/path` (lowercase, no `.git`, no credentials), so the https and
  * ssh URLs of one repository compare equal: `git@gitlab.com:acme/pay.git` and
- * `https://gitlab.com/acme/pay` are both `gitlab.com/acme/pay`. Null for something that isn't a URL.
+ * `https://gitlab.com/acme/pay` are both `gitlab.com/acme/pay`. A local repository `local:<slug>` is
+ * `harness/<slug>`. Null for something that isn't a URL.
  */
 export function repoKey(url: string): string | null {
   const s = url.trim()
   if (!s) return null
+  if (isLocalRepoUrl(s)) {
+    const slug = s.slice('local:'.length)
+    return isValidRepoSlug(slug) ? `${LOCAL_MIRROR_HOST}/${slug}` : null
+  }
   const clean = (host: string, path: string) => {
     const p = path
       .replace(/^\/+|\/+$/g, '')
@@ -175,14 +182,19 @@ function repositoryOf(r: unknown): Repository {
   return { url: (o.url as string).trim(), ...opt('httpUrl'), ...opt('defaultBranch'), ...opt('path') }
 }
 
-/** The request's repositories: empty ones dropped, each checked to be a URL, duplicates (by `repoKey`) removed. */
-function repositoriesOf(v: unknown): Repository[] {
+/**
+ * The request's repositories: empty ones dropped, each checked to be a URL, duplicates (by `repoKey`) removed.
+ * Local repositories (`local:<slug>`) only with `allowLocal`: they are made by `POST /api/projects/local`.
+ */
+function repositoriesOf(v: unknown, allowLocal = false): Repository[] {
   if (v === undefined || v === null) return []
   if (!Array.isArray(v)) throw new BadRequestError('repositories must be a list of URLs')
   const out: Repository[] = []
   const seen = new Set<string>()
   for (const repo of v.map(repositoryOf)) {
     if (!repo.url) continue
+    if (isLocalRepoUrl(repo.url) && !allowLocal)
+      throw new ValidationError('a local repository is created with the project (New project → Local repository), not linked')
     const key = repoKey(repo.url)
     if (!key) throw new ValidationError(`${repo.url} isn't a repository URL (use https://… or git@host:path)`)
     if (seen.has(key)) continue
@@ -211,13 +223,18 @@ function docsOf(v: unknown): { system: string; ref: string }[] {
  * step (`POST /api/projects`). Everyone is checked before anything is written. A repository
  * another project already has is a `ConflictError` naming that project.
  */
-export async function createProject(s: Services, body: Record<string, unknown>, actor: Actor): Promise<Api.CreatedProject> {
+export async function createProject(
+  s: Services,
+  body: Record<string, unknown>,
+  actor: Actor,
+  opts: { allowLocal?: boolean } = {},
+): Promise<Api.CreatedProject> {
   const name = requireString(body.name, 'name').trim()
   if (!name) throw new ValidationError('name is required')
   if (body.description !== undefined && body.description !== null && typeof body.description !== 'string')
     throw new BadRequestError('description must be a string')
   const description = typeof body.description === 'string' ? body.description.trim() : ''
-  const repositories = repositoriesOf(body.repositories)
+  const repositories = repositoriesOf(body.repositories, opts.allowLocal)
   const docs = docsOf(body.docs)
   const owner = body.owner ? await contactOf(s, body.owner, 'owner') : null
   if (body.members !== undefined && !Array.isArray(body.members)) throw new BadRequestError('members must be a list')
@@ -271,7 +288,9 @@ export function projectRoutes(s: Services): Hono {
     const body = await jsonBody<Record<string, unknown>>(c)
     const id = c.req.param('id')
     await s.directory.projects.require(id)
-    await addProjectPerson(s, id, await contactOf(s, body), roleOf(body.role, 'member'), actor(c))
+    const role = roleOf(body.role, 'member')
+    await assertMayGrantRole(s, principalOf(c), id, role)
+    await addProjectPerson(s, id, await contactOf(s, body), role, actor(c))
     return c.json(await projectPeople(s, id))
   })
 

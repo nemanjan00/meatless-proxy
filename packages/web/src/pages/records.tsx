@@ -23,6 +23,7 @@ import { SplitView } from '@/components/split-view.tsx'
 import { NewProjectDialog } from '@/components/new-project-dialog.tsx'
 import { PersonAvatar } from '@/components/people.tsx'
 import { ProjectPeopleSection } from '@/components/project-people.tsx'
+import { LocalRepositorySection, hasLocalRepository } from '@/components/local-repository.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog.tsx'
@@ -437,6 +438,9 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
               </section>
             )}
             {kind === 'project' && <ProjectPeopleSection projectId={r.id} className="mb-8" />}
+            {kind === 'project' && hasLocalRepository(r.data) && (
+              <LocalRepositorySection projectId={r.id} className="mb-8" onRemoteAttached={rec.reload} />
+            )}
             <Tabs defaultValue="links">
               <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b pb-0">
                 <TabsTrigger value="links" className="flex-none px-0">

@@ -16,10 +16,11 @@ import { cn } from '@/lib/utils.ts'
 /** The roles offered when assigning someone to a project. */
 export const PROJECT_ROLES = [
   { value: 'member', label: 'Member' },
+  { value: 'reviewer', label: 'Reviewer' },
   { value: 'owner', label: 'Owner' },
 ] as const
 
-/** Owner or member. Owner replaces the project's current owner. */
+/** Owner, reviewer or member. Owner replaces the project's current owner; reviewers merge into local projects. */
 export function RoleSelect({
   value,
   onChange,

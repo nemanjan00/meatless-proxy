@@ -18,6 +18,15 @@ The git port (L1): a local cache of remotes, worktrees per session, commits and 
 - `assertPushAllowed(branch, policy)`: throws `DeniedError` for protected branches, branches not in `allow`, and invalid
   names (anything that could smuggle a refspec such as `mp/x:main`).
 - `isValidBranchName(name)`.
+- Local repositories (`src/local.ts`, docs/spec.md#local-projects): `LocalRepos`, the port for the harness's own bare
+  repositories (`create` with an empty first commit on `main`, `branches` ahead/behind the default branch, `compare`,
+  `merge` fast-forward or merge commit with conflicts as a `ConflictError` listing `details.files`, `deleteBranch`,
+  `tree`, `readFile`, `pushAll` to attach a remote, `remove`). A person's API: employees reach a local repository only
+  through `GitCache`. `local:<slug>` URLs: `isValidRepoSlug`/`assertRepoSlug` (`[a-z0-9-]`, at most 64, no leading or
+  trailing dash), `localRepoUrl`, `localRepoSlug` (null for other URLs, throws for a bad slug), `isLocalRepoUrl`,
+  `slugifyRepoName`; `mirrorKey('local:<slug>')` is `harness/<slug>`. `LOCAL_GIT_SYSTEM` and `localBranchSubject(slug,
+  branch)` name the `branch.merged` / `branch.deleted` events. The adapter is `gitCliLocalRepos` in `@mp/git-cli`
+  (tested there against real git); there is no in-memory fake.
 - `fakeGitCache({ root? })`: in-memory implementation for other packages' tests. Records `calls` and `pushes`; simulate
   edits with `writeFile(path, file, content)`, upstream commits with `addRemoteCommit`; `remote(url)` exposes the
   upstream state. `push` enforces `assertPushAllowed` first and rejects non-fast-forwards. `auths` records the auth

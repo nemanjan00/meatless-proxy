@@ -136,6 +136,8 @@ export const configSchema = z.object({
   DATA_DIR: optStr.transform((v) => resolve(v ?? './.data/app')),
   GIT_CACHE_DIR: optStr,
   WORKTREES_DIR: optStr,
+  /** The harness's own git repositories (local projects): `<LOCAL_REPOS_DIR>/<slug>.git`. Default `<DATA_DIR>/repos`. */
+  LOCAL_REPOS_DIR: optStr,
   DOCKER_ENABLED: bool(false),
   DOCKER_SOCKET: optStr,
   /**
@@ -334,9 +336,11 @@ export const configSchema = z.object({
 
 export type RawConfig = z.infer<typeof configSchema>
 
-export interface Config extends Omit<RawConfig, 'GIT_CACHE_DIR' | 'WORKTREES_DIR' | 'MCP_SERVERS' | 'FILES_DIR'> {
+export interface Config
+  extends Omit<RawConfig, 'GIT_CACHE_DIR' | 'WORKTREES_DIR' | 'LOCAL_REPOS_DIR' | 'MCP_SERVERS' | 'FILES_DIR'> {
   GIT_CACHE_DIR: string
   WORKTREES_DIR: string
+  LOCAL_REPOS_DIR: string
   FILES_DIR: string
   MCP_SERVERS: McpServerEntry[]
 }
@@ -388,6 +392,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ...c,
     GIT_CACHE_DIR: resolve(c.GIT_CACHE_DIR ?? `${c.DATA_DIR}/git`),
     WORKTREES_DIR: resolve(c.WORKTREES_DIR ?? `${c.DATA_DIR}/worktrees`),
+    LOCAL_REPOS_DIR: resolve(c.LOCAL_REPOS_DIR ?? `${c.DATA_DIR}/repos`),
     FILES_DIR: resolve(c.FILES_DIR ?? `${c.DATA_DIR}/files`),
     MCP_SERVERS: c.MCP_SERVERS ?? [],
   }

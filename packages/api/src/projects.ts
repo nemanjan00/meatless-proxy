@@ -65,6 +65,105 @@ export interface CreatedProject {
   people: ProjectPerson[]
 }
 
+// ─── Local projects: repositories the harness hosts itself ──────────────────
+//
+// A project whose repository url is `local:<slug>` (docs/spec.md#local-projects). Employees push their
+// own branches there; people review and merge them here. Merging and deleting branches: admins and
+// the project's owners, backups and reviewers. Creating one and attaching a remote: admins.
+
+/** `POST /api/projects/local` body: a new project with a new local repository. */
+export interface CreateLocalProjectBody {
+  name: string
+  description?: string
+  /** The repository's name (`[a-z0-9-]`). Default: from the project name. */
+  slug?: string
+  owner?: ProjectPersonRef
+  members?: (ProjectPersonRef & { role?: ProjectRole })[]
+}
+
+/** A branch of a local repository, compared with its default branch. */
+export interface LocalBranchInfo {
+  name: string
+  sha: string
+  /** Commits the default branch doesn't have yet. 0: merged (or nothing new). */
+  ahead: number
+  /** Commits on the default branch the branch doesn't have. */
+  behind: number
+  subject: string
+  author: string
+  date: string
+}
+
+/** `GET /api/projects/:id/local` → the local repository and its branches. */
+export interface LocalProject {
+  projectId: string
+  slug: string
+  /** `local:<slug>`. */
+  url: string
+  defaultBranch: string
+  branches: LocalBranchInfo[]
+  /** Whether the signed-in person may merge and delete branches (admins, owners, backups, reviewers). */
+  canMerge: boolean
+  /** Whether they may attach a remote (admins). */
+  canAttachRemote: boolean
+}
+
+/** `GET /api/projects/:id/local/compare?branch=` → a branch against the default branch. */
+export interface LocalComparison {
+  branch: string
+  base: string
+  ahead: number
+  behind: number
+  commits: { sha: string; subject: string; author: string; date: string }[]
+  files: { status: string; path: string }[]
+  diff: string
+  truncated: boolean
+  fastForward: boolean
+}
+
+/** `POST /api/projects/:id/local/merge` → what happened. */
+export interface LocalMergeResult {
+  branch: string
+  into: string
+  sha: string
+  mode: 'fast-forward' | 'merge-commit'
+}
+
+/** `GET /api/projects/:id/local/tree?path=&ref=` → one directory. */
+export interface LocalTree {
+  path: string
+  ref: string
+  entries: { name: string; type: 'file' | 'dir'; size?: number }[]
+}
+
+/** `GET /api/projects/:id/local/file?path=&ref=` → one file (no content when binary or too large). */
+export interface LocalFile {
+  path: string
+  ref: string
+  size: number
+  binary: boolean
+  tooLarge: boolean
+  content: string | null
+}
+
+/** `POST /api/projects/:id/local/remote` body: the remote to push everything to and switch the project to. */
+export interface AttachRemoteBody {
+  /** The new, empty remote (ssh or https, no credentials in it). */
+  url: string
+  /** Its https URL, when `url` is ssh. */
+  httpUrl?: string
+  /** Push with this employee's SSH key. Default: the project's owner or first member that is an employee with a key. */
+  employeeId?: string
+}
+
+/** `POST /api/projects/:id/local/remote` → the updated project and what was pushed. */
+export interface AttachedRemote {
+  project: ApiRecord<ProjectData>
+  branches: string[]
+  /** Whose SSH key pushed, if any. */
+  pushedAs: { employeeId: string; name: string } | null
+}
+
 /** The routes of this section (merged into `ROUTES`). */
 export const PROJECT_ROUTES = {
   createProject: ['POST', '/api/projects'],
@@ -72,6 +171,14 @@ export const PROJECT_ROUTES = {
   addProjectPerson: ['POST', '/api/projects/:id/people'],
   removeProjectPerson: ['DELETE', '/api/projects/:id/people/:contactId'],
   employeeProjects: ['GET', '/api/employees/:id/projects'],
+  createLocalProject: ['POST', '/api/projects/local'],
+  localProject: ['GET', '/api/projects/:id/local'],
+  compareLocalBranch: ['GET', '/api/projects/:id/local/compare'],
+  mergeLocalBranch: ['POST', '/api/projects/:id/local/merge'],
+  deleteLocalBranch: ['POST', '/api/projects/:id/local/branches/delete'],
+  localTree: ['GET', '/api/projects/:id/local/tree'],
+  localFile: ['GET', '/api/projects/:id/local/file'],
+  attachRemote: ['POST', '/api/projects/:id/local/remote'],
 } as const
 
 /** The client methods of this section (part of `ApiClient`). */
@@ -93,6 +200,31 @@ export interface ProjectsApi {
   removeProjectPerson(id: string, contactId: string, role?: string): Promise<ProjectPeople>
   /** `GET /api/employees/:id/projects` → the projects an employee works on. */
   employeeProjects(id: string): Promise<EmployeeProjects>
+  /**
+   * `POST /api/projects/local` → a new project with a new local repository (one empty commit on
+   * `main`), its owner and members linked (admins).
+   */
+  createLocalProject(body: CreateLocalProjectBody): Promise<CreatedProject>
+  /** `GET /api/projects/:id/local` → the project's local repository and its branches. 404 without one. */
+  localProject(id: string): Promise<LocalProject>
+  /** `GET /api/projects/:id/local/compare?branch=` → the branch's commits and diff against the default branch. */
+  compareLocalBranch(id: string, branch: string): Promise<LocalComparison>
+  /**
+   * `POST /api/projects/:id/local/merge` body `{ branch }` → merges it into the default branch (fast-forward,
+   * or a merge commit). Conflicts are a 409 listing the files; nothing changes. Admins, owners, backups, reviewers.
+   */
+  mergeLocalBranch(id: string, branch: string): Promise<LocalMergeResult>
+  /** `POST /api/projects/:id/local/branches/delete` body `{ branch }` → deletes a branch (not the default one). */
+  deleteLocalBranch(id: string, branch: string): Promise<LocalProject>
+  /** `GET /api/projects/:id/local/tree?path=&ref=` → a directory of the default branch (or `ref`). */
+  localTree(id: string, path?: string, ref?: string): Promise<LocalTree>
+  /** `GET /api/projects/:id/local/file?path=&ref=` → a file of the default branch (or `ref`). */
+  localFile(id: string, path: string, ref?: string): Promise<LocalFile>
+  /**
+   * `POST /api/projects/:id/local/remote` → pushes every branch to a new, empty remote and makes it the
+   * project's repository (admins). The local repository is kept, as the repository's `previousUrl`.
+   */
+  attachRemote(id: string, body: AttachRemoteBody): Promise<AttachedRemote>
 }
 
 type Call = <T>(
@@ -110,5 +242,13 @@ export function projectsMethods(call: Call): ProjectsApi {
     addProjectPerson: (id, body) => call('addProjectPerson', { id }, undefined, body),
     removeProjectPerson: (id, contactId, role) => call('removeProjectPerson', { id, contactId }, { role }),
     employeeProjects: (id) => call('employeeProjects', { id }),
+    createLocalProject: (body) => call('createLocalProject', undefined, undefined, body),
+    localProject: (id) => call('localProject', { id }),
+    compareLocalBranch: (id, branch) => call('compareLocalBranch', { id }, { branch }),
+    mergeLocalBranch: (id, branch) => call('mergeLocalBranch', { id }, undefined, { branch }),
+    deleteLocalBranch: (id, branch) => call('deleteLocalBranch', { id }, undefined, { branch }),
+    localTree: (id, path, ref) => call('localTree', { id }, { path, ref }),
+    localFile: (id, path, ref) => call('localFile', { id }, { path, ref }),
+    attachRemote: (id, body) => call('attachRemote', { id }, undefined, body),
   }
 }

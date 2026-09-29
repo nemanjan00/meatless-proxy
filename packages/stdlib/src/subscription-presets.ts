@@ -12,6 +12,8 @@ export const DEFAULT_SUBSCRIPTION_TYPES: Record<string, string[]> = {
   slack: ['message.replied', 'message.edited', 'message.deleted', 'message.mentioned', 'reaction.added'],
   linear: ['comment.*', 'issue.state_changed', 'issue.assigned', 'issue.unassigned', 'issue.removed', 'issue.updated'],
   gitlab: ['comment.created', 'pipeline.*', 'job.failed', 'merge_request.*', 'issue.*'],
+  // A branch of a harness-hosted repository (local projects): a person merged or deleted it.
+  'local-git': ['branch.*'],
 }
 
 /** Named filters a session can apply instead of writing one. */

@@ -8,6 +8,7 @@ import type { Services } from '../services.ts'
 import { contactForToken } from '../tokens.ts'
 import { type Access, accessOf, atLeast } from './access.ts'
 import { KNOWLEDGE_GUARD_RULES } from '../knowledge/guard-rules.ts'
+import { mergeGuard } from '../local-projects/access.ts'
 import { RateLimiter } from './rate-limit.ts'
 import { resolveAuthSession } from './sessions.ts'
 import { ChatVisibility, type Viewer } from './visibility.ts'
@@ -172,6 +173,12 @@ export const GUARD_RULES: GuardRule[] = [
     need: (p) => (LINKABLE_KINDS.has(p.kind ?? '') ? 'member' : 'admin'),
   },
   { method: 'DELETE', path: '/api/links/:id', need: 'member' },
+  // Local projects (src/local-projects): creating one and attaching a remote are for admins; merging and deleting
+  // branches for admins and the project's owners, backups and reviewers. AI employees never sign in: no route merges for them.
+  { method: 'POST', path: '/api/projects/local', need: 'admin' },
+  { method: 'POST', path: '/api/projects/:id/local/remote', need: 'admin' },
+  { method: 'POST', path: '/api/projects/:id/local/merge', need: 'member', check: mergeGuard },
+  { method: 'POST', path: '/api/projects/:id/local/branches/delete', need: 'member', check: mergeGuard },
   // Projects and who works on them (src/projects): knowledge too, like the links they are.
   { method: 'POST', path: '/api/projects', need: 'member' },
   { method: 'POST', path: '/api/projects/:id/people', need: 'member' },

@@ -36,6 +36,9 @@ correctly.
   scripts in chat; employees attach any file they made (a chart, a script)
   and look at an image or read a file only when they need to (`image.view`,
   `chat.attachment_text`), so attachments cost tokens only when they matter.
+- **Local projects.** No git host needed: the harness can host a project's
+  repository itself. Employees push their own branches, and people review the
+  diff and merge on the project's page. Attach a GitLab remote any time later.
 - **Safe by construction.** AI employees open pull requests and never merge or
   deploy. Secrets are injected at call time and never shown to the model.
   Checklists need evidence before anything counts as done.

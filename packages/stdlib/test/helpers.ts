@@ -64,6 +64,8 @@ export interface StackOptions {
   describeMode?: ImageDescribeMode
   /** Where employee files are on disk (config.filesDir): env.up mounts them at /files. Default: none. */
   filesDir?: string
+  /** projects.create_local (a fake that writes the project and its member link). Default on. */
+  localProjects?: boolean
 }
 
 /** Where a session's checkout is on disk (git.checkout no longer says: it isn't a path for the model). */
@@ -126,6 +128,25 @@ export async function stack(opts: StackOptions = {}) {
         ...(opts.describeMode ? { mode: opts.describeMode } : {}),
       })
     : undefined
+  /** What projects.create_local asked for. */
+  const localCreated: { name: string; description?: string; employeeId: string }[] = []
+  const localProjects: NonNullable<StdlibDeps['localProjects']> = {
+    async create(input) {
+      localCreated.push({
+        name: input.name,
+        employeeId: input.employeeId,
+        ...(input.description ? { description: input.description } : {}),
+      })
+      const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      const p = await directory.projects.create(
+        { name: input.name, repositories: [{ url: `local:${slug}`, defaultBranch: 'main' }] },
+        { actor: input.actor },
+      )
+      const emp = await directory.employees.require(input.employeeId)
+      await directory.projects.addMember(p.id, emp.data.contactId, 'member', {}, { actor: input.actor })
+      return { projectId: p.id, name: input.name, url: `local:${slug}`, defaultBranch: 'main' }
+    },
+  }
   const deps: StdlibDeps = {
     records,
     docs,
@@ -144,6 +165,7 @@ export async function stack(opts: StackOptions = {}) {
     ...(opts.git === false ? {} : { git }),
     ...(opts.containers === false ? {} : { containers }),
     ...(opts.sandbox === false ? {} : { sandbox }),
+    ...(opts.localProjects === false ? {} : { localProjects }),
     enqueueRun:
       opts.enqueueRun ??
       (async (id) => {
@@ -275,6 +297,7 @@ export async function stack(opts: StackOptions = {}) {
     enqueued,
     woken,
     worktreeFs,
+    localCreated,
     employee,
     ana,
     project,
