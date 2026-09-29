@@ -1090,6 +1090,9 @@ Open questions:
 The harness has a web UI where people can see what it is doing, what it has
 done, and what it costs, and where they can explore and edit what it knows.
 
+It is built with shadcn/ui and styled after Linear. See the
+[stylebook](stylebook.md).
+
 #### Activity
 
 - **Now.** Live view of running sessions: what each one is working on, its

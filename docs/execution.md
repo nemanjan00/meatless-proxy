@@ -374,4 +374,4 @@ stays the same across calls, runs and forks:
 ## Not covered here yet
 
 - **Language and framework.** This design only assumes Postgres, Docker and
-  git.
+  git. The web UI is React, Tailwind and shadcn/ui ([stylebook](stylebook.md)).
