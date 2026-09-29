@@ -584,6 +584,26 @@ Each integration has three parts:
   workspace. Each URL has its own secret.
 - An integration is enabled for an employee when its secrets are set, and the
   employee's tool allow list decides which of its tools it may use.
+- **Webhooks set themselves up.** Nobody registers webhooks by hand: the
+  harness does it through the system's API, for everything an employee works
+  on. For GitLab, that's every repository linked to a project the employee is
+  on.
+  - It generates each webhook's secret and stores it as a [secret](#secrets).
+  - It registers the hook at the employee's webhook URL with the events the
+    integration handles.
+  - It repairs the hook if it drifts (wrong URL, events or secret), and never
+    creates duplicates.
+  - It runs when a token is set, when a repository is linked, and on every
+    start. It needs `PUBLIC_URL`, the address GitLab can reach.
+  - **Permissions.** Registering a GitLab project hook needs the Maintainer
+    role. The recommended setup is a deployment-wide **provisioning token**
+    (`GITLAB_HOOKS_TOKEN`, from a Maintainer or group Owner) used only for
+    registering hooks, while each employee's service account stays
+    **Developer**: it can push branches and open merge requests, but GitLab
+    itself stops it from merging. Without a provisioning token, the
+    employee's own token is used, which then needs Maintainer; `main` must
+    then be protected so only named people can merge.
+  - The model never gets a tool to manage webhooks: it's the harness's job.
 
 #### The harness as an MCP server
 
