@@ -28,6 +28,8 @@ jobs:
       - run: npm run check:secrets
       - run: npm run lint
       - run: npm run typecheck
+      - name: Web UI typecheck and build
+        run: npm run build -w @mp/web
 
   test:
     name: Tests (with Postgres and Redis)
