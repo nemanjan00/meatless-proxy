@@ -14,6 +14,9 @@ For each event, in order:
    recipients.
 4. **Employee tags** (`@employee`) go to the employee's router session, unless
    one of its sessions already acts.
+   A person's untagged follow-up counts as a tag of the employees already in
+   the conversation (`participantsOf`, e.g. those whose sessions posted in the
+   chat thread): reason `thread_participant`.
 5. **Triggers** take work nobody has claimed, into their context (or a fork
    of it).
 6. The **fallback** is the employee's router session, or the default router.
@@ -39,7 +42,9 @@ exactly its trigger through `events.triggers.match`.
 ## API
 
 - `createRouter(opts)` returns `{ plan(event), route(eventId), deliver(event, delivery) }`.
-- `chatTags(event)` and `renderEvent(event)`.
+- `chatTags(event)` and `renderEvent(event)`. A rendered event's header ends
+  with when it arrived, `eventTime(receivedAt)`, e.g. `Tue 2026-09-29 12:07 UTC`,
+  so sessions know the time without a clock in the (cached) system prompt.
 - `beforeDeliver` and `afterFork` (hook points), `QUEUES`.
 
 ## Tests

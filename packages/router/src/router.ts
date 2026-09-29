@@ -10,7 +10,14 @@ export const QUEUES = {
 } as const
 
 /** Why a session receives an event. The first matching rule wins for each session. */
-export type DeliveryReason = 'session_tag' | 'subscription' | 'member' | 'employee_tag' | 'trigger' | 'fallback'
+export type DeliveryReason =
+  | 'session_tag'
+  | 'subscription'
+  | 'member'
+  | 'employee_tag'
+  | 'thread_participant'
+  | 'trigger'
+  | 'fallback'
 
 export interface Delivery {
   sessionId: string
@@ -97,6 +104,13 @@ export interface RouterOptions {
   /** Resolves `@employee` tags in an event to employee ids. Defaults to reading chat-style tags from the payload. */
   tagsOf?: (event: MpEvent) => EventTags
   resolvers?: RecipientResolver[]
+  /**
+   * Employees taking part in the conversation an event belongs to, e.g. those
+   * whose sessions already posted in a chat thread. A person's untagged reply
+   * there goes to that employee's router, unless one of its sessions already
+   * acts on it: a follow-up doesn't need a new tag.
+   */
+  participantsOf?: (event: MpEvent) => Promise<string[]>
   /** Priority for runs caused by a person (`actorContactId` of a non-AI contact). */
   humanPriority?: number
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
@@ -187,11 +201,11 @@ export function createRouter(opts: RouterOptions): Router {
   const tagsOf = opts.tagsOf ?? chatTags
   const humanPriority = opts.humanPriority ?? 10
 
-  const priorityOf = async (event: MpEvent) =>
-    opts.isHuman ? ((await opts.isHuman(event)) ? humanPriority : 0) : event.data.actorContactId ? humanPriority : 0
+  const byPerson = async (event: MpEvent) => (opts.isHuman ? await opts.isHuman(event) : !!event.data.actorContactId)
 
   const plan = async (event: MpEvent): Promise<Delivery[]> => {
-    const priority = await priorityOf(event)
+    const human = await byPerson(event)
+    const priority = human ? humanPriority : 0
     const out = new Map<string, Delivery>()
     const tags = tagsOf(event)
     const add = (d: Omit<Delivery, 'priority'>) => {
@@ -243,6 +257,22 @@ export function createRouter(opts: RouterOptions): Router {
       const routerSession = await opts.routerSessionFor(employeeId)
       if (routerSession)
         add({ sessionId: routerSession, reason: 'employee_tag', expectedToAct: true, trusted: true, fork: false })
+    }
+
+    // 3b. Untagged follow-ups from a person go to the employees already in the conversation.
+    const untagged = tags.sessions.length === 0 && tags.employees.length === 0
+    if (untagged && !tags.authorSessionId && opts.participantsOf && human) {
+      for (const employeeId of await opts.participantsOf(event)) {
+        let handled = false
+        for (const d of out.values()) {
+          if (!d.expectedToAct) continue
+          if ((await opts.sessions.get(d.sessionId))?.data.employeeId === employeeId) handled = true
+        }
+        if (handled) continue
+        const routerSession = await opts.routerSessionFor(employeeId)
+        if (routerSession)
+          add({ sessionId: routerSession, reason: 'thread_participant', expectedToAct: true, trusted: true, fork: false })
+      }
     }
 
     // 4. Triggers, only for work nobody has claimed yet.

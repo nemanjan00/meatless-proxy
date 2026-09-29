@@ -7,7 +7,7 @@ import { memoryStore } from '@mp/store'
 import { describe, expect, it } from 'vitest'
 import { beforeDeliver, runInput, chatTags, createRouter, eventTime, renderEvent, type RecipientResolver } from '../src/index.ts'
 
-async function setup(opts: { resolvers?: RecipientResolver[] } = {}) {
+async function setup(opts: { resolvers?: RecipientResolver[]; participantsOf?: (e: any) => Promise<string[]> } = {}) {
   const bus = createEventBus()
   const records = createRecords({ store: memoryStore({ bus }) })
   const sessions = createSessions({ records, bus })
@@ -30,6 +30,7 @@ async function setup(opts: { resolvers?: RecipientResolver[] } = {}) {
       employeeId === 'emp_a' ? routerA.id : employeeId === 'emp_b' ? routerB.id : employeeId ? null : defaultRouter.id,
     procedureContext: async (id) => (id === 'prc_access' ? procedureCtx.id : null),
     ...(opts.resolvers ? { resolvers: opts.resolvers } : {}),
+    ...(opts.participantsOf ? { participantsOf: opts.participantsOf } : {}),
   })
   const queued: string[] = []
   queue.process<{ runId: string }>('runs', async (j) => void queued.push(j.data.runId))
@@ -153,6 +154,38 @@ describe('router', () => {
     expect(bySession[author.id]).toBeUndefined()
     expect(bySession[t.routerA.id]).toMatchObject({ reason: 'employee_tag' })
     expect(chatTags(ev).sessions).toEqual([target.id])
+  })
+
+  it("sends a person's untagged follow-up to the employees already in the thread", async () => {
+    const t = await setup({ participantsOf: async () => ['emp_a'] })
+    const reply = (payload: Record<string, Json>, actorContactId?: string) =>
+      t.ingest({
+        source: 'chat',
+        type: 'message.replied',
+        subject: { system: 'mp', id: 'msg_root' },
+        ...(actorContactId ? { actorContactId } : {}),
+        payload: payload as Json,
+      })
+    // A person's untagged follow-up goes to the router of the employee in the thread.
+    const plan = await t.router.plan(await reply({ text: 'and which projects?' }, 'con_ana'))
+    expect(plan).toEqual([
+      expect.objectContaining({ sessionId: t.routerA.id, reason: 'thread_participant', expectedToAct: true }),
+    ])
+    // Not when the person tags someone else: it's for them.
+    const tagged = await t.router.plan(
+      await reply({ tags: [{ raw: '@b', type: 'employee', employeeId: 'emp_b' }] as Json }, 'con_ana'),
+    )
+    expect(tagged.map((d) => d.sessionId)).toEqual([t.routerB.id])
+    // Not for messages from AIs (no loops), and not when a session of the employee already handles the thread.
+    expect(
+      (await t.router.plan(await reply({ author: { kind: 'session', id: 'ses_other' } as Json }))).some(
+        (d) => d.reason === 'thread_participant',
+      ),
+    ).toBe(false)
+    const worker = await t.mk('handles the thread')
+    await t.events.subscriptions.subscribe(worker.id, { system: 'mp', id: 'msg_root' }, { primary: true })
+    const handled = await t.router.plan(await reply({ text: 'thanks, one more thing' }, 'con_ana'))
+    expect(handled.map((d) => [d.sessionId, d.reason])).toEqual([[worker.id, 'subscription']])
   })
 
   it('without tags only the primary subscriber is expected to act; tags override', async () => {

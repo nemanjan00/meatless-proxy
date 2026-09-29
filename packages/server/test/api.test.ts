@@ -477,6 +477,31 @@ describe('everyday chat', () => {
     expect((await t.req('POST', '/api/chat/dms', { members: [] })).status).toBe(400)
   })
 
+  it("routes a person's untagged follow-up to the employee that answered in the thread", async () => {
+    const s = t.a.services
+    const root = await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: '@meatless who are you?' })
+    await s.chat.post({ channelId, threadId: root.body.id, author: { kind: 'session', id: routerId }, text: 'Meatless.' })
+    await t.req(
+      'POST',
+      `/api/chat/channels/${channelId}/messages`,
+      { text: 'which projects?', threadId: root.body.id },
+      asOther(),
+    )
+    const events = await s.records.query<any>('event', {
+      where: { type: 'message.replied' },
+      orderBy: { field: 'createdAt', dir: 'desc' },
+      limit: 5,
+    })
+    const followUp = events.items.find(
+      (e: any) => e.data.payload?.text === 'which projects?' || e.data.text?.includes('which projects?'),
+    )
+    expect(followUp).toBeTruthy()
+    const plan = await s.router.plan(followUp!)
+    expect(plan).toContainEqual(
+      expect.objectContaining({ sessionId: routerId, reason: 'thread_participant', expectedToAct: true }),
+    )
+  })
+
   it('searches by text, author and thread, with channel and thread', async () => {
     const root = await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'the quarterly invoice run' })
     const reply = await t.req(

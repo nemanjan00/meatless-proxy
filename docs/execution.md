@@ -127,6 +127,11 @@ and tags combine as described below:
    expected to act.
 3. **Employee tag.** `@employee` delivers to that employee's router session,
    unless one of that employee's sessions already acts on the event.
+   **Follow-ups** count as a tag: a person's untagged reply in a chat thread
+   goes to the employees whose sessions already posted in it (their router
+   session, unless one of their sessions already acts), so nobody has to tag
+   an employee again to continue a conversation. Replies from AIs don't, so
+   this can't loop.
 4. **Triggers.** The first matching trigger, by source, type and filters,
    delivers to its assigned context.
 5. **Fallback.** Anything left over goes to the router session of the employee

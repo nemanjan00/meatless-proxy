@@ -292,6 +292,18 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
     resolvers: [channelMembers],
+    // Employees whose sessions already posted in a chat thread hear a person's untagged follow-up there.
+    participantsOf: async (event) => {
+      const p = event.data.payload as { threadId?: unknown } | undefined
+      if (event.data.source !== 'chat' || event.data.type !== 'message.replied' || typeof p?.threadId !== 'string') return []
+      const employees = new Set<string>()
+      for (const m of await chat.thread(p.threadId)) {
+        if (m.data.author.kind !== 'session') continue
+        const employeeId = (await sessions.get(m.data.author.id))?.data.employeeId
+        if (employeeId) employees.add(employeeId)
+      }
+      return [...employees]
+    },
     isHuman: async (event) => {
       const id = event.data.actorContactId
       if (!id) return false
