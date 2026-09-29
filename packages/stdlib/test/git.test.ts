@@ -169,3 +169,67 @@ describe('worktree paths', () => {
     await expect(fs.write(root, 'link/new', 'x')).rejects.toThrow(/outside the worktree/)
   })
 })
+
+describe('AGENTS.md', () => {
+  const root = (t: Awaited<ReturnType<typeof stack>>) => `/wt/${t.session.id}/github.com/acme/billing`
+
+  it('checkout hands over the root AGENTS.md, once', async () => {
+    const t = await stack()
+    t.worktreeFs.files.set(`${root(t)}/AGENTS.md`, '# Billing\n\nRun `npm test` before committing.')
+    const o = await t.out('git.checkout', { projectId: t.project.id })
+    expect(o.instructions.note).toContain('never override')
+    expect(o.instructions.files).toEqual([{ file: 'AGENTS.md', content: '# Billing\n\nRun `npm test` before committing.' }])
+    const again = await t.out('git.checkout', { projectId: t.project.id })
+    expect(again.existing).toBe(true)
+    expect(again.instructions).toBeUndefined()
+  })
+
+  it('falls back to CLAUDE.md and resolves @ includes inside the checkout only', async () => {
+    const t = await stack()
+    const r = root(t)
+    t.worktreeFs.files.set(
+      `${r}/CLAUDE.md`,
+      'Project notes.\n\n@docs/agents.md\n@../../etc/passwd\n@missing.md\n```\n@docs/agents.md\n```',
+    )
+    t.worktreeFs.files.set(`${r}/docs/agents.md`, 'Use tabs.\n@../CLAUDE.md')
+    const o = await t.out('git.checkout', { projectId: t.project.id })
+    const f = o.instructions.files[0]
+    expect(f.file).toBe('CLAUDE.md')
+    expect(f.includes).toEqual(['docs/agents.md'])
+    expect(f.content).toContain('Use tabs.')
+    // Outside the checkout, missing, cyclic and fenced includes stay as written.
+    expect(f.content).toContain('@../../etc/passwd')
+    expect(f.content).toContain('@missing.md')
+    expect(f.content.match(/Use tabs\./g)).toHaveLength(1)
+  })
+
+  it('hands over nested AGENTS.md files as the session reaches their directories', async () => {
+    const t = await stack()
+    const r = root(t)
+    t.worktreeFs.files.set(`${r}/AGENTS.md`, 'root rules')
+    t.worktreeFs.files.set(`${r}/packages/api/AGENTS.md`, 'api rules')
+    t.worktreeFs.files.set(`${r}/packages/api/src/deep/AGENTS.md`, 'deep rules')
+    t.worktreeFs.files.set(`${r}/packages/api/src/deep/x.ts`, 'x')
+    await t.out('git.checkout', { projectId: t.project.id })
+    const first = await t.out('git.read_file', { path: 'packages/api/src/deep/x.ts' })
+    expect(first.instructions.files.map((f: any) => f.file)).toEqual([
+      'packages/api/AGENTS.md',
+      'packages/api/src/deep/AGENTS.md',
+    ])
+    // Once per session.
+    expect((await t.out('git.read_file', { path: 'packages/api/src/deep/x.ts' })).instructions).toBeUndefined()
+    expect((await t.out('git.write_file', { path: 'packages/api/y.ts', content: 'y' })).instructions).toBeUndefined()
+    // Listing a directory counts as reaching it; a new session gets them again.
+    const s2 = await t.sessions.fork(t.session.id)
+    const listed = await t.out('git.list_files', { path: 'packages/api', sessionId: t.session.id }, t.ctx({ sessionId: s2.id }))
+    expect(listed.instructions.files.map((f: any) => f.file)).toEqual(['packages/api/AGENTS.md'])
+  })
+
+  it('caps large files', async () => {
+    const t = await stack()
+    t.worktreeFs.files.set(`${root(t)}/AGENTS.md`, 'x'.repeat(40 * 1024))
+    const o = await t.out('git.checkout', { projectId: t.project.id })
+    expect(o.instructions.files[0].truncated).toBe(true)
+    expect(o.instructions.files[0].content).toContain('truncated')
+  })
+})

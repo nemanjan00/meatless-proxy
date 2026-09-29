@@ -5,6 +5,7 @@ import type { Session } from '@mp/sessions'
 import type { ToolContext } from '@mp/tools'
 import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type WorktreeMeta } from '../kit.ts'
 import type { StdlibDeps, WorktreeFs } from '../types.ts'
+import { INSTRUCTIONS_NOTE, nestedInstructions, rootInstructions, type AgentInstructions } from '../agent-instructions.ts'
 import { safeRelPath } from '../worktree-fs.ts'
 
 const repoProp = {
@@ -56,6 +57,36 @@ export function trailersFor(sessionId: string, requesterId?: string): Record<str
 export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void {
   const { deps } = kit
   const { directory } = deps
+
+  /** Instruction files already handed to a session, per checkout (session meta `agentInstructions`). */
+  const loadedInstructions = async (sessionId: string, key: string): Promise<Set<string>> => {
+    const s = await deps.sessions.require(sessionId)
+    const all = (s.data.meta?.agentInstructions ?? {}) as Record<string, string[]>
+    return new Set(all[key] ?? [])
+  }
+  const rememberInstructions = (sessionId: string, key: string, files: string[]) =>
+    kit.patchMeta(sessionId, (m) => {
+      const all = { ...((m.agentInstructions as Record<string, string[]>) ?? {}) }
+      all[key] = [...new Set([...(all[key] ?? []), ...files])]
+      return { ...m, agentInstructions: all as unknown as Json }
+    })
+  const view = (i: AgentInstructions) => ({
+    file: i.file,
+    content: i.content,
+    ...(i.truncated ? { truncated: true } : {}),
+    ...(i.includes ? { includes: i.includes } : {}),
+  })
+  /** Nested AGENTS.md files this call reaches for the first time, as extra output fields. */
+  const newInstructions = async (sessionId: string, w: WorktreeMeta, rel: string, isDirectory: boolean) => {
+    const found = await nestedInstructions(fs, w.path, rel, await loadedInstructions(sessionId, w.key), { isDirectory })
+    if (!found.length) return {}
+    await rememberInstructions(
+      sessionId,
+      w.key,
+      found.map((f) => f.file),
+    )
+    return { instructions: { note: INSTRUCTIONS_NOTE, files: found.map(view) } }
+  }
 
   const worktree = async (ctx: ToolContext, repo?: string, sessionId?: string) => {
     const s = await kit.ownSession(sessionId, ctx)
@@ -117,7 +148,17 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
         {},
         { actor: kit.actor(ctx) },
       )
-      return ok({ key, path: w.path, branch: w.branch, head: info.head, ...(repo.path ? { subdir: repo.path } : {}) })
+      // The repo's instructions for coding agents (AGENTS.md, else CLAUDE.md), handed over once, with the checkout.
+      const root = await rootInstructions(fs, w.path)
+      if (root) await rememberInstructions(session.id, key, [root.file, ...(root.includes ?? [])])
+      return ok({
+        key,
+        path: w.path,
+        branch: w.branch,
+        head: info.head,
+        ...(repo.path ? { subdir: repo.path } : {}),
+        ...(root ? { instructions: { note: INSTRUCTIONS_NOTE, files: [view(root)] } } : {}),
+      })
     },
   )
 
@@ -220,7 +261,12 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const rel = safeRelPath(w.path, a.path)
       if (!rel) return fail('path is a directory')
       const content = await fs.read(w.path, rel)
-      return ok({ path: rel, size: content.length, content: clip(content, 30000) })
+      return ok({
+        path: rel,
+        size: content.length,
+        content: clip(content, 30000),
+        ...(await newInstructions(ctx.sessionId, w, rel, false)),
+      })
     },
   )
 
@@ -239,7 +285,12 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const rel = safeRelPath(w.path, a.path)
       if (!rel) return fail('path is a directory')
       await fs.write(w.path, rel, String(a.content))
-      return ok({ key: w.key, path: rel, size: String(a.content).length })
+      return ok({
+        key: w.key,
+        path: rel,
+        size: String(a.content).length,
+        ...(await newInstructions(ctx.sessionId, w, rel, false)),
+      })
     },
   )
 
@@ -258,6 +309,7 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
         path: rel || '.',
         entries: entries.slice(0, 500).map((e) => (e.type === 'dir' ? `${e.name}/` : e.name)),
         ...(entries.length > 500 ? { note: `showing 500 of ${entries.length}` } : {}),
+        ...(rel ? await newInstructions(ctx.sessionId, w, rel, true) : {}),
       })
     },
   )
