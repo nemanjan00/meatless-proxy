@@ -15,7 +15,7 @@ import { SettingNames } from './settings.ts'
  * - a run failed (bus topic `run.state`, `to: 'failed'`);
  * - a run has been paused longer than `ALERT_PAUSED_MINUTES` (checked by a
  *   repeatable queue job);
- * - the model provider or an MCP server keeps failing: `ALERT_UNAVAILABLE_COUNT`
+ * - the model provider, the Docker daemon or an MCP server keeps failing: `ALERT_UNAVAILABLE_COUNT`
  *   `unavailable` errors within `ALERT_UNAVAILABLE_MINUTES`. The source is the
  *   run worker: an `unavailable` error that ends a run job attempt (the job is
  *   retried) is reported with `reportUnavailable`. The count is per process.
@@ -141,13 +141,19 @@ export interface Alerts extends WorkerHandle {
   reportUnavailable(runId: string | undefined, err: unknown): Promise<void>
 }
 
-/** The dependency an `unavailable` error is about: `MCP server <name>` or `model provider`. */
+/**
+ * The dependency an `unavailable` error is about: `MCP server <name>`,
+ * `model provider`, `Docker daemon`, or `service` when it can't tell.
+ */
 export function dependencyOf(err: unknown): string {
-  const server = isMpError(err) ? (err.details as { server?: unknown } | undefined)?.server : undefined
-  if (typeof server === 'string' && server) return `MCP server ${server}`
-  const m = /MCP server (\S+)/.exec(errorMessage(err))
+  const details = isMpError(err) ? (err.details as { server?: unknown; model?: unknown } | undefined) : undefined
+  if (typeof details?.server === 'string' && details.server) return `MCP server ${details.server}`
+  const text = errorMessage(err)
+  const m = /MCP server (\S+)/.exec(text)
   if (m) return `MCP server ${m[1]!.replace(/[:.,]$/, '')}`
-  return 'model provider'
+  if (/^docker\b|docker\.sock/i.test(text)) return 'Docker daemon'
+  if (details?.model !== undefined || /^model\b/i.test(text)) return 'model provider'
+  return 'service'
 }
 
 /** Starts alerts: the `run.state` listener, the paused-run check job, the unavailable counter. */
@@ -224,7 +230,7 @@ export function startAlerts(s: Services, opts: { checkEveryMs?: number } = {}): 
             condition: 'dependency.unavailable',
             dependency,
             ...(run ? { runId: run.id, sessionId: run.data.sessionId } : {}),
-            text: `The ${dependency} keeps failing: ${recent.length} unavailable errors in ${cfg.ALERT_UNAVAILABLE_MINUTES} minutes. Last: ${clip(errorMessage(err))}`,
+            text: `${dependency === 'service' ? 'A service' : `The ${dependency}`} keeps failing: ${recent.length} unavailable errors in ${cfg.ALERT_UNAVAILABLE_MINUTES} minutes. Last: ${clip(errorMessage(err))}`,
           },
           run,
         )

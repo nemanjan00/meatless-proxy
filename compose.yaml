@@ -17,6 +17,7 @@ services:
       REDIS_URL: redis://redis:6379
       DOCKER_ENABLED: "true"
       DOCKER_SOCKET: /var/run/docker.sock
+      DOCKER_GID: ${DOCKER_GID:-}
       DATA_DIR: /data
       HOST: 0.0.0.0
       PORT: "3000"
@@ -31,9 +32,8 @@ services:
       # Full Docker socket access (an accepted risk, see docs/execution.md#deployment):
       # project environments run as sibling containers on this host.
       - /var/run/docker.sock:/var/run/docker.sock
-    # The app runs as a non-root user; give it the socket's group (`stat -c %g /var/run/docker.sock`).
-    group_add:
-      - "${DOCKER_GID:-0}"
+    # The app runs as a non-root user. Its entrypoint gives that user the socket's group by itself;
+    # set DOCKER_GID only to add another group.
     depends_on:
       postgres:
         condition: service_healthy

@@ -30,12 +30,16 @@ WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
+COPY docker/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh
 RUN mkdir -p /data && chown 1000:1000 /data
-# The image's `node` user.
-USER 1000:1000
+# The container starts as root only long enough for the entrypoint to give the
+# `node` user (1000:1000) the Docker socket's group, whose gid differs per host;
+# the app itself always runs as `node`.
+# hadolint ignore=DL3002
+USER root
 EXPOSE 3000 3001
 VOLUME ["/data"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/app-entrypoint.sh"]
 CMD ["node", "--import", "tsx", "packages/server/src/main.ts"]

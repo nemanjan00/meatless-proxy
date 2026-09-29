@@ -527,8 +527,10 @@ start logs a one-time sign-in link for them (`bootstrap: sign in as the admin
 - Health: `GET /healthz` (process up), `GET /readyz` (database, queue and migrations; 503 otherwise).
 - Deployment: `docker compose up` with the root `Dockerfile` and `compose.yaml`
   (Postgres 18, Redis 8 with AOF, the Docker socket and a `data` volume). Set
-  `SECRETS_KEY` and the model provider in `.env`, and `DOCKER_GID` to the group of
-  `/var/run/docker.sock` so the non-root app user can use it.
+  `SECRETS_KEY` and the model provider in `.env`. The app runs as the non-root
+  `node` user: the image's entrypoint (`docker/app-entrypoint.sh`) starts as
+  root only to give that user the group of `/var/run/docker.sock`, whatever its
+  gid on the host, then drops root.
 
 ### Import and export
 

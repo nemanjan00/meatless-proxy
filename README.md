@@ -54,7 +54,6 @@ The whole thing runs with Docker Compose:
 git clone https://github.com/nemanjan00/meatless-proxy.git
 cd meatless-proxy
 cp .env.example .env    # then set OPENAI_API_KEY and SECRETS_KEY
-export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # so the app can reach the Docker socket
 docker compose up
 ```
 

@@ -173,5 +173,10 @@ describe('alerts', () => {
     expect(dependencyOf(new UnavailableError('x', { server: 'github' }))).toBe('MCP server github')
     expect(dependencyOf(new UnavailableError('cannot connect to MCP server slack: refused'))).toBe('MCP server slack')
     expect(dependencyOf(new UnavailableError('model provider unavailable'))).toBe('model provider')
+    expect(dependencyOf(new UnavailableError('model stream broke: reset', { model: 'm' }))).toBe('model provider')
+    expect(dependencyOf(new UnavailableError('docker: environment meatless-router: connect EACCES /var/run/docker.sock'))).toBe(
+      'Docker daemon',
+    )
+    expect(dependencyOf(new UnavailableError('something else is down'))).toBe('service')
   })
 })
