@@ -33,7 +33,7 @@
     "@mp/stdlib": 5,
     "@mp/server": 6,
     "@mp/web": 6,
-    "@mp/evals": 6,
+    "@mp/evals": 7,
     "@mp/integration-slack": 2,
     "@mp/integration-linear": 2,
     "@mp/integration-gitlab": 2
