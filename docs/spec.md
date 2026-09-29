@@ -94,6 +94,32 @@ and the features unique to meatless-proxy follow later.
 
 ## Common features
 
+### Model calls
+
+The harness calls models through the **OpenAI-compatible Chat Completions
+API**: messages, tool definitions and tool calls, and streaming. That format is
+the standard inside the harness. A provider is anything that speaks it, set
+with a base URL, an API key and a model name.
+
+- **First provider: Kimi** (Moonshot AI), through its OpenAI-compatible
+  endpoint.
+- **Swappable.** Changing or adding a provider is configuration. Different
+  sessions, templates or procedures can use different models.
+- **Usage.** Token counts are read from each response's `usage` field (prompt,
+  completion, and cached where the provider reports it) and stored for the
+  [web UI](#usage).
+- **Caching.** [Forks](#sessions) and [procedure contexts](#procedure-contexts)
+  are designed to share long common prefixes. The harness keeps those prefixes
+  byte-identical, so a provider with prefix caching can reuse them.
+
+Open questions:
+
+- Which Kimi model(s) to start with?
+- How exactly does Kimi cache prompts (automatic prefix caching or explicit
+  context caching), and how is that reported in `usage`? This needs checking
+  against their docs.
+- Rate limits, retries and fallback to another provider when one is down.
+
 ### MCP
 
 The harness is an MCP (Model Context Protocol) client. It reaches outside
