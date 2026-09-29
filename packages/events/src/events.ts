@@ -13,6 +13,7 @@ import {
 } from '@mp/core'
 import type { Records } from '@mp/records'
 import { contentHash, deepMatch, fieldValue, type Actor, type Condition, type StoredRecord } from '@mp/store'
+import { checkSchedule, dueFiring, type TriggerSchedule } from './schedule.ts'
 import { eventSchema, subscriptionSchema, triggerSchema } from './schemas.ts'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -92,14 +93,21 @@ export interface TriggerData extends Record<string, unknown> {
   mode: 'continuing' | 'ephemeral'
   fired: number
   lastFiredAt?: string
+  /** Fires on a schedule instead of matching events. Such a trigger has an empty `match`. */
+  schedule?: TriggerSchedule
+  /** The last scheduled firing handled (ISO), or when the schedule was set or last enabled. */
+  lastScheduledAt?: string
 }
 export type Trigger = StoredRecord<TriggerData>
 
 export interface CreateTriggerInput {
   name: string
   employeeId: string
-  match: TriggerMatch
+  /** Required unless `schedule` is given; a schedule trigger has no event match. */
+  match?: TriggerMatch
   target: TriggerTarget
+  /** Fire on this schedule (cron, time zone, grace period) instead of on matching events. */
+  schedule?: TriggerSchedule
   enabled?: boolean
   priority?: number
   fork?: boolean
@@ -129,17 +137,40 @@ export interface EventQuery {
   limit?: number
 }
 
+/** A trigger patch. `schedule: null` turns a schedule trigger back into an event trigger. */
+export type TriggerPatch = Partial<Omit<TriggerData, 'fired' | 'lastFiredAt' | 'lastScheduledAt' | 'schedule'>> & {
+  schedule?: TriggerSchedule | null
+}
+
+/** A scheduled firing that is due: the trigger and the firing time (ISO). */
+export interface DueSchedule {
+  trigger: Trigger
+  at: string
+}
+
 export interface Triggers {
   create(input: CreateTriggerInput, actor?: Actor): Promise<Trigger>
   get(id: string): Promise<Trigger | null>
-  update(id: string, patch: Partial<Omit<TriggerData, 'fired' | 'lastFiredAt'>>, actor?: Actor): Promise<Trigger>
+  update(id: string, patch: TriggerPatch, actor?: Actor): Promise<Trigger>
   list(q?: { employeeId?: string; enabled?: boolean }): Promise<Trigger[]>
   remove(id: string, actor?: Actor): Promise<void>
   /**
    * Enabled triggers matching the event, best first (priority desc, then oldest first).
    * When the event names an `employeeId`, only that employee's triggers match.
+   * Schedule triggers never match ordinary events: a `schedule.fired` event
+   * with `payload.triggerId` matches exactly that trigger (if it is enabled).
    */
   match(event: MpEvent | EventData): Promise<Trigger[]>
+  /**
+   * Enabled schedule triggers with a firing due at `now` (default: the clock):
+   * the latest firing since `lastScheduledAt` (or since the trigger was
+   * created), if it is within the grace period. Read-only: fire it by
+   * ingesting a `schedule.fired` event with `scheduleDedupeKey`, then call
+   * `markScheduled`, so a crash in between or a second instance never fires twice.
+   */
+  dueSchedules(now?: number): Promise<DueSchedule[]>
+  /** Records that the firing at `at` was handled. Only moves forward; safe under concurrency. */
+  markScheduled(id: string, at: string): Promise<Trigger>
   /** Counts a firing. Safe under concurrency. */
   recordFired(id: string): Promise<Trigger>
 }
@@ -182,6 +213,22 @@ export interface Events {
 export const EventTopics = {
   ingested: 'event.ingested',
 } as const
+
+/** Source and type of the events schedule triggers fire. */
+export const SCHEDULE_SOURCE = 'schedule'
+export const SCHEDULE_FIRED = 'schedule.fired'
+
+/** The dedupe key of a scheduled firing: once per trigger and time, across restarts and instances. */
+export function scheduleDedupeKey(triggerId: string, at: string | Date): string {
+  return `schedule:${triggerId}:${new Date(at).toISOString()}`
+}
+
+/** The trigger a `schedule.fired` event (source `schedule`) is for, if it is one. */
+export function scheduledTriggerId(event: Pick<EventData, 'source' | 'type' | 'payload'>): string | undefined {
+  if (event.source !== SCHEDULE_SOURCE || event.type !== SCHEDULE_FIRED) return undefined
+  const id = (event.payload as { triggerId?: unknown } | undefined)?.triggerId
+  return typeof id === 'string' && id ? id : undefined
+}
 
 export interface EventIngested {
   eventId: string
@@ -275,6 +322,9 @@ export function triggerMatches(match: TriggerMatch, event: EventData): boolean {
   return true
 }
 
+/** Whether a trigger match constrains anything (a schedule trigger must not). */
+const hasMatch = (m: TriggerMatch) => Object.values(m).some((v) => v !== undefined)
+
 const MAX_CAS_RETRIES = 50
 
 // ─── Service ────────────────────────────────────────────────────────────────
@@ -306,27 +356,49 @@ export function createEvents(opts: EventsOptions): Events {
   const triggers: Triggers = {
     async create(input, actor) {
       if (!input.name) throw new ValidationError('trigger name is required')
-      if (input.match?.filter !== undefined) eventFilter(input.match.filter)
+      const schedule = input.schedule !== undefined ? checkSchedule(input.schedule) : undefined
+      const match = input.match ?? {}
+      if (schedule && hasMatch(match)) throw new ValidationError('a schedule trigger has no event match')
+      if (match.filter !== undefined) eventFilter(match.filter)
       const data: TriggerData = {
         name: input.name,
         employeeId: input.employeeId,
         enabled: input.enabled ?? true,
         priority: input.priority ?? 0,
-        match: input.match ?? {},
+        match,
         target: checkTarget(input.target),
         fork: input.fork ?? false,
         mode: input.mode ?? 'ephemeral',
         fired: 0,
+        ...(schedule ? { schedule, lastScheduledAt: clock.iso() } : {}),
       }
       return records.create('trigger', data, actor ? { actor } : {})
     },
     get: (id) => records.get<TriggerData>('trigger', id),
     async update(id, patch, actor) {
-      const p = { ...patch } as Partial<TriggerData>
+      const current = await records.require<TriggerData>('trigger', id)
+      const { schedule: nextSchedule, ...rest } = patch
+      const p = { ...rest } as Partial<TriggerData>
       delete p.fired
       delete p.lastFiredAt
+      delete (p as Record<string, unknown>).lastScheduledAt
       if (p.target !== undefined) p.target = checkTarget(p.target)
       if (p.match?.filter !== undefined) eventFilter(p.match.filter)
+      let schedule = current.data.schedule
+      if (nextSchedule === null) {
+        schedule = undefined
+        p.schedule = undefined
+        p.lastScheduledAt = undefined
+      } else if (nextSchedule !== undefined) {
+        schedule = checkSchedule(nextSchedule)
+        p.schedule = schedule
+        // A new schedule starts from now: slots before the change don't fire.
+        if (JSON.stringify(schedule) !== JSON.stringify(current.data.schedule)) p.lastScheduledAt = clock.iso()
+      }
+      if (schedule && hasMatch(p.match ?? current.data.match ?? {}))
+        throw new ValidationError('a schedule trigger has no event match')
+      // Slots that passed while the trigger was disabled don't fire when it's enabled again.
+      if (schedule && p.enabled === true && !current.data.enabled) p.lastScheduledAt = clock.iso()
       return records.update<TriggerData>('trigger', id, p, actor ? { actor } : {})
     },
     async list(q = {}) {
@@ -338,11 +410,18 @@ export function createEvents(opts: EventsOptions): Events {
     remove: (id, actor) => records.delete('trigger', id, { cascade: true, ...(actor ? { actor } : {}) }),
     async match(event) {
       const data: EventData = 'data' in event && 'kind' in event ? (event as MpEvent).data : (event as EventData)
+      const scheduled = scheduledTriggerId(data)
+      if (scheduled) {
+        const t = await records.get<TriggerData>('trigger', scheduled)
+        if (!t?.data.enabled || !t.data.schedule) return []
+        if (data.employeeId && t.data.employeeId !== data.employeeId) return []
+        return [t]
+      }
       const where: Record<string, Json> = { enabled: true }
       if (data.employeeId) where.employeeId = data.employeeId
       const all = (await records.query<TriggerData>('trigger', { where, orderBy: { field: 'createdAt' } })).items
       return all
-        .filter((t) => triggerMatches(t.data.match ?? {}, data))
+        .filter((t) => !t.data.schedule && triggerMatches(t.data.match ?? {}, data))
         .sort(
           (a, b) =>
             b.data.priority - a.data.priority ||
@@ -352,6 +431,29 @@ export function createEvents(opts: EventsOptions): Events {
     },
     recordFired: (id) =>
       casUpdate<TriggerData>('trigger', id, (t) => ({ fired: (t.data.fired ?? 0) + 1, lastFiredAt: clock.iso() })),
+    async dueSchedules(now = clock.now()) {
+      const out: DueSchedule[] = []
+      for (const t of await triggers.list({ enabled: true })) {
+        if (!t.data.schedule) continue
+        let at: Date | null
+        try {
+          at = dueFiring(t.data.schedule, t.data.lastScheduledAt ?? t.createdAt, now)
+        } catch {
+          continue // a schedule stored without validation: never due
+        }
+        if (at) out.push({ trigger: t, at: at.toISOString() })
+      }
+      return out
+    },
+    async markScheduled(id, at) {
+      const ms = Date.parse(at)
+      if (Number.isNaN(ms)) throw new ValidationError('at must be an ISO timestamp')
+      return casUpdate<TriggerData>('trigger', id, (t) =>
+        t.data.lastScheduledAt && Date.parse(t.data.lastScheduledAt) >= ms
+          ? null
+          : { lastScheduledAt: new Date(ms).toISOString() },
+      )
+    },
   }
 
   const subKey = (sessionId: string, subject: Subject) => `${sessionId}|${subjectKey(subject)}`

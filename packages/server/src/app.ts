@@ -12,6 +12,7 @@ import { defaultWebDist, serveWeb } from './http/static.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
+import { registerSessionMemory } from './session-memory.ts'
 import { ensureSshKey } from './ssh.ts'
 import { buildServices, type AppOverrides, type Services } from './services.ts'
 import { recoverQueues, startWorkers, type Workers } from './workers.ts'
@@ -43,6 +44,7 @@ export interface App {
 export async function createApp(config: Config, overrides: AppOverrides = {}): Promise<App> {
   const services = await buildServices(config, overrides)
   const log = services.logger
+  registerSessionMemory(services)
   if (config.MP_BOOTSTRAP && (await isEmpty(services))) {
     const r = await bootstrap(services)
     log.info('bootstrap done', { employeeId: r.employeeId, routerSessionId: r.routerSessionId })

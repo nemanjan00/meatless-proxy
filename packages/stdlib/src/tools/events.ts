@@ -1,5 +1,5 @@
 import { NotFoundError, ValidationError, type Json } from '@mp/core'
-import type { Subject, Trigger, TriggerData, TriggerTarget } from '@mp/events'
+import type { Subject, Trigger, TriggerPatch, TriggerTarget } from '@mp/events'
 import type { ToolContext } from '@mp/tools'
 import { fail, ok, str, type Kit } from '../kit.ts'
 
@@ -15,6 +15,18 @@ const matchProp = {
   type: 'object',
   description:
     'Which events: {source?, type?, subject?: {system?, id?}} (globs, e.g. type "task.*"), where? (dot path -> value), filter? (MongoDB-style query over the event, e.g. {"payload.priority": {"$gte": 2}}).',
+}
+
+const scheduleProp = {
+  type: 'object',
+  description:
+    'Fire on a schedule instead of on events: {cron, timezone?, graceSeconds?}, e.g. {cron:"0 9 * * 1-5", timezone:"Europe/Berlin"} for weekdays at 9:00. timezone is an IANA name (default UTC); graceSeconds is how late a missed firing may still fire (default 300). A schedule trigger has no match.',
+  properties: {
+    cron: { type: 'string' },
+    timezone: { type: 'string' },
+    graceSeconds: { type: 'number' },
+  },
+  required: ['cron'],
 }
 
 const targetProp = {
@@ -41,6 +53,8 @@ const triggerView = (t: Trigger): Json => ({
   mode: t.data.mode,
   fired: t.data.fired,
   ...(t.data.lastFiredAt ? { lastFiredAt: t.data.lastFiredAt } : {}),
+  ...(t.data.schedule ? { schedule: t.data.schedule as unknown as Json } : {}),
+  ...(t.data.lastScheduledAt ? { lastScheduledAt: t.data.lastScheduledAt } : {}),
 })
 
 export function registerEventTools(kit: Kit): void {
@@ -141,28 +155,31 @@ export function registerEventTools(kit: Kit): void {
     {
       name: 'triggers.create',
       description:
-        'Create a trigger for yourself: new events that match go to a context (default: this session) as runs, optionally each in a fresh fork. Use subscriptions for things you already work on; triggers are for new work.',
+        'Create a trigger for yourself: new events that match go to a context (default: this session) as runs, optionally each in a fresh fork. With a schedule instead of a match, it fires on that schedule (a schedule.fired event). Use subscriptions for things you already work on; triggers are for new work.',
       effect: 'non_idempotent',
       params: {
         properties: {
           name: { type: 'string' },
           match: matchProp,
+          schedule: scheduleProp,
           target: targetProp,
           fork: { type: 'boolean', description: 'Handle each event in a fork of the target. Default false.' },
           mode: { type: 'string', enum: ['continuing', 'ephemeral'], description: 'Default ephemeral.' },
           priority: { type: 'number', description: 'Higher matches first. Default 0.' },
           enabled: { type: 'boolean' },
         },
-        required: ['name', 'match'],
+        required: ['name'],
       },
     },
     async (a, ctx) => {
       if (!str(a.name)) return fail('name is required')
+      if (a.match === undefined && a.schedule === undefined) return fail('give a match (which events) or a schedule')
       const t = await events.triggers.create(
         {
           name: a.name,
           employeeId: ctx.employeeId,
-          match: a.match,
+          ...(a.match !== undefined ? { match: a.match } : {}),
+          ...(a.schedule !== undefined ? { schedule: a.schedule } : {}),
           target: await checkTarget(a.target, ctx),
           ...(a.fork !== undefined ? { fork: !!a.fork } : {}),
           ...(a.mode ? { mode: a.mode } : {}),
@@ -178,13 +195,15 @@ export function registerEventTools(kit: Kit): void {
   kit.tool(
     {
       name: 'triggers.update',
-      description: 'Change one of your triggers (name, match, target, fork, mode, priority, enabled).',
+      description:
+        'Change one of your triggers (name, match, schedule, target, fork, mode, priority, enabled). schedule: null turns a schedule trigger back into an event trigger.',
       effect: 'idempotent',
       params: {
         properties: {
           triggerId: { type: 'string' },
           name: { type: 'string' },
           match: matchProp,
+          schedule: { ...scheduleProp, type: ['object', 'null'] },
           target: targetProp,
           fork: { type: 'boolean' },
           mode: { type: 'string', enum: ['continuing', 'ephemeral'] },
@@ -196,8 +215,8 @@ export function registerEventTools(kit: Kit): void {
     },
     async (a, ctx) => {
       await ownTrigger(a.triggerId, ctx)
-      const patch: Partial<TriggerData> = {}
-      for (const k of ['name', 'match', 'fork', 'mode', 'priority', 'enabled'] as const)
+      const patch: TriggerPatch = {}
+      for (const k of ['name', 'match', 'schedule', 'fork', 'mode', 'priority', 'enabled'] as const)
         if (a[k] !== undefined) (patch as any)[k] = a[k]
       if (a.target !== undefined) patch.target = await checkTarget(a.target, ctx)
       if (!Object.keys(patch).length) return fail('nothing to update')

@@ -46,6 +46,10 @@ first by a small built-in loader; variables already set win.
 | `RUN_BACKOFF_MS` | `2000` | First retry delay, doubled per attempt |
 | `MAX_STEPS` | `60` | Model calls per run before it pauses |
 | `MAX_TOKENS` | none | `max_tokens` per model call (leave room for reasoning) |
+| `ALERTS_ENABLED` | `true` | Post alerts in `#alerts` (see [Alerts](#alerts)) |
+| `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |
+| `ALERT_UNAVAILABLE_COUNT` | `3` | Alert when a dependency had this many `unavailable` errors… |
+| `ALERT_UNAVAILABLE_MINUTES` | `10` | …within this many minutes |
 | `NODE_ENV` | | `production` disables `.env` loading |
 | `DOTENV_PATH` | `.env` | Where the development `.env` is |
 
@@ -148,6 +152,55 @@ claude mcp add --transport http meatless http://localhost:3000/mcp --header "Aut
   jobs, wait up to 30 s for running jobs, close the queue, MCP and the store.
   A run interrupted at shutdown resumes from its journal at the next start.
 
+## Schedules
+
+`src/scheduler.ts` runs a repeatable job (queue `schedules`, job id
+`schedule-tick`, every 30 s). Each tick calls `events.triggers.dueSchedules`,
+ingests a `schedule.fired` event per due firing (source `schedule`, the
+trigger's employee, subject `{ system: 'mp', id: <triggerId> }`, text
+`Scheduled: <name> (<cron>)`, dedupe key `schedule:<triggerId>:<ISO time>`),
+and marks the slot with `markScheduled`. The router delivers it to the
+trigger's context, or a fork of it. Racing ticks, restarts and several
+instances fire a slot once. A firing whose trigger was disabled or removed
+before routing is dropped rather than sent to the fallback router. Schedule
+triggers are created in the API or by employees with `triggers.create`
+(`schedule: { cron, timezone?, graceSeconds? }`).
+
+## Alerts
+
+`src/alerts.ts` posts in `#alerts`, which the bootstrap employee creates the
+first time it's needed. Each alert tags the run's requester (their `mp`
+handle, or their name) and the session's employee:
+
+- **Failed run:** bus topic `run.state` with `to: 'failed'`.
+- **Paused too long:** a repeatable job (queue `alerts`, every 60 s) looks
+  for runs paused longer than `ALERT_PAUSED_MINUTES`. A paused run doesn't
+  change, so its `updatedAt` is when it was paused.
+- **A dependency keeps failing:** `ALERT_UNAVAILABLE_COUNT` `unavailable`
+  errors from the same dependency within `ALERT_UNAVAILABLE_MINUTES`. The
+  source is the run worker: when a run job attempt ends with an `unavailable`
+  error (the job is then retried), it's reported. The dependency is
+  `MCP server <name>` when the error names a server (`details.server`), else
+  `model provider`. Counts are per process.
+
+Each alert is claimed with an `alert` record whose key is the condition and
+the run (or the dependency and the time window), so there is one alert per
+run per condition, across restarts and instances. Alert messages don't
+start runs: tagging the employee is a notification, otherwise a failing
+provider would keep alerting about its own alerts. Replies in an alert's
+thread are routed as usual.
+
+## Memory at session start
+
+`src/session-memory.ts` handles the router's `afterFork` hook. When a context
+is forked for a delivery (e.g. each request in `#requests`), it recalls up to
+5 memories with `memory.recall`. It uses the event's text (a chat message's
+full text), the fork's employee, the projects linked to the context and the
+fork, and the event's actor. The memories go into the fork's first run as
+one `system` entry, after the fork point and before the event: "Things you
+remember that may be relevant:" followed by one line per memory (summary,
+kind, id, content snippet). The fork keeps the context's cached prefix.
+
 ## Bootstrap
 
 When `MP_BOOTSTRAP` is on and the store has no employee, `src/bootstrap.ts`
@@ -178,6 +231,11 @@ setting and the default web contact. Every step is idempotent (`npm run seed`).
   subscription; an MCP notification through a trigger to a procedure fork; a loop with a wait; the checklist
   gate; crash recovery; a budget pause). They run on the in-memory adapters, and again on Postgres and BullMQ
   (unique schema and Redis prefix) when `DATABASE_URL` and `REDIS_URL` are set.
+- `scheduler.test.ts`: schedule triggers fire once per slot with racing ticks (and with two app instances on Postgres
+  and BullMQ when configured), the fork's run reaches its context, grace, disabled triggers, the repeatable job.
+- `alerts.test.ts`: failed runs (once, tags, no run started), `ALERTS_ENABLED`, paused runs, dependencies that keep
+  failing, and the run worker reporting a provider outage.
+- `session-memory.test.ts`: recalled memories in a request fork, before the event; visibility; the limit of 5.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.
 

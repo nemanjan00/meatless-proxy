@@ -70,6 +70,16 @@ export const triggerSchema: KindSchema = {
     { name: 'mode', type: 'enum', values: ['continuing', 'ephemeral'], required: true },
     { name: 'fired', type: 'number', required: true },
     { name: 'lastFiredAt', type: 'timestamp' },
+    {
+      name: 'schedule',
+      type: 'json',
+      description: '`{ cron, timezone?, graceSeconds? }`: fires on a schedule instead of matching events.',
+    },
+    {
+      name: 'lastScheduledAt',
+      type: 'timestamp',
+      description: 'The last scheduled firing handled, or when the schedule was set or enabled.',
+    },
   ],
 }
 

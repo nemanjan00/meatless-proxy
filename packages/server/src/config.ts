@@ -142,6 +142,11 @@ export const configSchema = z.object({
   MAX_STEPS: z.coerce.number().int().min(1).default(60),
   /** max_tokens per model call (leave room for reasoning). */
   MAX_TOKENS: z.coerce.number().int().min(1).optional(),
+  /** Alerts in #alerts (src/alerts.ts). */
+  ALERTS_ENABLED: bool(true),
+  ALERT_PAUSED_MINUTES: z.coerce.number().min(0).default(30),
+  ALERT_UNAVAILABLE_COUNT: z.coerce.number().int().min(1).default(3),
+  ALERT_UNAVAILABLE_MINUTES: z.coerce.number().min(0.01).default(10),
 })
 
 export type RawConfig = z.infer<typeof configSchema>

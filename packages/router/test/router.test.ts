@@ -1,11 +1,11 @@
 import { createEventBus, createHooks, type Json } from '@mp/core'
-import { createEvents } from '@mp/events'
+import { SCHEDULE_FIRED, SCHEDULE_SOURCE, createEvents } from '@mp/events'
 import { memoryQueue } from '@mp/queue'
 import { createRecords } from '@mp/records'
 import { createSessions } from '@mp/sessions'
 import { memoryStore } from '@mp/store'
 import { describe, expect, it } from 'vitest'
-import { beforeDeliver, chatTags, createRouter, renderEvent, type RecipientResolver } from '../src/index.ts'
+import { afterFork, beforeDeliver, chatTags, createRouter, renderEvent, type RecipientResolver } from '../src/index.ts'
 
 async function setup(opts: { resolvers?: RecipientResolver[] } = {}) {
   const bus = createEventBus()
@@ -284,5 +284,87 @@ describe('reactions', () => {
       },
     })
     expect((await t.router.plan(bySelf)).map((d) => d.sessionId)).toEqual([])
+  })
+
+  describe('afterFork', () => {
+    it('adds entries to a fork after the fork point and before the event', async () => {
+      const t = await setup()
+      const ctx = await t.mk('requests context')
+      await t.events.triggers.create({
+        name: 'tasks',
+        employeeId: 'emp_a',
+        match: { type: 'task.*' },
+        target: { type: 'session', sessionId: ctx.id },
+        fork: true,
+      })
+      const seen: { context: string; fork: string; reason: string }[] = []
+      t.hooks.onTransform(afterFork, (p) => {
+        seen.push({ context: p.context.id, fork: p.fork.id, reason: p.delivery.reason })
+        return { ...p, entries: [...p.entries, { kind: 'system' as const, content: { text: 'remember: Ana prefers mornings' } }] }
+      })
+      t.hooks.onTransform(afterFork, (p) => ({
+        ...p,
+        entries: [...p.entries, { kind: 'system' as const, content: { text: 'second' }, meta: { from: 'test' } }],
+      }))
+      const ev = await t.ingest({ source: 'mcp:linear', type: 'task.assigned', employeeId: 'emp_a', text: 'New task' })
+      const res = await t.router.route(ev.id)
+      const out = res.deliveries[0]!.outcome as { runId: string; sessionId: string }
+      expect(seen).toEqual([{ context: ctx.id, fork: out.sessionId, reason: 'trigger' }])
+      const fork = await t.sessions.require(out.sessionId)
+      expect(fork.data.parent?.sessionId).toBe(ctx.id)
+      // The fork's committed history is the context's: the entries belong to the run, on top of it.
+      expect((await t.sessions.history(fork.id)).map((e) => e.id)).toEqual((await t.sessions.history(ctx.id)).map((e) => e.id))
+      const hist = await t.sessions.runHistory(out.runId)
+      expect(hist.map((e) => [e.kind, (e.content as any).text ?? null])).toEqual([
+        ['system', 'requests context'],
+        ['system', 'remember: Ana prefers mornings'],
+        ['system', 'second'],
+        ['event', expect.stringContaining('New task')],
+      ])
+      expect(hist[2]!.meta.from).toBe('test')
+    })
+
+    it('is not called without a fork', async () => {
+      const t = await setup()
+      let calls = 0
+      t.hooks.onTransform(afterFork, (p) => {
+        calls++
+        return p
+      })
+      const ev = await t.ingest({ source: 'mcp:linear', type: 'task.assigned', employeeId: 'emp_a', text: 'x' })
+      const res = await t.router.route(ev.id)
+      expect(res.deliveries[0]!.reason).toBe('fallback')
+      expect(calls).toBe(0)
+      const hist = await t.sessions.runHistory((res.deliveries[0]!.outcome as { runId: string }).runId)
+      expect(hist.map((e) => e.kind)).toEqual(['system', 'event'])
+    })
+  })
+
+  it('routes a schedule.fired event to its schedule trigger only', async () => {
+    const t = await setup()
+    const ctx = await t.mk('weekly summary')
+    const scheduled = await t.events.triggers.create({
+      name: 'weekly',
+      employeeId: 'emp_a',
+      target: { type: 'session', sessionId: ctx.id },
+      schedule: { cron: '0 9 * * 5' },
+      fork: true,
+    })
+    // A catch-all trigger with a higher priority does not take it.
+    await t.events.triggers.create({ name: 'all', employeeId: 'emp_a', match: {}, target: { type: 'router' }, priority: 99 })
+    const ev = await t.ingest({
+      source: SCHEDULE_SOURCE,
+      type: SCHEDULE_FIRED,
+      employeeId: 'emp_a',
+      subject: { system: 'mp', id: scheduled.id },
+      payload: { triggerId: scheduled.id },
+      text: 'Scheduled: weekly (0 9 * * 5)',
+    })
+    const res = await t.router.route(ev.id)
+    expect(res.deliveries).toHaveLength(1)
+    expect(res.deliveries[0]).toMatchObject({ reason: 'trigger', triggerId: scheduled.id, fork: true })
+    const fork = await t.sessions.require(res.deliveries[0]!.outcome.sessionId)
+    expect(fork.data.parent?.sessionId).toBe(ctx.id)
+    expect((await t.events.triggers.get(scheduled.id))!.data.fired).toBe(1)
   })
 })

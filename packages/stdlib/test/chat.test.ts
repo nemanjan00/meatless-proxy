@@ -143,6 +143,36 @@ describe('triggers', () => {
     expect((await t.call('triggers.update', { triggerId: tr.id })).isError).toBe(true)
   })
 
+  it('creates and updates schedule triggers', async () => {
+    const t = await stack()
+    const tr = await t.out('triggers.create', {
+      name: 'weekday triage',
+      schedule: { cron: '0 9 * * 1-5', timezone: 'Europe/Berlin' },
+      fork: true,
+    })
+    expect(tr).toMatchObject({
+      name: 'weekday triage',
+      match: {},
+      schedule: { cron: '0 9 * * 1-5', timezone: 'Europe/Berlin', graceSeconds: 300 },
+      target: { type: 'session', sessionId: t.session.id },
+      fork: true,
+    })
+    expect(tr.lastScheduledAt).toEqual(expect.any(String))
+    const u = await t.out('triggers.update', { triggerId: tr.id, schedule: { cron: '0 17 * * 5' } })
+    expect(u.schedule).toEqual({ cron: '0 17 * * 5', timezone: 'UTC', graceSeconds: 300 })
+    const off = await t.out('triggers.update', { triggerId: tr.id, schedule: null, match: { type: 'task.*' } })
+    expect(off.schedule).toBeUndefined()
+    expect(off.match).toEqual({ type: 'task.*' })
+    // Bad cron, bad time zone, a schedule with a match, and neither are refused.
+    for (const args of [
+      { name: 'x', schedule: { cron: 'every day' } },
+      { name: 'x', schedule: { cron: '0 9 * * *', timezone: 'Nope/Zone' } },
+      { name: 'x', schedule: { cron: '0 9 * * *' }, match: { type: 'task.*' } },
+      { name: 'x' },
+    ])
+      expect((await t.call('triggers.create', args)).isError, JSON.stringify(args)).toBe(true)
+  })
+
   it('reacts, edits and deletes its own messages, and searches with filters', async () => {
     const t = await stack()
     await t.chat.createChannel({ name: 'ops', createdBy: { kind: 'contact', id: t.ana.id } })

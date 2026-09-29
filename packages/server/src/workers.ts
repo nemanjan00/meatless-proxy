@@ -1,7 +1,9 @@
 import { errorMessage, isMpError, type Json } from '@mp/core'
 import type { WorkerHandle } from '@mp/queue'
 import type { RouteResult } from '@mp/router'
+import { startAlerts } from './alerts.ts'
 import { asEmployee } from './git-store.ts'
+import { startScheduler } from './scheduler.ts'
 import { QUEUES, activeJobs, enqueueEvent } from './queues.ts'
 import type { Services } from './services.ts'
 
@@ -66,6 +68,8 @@ export interface Workers {
 export function startWorkers(s: Services): Workers {
   const log = s.logger.child({ component: 'workers' })
   const handles: WorkerHandle[] = []
+  const alerts = s.config.ALERTS_ENABLED ? startAlerts(s) : null
+  handles.push(startScheduler(s), ...(alerts ? [alerts] : []))
   handles.push(
     s.queue.process<{ eventId: string }>(
       QUEUES.events,
@@ -86,6 +90,9 @@ export function startWorkers(s: Services): Workers {
           const run = await s.sessions.getRun(runId)
           const outcome = await asEmployee(run?.data.employeeId, () => s.runner.execute(runId))
           log.debug('run job done', { runId, attempt: job.attempt, outcome: outcome.status })
+        } catch (err) {
+          await alerts?.reportUnavailable(runId, err)
+          throw err
         } finally {
           activeJobs.delete(key)
         }
