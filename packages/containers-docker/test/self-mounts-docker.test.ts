@@ -73,4 +73,13 @@ describe.skipIf(!ENABLED)('mounts of paths inside the harness container', () => 
     const r = await runtime.exec(env.id, ['cat', '/workspace/hello.txt'])
     expect(r.stdout.trim()).toBe('hello-from-bind')
   }, 120_000)
+
+  it('keeps an image with its own entrypoint running for exec (alpine/git has entrypoint git)', async () => {
+    const runtime = dockerRuntime({ namePrefix: PREFIX })
+    const env = await runtime.createEnv({ name: 'entrypoint-env', image: 'alpine/git:latest' })
+    cleanup.push(() => runtime.destroyEnv(env.id))
+    const r = await runtime.exec(env.id, ['git', '--version'])
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toMatch(/git version/)
+  }, 180_000)
 })

@@ -4,6 +4,23 @@ import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec 
 import type { Session } from '@mp/sessions'
 import type { ToolContext } from '@mp/tools'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
+
+/** Where each checkout of a session is in its environment: /repos/<repository name>, made unique. */
+function repoMountsOf(worktrees: { key: string; path: string }[]): { key: string; path: string; containerPath: string }[] {
+  const used = new Set<string>()
+  return worktrees.map((w) => {
+    const base = (w.key.split('/').pop() || 'repo').replace(/[^A-Za-z0-9._-]/g, '-')
+    let name = base
+    for (let n = 2; used.has(name); n++) name = `${base}-${n}`
+    used.add(name)
+    return { key: w.key, path: w.path, containerPath: `/repos/${name}` }
+  })
+}
+
+/** Told with every environment: what it holds, and what it doesn't. */
+const ENV_NOTE =
+  'The checkout is at /workspace (and every checkout of this session at /repos/<name>): files only. Run git through the git.* tools (status, diff, log, commit, push), not inside the environment: its .git points outside it. Without network nothing can be installed, so pick an image that already has the tools you need.'
+
 import { DIRECT_NOTE, PROXY_NOTE, directNetworkName, networkFor, type NetworkDecision } from '../network.ts'
 import { worktreeFor } from './git.ts'
 
@@ -74,13 +91,21 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's isolated environment (containers on a private network) for working on code: check the repository out first (git.checkout), then env.up gives you a container with that checkout at /workspace and every checkout of this session at /repos/<name>, from an image (any image: it's kept running for you) or built from the checkout's Dockerfile. It holds files only: run git through the git.* tools. One environment per session: env.down first to change its image or which checkout is at /workspace. Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
-          image: { type: 'string', description: 'Image to run. Default: build the checkout.' },
+          image: {
+            type: 'string',
+            description:
+              "Image to run, e.g. alpine:3 (sh, grep, find, sed), node:22 or python:3.13 (with git, curl and the language). Without network nothing can be installed, so pick one that has what you need. Default: build the checkout's Dockerfile.",
+          },
           dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, when building.' },
-          repo: { type: 'string', description: 'Which checkout to mount/build (key or project id).' },
+          repo: {
+            type: 'string',
+            description:
+              'Which checkout goes at /workspace (and is built): its key, e.g. gitlab.com/group/repo, or its project id. Default: your only or first checkout.',
+          },
           env: { type: 'object', description: 'Environment variables (no secrets: name secrets instead).' },
           services: {
             type: 'array',
@@ -170,12 +195,15 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           ? { via: 'proxy', allow: egress.allow, note: PROXY_NOTE }
           : { via: 'none', reason: net.reason ?? 'no network: env.up was asked for no hosts' }
 
+      // Every checkout of the session is there too, at /repos/<name>: one environment works across them.
+      const repoMounts = repoMountsOf(worktreesOf(session))
+      const otherMounts = repoMounts.map((m) => ({ hostPath: m.path, containerPath: m.containerPath }))
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
         ...(str(a.image)
           ? { image: a.image }
           : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
-        ...(w ? { mounts: [{ hostPath: w.path, containerPath: '/workspace' }], workdir: '/workspace' } : {}),
+        ...(w ? { mounts: [{ hostPath: w.path, containerPath: '/workspace' }, ...otherMounts], workdir: '/workspace' } : {}),
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
         ...(egress ? { egress } : {}),
@@ -199,9 +227,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         envId: info.id,
         name: info.name,
         status: info.status,
-        ...(w ? { workspace: '/workspace' } : {}),
+        ...(w ? { workspace: '/workspace', checkout: w.key } : {}),
+        ...(repoMounts.length ? { repos: Object.fromEntries(repoMounts.map((m) => [m.containerPath, m.key])) } : {}),
         network,
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
+        note: ENV_NOTE,
       })
     },
   )
@@ -210,7 +240,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment (argv list, e.g. ["npm", "test"]), in /workspace. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
+        'Run a command in this session\'s environment (start it with env.up first), in /workspace. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
       effect: 'non_idempotent',
       params: {
         properties: {

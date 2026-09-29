@@ -54,7 +54,9 @@ describe('createEnv', () => {
 
     expect(main).toMatchObject({
       Image: 'node:22',
-      Cmd: ['sleep', 'infinity'],
+      // Kept running for exec whatever the image's entrypoint: the entrypoint is overridden.
+      Entrypoint: ['sleep'],
+      Cmd: ['infinity'],
       WorkingDir: '/src',
       Env: ['CI=1'],
     })

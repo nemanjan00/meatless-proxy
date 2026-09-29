@@ -453,7 +453,9 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     const main = await docker.createContainer({
       name: mainName(spec.name),
       Image: image,
-      Cmd: spec.command ?? ['sleep', 'infinity'],
+      // Without a command it's kept running for exec, whatever the image's own entrypoint is
+      // (e.g. alpine/git's `git`, which would turn the keep-alive into `git sleep infinity` and exit).
+      ...(spec.command ? { Cmd: spec.command } : { Entrypoint: ['sleep'], Cmd: ['infinity'] }),
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
       ...(spec.user ? { User: spec.user } : {}),
       Env: envList({ ...spec.env, ...viaProxy }),

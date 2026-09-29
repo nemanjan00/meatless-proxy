@@ -116,7 +116,11 @@ describe('env tools', () => {
     const spec = t.containers.created[0]!
     expect(spec).toMatchObject({
       build: { context: w.path },
-      mounts: [{ hostPath: w.path, containerPath: '/workspace' }],
+      // The checkout at /workspace, and every checkout of the session at /repos/<name>.
+      mounts: [
+        { hostPath: w.path, containerPath: '/workspace' },
+        { hostPath: w.path, containerPath: expect.stringMatching(/^\/repos\//) },
+      ],
       env: { NODE_ENV: 'test' },
       labels: { 'mp.session': t.session.id },
     })
