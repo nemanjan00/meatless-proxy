@@ -113,12 +113,20 @@ and tags combine as described below:
 
 1. **Session tag.** `@employee#slug` delivers to that session.
 2. **Subscriptions.** Every session subscribed to the event's `subject`
-   (including channel members) receives it. If the event carries tags, only
+   receives it, if the subscription's event-type globs and its optional
+   **filter** match. A filter is a MongoDB-style JSON query evaluated with
+   [sift](https://github.com/crcn/sift.js), e.g.
+   `{ "payload.author.kind": "contact" }`. Triggers take the same kind of
+   filter, so both stay plain data. If the event carries tags, only
    tagged sessions are marked *expected to act*. Without tags, the subscriber
    marked **primary** at subscribe time is expected to act. The others get it
    as context. This is the proposed answer to "which subscriber handles each
    event".
-3. **Employee tag.** `@employee` delivers to that employee's router session.
+   **Resolvers** registered by higher layers add recipients. For example, the
+   sessions that are members of a chat channel get its messages, but aren't
+   expected to act.
+3. **Employee tag.** `@employee` delivers to that employee's router session,
+   unless one of that employee's sessions already acts on the event.
 4. **Triggers.** The first matching trigger, by source, type and filters,
    delivers to its assigned context.
 5. **Fallback.** Anything left over goes to the router session of the employee
@@ -128,6 +136,11 @@ and tags combine as described below:
 Only the router sessions in steps 3 and 5 involve a model. That's where
 [untrusted input](spec.md#untrusted-input) is judged critically, and where
 work nobody has claimed gets assigned.
+
+A session never receives its own messages back. Each delivery also carries
+whether the input is **trusted**: it is when it came through a subscription,
+a direct tag or membership, and it isn't when it came through a trigger or
+the fallback. Untrusted input is marked when it's rendered for the model.
 
 The router's output is a **delivery** per receiving session, which either
 becomes a new run or goes into the inbox of a run that's already going (see
@@ -164,7 +177,7 @@ anything.
 | Operation | What happens in the tree |
 |-----------|--------------------------|
 | fork      | a new session whose `head` is the chosen entry. Nothing is copied. |
-| loop      | *n* forks from the same entry, each with one `event` entry for its item on top |
+| loop      | *n* forks from the same entry, each with one `user` entry for its item on top |
 | commit    | the session's `head` moves to the run's last entry ([compare-and-swap](#commit)) |
 | ephemeral | the run's entries stay in the tree for the log and the UI, but `head` never moves to them |
 | rewind    | a new `summary` entry whose parent is the earlier entry, and `head` moves to it. The detailed branch stays in the tree. |
