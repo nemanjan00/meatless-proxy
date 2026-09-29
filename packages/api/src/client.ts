@@ -64,6 +64,7 @@ import { CHAT_ACTIVITY_ROUTES, type ChatActivityApi, chatActivityMethods } from 
 import { PROJECT_ROUTES, type ProjectsApi, projectsMethods } from './projects.ts'
 import { PROCEDURE_ROUTES, type ProceduresApi, proceduresMethods } from './procedures.ts'
 import { SETUP_ROUTES, type SetupApi, setupMethods } from './setup.ts'
+import { SCHEDULE_ROUTES, type SchedulesApi, schedulesMethods } from './schedules.ts'
 
 /**
  * Every endpoint of the HTTP API, as `[method, path]`. Path parameters are
@@ -172,6 +173,7 @@ export const ROUTES = {
   ...ENVIRONMENT_ROUTES,
   ...IDENTITY_ROUTES,
   ...CHAT_ACTIVITY_ROUTES,
+  ...SCHEDULE_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -279,7 +281,8 @@ export interface ApiClient
     LimitsApi,
     KnowledgeApi,
     EnvironmentsApi,
-    IdentityApi {
+    IdentityApi,
+    SchedulesApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -712,6 +715,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     ...environmentsMethods(call),
     ...identityMethods(call),
     ...chatActivityMethods(call),
+    ...schedulesMethods(call),
   }
 }
 

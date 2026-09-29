@@ -25,6 +25,7 @@ import { gitlabHookProvisioning, type HookProvisioning, identityRoutes, integrat
 import { createPreviews, type Previews } from './previews/index.ts'
 import { EnvironmentMonitor, EnvironmentViews, environmentRoutes } from './environments/index.ts'
 import { procedureRoutes } from './procedures/index.ts'
+import { scheduleRoutes, trackScheduledRuns } from './schedules/index.ts'
 import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
 import { projectRoutes } from './projects/index.ts'
 import { localProjectRoutes } from './local-projects/index.ts'
@@ -80,6 +81,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   registerThreadContext(services)
   registerSessionProjects(services)
   registerKnowledgeUse(services)
+  // Each scheduled task's last run follows its runs (src/schedules).
+  trackScheduledRuns(services)
   if (config.MP_BOOTSTRAP && (await isEmpty(services))) {
     const r = await bootstrap(services)
     log.info('bootstrap done', { employeeId: r.employeeId, routerSessionId: r.routerSessionId })
@@ -160,6 +163,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', projectRoutes(services))
   app.route('/', localProjectRoutes(services)) // repositories the harness hosts (src/local-projects)
   app.route('/', procedureRoutes(services))
+  app.route('/', scheduleRoutes(services, auth.visibility)) // scheduled tasks and follow-ups (src/schedules)
   app.route('/', knowledgeRoutes(services, auth.visibility)) // Memory, Skills and People (src/knowledge)
   app.route('/', notificationPrefsRoutes(services))
   app.route('/', limitRoutes(services)) // Settings → Limits and Pricing (src/http/limits.ts)

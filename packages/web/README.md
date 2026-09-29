@@ -213,6 +213,21 @@ session's requester (`canControl`), Reload and New tab (a fresh token). The sess
 (`src/mock/environments.ts`) has three environments (a dev server with a database behind the proxy, a
 desktop, a direct network) whose metrics move every 5 s.
 
+### Schedules
+
+`src/pages/schedules.tsx` is `/schedules` (sidebar under Routing, next to Triggers; `G` `H`): every scheduled task
+and pending follow-up (`GET /api/schedules`, following the employee switcher), grouped Upcoming, Paused and
+Finished, with All / Tasks / Follow-ups tabs. A row shows the instruction, the schedule in words with its time zone,
+the next run ("next in 3h", the exact local time on hover), the last run's state, age and output linked to its
+session, the report target and the employee; on a phone the facts wrap under the title. With `canManage` (admins and
+the person who asked) a row has Run now (tasks only), Pause / Resume, Edit and Delete (after a confirmation).
+**New scheduled task** (members) and Edit open `ScheduleDialog`: the employee, the instruction, Once (a date-time
+picker) or Recurring (every weekday, day, week on a day, month on a day, every hour, or custom cron), the time zone
+(the browser's by default), where to report (a channel, optional) and a fresh session per run; the preview asks the
+server (`GET /api/schedules/preview`) and shows the schedule in words and its next firings, or why it's refused.
+Form helpers are in `src/lib/schedules.ts`; the mock (`src/mock/schedules.ts`) has six tasks in every state and a
+small stand-in for the server's cron math.
+
 ### Sessions list
 
 `src/pages/sessions.tsx` is `/sessions`: status tabs, a text search, Sort (recent activity, newest, oldest,
@@ -350,6 +365,9 @@ what members don't see).
 `chat-activity.test.tsx`: the activity state (delivering, outcomes and their notices, expiry, load, `expectsWork`)
 and the chat page: a worker under its message updating live to paused and failed, "3 working", "Delivering…"
 replaced by the router and then the hand-off, nothing for plain chat, and a static dot with reduced motion.
+`schedules.test.tsx`: the form's cron presets and back, the mock's words and next firings, the page's groups, words,
+next runs and last runs linked to sessions, the Follow-ups tab, Run now, Pause/Resume and Delete, creating a
+recurring task from a preset with the preview, a one-off, a refused cron, and what members, viewers and admins may do.
 `auth.test.tsx`: signed-out people land on the login page (and a later 401 sends them there),
 login errors and the single sign-on button, the sidebar's user menu and sign-out, what viewers,
 members and admins see (kill switch, settings sections, chat message box), and the tokens page.

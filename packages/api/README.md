@@ -49,6 +49,8 @@ so the browser bundle stays free of Node code.
 - Chat authors: `MessageData.author` has the employee's `handle` for employee authors; a router context's messages come as the employee (`type: 'employee'`), never as `@employee#router`
 - Control and health: `GET /api/control`, `POST /api/control/pause-all|resume-all`, `GET /healthz`, `GET /readyz`
 
+- Schedules (`schedules.ts`): `GET /api/schedules?employeeId=&kind=&sessionId=`, `GET /api/schedules/preview?at=|in=|every=|cron=&timezone=`, `POST /api/schedules`, `PATCH /api/schedules/:id`, `DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`: scheduled tasks and follow-ups (`ScheduledTask`, with `description` in words, `nextRunAt`, `lastRun` and `canManage`)
+
 Additions beyond the original brief, needed by the UI: `GET /api/sessions/:id/entry-tree`,
 `GET /api/usage/series`, `GET /api/inbox`, `GET /api/control`, `POST /api/records/:kind/:id/links`,
 `DELETE /api/links/:id`.

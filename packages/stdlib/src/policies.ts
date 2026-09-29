@@ -6,6 +6,7 @@ import { afterModelCall, afterRun, beforeFinish, beforeModelCall, beforeToolCall
 import type { AssistantContent, Run, Session, ToolResultContent } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import { worktreesOf } from './kit.ts'
+import { chatReportOf } from './schedules.ts'
 import { authorFor, trailersFor, worktreeFor } from './tools/git.ts'
 import type { PolicyConfig, StdlibDeps } from './types.ts'
 
@@ -102,6 +103,35 @@ export function needsAutoReply(entries: Entry[], output: string | undefined): bo
   )
   if (!asked) return false
   return !results(entries).some((r) => !r.isError && (CHAT_ANSWER_TOOLS.includes(r.name) || HANDOFF_TOOLS.includes(r.name)))
+}
+
+/**
+ * A scheduled task's final answer, posted in its report thread (or as a new thread in its report channel)
+ * unless the run already answered in chat or ends with NO_REPLY. The session follows the thread afterwards.
+ */
+async function postReport(
+  deps: StdlibDeps,
+  run: Run,
+  session: Session,
+  output: string | undefined,
+  report: { channelId: string; threadId?: string },
+): Promise<void> {
+  if (!output?.trim() || NO_REPLY_RE.test(output)) return
+  const entries = await runEntries(deps, run)
+  if (results(entries).some((r) => !r.isError && CHAT_ANSWER_TOOLS.includes(r.name))) return
+  const msg = await deps.chat.post({
+    channelId: report.channelId,
+    ...(report.threadId ? { threadId: report.threadId } : {}),
+    author: { kind: 'session', id: session.id },
+    text: output,
+  })
+  const subject = { system: 'mp', id: msg.data.threadId ?? msg.id }
+  const subs = await deps.events.subscriptions.forSubject(subject)
+  if (!subs.some((x) => x.data.sessionId === session.id))
+    await deps.events.subscriptions.subscribe(session.id, subject, {
+      primary: !subs.some((x) => x.data.primary),
+      ...subscriptionScope('mp'),
+    })
 }
 
 /**
@@ -209,6 +239,12 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
         if (!eventId) return undefined
         try {
           const event = await deps.events.get(eventId)
+          // A scheduled task's run reports where the task says (docs/spec.md#scheduled-tasks).
+          const report = await chatReportOf(deps, run)
+          if (report) {
+            await postReport(deps, run, session, result.output, report)
+            return undefined
+          }
           const payload = event?.data.payload as ChatEventPayload | undefined
           if (event?.data.source !== 'chat' || !payload?.channelId || !payload.messageId) return undefined
           const entries = await runEntries(deps, run)

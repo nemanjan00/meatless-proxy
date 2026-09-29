@@ -1,5 +1,5 @@
 import { errorMessage } from '@mp/core'
-import { SCHEDULE_FIRED, SCHEDULE_SOURCE, internalSubject, scheduleDedupeKey } from '@mp/events'
+import { SCHEDULE_FIRED, SCHEDULE_SOURCE, internalSubject, scheduleDedupeKey, scheduledTaskEvent } from '@mp/events'
 import type { WorkerHandle } from '@mp/queue'
 import { beforeDeliver } from '@mp/router'
 import type { Services } from './services.ts'
@@ -10,6 +10,11 @@ import type { Services } from './services.ts'
  * which the router then delivers to the trigger's context like any other
  * event. The event's dedupe key is the trigger and the slot, so a restart,
  * racing ticks or a second instance never fire twice.
+ *
+ * Scheduled tasks and follow-ups (docs/spec.md#scheduled-tasks) fire the same
+ * way: one `scheduled_task.fired` event per task and slot, routed to the
+ * task's session (src/schedules/recipients.ts). A one-off missed by more than
+ * its grace period is marked missed instead of firing late.
  */
 
 /** The queue and repeatable job id of the scheduler tick. */
@@ -48,6 +53,35 @@ export async function scheduleTick(s: Services, now = s.clock.now()): Promise<{ 
       }
     } catch (err) {
       log.error('schedule could not fire', { triggerId: trigger.id, at, err: errorMessage(err) })
+    }
+  }
+  const tasks = await fireScheduledTasks(s, now)
+  return { due: due.length + tasks.due, fired: fired + tasks.fired }
+}
+
+/** Fires the scheduled tasks and follow-ups due at `now`. */
+export async function fireScheduledTasks(s: Services, now = s.clock.now()): Promise<{ due: number; fired: number }> {
+  const log = s.logger.child({ component: 'scheduler' })
+  const due = await s.scheduledTasks.due(now)
+  let fired = 0
+  for (const { task, at, missed } of due) {
+    try {
+      if (missed) {
+        await s.scheduledTasks.markMissed(task.id, at)
+        log.warn('scheduled task missed: its time passed while the harness was down', { taskId: task.id, at })
+        continue
+      }
+      const requester = task.data.requesterId ? await s.directory.contacts.get(task.data.requesterId) : null
+      const { event, created } = await s.events.ingest(
+        scheduledTaskEvent(task, at, requester ? { requesterName: requester.data.name } : {}),
+      )
+      await s.scheduledTasks.markFired(task.id, at, event.id)
+      if (created) {
+        fired++
+        log.info('scheduled task fired', { taskId: task.id, kind: task.data.kind, at, eventId: event.id })
+      }
+    } catch (err) {
+      log.error('scheduled task could not fire', { taskId: task.id, at, err: errorMessage(err) })
     }
   }
   return { due: due.length, fired }

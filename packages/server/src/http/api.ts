@@ -51,6 +51,8 @@ const HIDDEN_KINDS = new Set<string>([
 for (const k of ['chat_attachment', 'image_description']) HIDDEN_KINDS.add(k)
 // Integration users without a contact (names, emails): admins, through /api/identity (src/integrations/identity-routes.ts).
 HIDDEN_KINDS.add('identity_link')
+// Scheduled tasks have their own API (src/schedules), which hides a private (DM) session's tasks from non-members.
+HIDDEN_KINDS.add('scheduled_task')
 /** Kinds whose records can belong to a DM (and are then visible to its members only). */
 const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 

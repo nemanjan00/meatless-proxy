@@ -2,6 +2,7 @@ import {
   Activity,
   BookOpen,
   Brain,
+  CalendarClock,
   ChartBar,
   Check,
   ChevronsUpDown,
@@ -284,6 +285,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
           label="Routing"
           items={[
             { to: '/triggers', label: 'Triggers', icon: <Zap /> },
+            { to: '/schedules', label: 'Schedules', icon: <CalendarClock /> },
             { to: '/events', label: 'Events', icon: <Radio /> },
           ]}
         />

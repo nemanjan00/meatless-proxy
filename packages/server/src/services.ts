@@ -17,7 +17,7 @@ import {
   type Logger,
 } from '@mp/core'
 import { createDirectory, type Directory, type Employee } from '@mp/directory'
-import { createEvents, type Events } from '@mp/events'
+import { createEvents, createScheduledTasks, type Events, type ScheduledTasks } from '@mp/events'
 import { createFiles, directoryStorage, migrateFileRecords, type FileStorage, type FilesService } from '@mp/files'
 import type { GitCache, LocalRepos } from '@mp/git'
 import { gitCliLocalRepos } from '@mp/git-cli'
@@ -34,7 +34,7 @@ import { afterModelCall, createRunner, type Runner } from '@mp/runner'
 import type { SecretStore } from '@mp/secrets'
 import { storeSecretStore } from '@mp/secrets-store'
 import { createSandbox, type Sandbox } from '@mp/sandbox'
-import { directNetworkName, networkFor, type ProcedureContexts } from '@mp/stdlib'
+import { directNetworkName, networkFor, type ProcedureContexts, type ScheduleService } from '@mp/stdlib'
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
 import { createSkills, type SkillsService } from '@mp/skills'
 import { memoryStore, type Store } from '@mp/store'
@@ -59,6 +59,7 @@ import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
 import { McpServers } from './mcp-servers/index.ts'
 import { privateEvents, privateSessions, watchDmLinks } from './private-work.ts'
+import { scheduledTaskRecipients } from './schedules/recipients.ts'
 import { createLocalProjectForEmployee } from './local-projects/index.ts'
 
 /** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
@@ -140,6 +141,10 @@ export interface Services {
   stdlib: StdlibModule | null
   /** Procedure contexts: build, check, rebuild and start (from the stdlib; null without it). */
   procedureContexts: ProcedureContexts | null
+  /** Scheduled tasks and follow-ups, as records (docs/spec.md#scheduled-tasks). */
+  scheduledTasks: ScheduledTasks
+  /** Creating, running and cancelling them, with their sessions (from the stdlib; null without it). */
+  schedules: ScheduleService | null
   /** Tool names registered from `MCP_SERVERS` servers. */
   mcpTools: string[]
   /** MCP servers added at runtime (src/mcp-servers), null when the hub can't add servers. */
@@ -257,6 +262,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const rawEvents = privateEvents(createEvents({ records, clock, bus }), privacy)
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = privateSessions(createSessions({ records, clock, bus }), privacy)
+  const scheduledTasks = createScheduledTasks({ records, clock })
   watchDmLinks(bus, sessions, privacy)
   const checklists = createChecklists({ records, sessions, clock, bus })
   // Chat attachments live on the files volume too, under `attachments/`, apart from employees' files.
@@ -400,7 +406,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     logger: logger.child({ component: 'router' }),
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
-    resolvers: [channelMembers],
+    // A scheduled task's firing goes to its session (src/schedules/recipients.ts).
+    resolvers: [channelMembers, scheduledTaskRecipients(scheduledTasks)],
     // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
     // every event there, so its sessions skip other employees' copies.
     hasOwnCopies: async (source, employeeId) => {
@@ -571,6 +578,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     runner,
     stdlib: null,
     procedureContexts: null,
+    scheduledTasks,
+    schedules: null,
     mcpTools: [],
     mcpServers: null,
     integrations: null,
@@ -620,6 +629,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         create: (input: Parameters<typeof createLocalProjectForEmployee>[1]) => createLocalProjectForEmployee(services, input),
       },
       defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
+      scheduledTasks,
       enqueueRun: (runId: string, opts?: { priority?: number }) => runner.enqueue(runId, opts ?? {}),
       wakeRun: (runId: string) => runner.wake(runId),
       clock,
@@ -644,6 +654,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     services.stdlib = stdlib
     sessionPrompt = (session, stored) => stdlib.currentSessionPrompt(deps, session, stored)
     services.procedureContexts = stdlib.createProcedureContexts(tools, deps)
+    services.schedules = stdlib.scheduleService(deps)
     logger.debug('stdlib registered', { tools: names.length })
   } else {
     // Without the stdlib's usage policy, still keep the ledger.

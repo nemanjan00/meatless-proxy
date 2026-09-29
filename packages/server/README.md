@@ -234,7 +234,9 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   the contact's `role` is a job title): `viewer` (reads everything except
   secrets), `member` (chat, messages to sessions, forks, pausing and resuming
   their own runs, knowledge edits: contacts, projects, procedures, memories,
-  skills, docs, templates, a session's document and title, files) and `admin`
+  skills, docs, templates, a session's document and title, files, creating
+  scheduled tasks and running, pausing, editing and deleting the ones they
+  asked for) and `admin`
   (secrets, employees, limits, triggers, settings, the kill switch, others'
   tokens, sign-in links, import and export, anyone's access). A person without
   it is a viewer. AI employees and people with `status: left` never sign in.
@@ -569,6 +571,18 @@ instances fire a slot once. A firing whose trigger was disabled or removed
 before routing is dropped rather than sent to the fallback router. Schedule
 triggers are created in the API or by employees with `triggers.create`
 (`schedule: { cron, timezone?, graceSeconds? }`).
+
+The same tick fires **scheduled tasks and follow-ups** (docs/spec.md#scheduled-tasks, `fireScheduledTasks`):
+`scheduledTasks.due()`, one `scheduled_task.fired` event per task and slot (`scheduledTaskEvent`, the requester's
+name in the text), then `markFired`; a one-off past its grace is marked missed instead. `src/schedules/recipients.ts`
+is a router resolver that delivers the firing to the task's session (trusted, expected to act, continuing; a fork for
+`fresh` tasks), so it never reaches triggers or the fallback. `trackScheduledRuns` (bus `event.routed` and
+`run.state`) keeps each task's `lastRun` (run, session, state, the start of the output) up to date, and titles a
+fresh fork after the task and the day. `src/schedules/index.ts` is the API: `GET /api/schedules` (a private
+session's tasks only for its members), `GET /api/schedules/preview` (the schedule in words and the next five
+firings), `POST /api/schedules` (members; the caller is the requester), `PATCH` / `DELETE /api/schedules/:id` and
+`POST /api/schedules/:id/run` (admins and the requester: the guard's `ownSchedule`). `scheduled_task` records are
+hidden from the generic records API.
 
 ## Employees and guided setup
 
@@ -1086,6 +1100,11 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   (unique schema and Redis prefix) when `DATABASE_URL` and `REDIS_URL` are set.
 - `scheduler.test.ts`: schedule triggers fire once per slot with racing ticks (and with two app instances on Postgres
   and BullMQ when configured), the fork's run reaches its context, grace, disabled triggers, the repeatable job.
+- `schedules.test.ts`: a one-off fires once with racing ticks, runs in its session with the instruction and the
+  requester, posts its answer in the report thread, records the result and is done; recurring tasks continue their
+  session (each run sees the last), `fresh` ones fork; a missed one-off; a deleted task's firing goes nowhere; run
+  now; follow-ups wake the session after its run finished, and wake a run waiting for a delivery; the API's list,
+  preview, create and the admin/requester/member/viewer/anonymous permissions.
 - `alerts.test.ts`: failed runs (once, tags, no run started), `ALERTS_ENABLED`, paused runs, dependencies that keep
   failing, and the run worker reporting a provider outage.
 - `session-memory.test.ts`: recalled memories in a request fork, before the event; visibility; the limit of 5.

@@ -91,6 +91,7 @@ module to it:
 | repos, runtime    | [Project code and runtime](#project-code-and-runtime) |
 | sessions          | [Sessions](#sessions)                         |
 | triggers          | [Triggers](#triggers)                         |
+| scheduled tasks   | [Scheduled tasks](#scheduled-tasks)           |
 | procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
 | skills            | [Skills](#skills)                             |
@@ -1796,6 +1797,7 @@ The model has tools for working with sessions:
 | link / unlink  | add or remove links to contacts, projects and other sessions  |
 | save template  | turn a session into a template                                |
 | wait           | block until the given children (one, some or all) finish, and return their results |
+| follow up      | come back to this session later with a note, without waiting ([scheduled tasks](#scheduled-tasks)) |
 | commit         | keep the current run: add it to the session's history          |
 | rewind         | jump back to an earlier point and append a summary of what happened since |
 | offload        | replace a message in history with a pointer to a docs chapter, writing the chapter first if needed |
@@ -2179,6 +2181,97 @@ weekly summary".
   period.
 - Schedules are created and edited in the UI, and by employees themselves
   through `triggers.*` tools.
+
+A schedule trigger is plumbing: it routes a firing into a context. Work that
+someone asks for later ("remind me on Friday", "every weekday at 9:00 post the
+standup summary") is a [scheduled task](#scheduled-tasks).
+
+### Scheduled tasks
+
+A **scheduled task** is an instruction an employee carries out at a time or on
+a schedule, for someone, reporting somewhere. A **follow-up** is the same thing
+pointed at the employee's own work: a note a session leaves for itself ("check
+CI", "poke the reviewer if there is no answer"), delivered back into that
+session later.
+
+- **What a task is:**
+  - the instruction (a follow-up's note), self-contained: the run starts
+    without the conversation it was asked in
+  - when: **once** (an ISO time, a wall-clock time in the time zone such as
+    `2026-10-02 16:00`, `tomorrow 09:00` or `friday 16:00`, or a delay such as
+    "in 2 hours") or **recurring** (cron, or words mapped to cron: `weekday at
+    09:00`, `monday, thursday at 9am`, `week on friday at 16:00`, `month on the
+    1st at 09:00`, `hour`, `30 minutes`)
+  - a time zone: the one given, else the company's (the `timezone` setting),
+    else UTC
+  - the employee who does it, and who asked (the requester)
+  - where to report, optionally: a harness chat thread or channel, or a subject
+    such as a Slack thread (`slack:C123/1700000000.000100`) or channel. The
+    employee's tools default to "here": the conversation the request came in,
+    or the thread the session owns.
+  - enabled or paused
+  - its next run, and its last run (run id, state, the start of the output)
+- **Storage.** A record kind of its own, `scheduled_task` (`tsk_…`, in
+  `@mp/events`), not a schedule trigger: a task carries per-task data (the
+  instruction, the requester, the report target, the last result), one-off
+  times cron can't express, and different permissions (the requester manages
+  it, not only admins). It reuses the trigger scheduling: the same cron and
+  time-zone math, the grace period, and the same scheduler tick.
+- **Its session.** Creating a task creates its own session: the employee
+  prompt, the employee's full toolset, a `requested_by` link to the requester,
+  and a subscription to the report thread, so replies there come back to it.
+  By default every firing is a **continuing** run in that one session, so a
+  recurring task remembers its earlier runs ("since last week…").
+  `sessionMode: fresh` forks the session for each firing instead, for work
+  where history only gets in the way. A follow-up runs in the session that left
+  it.
+- **Firing.** At each slot the scheduler ingests one `scheduled_task.fired`
+  event (source `schedule`, dedupe key `scheduled_task:<id>:<slot>`), and the
+  router delivers it to the task's session as a trusted, direct delivery that
+  is expected to act. The run's requester is the task's. If a run of that
+  session is going, the firing waits in its inbox; a run waiting for a
+  delivery is woken. The run's final answer is posted to a chat report target
+  unless the run already posted there (or ends with `NO_REPLY`); for other
+  targets the run is told which tool to use.
+- **No double firing.** Firings are deduplicated by task and slot, and the
+  task's last handled slot only moves forward, so racing ticks, restarts and a
+  second instance fire once.
+- **Missed firings** respect the grace period (300 s for recurring tasks, an
+  hour for one-offs, or the task's own). Older recurring slots are skipped; a
+  one-off missed beyond its grace is marked `missed` and done instead of
+  running late.
+- **One-offs** are done after they fire (or are run now); giving one a new
+  time re-arms it. Resuming a paused task skips the slots that passed while it
+  was paused.
+- **Run now** fires a task at once, outside its schedule, which stays.
+- **Cancelling** deletes it; a task's own session is marked done and its
+  subscriptions end. A deleted task's pending firing goes nowhere (never to
+  the router).
+
+| Tool               | What it does                                                 |
+|--------------------|--------------------------------------------------------------|
+| schedule.create    | `{ instruction, at? \| in? \| every? \| cron?, timezone?, report?, session? }`: schedule work for later |
+| schedule.list      | the employee's tasks and follow-ups, in words, with next and last run |
+| schedule.update    | change the instruction, time, time zone or report; pause and resume |
+| schedule.cancel    | delete one                                                   |
+| schedule.run_now   | run a task now                                               |
+| sessions.follow_up | `{ in \| at, note }`: come back to this session later        |
+
+- **Follow-ups don't wait.** `sessions.follow_up` is its own tool rather than
+  a `sessions.wait` timeout: `wait` keeps the run open (suspended, holding the
+  session's continuing slot), while a follow-up lets the run finish now. At
+  the time, the note arrives as a new continuing run of the session (or in the
+  inbox of one that is going). If an answer arrived first, the note still
+  comes, and says to check whether it is still needed and end without doing
+  anything if not; it can also be cancelled with `schedule.cancel`.
+- **Routers** don't schedule: scheduling is work for the session the router
+  starts, which tells the person what it scheduled (a router's own text is
+  never posted) and becomes the report's conversation. Routers can still look
+  (`schedule.list`).
+- **Permissions.** Everyone signed in sees scheduled tasks (a task of a
+  private, DM session only its members); members create them; running,
+  pausing, editing and deleting one is for admins and the person who asked.
+  The employee's own tools reach only its own tasks.
 
 ### Observability
 
@@ -2735,6 +2828,14 @@ it easy to see what is happening, and why:
   types go to which contexts and employees, how often each one fired, and
   recent events per trigger. Events that nothing matched, and that went to the
   router, stand out.
+- **Schedules.** Every [scheduled task](#scheduled-tasks) and pending
+  follow-up, grouped upcoming, paused and finished: the instruction, the
+  employee, the schedule in words ("every weekday 09:00 Europe/Belgrade"), the
+  next run, and the last run and its result, linked to its session. Admins and
+  the person who asked can run one now, pause and resume it, edit it and
+  delete it. People create tasks there too: an instruction, the employee, and
+  when (once, with a date and time; or recurring, from presets or cron, with a
+  preview of the next firings).
 - **History timeline.** A session's history drawn as its entry tree, with
   rewinds, summaries, offloads and pointers shown as branches.
 - **Links graph.** For a contact, project, procedure or memory, a graph of what

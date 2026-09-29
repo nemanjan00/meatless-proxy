@@ -9,6 +9,7 @@ import { contactForToken } from '../tokens.ts'
 import { type Access, accessOf, atLeast } from './access.ts'
 import { KNOWLEDGE_GUARD_RULES } from '../knowledge/guard-rules.ts'
 import { mergeGuard } from '../local-projects/access.ts'
+import { ownSchedule } from '../schedules/index.ts'
 import { RateLimiter } from './rate-limit.ts'
 import { resolveAuthSession } from './sessions.ts'
 import { ChatVisibility, type Viewer } from './visibility.ts'
@@ -191,6 +192,12 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/procedures/:id/archive', need: 'member' },
   { method: '*', path: '/api/procedures/:id/triggers', need: 'admin' },
   { method: '*', path: '/api/procedures/:id/triggers/:triggerId', need: 'admin' },
+  // Scheduled tasks (src/schedules): members create them; running, pausing, editing and deleting one is for
+  // admins and the person who asked for it.
+  { method: 'POST', path: '/api/schedules', need: 'member' },
+  { method: 'PATCH', path: '/api/schedules/:id', need: 'member', check: ownSchedule },
+  { method: 'DELETE', path: '/api/schedules/:id', need: 'member', check: ownSchedule },
+  { method: 'POST', path: '/api/schedules/:id/run', need: 'member', check: ownSchedule },
 
   // Chat, messages to sessions, forks, and steering one's own work. Marking read is your own state.
   { method: 'POST', path: '/api/chat/read', need: 'viewer' },

@@ -10,6 +10,7 @@ import { registerGitTools } from './tools/git.ts'
 import { registerImageTools } from './tools/images.ts'
 import { registerKnowledgeTools } from './tools/knowledge.ts'
 import { registerProjectTools } from './tools/projects.ts'
+import { registerScheduleTools } from './tools/schedule.ts'
 import { registerSessionTools } from './tools/sessions.ts'
 import { registerTimeTools } from './tools/time.ts'
 import type { StdlibDeps } from './types.ts'
@@ -29,6 +30,7 @@ export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string
   registerKnowledgeTools(kit)
   registerChecklistTools(kit)
   registerTimeTools(kit)
+  registerScheduleTools(kit)
   registerImageTools(kit)
   if (deps.localProjects) registerProjectTools(kit, deps.localProjects)
   if (deps.git) registerGitTools(kit, deps.git, deps.worktreeFs ?? nodeWorktreeFs())

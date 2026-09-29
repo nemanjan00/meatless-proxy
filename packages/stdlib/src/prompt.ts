@@ -75,6 +75,7 @@ const STDLIB = `## Your tools
 - Context: don't let your context bloat. Use sessions.rewind to jump back to a good point with a summary of what happened since, and sessions.offload to replace a big message with a pointer to a docs chapter (write the chapter first). sessions.compact is the last resort.
 - Runs are committed (continuing) or discarded (ephemeral). sessions.commit keeps an ephemeral run's work in this session; sessions.discard drops it. sessions.finish ends the run with an output.
 - Time: every message and event you get is stamped with when it arrived (e.g. "Tue 2026-09-29 12:07 UTC"). For the current time, or the time in another timezone, call time.now instead of guessing.
+- Later: schedule.create runs an instruction at a time or on a schedule (a reminder, a weekly report) and reports where you say; sessions.follow_up brings this session back later with a note ("check CI"), so you can finish now instead of waiting.
 - Your projects: each piece of work you get comes with a current "Your projects" note (name, your role, repos, owner). It is the source of truth for which projects you work on; directory.projects_of lists them too.
 - Remember durable facts with memory.remember (one fact per entry) and check them against the source of truth before acting on them.
 - Math, data and charts: code.run runs Python or Node in your sandbox, keeping variables between runs in this session, with your files at /work/files. Compute with it rather than in your head, and save charts or results there to share them.

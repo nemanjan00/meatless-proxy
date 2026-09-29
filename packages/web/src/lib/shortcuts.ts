@@ -15,6 +15,7 @@ export const NAV_SHORTCUTS: Shortcut[] = [
   { keys: ['G', 'V'], label: 'Environments', to: '/environments' },
   { keys: ['G', 'C'], label: 'Chat', to: '/chat' },
   { keys: ['G', 'T'], label: 'Triggers', to: '/triggers' },
+  { keys: ['G', 'H'], label: 'Schedules', to: '/schedules' },
   { keys: ['G', 'E'], label: 'Events', to: '/events' },
   { keys: ['G', 'P'], label: 'Projects', to: '/projects' },
   { keys: ['G', 'R'], label: 'Procedures', to: '/procedures' },

@@ -7,7 +7,7 @@ import type { Checklists } from '@mp/checklists'
 import type { Chat, ChatAttachments, ImageDescriber } from '@mp/chat'
 import type { ContainerRuntime } from '@mp/containers'
 import type { Directory, EmployeeNetwork } from '@mp/directory'
-import type { Events } from '@mp/events'
+import type { Events, ScheduledTasks } from '@mp/events'
 import type { FilesService } from '@mp/files'
 import type { GitCache, PushPolicy } from '@mp/git'
 import type { MemoryService } from '@mp/memory'
@@ -77,6 +77,11 @@ export interface StdlibDeps {
    * names none. Optional: without it, or when it returns nothing, `UTC`.
    */
   defaultTimezone?: () => Promise<string | undefined>
+  /**
+   * Scheduled tasks and follow-ups (`schedule.*`, `sessions.follow_up`). Optional: without it the stdlib
+   * keeps them over `records` itself (the same records, so the server's scheduler still sees them).
+   */
+  scheduledTasks?: ScheduledTasks
   /** Queues a run for execution (the server wires it to the runner). */
   enqueueRun: (runId: string, opts?: { priority?: number }) => Promise<void>
   /** Wakes a suspended run if its wait is satisfied. */

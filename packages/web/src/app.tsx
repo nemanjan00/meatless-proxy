@@ -30,6 +30,7 @@ const ProcedurePage = page(() => import('@/pages/procedures.tsx'), 'ProcedurePag
 const ProceduresPage = page(() => import('@/pages/procedures.tsx'), 'ProceduresPage')
 const RecordDetailPage = page(() => import('@/pages/records.tsx'), 'RecordDetailPage')
 const RecordListPage = page(() => import('@/pages/records.tsx'), 'RecordListPage')
+const SchedulesPage = page(() => import('@/pages/schedules.tsx'), 'SchedulesPage')
 const SessionDetailPage = page(() => import('@/pages/session-detail.tsx'), 'SessionDetailPage')
 const SessionsPage = page(() => import('@/pages/sessions.tsx'), 'SessionsPage')
 const SettingsPage = page(() => import('@/pages/settings.tsx'), 'SettingsPage')
@@ -67,6 +68,7 @@ export function AppRoutes() {
         <Route path="environments" element={<EnvironmentsPage />} />
         <Route path="lineage/:id" element={<LineagePage />} />
         <Route path="triggers" element={<TriggersPage />} />
+        <Route path="schedules" element={<SchedulesPage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="chat/:channelId" element={<ChatPage />} />

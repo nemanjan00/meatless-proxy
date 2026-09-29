@@ -55,6 +55,7 @@ import { createMockKnowledgeApi } from './knowledge.ts'
 import { createMockIdentityApi } from './identity.ts'
 import { createMockLimitsApi } from './limits.ts'
 import { createMockEnvironmentsApi } from './environments.ts'
+import { createMockSchedulesApi } from './schedules.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
 import { mockListExtras, mockQuerySessions } from './session-list.ts'
@@ -1293,6 +1294,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Integration users the harness couldn't link to a contact by itself (./identity.ts).
     ...createMockIdentityApi({ delay }),
+
+    // Scheduled tasks and follow-ups (./schedules.ts).
+    ...createMockSchedulesApi({ db, delay, get, whoami: () => api.me() }),
 
     // Who is working on chat threads, and a small simulation when you post (./chat-activity.ts).
     channelActivity: chatActivity.channelActivity,

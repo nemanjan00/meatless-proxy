@@ -13,7 +13,17 @@ import type { StdlibDeps } from './types.ts'
 export const ONCE_KIND = 'stdlib_once'
 
 /** Session meta keys written by the stdlib itself. `sessions.save_metadata` can't overwrite them. */
-export const RESERVED_META = ['worktrees', 'env', 'reviewFor', 'reviews', 'idem', 'skills', 'procedureId', 'realTask'] as const
+export const RESERVED_META = [
+  'worktrees',
+  'env',
+  'reviewFor',
+  'reviews',
+  'idem',
+  'skills',
+  'procedureId',
+  'realTask',
+  'scheduledTaskId',
+] as const
 
 /** Link roles the stdlib uses. */
 export const Roles = {

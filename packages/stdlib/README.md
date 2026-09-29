@@ -62,7 +62,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 
 | Namespace | Tools |
 |-----------|-------|
-| `sessions.*` | create, fork, loop, wait, look_up, list, search, tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
+| `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search, tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
 | `chat.*` | post, reply, read, search, create_channel, add_member, remove_member, archive, invite |
 | `subscriptions.*` / `triggers.*` | subscribe, unsubscribe, list / list, create, update, disable |
 | `directory.*` / `procedures.run` | find_contact, get_contact, find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
@@ -71,6 +71,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
 | `projects.create_local` | a project on a repository the harness hosts (docs/spec.md#local-projects), the employee a member (`deps.localProjects.create`, once per call). No tool merges |
 | `env.*` | up (with `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
+| `schedule.*` | create, list, update, cancel, run_now: scheduled tasks (docs/spec.md#scheduled-tasks). `create { instruction, at? \| in? \| every? \| cron?, timezone?, report?, session? }` reads times in the company time zone, creates the task's own session (employee prompt, full toolset, `requested_by`) and reports "here" by default (the conversation of the run, or the thread its session owns). `sessions.follow_up { in \| at, note }` leaves a note for the calling session. Routers get `schedule.list` only |
 | `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
 | `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
 
@@ -204,6 +205,12 @@ Notes on behaviour:
   characters each for stdout) and then says to redirect it to a file (`cutNote`).
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
   escapes with `nodeWorktreeFs`).
+- **Scheduled tasks** (`src/schedules.ts`, `scheduleService(deps)`): the tools and the server's API share it. It
+  resolves `at | in | every | cron` (`@mp/events` when.ts), creates a task with its session, a follow-up for a
+  session, runs a task now (an event with a `now:<key>` dedupe key), cancels one (its session done, its
+  subscriptions ended) and works out "here" for a report. Records are `deps.scheduledTasks` or, without it,
+  `createScheduledTasks` over the same records. The answer-where-asked policy posts a task run's final answer to its
+  chat report target (a thread, or a new thread in a channel) unless the run posted in chat or ended with `NO_REPLY`.
 - **Policies.** The docs policy looks at the run's own entries (after
   `run.data.base`): a successful `git.commit` with a sha and no docs write
   (`docs.write`, `docs.write_chapter`, `git.write_file` on `docs/…` or
@@ -227,6 +234,9 @@ environments keep what they started with).
 `test/local-projects.test.ts` covers `projects.create_local` (membership, once per call, the toolsets), checkout and
 push of a local repository without the SSH key and the branch subscription, protected branches refused, and that no
 tool merges.
+`test/schedule.test.ts` covers `schedule.*` and `sessions.follow_up`: one-offs, recurring in words and cron, the
+company time zone, the task's session and requester, a retried call, bad input, "here" and other report targets,
+list/update/pause/run now/cancel on the employee's own tasks only, and the router's toolset.
 `test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
 project, `you`, role order, the limit), skipping a repeat, new sessions and forks
 getting the current list with the system prompt byte-identical after an

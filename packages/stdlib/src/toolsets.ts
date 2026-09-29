@@ -70,11 +70,17 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'memory.verify',
   'procedures.run',
   'projects.create_local',
+  'schedule.cancel',
+  'schedule.create',
+  'schedule.list',
+  'schedule.run_now',
+  'schedule.update',
   'sessions.commit',
   'sessions.compact',
   'sessions.create',
   'sessions.discard',
   'sessions.finish',
+  'sessions.follow_up',
   'sessions.fork',
   'sessions.get',
   'sessions.link',
@@ -138,4 +144,12 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'sessions.restore',
   'sessions.save_template',
   'triggers.**',
+  // Scheduling is work for the session the router starts: it tells the person what it scheduled (a router's
+  // own text is never posted) and becomes the report's conversation. The router may still look (schedule.list).
+  'schedule.create',
+  'schedule.update',
+  'schedule.cancel',
+  'schedule.run_now',
+  // A router run is one decision; there is no work of its own to come back to.
+  'sessions.follow_up',
 ]

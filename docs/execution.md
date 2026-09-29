@@ -124,7 +124,8 @@ and tags combine as described below:
    event".
    **Resolvers** registered by higher layers add recipients. For example, the
    sessions that are members of a chat channel get its messages, but aren't
-   expected to act.
+   expected to act, and a [scheduled task](spec.md#scheduled-tasks)'s firing
+   goes to the task's session (trusted, expected to act).
 3. **Employee tag.** `@employee` delivers to that employee's router session,
    unless one of that employee's sessions already acts on the event.
    **Follow-ups** count as a tag: a person's untagged reply in a chat thread

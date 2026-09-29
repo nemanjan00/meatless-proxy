@@ -12,7 +12,7 @@ import { type ChatVisibility, PRIVATE_TITLE, type Viewer, markOf } from '../auth
 import type { Services } from '../services.ts'
 
 /** Record kinds that belong to a session through their `sessionId` field. */
-export const SESSION_OWNED_KINDS = new Set(['run', 'inbox', 'subscription', 'checklist', 'usage'])
+export const SESSION_OWNED_KINDS = new Set(['run', 'inbox', 'subscription', 'checklist', 'usage', 'scheduled_task'])
 
 /** Extra conditions for a records query of `kind` that leave out private work the viewer may not read. */
 export async function privateWorkFilter(vis: ChatVisibility, viewer: Viewer, kind: string): Promise<Condition[]> {
