@@ -346,10 +346,17 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
    * What the runner offers the model, at each call: the lists above, minus the tools of integrations
    * the employee has no token for (they can only fail). Not used for toolsets fixed at creation, so a
    * token set later brings the tools back without a new session.
+   * An integration's hiding pattern is `mcp.<name>.*`; a config MCP server with that name owns the
+   * namespace instead (its tools replaced the integration's at registration), so it isn't hidden.
    */
+  const integrationPattern = /^mcp\.([^.]+)\.\*$/
+  const configServerNames = new Set(config.MCP_SERVERS.map((s) => s.name))
   const offeredToolListsFor = async (employeeId: string): Promise<ToolLists> => {
     const lists = await toolListsFor(employeeId)
-    const hidden = (await integrationsForTools?.hiddenToolsFor(employeeId).catch(() => [])) ?? []
+    const hidden = ((await integrationsForTools?.hiddenToolsFor(employeeId).catch(() => [])) ?? []).filter((p) => {
+      const m = integrationPattern.exec(p)
+      return !m || !configServerNames.has(m[1]!)
+    })
     return hidden.length ? { ...lists, deny: [...lists.deny, ...hidden] } : lists
   }
 
