@@ -825,14 +825,32 @@ When an employee runs a project in its environment, people can watch it
 being built.
 
 - An environment can **expose ports**, e.g. a dev server on 5173. The harness
-  proxies them at `/preview/<env>/<port>/`, WebSockets included, so hot reload
-  works. It's served only to signed-in people who may see the session.
+  proxies them, WebSockets included, so hot reload works.
+- **Previews are served from a separate origin, never the harness's own.**
+  A preview runs code the employee just wrote or pulled in, e.g. any npm
+  package. On the harness's origin that code could call `/api/…` with the
+  viewer's session cookie. `httpOnly` doesn't prevent that and neither does
+  `SameSite`, so an admin opening a preview would hand it admin rights. Instead:
+  - Each preview gets its own origin, `<env>-<port>.<PREVIEW_DOMAIN>` (wildcard
+    DNS and certificate), or a dedicated port when no domain is set. It shares
+    no cookies with the harness.
+  - **Access by preview token:** the UI asks the API for a short-lived token
+    (about 5 minutes), signed and scoped to one environment, one port and one
+    viewer. The preview origin exchanges it for its own cookie, scoped to that
+    preview only. The harness session cookie never reaches a preview origin.
+  - The preview origin serves nothing but the proxied app. The harness API,
+    WebSocket and MCP server refuse requests from preview origins (checked by
+    `Origin` and `Host`), and CORS never allows them.
+  - The UI frames previews with `sandbox="allow-scripts allow-forms
+    allow-same-origin"`, which is safe because the origin differs, and
+    `allow-same-origin` only lets the preview use its own storage. Previews
+    can't frame the harness (`frame-ancestors` on the harness forbids it).
 - The session page shows the preview in a frame next to the history. It
   reloads as the employee changes the code, and it's marked with which commit
   is running.
 - An employee can link a preview in chat, and people can open it full-screen.
 - Previews live as long as their environment. Nothing is exposed on the
-  host's own ports.
+  host's own ports apart from the preview listener.
 
 Open questions:
 
