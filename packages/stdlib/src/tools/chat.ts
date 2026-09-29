@@ -196,21 +196,83 @@ export function registerChatTools(kit: Kit): void {
   kit.tool(
     {
       name: 'chat.search',
-      description: 'Search harness chat messages by text, newest first, optionally in one channel.',
+      description:
+        'Search harness chat messages, newest first: by text, and optionally in one channel, in one thread, by an author (a contact or session id), or tagging someone (an employee, session or contact id). Give text or at least one filter.',
       effect: 'read',
-      params: { properties: { text: { type: 'string' }, channel: channelProp, limit: { type: 'number' } }, required: ['text'] },
+      params: {
+        properties: {
+          text: { type: 'string' },
+          channel: channelProp,
+          threadId: { type: 'string' },
+          author: { type: 'string', description: 'A contact id (con_…) or session id (ses_…).' },
+          tagged: { type: 'string', description: 'An employee, session or contact id.' },
+          limit: { type: 'number' },
+        },
+      },
     },
     async (a) => {
-      const text = str(a.text)
-      if (!text) return fail('text is required')
+      const text = str(a.text) ?? ''
+      if (!text && !a.channel && !a.threadId && !a.author && !a.tagged) return fail('give text or a filter')
       const ch = a.channel ? await channel(a.channel) : null
+      const by =
+        typeof a.author === 'string' && a.author
+          ? { kind: a.author.startsWith('ses_') ? 'session' : 'contact', id: a.author }
+          : null
       const msgs = await chat.search(text, {
         ...(ch ? { channelId: ch.id } : {}),
+        ...(a.threadId ? { threadId: threadRef(String(a.threadId)) } : {}),
+        ...(by ? { author: by } : {}),
+        ...(a.tagged ? { tagged: String(a.tagged) } : {}),
         limit: Math.min(Math.max(1, a.limit ?? 20), 50),
       })
       return ok({
         messages: msgs.map((m) => ({ ...(msgView(m) as object), text: clip(m.data.text, 300), channelId: m.data.channelId })),
       })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'chat.react',
+      description:
+        'React to a chat message with an emoji, e.g. 👀 to show you are on it or ✅ when done. Use sparingly: a reaction is a message people see.',
+      effect: 'idempotent',
+      params: { properties: { messageId: { type: 'string' }, emoji: { type: 'string' } }, required: ['messageId', 'emoji'] },
+    },
+    async (a, ctx) => {
+      const m = await chat.react(threadRef(String(a.messageId)), String(a.emoji), author(ctx))
+      return ok({
+        messageId: m.id,
+        reactions: Object.fromEntries(Object.entries(m.data.reactions ?? {}).map(([k, v]) => [k, v.length])),
+      })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'chat.edit',
+      description: 'Edit a message this session posted, e.g. to correct it. People see that it was edited.',
+      effect: 'idempotent',
+      params: { properties: { messageId: { type: 'string' }, text: { type: 'string' } }, required: ['messageId', 'text'] },
+    },
+    async (a, ctx) => {
+      const text = str(a.text)
+      if (!text) return fail('text is required')
+      const m = await chat.edit(threadRef(String(a.messageId)), text, author(ctx))
+      return ok({ messageId: m.id, editedAt: m.data.editedAt })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'chat.delete',
+      description: 'Delete a message this session posted. A placeholder stays in the thread.',
+      effect: 'idempotent',
+      params: { properties: { messageId: { type: 'string' } }, required: ['messageId'] },
+    },
+    async (a, ctx) => {
+      const m = await chat.delete(threadRef(String(a.messageId)), author(ctx))
+      return ok({ messageId: m.id, deleted: true })
     },
   )
 

@@ -142,4 +142,28 @@ describe('triggers', () => {
     expect((await t.call('triggers.create', { name: 'x', match: { filter: { $bogus: 1 } } })).isError).toBe(true)
     expect((await t.call('triggers.update', { triggerId: tr.id })).isError).toBe(true)
   })
+
+  it('reacts, edits and deletes its own messages, and searches with filters', async () => {
+    const t = await stack()
+    await t.chat.createChannel({ name: 'ops', createdBy: { kind: 'contact', id: t.ana.id } })
+    const p = await t.out('chat.post', { channel: 'ops', text: 'Deploying @ana' })
+    expect(await t.out('chat.react', { messageId: p.messageId, emoji: '👀' })).toMatchObject({ reactions: { '👀': 1 } })
+    expect((await t.out('chat.edit', { messageId: `mp:${p.messageId}`, text: 'Deployed @ana' })).editedAt).toBeTruthy()
+    expect((await t.chat.getMessage(p.messageId))!.data.text).toBe('Deployed @ana')
+    const byAuthor = await t.out('chat.search', { author: t.session.id })
+    expect(byAuthor.messages.map((m: any) => m.id)).toEqual([p.messageId])
+    expect((await t.out('chat.search', { tagged: t.ana.id })).messages).toHaveLength(1)
+    expect((await t.call('chat.search', {})).isError).toBe(true)
+    // Someone else's message can't be edited or deleted.
+    const theirs = await t.chat.post({
+      channelId: (await t.chat.channelByName('ops'))!.id,
+      author: { kind: 'contact', id: t.ana.id },
+      text: 'mine',
+    })
+    // Denials surface as errors, which the runner shows the model as a failed call.
+    await expect(t.call('chat.edit', { messageId: theirs.id, text: 'hacked' })).rejects.toThrow('only the author')
+    await expect(t.call('chat.delete', { messageId: theirs.id })).rejects.toThrow('only the author')
+    expect(await t.out('chat.delete', { messageId: p.messageId })).toMatchObject({ deleted: true })
+    expect((await t.out('chat.search', { text: 'Deployed' })).messages).toEqual([])
+  })
 })
