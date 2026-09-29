@@ -5,7 +5,7 @@ import { ConflictError, DeniedError, NotFoundError, ValidationError, isMpError, 
 import { invalidNetwork } from '@mp/directory'
 import type { MpEvent } from '@mp/events'
 import type { SecretScope as DomainScope } from '@mp/secrets'
-import { TERMINAL_RUN_STATES, type RunState, type SessionStatus } from '@mp/sessions'
+import { TERMINAL_RUN_STATES, type RunState } from '@mp/sessions'
 import { normalizeWhere, type Condition, type StoredRecord } from '@mp/store'
 import type { UsageData } from '@mp/usage'
 import { Hono, type Context } from 'hono'
@@ -16,6 +16,7 @@ import type { ChatVisibility } from '../auth/visibility.ts'
 import type { Services } from '../services.ts'
 import { rotateSshKey } from '../ssh.ts'
 import { lineage } from './lineage.ts'
+import { querySessionList, sessionOrigins } from './session-list.ts'
 import { BadRequestError, boolParam, intParam, jsonBody, requireString } from './util.ts'
 import {
   Views,
@@ -104,6 +105,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   const vis = deps.visibility
   const inbox = new PersonInbox(s, vis)
   const me_ = (c: Context) => principalOf(c).contactId
+  const origins = sessionOrigins(s)
 
   /** Extra conditions hiding DM channels (and their messages and chat events) from people who aren't members. */
   const dmFilter = async (c: Context, kind: string): Promise<Condition[]> => {
@@ -275,23 +277,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
   // ── Sessions and runs ────────────────────────────────────────────────────
 
   app.get('/api/sessions', async (c) => {
-    const q = c.req.query()
-    const status = q.status
-      ? (q.status
-          .split(',')
-          .map((x) => x.trim())
-          .filter(Boolean) as SessionStatus[])
-      : undefined
-    const page = await s.sessions.query({
-      ...(q.employeeId ? { employeeId: q.employeeId } : {}),
-      ...(status?.length ? { status } : {}),
-      ...(q.rootId ? { rootId: q.rootId } : {}),
-      ...(q.text ? { text: q.text } : {}),
-      limit: intParam(q.limit, 'limit', 50, 500, 1),
-      offset: intParam(q.offset, 'offset', 0),
-    })
+    const page = await querySessionList(s, origins, c.req.query())
     const v = views()
-    const items = await Promise.all(page.items.map((x) => v.sessionListItem(x)))
+    const items = await Promise.all(page.items.map((x) => v.sessionListItem(x, page.origins.get(x.id))))
     return c.json({ items, total: page.total } satisfies Api.Page<Api.SessionListItem>)
   })
 

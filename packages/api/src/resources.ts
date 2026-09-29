@@ -392,7 +392,26 @@ export interface SessionListItem {
   /** Number of direct children. */
   children: number
   checklist?: { done: number; total: number }
+  /** The latest run's last change or the session's `updatedAt`, whichever is later. */
+  lastActivityAt: string
+  /** Where the session came from. */
+  startedFrom: SessionStartedFrom
+  /** The person the work is for: the session's `requested_by` link, else its first run's requester. */
+  requester?: { id: string; name: string }
+  /** The project the session is linked to (a `works_on` link first, then any other link but `mentions`). */
+  project?: { id: string; name: string }
 }
+
+/**
+ * Where a session came from, derived from its role, meta, links and first run:
+ * `router` (an employee's router context, current or retired), `procedure` (a procedure's context or a run of it),
+ * `handoff` (started by a router context), `session` (started by another session: a fork, loop or new session),
+ * `chat` (a chat message), `trigger` (a trigger, integration, webhook or timer event) or `manual` (the UI or API).
+ */
+export type SessionStartedFrom = 'chat' | 'procedure' | 'trigger' | 'handoff' | 'session' | 'manual' | 'router'
+
+/** `GET /api/sessions?sort=`: `activity` (latest first, the default), `newest`, `oldest` or `title` (A–Z). */
+export type SessionSort = 'activity' | 'newest' | 'oldest' | 'title'
 
 /** `GET /api/sessions/:id`. */
 export interface SessionDetail {

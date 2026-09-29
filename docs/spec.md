@@ -2160,6 +2160,23 @@ It is built with shadcn/ui and styled after Linear. See the
   opened from history and watched live. Every session can be opened and read in
   full: messages, tool calls with their inputs and outputs, container logs, and
   git changes.
+- **Sessions list.** Every session, in status tabs (All, Live, Contexts, Done)
+  and grouped by status, employee or fork tree. A filter bar narrows it by
+  employee, project (sessions linked to it, except by a passing mention),
+  requested by (the session's `requested_by` person, or whoever asked for one
+  of its runs), started from (a chat thread, a procedure, a trigger or
+  integration, a router hand-off, another session, by hand, or router contexts)
+  and text. Router contexts replaced by a newer router (role `router-retired`)
+  are hidden unless asked for. The employee filter starts from the employee
+  switcher; the page's own choice wins while it's set and doesn't change the
+  switcher. Sort by recent activity (the default: the latest run's change or the
+  session's, newest first), newest, oldest or title. Rows in every group follow
+  the sort; groups keep their order, and trees go by their latest activity with
+  rows in depth order. Filters and sort live in the URL, so a filtered list can
+  be shared, and "Clear filters" resets them. The server filters, sorts and
+  pages (`GET /api/sessions`), so long lists stay fast: the page shows the count
+  and loads more on request. Each row shows the last activity (the exact time on
+  hover), the requester's avatar and the project.
 - **Session trees.** Forks and loops are shown as a tree. You can navigate from
   a session to its parent, its children, and linked sessions, and see at a
   glance which branches are running, waiting, done or failed.

@@ -118,6 +118,17 @@ becomes an event with source `mcp:<server>`, routed like any other.
 
 Exactly the routes of `@mp/api` (`ROUTES`), plus:
 
+- `GET /api/sessions` (`src/http/session-list.ts`) filters by `employeeId`, `status`, `rootId`, `text`, `projectId`
+  (sessions linked to the project with any role but `mentions`), `requesterId` (a `requested_by` link, or a run they
+  requested), `origin` (`chat`, `procedure`, `trigger`, `handoff`, `session`, `manual`, `router`) and
+  `excludeRoles` (session `meta.role`s, comma-separated; default `router-retired`, `none` for nothing), and sorts
+  by `sort` (`activity`: `updatedAt` desc, the default; `newest`; `oldest`; `title`), ties broken by id so pages
+  don't overlap. Rows carry `lastActivityAt`, `startedFrom`, `requester` and `project`. Where a session came from is
+  its role (router contexts), its meta (procedures), else its first run's cause: a fork or loop by a router's run
+  is a hand-off and by any other session's is `session`, an event from `chat` is `chat`, from `ui` is manual, from
+  anything else (integrations, timers, webhooks) is `trigger`. It's cached per session once it has a run, and an
+  origin filter scans at most 10,000 matching sessions.
+
 - `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
 - `GET /api/inbox` and `POST /api/inbox/read { ids?, clear? }` (`src/inbox.ts`, `PersonInbox`): the signed-in person's
   mentions, messages in their DMs, replies in their threads (started, posted in or tagged in), alerts that tag them
@@ -773,6 +784,9 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 `npx vitest run --project node packages/server`:
 
 - `api.test.ts`: every `@mp/api` route exists, shapes, error mapping, secrets never returned, pause-all.
+- `session-list.test.ts`: `GET /api/sessions` filters (employee, project, requester, origin, combined), sort orders,
+  paging an origin filter, retired routers hidden by default, row details, viewers may list; in memory, and on
+  Postgres and BullMQ when `DATABASE_URL` and `REDIS_URL` are set.
 - `tools-files.test.ts`: router contexts get new stdlib tools (and code tools with a sandbox), `time.now` follows the
   `timezone` setting, employee files land in `FILES_DIR` with no file records.
 - `sandbox-docker.test.ts` (`MP_DOCKER_TEST=1`): builds `docker/sandbox` as `mp-sandbox:test` and runs `code.run` for real,

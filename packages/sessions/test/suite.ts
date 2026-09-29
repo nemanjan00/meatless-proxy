@@ -128,6 +128,33 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
         await expect(sessions.update(a.id, { status: 'bogus' as any })).rejects.toBeInstanceOf(ValidationError)
         await expect(sessions.update(a.id, { title: '' })).rejects.toBeInstanceOf(ValidationError)
       })
+
+      it('filters by ids and excluded roles, and orders by the given field with stable ties', async () => {
+        const a = await sessions.create({ employeeId: EMP, title: 'beta' })
+        clock.advance(1000)
+        const b = await sessions.create({ employeeId: EMP, title: 'Alpha', meta: { role: 'router' } })
+        clock.advance(1000)
+        const c = await sessions.create({ employeeId: EMP, title: 'Gamma', meta: { role: 'router-retired' } })
+        clock.advance(1000)
+        await sessions.update(a.id, { document: 'touched' })
+        const ids = async (q: Parameters<Sessions['query']>[0]) => (await sessions.query(q)).items.map((s) => s.id)
+        expect(await ids({})).toEqual([c.id, b.id, a.id])
+        expect(await ids({ orderBy: { field: 'createdAt', dir: 'asc' } })).toEqual([a.id, b.id, c.id])
+        expect(await ids({ orderBy: { field: 'updatedAt' } })).toEqual([a.id, c.id, b.id])
+        // Byte order, like the stores: capitals first.
+        expect(await ids({ orderBy: { field: 'title', dir: 'asc' } })).toEqual([b.id, c.id, a.id])
+        expect(await ids({ excludeRoles: ['router-retired'] })).toEqual([b.id, a.id])
+        expect(await ids({ excludeRoles: ['router', 'router-retired'] })).toEqual([a.id])
+        expect(await ids({ ids: [a.id, c.id] })).toEqual([c.id, a.id])
+        expect(await sessions.query({ ids: [] })).toEqual({ items: [], total: 0 })
+        expect((await sessions.query({ ids: [a.id, b.id, c.id], excludeRoles: ['router'], limit: 1 })).total).toBe(2)
+        await expect(sessions.query({ orderBy: { field: 'slug' as any } })).rejects.toBeInstanceOf(ValidationError)
+        // Same timestamps: ties break on id, so pages don't overlap.
+        const same = await Promise.all([1, 2, 3, 4].map((i) => sessions.create({ employeeId: 'emp_tie', title: `T${i}` })))
+        const p1 = await ids({ employeeId: 'emp_tie', limit: 2, orderBy: { field: 'updatedAt' } })
+        const p2 = await ids({ employeeId: 'emp_tie', limit: 2, offset: 2, orderBy: { field: 'updatedAt' } })
+        expect(new Set([...p1, ...p2])).toEqual(new Set(same.map((s) => s.id)))
+      })
     })
 
     describe('fork and loop', () => {

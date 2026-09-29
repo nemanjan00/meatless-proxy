@@ -409,10 +409,18 @@ export function createSessions(opts: SessionsOptions): Sessions {
       if (q.employeeId) where.push({ field: 'employeeId', op: 'eq', value: q.employeeId })
       if (q.status) where.push({ field: 'status', op: 'in', value: Array.isArray(q.status) ? q.status : [q.status] })
       if (q.rootId) where.push({ field: 'rootId', op: 'eq', value: q.rootId })
+      if (q.ids) {
+        if (!q.ids.length) return { items: [], total: 0 }
+        where.push({ field: 'id', op: 'in', value: q.ids })
+      }
+      if (q.excludeRoles?.length) where.push({ field: 'meta.role', op: 'nin', value: q.excludeRoles })
+      const orderBy = q.orderBy ?? { field: 'createdAt', dir: 'desc' }
+      if (!['createdAt', 'updatedAt', 'title'].includes(orderBy.field))
+        throw new ValidationError(`cannot order sessions by ${orderBy.field}`)
       return records.query<SessionData>(SESSION_KIND, {
         where,
         ...(q.text ? { text: q.text } : {}),
-        orderBy: { field: 'createdAt', dir: 'desc' },
+        orderBy: { field: orderBy.field, dir: orderBy.dir ?? 'desc' },
         ...(q.limit !== undefined ? { limit: q.limit } : {}),
         ...(q.offset !== undefined ? { offset: q.offset } : {}),
       })

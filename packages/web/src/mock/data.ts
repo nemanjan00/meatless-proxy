@@ -30,6 +30,7 @@ import type {
   UsageData,
 } from '@mp/api'
 import { seedProcedures } from './procedures-data.ts'
+import { seedListSessions } from './session-list.ts'
 
 /**
  * Fake data for the mock API: a small company (people named Ana, Bob, …,
@@ -1250,7 +1251,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       depth: 0,
       created: 60 * 24 * 30,
       updated: 50,
-      meta: { context: true, router: true },
+      meta: { context: true, router: true, role: 'router' },
       document: '# Billing router\n\nInput that no subscription, tag or trigger claimed. Untrusted by default.\n',
     },
     {
@@ -2737,6 +2738,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
 
   void [bi1, bi2, rc1, p10, p11, ro1]
   seedProcedures(db, at)
+  seedListSessions(db, at)
   return db
 }
 

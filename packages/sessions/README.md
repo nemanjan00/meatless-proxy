@@ -16,7 +16,10 @@ extend them with `records.kinds.extend`.
 
 - **Sessions:** `create`, `get`, `require`, `bySlug`, `query`, `update`,
   `history`, `tree`, `children`. Slugs come from the title and are made unique
-  per employee (`-2`, `-3`, …).
+  per employee (`-2`, `-3`, …). `query` filters by employee, status, root,
+  text, `ids` and `excludeRoles` (`meta.role`s to leave out; sessions without
+  a role stay), and orders by `createdAt` (default, newest first), `updatedAt`
+  or `title`, ties broken by id.
 - **Fork and loop:** `fork(sessionId, { atEntry })`, `loop(sessionId, items)`.
   A fork point may be any entry on the session's committed history, any entry
   written by one of the session's runs (including rewound-away branches and

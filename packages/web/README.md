@@ -149,6 +149,20 @@ frame (tokens are for members). `?tab=preview&port=5173` opens the tab on a port
 `env.preview` gives employees. The mock serves a static `data:` page per port and moves the demo
 commit now and then.
 
+### Sessions list
+
+`src/pages/sessions.tsx` is `/sessions`: status tabs, a text search, Sort (recent activity, newest, oldest,
+title A–Z) and Group by (status, employee, tree) on the first line; Employee, Project, Requested by (a
+`RecordPicker` over contacts, then the person with a clear button), Started from, "Hide finished routers" and
+Clear filters on the second, with the count. Everything is in the URL (`filter`, `q`, `sort`, `group`,
+`employee`, `project`, `requester`, `origin`, `retired=1`). The page's `?employee=` wins over the sidebar's
+employee switcher (`all` means every employee) and leaves the switcher alone; without it the list follows the
+switcher. The server filters, sorts and pages (100 rows a page, "Load more"); the status tabs filter what's
+loaded. Rows (36 px) show the last activity with the exact time on hover, the requester's avatar and the
+project tag. Grouping and sorting are pure functions in `src/lib/session-list.ts` (`groupSessions`,
+`compareSessions`). The mock mirrors the server in `src/mock/session-list.ts`, which also seeds sessions from
+every origin across the employees and projects, and a retired router.
+
 ### Chat
 
 Slack-like, per the spec's "Everyday chat features": channels, DMs and threads; `/`
@@ -226,6 +240,9 @@ Lineage, Triggers, Chat posting, Usage, a project's generated form, Secrets, Inb
 `polish.test.tsx`: usage buckets and labels, routing outcomes, recent-run summaries, chat
 helpers (tag suggestions, DM labels, reactions, search grouping), label and link helpers,
 and the chat page's autocomplete, search, reactions, edit, delete, new DM and unread badges.
+`sessions-list.test.tsx`: the Sessions list's sort (rows in every group, the URL, trees by latest activity),
+filters (project, started from, requester, employee, finished routers) through the URL, Clear filters, the empty
+state, and the mock API's filters and origins.
 `notifications.test.tsx`: a toast for a new item (Open, Mark read), none while viewing its thread or channel
 (but one when the tab is hidden), grouping, the warning style, the badge and title from new items and other tabs'
 reads, muted channels, toasts off, desktop notifications only while hidden (a click opens the item, DM text

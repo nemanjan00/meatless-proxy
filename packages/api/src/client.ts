@@ -40,6 +40,8 @@ import type {
   Session,
   SessionDetail,
   SessionListItem,
+  SessionStartedFrom,
+  SessionSort,
   SessionStatus,
   SessionTreeNode,
   Subscription,
@@ -193,6 +195,16 @@ export interface SessionListQuery {
   text?: string
   /** Only sessions of this fork tree. */
   rootId?: string
+  /** Only sessions linked to this project (any role but `mentions`). */
+  projectId?: string
+  /** Only sessions for this person (a `requested_by` link, or a run they requested). */
+  requesterId?: string
+  /** Only sessions from this origin. */
+  origin?: SessionStartedFrom
+  /** Default `activity`. */
+  sort?: SessionSort
+  /** `meta.role`s to leave out, comma-separated. Default `router-retired`; `none` leaves nothing out. */
+  excludeRoles?: string
   limit?: number
   offset?: number
 }

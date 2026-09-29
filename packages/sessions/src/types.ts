@@ -292,20 +292,29 @@ export interface SessionHeadChanged {
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
+/** What `Sessions.query` filters and sorts by. */
+export interface SessionQuery {
+  employeeId?: string
+  status?: SessionStatus | SessionStatus[]
+  rootId?: string
+  text?: string
+  /** Only these sessions (an empty list matches nothing). */
+  ids?: string[]
+  /** Leave out sessions whose `meta.role` is one of these (e.g. `router-retired`). Sessions without a role stay. */
+  excludeRoles?: string[]
+  /** Default: newest first (`createdAt` desc). Ties break on id, so paging is stable. */
+  orderBy?: { field: 'createdAt' | 'updatedAt' | 'title'; dir?: 'asc' | 'desc' }
+  limit?: number
+  offset?: number
+}
+
 export interface Sessions {
   // sessions
   create(input: CreateSessionInput): Promise<Session>
   get(id: string): Promise<Session | null>
   require(id: string): Promise<Session>
   bySlug(employeeId: string, slug: string): Promise<Session | null>
-  query(q: {
-    employeeId?: string
-    status?: SessionStatus | SessionStatus[]
-    rootId?: string
-    text?: string
-    limit?: number
-    offset?: number
-  }): Promise<{ items: Session[]; total: number }>
+  query(q: SessionQuery): Promise<{ items: Session[]; total: number }>
   update(
     id: string,
     patch: Partial<Pick<SessionData, 'title' | 'status' | 'document' | 'meta' | 'model'>>,

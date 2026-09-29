@@ -52,6 +52,7 @@ import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
+import { mockListExtras, mockQuerySessions } from './session-list.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -208,6 +209,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       tokens: totalsFor((u) => u.sessionId === s.id),
       children,
       ...(p ? { checklist: p } : {}),
+      ...mockListExtras(db, s),
     }
   }
 
@@ -587,18 +589,14 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     },
 
     listSessions: (q = {}) => {
-      const statuses = q.status ? String(q.status).split(',') : null
-      let items = all<SessionData>('session').filter(
-        (s) =>
-          (!q.employeeId || s.data.employeeId === q.employeeId) &&
-          (!statuses || statuses.includes(s.data.status)) &&
-          (!q.rootId || s.data.rootId === q.rootId) &&
-          (!q.text || `${s.data.title} ${s.data.slug} ${s.data.document}`.toLowerCase().includes(q.text.toLowerCase())),
-      )
-      items = items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      const total = items.length
+      let items: Session[]
+      try {
+        items = mockQuerySessions(db, q)
+      } catch (e) {
+        return fail(new ApiRequestError(400, 'bad_request', (e as Error).message))
+      }
       const off = q.offset ?? 0
-      return delay({ items: items.slice(off, off + (q.limit ?? 200)).map(listItem), total })
+      return delay({ items: items.slice(off, off + (q.limit ?? 50)).map(listItem), total: items.length })
     },
     getSession: (id) => {
       const s = get<SessionData>('session', id)

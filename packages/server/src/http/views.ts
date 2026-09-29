@@ -194,16 +194,39 @@ export class Views {
     return runs.at(-1)?.data.state ?? null
   }
 
-  async sessionListItem(session: Session): Promise<Api.SessionListItem> {
-    const [employee, runState, tokens, children, checklist] = await Promise.all([
+  /** A row of the sessions list; `origin` comes from `sessionOrigins` (session-list.ts). */
+  async sessionListItem(session: Session, origin: Api.SessionStartedFrom = 'manual'): Promise<Api.SessionListItem> {
+    const [employee, runs, tokens, children, checklist, links] = await Promise.all([
       this.employeeSummary(session.data.employeeId),
-      this.latestRunState(session.id),
+      this.runsOf(session.id),
       this.tokens({ sessionId: session.id }),
       this.s.records.store.records.count('session', { 'parent.sessionId': session.id }),
       this.s.records.getByKey<DomainChecklist['data']>('checklist', session.id),
+      this.s.records.links({ from: { kind: 'session', id: session.id } }),
     ])
     const counts = checklistCounts(checklist as DomainChecklist | null)
-    return { session: session as Api.Session, employee, runState, tokens, children, ...(counts ? { checklist: counts } : {}) }
+    const last = runs.at(-1)
+    const requesterId =
+      links.find((l) => l.role === 'requested_by' && l.to.kind === 'contact')?.to.id ??
+      runs.find((r) => r.data.requesterId)?.data.requesterId
+    const projectLinks = links.filter((l) => l.to.kind === 'project' && l.role !== 'mentions')
+    const projectId = (projectLinks.find((l) => l.role === 'works_on') ?? projectLinks[0])?.to.id
+    const [requester, project] = await Promise.all([
+      requesterId ? this.contact(requesterId) : null,
+      projectId ? this.s.records.get<{ name?: string }>('project', projectId) : null,
+    ])
+    return {
+      session: session as Api.Session,
+      employee,
+      runState: last?.data.state ?? null,
+      tokens,
+      children,
+      ...(counts ? { checklist: counts } : {}),
+      lastActivityAt: last && last.updatedAt > session.updatedAt ? last.updatedAt : session.updatedAt,
+      startedFrom: origin,
+      ...(requester ? { requester: { id: requester.id, name: requester.data.name } } : {}),
+      ...(project ? { project: { id: project.id, name: project.data.name ?? project.id } } : {}),
+    }
   }
 
   async sessionLabel(session: Session): Promise<string> {
