@@ -184,12 +184,11 @@ export function scenarioSuite(backend: Backend) {
   })
 
   it('1c. a run that answers with plain text (no chat tool) gets its answer posted in the thread', async () => {
-    let t!: TestApp
     const script = async (req: ModelRequest): Promise<ScriptResult> => {
       if ((lastMsg(req).content ?? '').includes('and in French')) return reply('Je suis Meatless.')
       return reply("I'm Meatless, an AI employee.")
     }
-    t = await make({ script })
+    const t = await make({ script })
     const s = t.a.services
     const requests = await requestsChannel(t)
     const root = await post(t, requests, 'In one sentence: what are you?')

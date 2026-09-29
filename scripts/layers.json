@@ -52,12 +52,8 @@
     "@mp/usage"
   ],
   "adapterLayer": 2,
-  "adapterConsumers": [
-    "@mp/server"
-  ],
+  "adapterConsumers": ["@mp/server"],
   "restricted": {
-    "@mp/web": [
-      "@mp/api"
-    ]
+    "@mp/web": ["@mp/api"]
   }
 }
