@@ -1,0 +1,16 @@
+{
+  "name": "@mp/checklists",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Checklists per session: items, evidence rules (entries the session observed), review requests and results.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0",
+    "@mp/sessions": "0.0.0"
+  }
+}

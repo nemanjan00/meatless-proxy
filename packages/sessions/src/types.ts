@@ -171,6 +171,8 @@ export interface RunData extends Record<string, unknown> {
   result?: RunResult
   startedAt?: string
   endedAt?: string
+  /** Set once the run was committed to its session: in full (head moved to the tip) or as a summary entry. */
+  committed?: { as: 'full' | 'summary'; at: string; entryId: string | null }
 }
 
 export type Run = StoredRecord<RunData>
@@ -226,6 +228,37 @@ export type Template = StoredRecord<TemplateData>
 export interface TreeNode {
   session: Session
   children: TreeNode[]
+}
+
+// ─── Waiting and search results ─────────────────────────────────────────────
+
+/** One awaited run, as returned by `waitResults`. `done` is false for runs that hadn't finished (e.g. on timeout). */
+export interface WaitResult {
+  runId: string
+  sessionId: string
+  state: RunState
+  result?: RunResult
+  document: string
+  done: boolean
+}
+
+export interface SearchQuery {
+  text: string
+  employeeId?: string
+  /** Only entries written in these sessions (entries inherited from a parent belong to the parent). */
+  sessionIds?: string[]
+  kinds?: EntryKind[]
+  limit?: number
+  offset?: number
+}
+
+export interface SearchHit {
+  entry: Entry
+  /** The session the entry was written in (`meta.sessionId`). */
+  sessionId: string
+  session: Session | null
+  /** About 160 characters of the entry's text around the first match. */
+  snippet: string
 }
 
 // ─── Bus topics ─────────────────────────────────────────────────────────────
@@ -291,6 +324,19 @@ export interface Sessions {
     opts?: { atEntry?: string | null; titlePrefix?: string; render?: (item: Json, index: number) => string; actor?: Actor },
   ): Promise<Session[]>
 
+  /**
+   * Full-text search over entry content, newest first. Each entry is attributed
+   * to the session it was written in (`meta.sessionId`), so history a fork
+   * inherited is found under its parent. Session titles and documents are
+   * searched by `searchSessions`.
+   */
+  search(q: SearchQuery): Promise<{ items: SearchHit[]; total: number }>
+  /** Sessions whose title, document or other data contain `text` (same as `query({ text })`). */
+  searchSessions(
+    text: string,
+    opts?: { employeeId?: string; limit?: number; offset?: number },
+  ): Promise<{ items: Session[]; total: number }>
+
   // runs
   createRun(input: CreateRunInput): Promise<Run>
   getRun(id: string): Promise<Run | null>
@@ -346,7 +392,7 @@ export interface Sessions {
   /** Whether a suspended run's wait is satisfied now (timers use the injected clock). */
   isWaitSatisfied(run: Run): Promise<boolean>
   /** Results of the runs a `runs` wait was waiting for. */
-  waitResults(run: Run): Promise<{ runId: string; sessionId: string; state: RunState; result?: RunResult; document: string }[]>
+  waitResults(run: Run): Promise<WaitResult[]>
 
   // inbox
   addToInbox(item: Omit<InboxItemData, 'consumed' | 'consumedByRun'>): Promise<InboxItem>
