@@ -19,6 +19,11 @@ const FilesPage = page(() => import('@/pages/files.tsx'), 'FilesPage')
 const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
 const LineagePage = page(() => import('@/pages/lineage.tsx'), 'LineagePage')
 const LoginPage = page(() => import('@/pages/login.tsx'), 'LoginPage')
+const MemoryPage = page(() => import('@/pages/memory.tsx'), 'MemoryPage')
+const PeoplePage = page(() => import('@/pages/people.tsx'), 'PeoplePage')
+const PersonPage = page(() => import('@/pages/people.tsx'), 'PersonPage')
+const SkillPage = page(() => import('@/pages/skills.tsx'), 'SkillPage')
+const SkillsPage = page(() => import('@/pages/skills.tsx'), 'SkillsPage')
 const NowPage = page(() => import('@/pages/now.tsx'), 'NowPage')
 const ProcedurePage = page(() => import('@/pages/procedures.tsx'), 'ProcedurePage')
 const ProceduresPage = page(() => import('@/pages/procedures.tsx'), 'ProceduresPage')
@@ -30,13 +35,8 @@ const SettingsPage = page(() => import('@/pages/settings.tsx'), 'SettingsPage')
 const TriggersPage = page(() => import('@/pages/triggers.tsx'), 'TriggersPage')
 const UsagePage = page(() => import('@/pages/usage.tsx'), 'UsagePage')
 
-/** Knowledge pages: one generic list and detail per record kind. Procedures have their own pages. */
-export const KNOWLEDGE = [
-  { path: 'projects', kind: 'project', title: 'Projects' },
-  { path: 'contacts', kind: 'contact', title: 'Contacts' },
-  { path: 'skills', kind: 'skill', title: 'Skills' },
-  { path: 'memory', kind: 'memory', title: 'Memory' },
-] as const
+/** Knowledge pages: one generic list and detail per record kind. Procedures, people, skills and memory have their own pages. */
+export const KNOWLEDGE = [{ path: 'projects', kind: 'project', title: 'Projects' }] as const
 
 export function AppRoutes() {
   return (
@@ -80,6 +80,12 @@ export function AppRoutes() {
           />
         ))}
         <Route path="procedures" element={<ProceduresPage />} />
+        <Route path="contacts" element={<PeoplePage />} />
+        <Route path="contacts/:id" element={<PersonPage />} />
+        <Route path="skills" element={<SkillsPage />} />
+        <Route path="skills/:id" element={<SkillPage />} />
+        <Route path="memory" element={<MemoryPage />} />
+        <Route path="memory/:id" element={<MemoryPage />} />
         <Route path="procedures/:id" element={<ProcedurePage />} />
         <Route path="records/:kind/:id" element={<RecordDetailPage />} />
         <Route path="employees/:id" element={<EmployeePage />} />

@@ -56,6 +56,7 @@ import type { McpOAuthStart, McpServerCreate, McpServerInfo, McpServerPatch, Mcp
 import { ATTACHMENT_ROUTES, type AttachmentsApi, attachmentsMethods } from './attachments.ts'
 import { NOTIFICATION_ROUTES, type NotificationsApi, notificationsMethods } from './notifications.ts'
 import { LIMIT_ROUTES, type LimitsApi, limitsMethods } from './limits.ts'
+import { KNOWLEDGE_ROUTES, type KnowledgeApi, knowledgeMethods } from './knowledge.ts'
 import { CHAT_ACTIVITY_ROUTES, type ChatActivityApi, chatActivityMethods } from './chat-activity.ts'
 import { PROJECT_ROUTES, type ProjectsApi, projectsMethods } from './projects.ts'
 import { PROCEDURE_ROUTES, type ProceduresApi, proceduresMethods } from './procedures.ts'
@@ -164,6 +165,7 @@ export const ROUTES = {
   ...PROCEDURE_ROUTES,
   ...NOTIFICATION_ROUTES,
   ...LIMIT_ROUTES,
+  ...KNOWLEDGE_ROUTES,
   ...CHAT_ACTIVITY_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
@@ -269,7 +271,8 @@ export interface ApiClient
     AttachmentsApi,
     NotificationsApi,
     ChatActivityApi,
-    LimitsApi {
+    LimitsApi,
+    KnowledgeApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -694,6 +697,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     ...proceduresMethods(call),
     ...notificationsMethods(call),
     ...limitsMethods(call),
+    ...knowledgeMethods(call),
     ...chatActivityMethods(call),
   }
 }

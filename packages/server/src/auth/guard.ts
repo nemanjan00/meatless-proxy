@@ -7,6 +7,7 @@ import { getCookie, setCookie } from 'hono/cookie'
 import type { Services } from '../services.ts'
 import { contactForToken } from '../tokens.ts'
 import { type Access, accessOf, atLeast } from './access.ts'
+import { KNOWLEDGE_GUARD_RULES } from '../knowledge/guard-rules.ts'
 import { RateLimiter } from './rate-limit.ts'
 import { resolveAuthSession } from './sessions.ts'
 import { ChatVisibility, type Viewer } from './visibility.ts'
@@ -153,6 +154,9 @@ export const GUARD_RULES: GuardRule[] = [
   { method: '*', path: '/api/mcp-servers/*', need: 'admin' },
   // The MCP OAuth callback checks the sign-in itself: its state is bound to the admin who started it.
   { method: 'GET', path: '/oauth/mcp/callback', need: 'public' },
+
+  // Memory, skills and people (src/knowledge/guard-rules.ts), and memory records in the generic API.
+  ...KNOWLEDGE_GUARD_RULES,
 
   // Knowledge edits: members for knowledge kinds; employees, triggers, limits, settings: admins.
   // A session's document and title are knowledge too (its other fields, e.g. its tools, are not: see api.ts).

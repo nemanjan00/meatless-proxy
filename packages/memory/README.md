@@ -9,7 +9,8 @@ Memory that lasts beyond a session: one fact per `memory` record (`mem_`), scope
 - `remember(input)`: creates a memory, or updates the one with the same normalized summary in the same scope and employee
   workspace (enforced with a record key, so concurrent remembers don't duplicate). `id` updates (or creates) that memory.
   `about: Ref[]` links it with role `about`; project/contact scopes are linked automatically. Returns `{ memory, created }`.
-- `get`, `require`, `update` (the dedupe key follows summary/scope changes).
+- `get`, `require`, `update` (the dedupe key follows summary/scope changes). `memoryKey(data)` is that key, for callers
+  that check for the existing memory first (the server's Memory page does, before a person adds one).
 - `recall({ text?, refs?, kinds?, context?, limit? })`: keyword scoring (summary 3, content 1 per keyword) plus 5 per matching
   ref (linked or scoped to it). Without text or refs it lists the most recent. With `context: { employeeId, projectIds,
   contactIds }` only visible memories come back: shared or the employee's own, company-scoped or scoped to one of the given

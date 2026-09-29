@@ -33,6 +33,7 @@ import {
   usageFilter,
 } from './views.ts'
 import type { NowTracker } from '../live.ts'
+import { canSeeMemoryRecord } from '../knowledge/memory-access.ts'
 
 /** Kinds the generic records API never exposes: secrets and credentials, and MCP servers (their own admin API). */
 // A person's inbox state and notification preferences are theirs alone (src/inbox.ts, src/notification-prefs.ts).
@@ -129,7 +130,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
   /** Only admins change who may do what, or anything of a session but its document and title. */
   const guardAccessField = (c: Context, kind: string, data: Record<string, unknown>) => {
     if (principalOf(c).access === 'admin') return
-    if (kind === 'contact' && 'access' in data) throw new DeniedError("only admins can change someone's access")
+    if (kind === 'contact' && ['access', 'deactivatedAt', 'deactivatedBy'].some((k) => k in data))
+      throw new DeniedError("only admins can change someone's access")
     if (kind === 'session' && Object.keys(data).some((k) => k !== 'document' && k !== 'title'))
       throw new DeniedError("members can edit a session's document and title only")
   }
@@ -239,7 +241,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
       if (
         !HIDDEN_KINDS.has(l.record.kind) &&
         (await vis.canSeeRecord(me_(c), l.record as StoredRecord)) &&
-        (await canReadWorkRecord(s, vis, viewer(c), l.record as StoredRecord))
+        (await canReadWorkRecord(s, vis, viewer(c), l.record as StoredRecord)) &&
+        (await canSeeMemoryRecord(s, principalOf(c), l.record))
       )
         shown.push(l)
     return c.json(shown satisfies Api.ApiLinkedRecord[])
@@ -284,7 +287,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     await requireVisible(c, await s.records.require(kind, id))
     const shown = []
     for (const r of await s.records.backlinks({ kind, id }))
-      if (!HIDDEN_KINDS.has(r.kind) && (await canReadWorkRecord(s, vis, viewer(c), r as StoredRecord))) shown.push(r)
+      if (
+        !HIDDEN_KINDS.has(r.kind) &&
+        (await canReadWorkRecord(s, vis, viewer(c), r as StoredRecord)) &&
+        (await canSeeMemoryRecord(s, principalOf(c), r))
+      )
+        shown.push(r)
     return c.json(shown satisfies Api.ApiRecord[])
   })
 

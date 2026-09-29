@@ -2,6 +2,7 @@ import { errorMessage, type Json } from '@mp/core'
 import type { MpEvent } from '@mp/events'
 import type { Ref } from '@mp/store'
 import { runInput } from '@mp/router'
+import { recordUse } from './knowledge/use.ts'
 import type { Services } from './services.ts'
 
 /**
@@ -71,6 +72,10 @@ export function registerSessionMemory(s: Services): () => void {
         content: { text: `${SESSION_MEMORY_HEADER}\n${lines.join('\n')}` },
         meta: { recalledMemories: hits.map((h) => h.memory.id) as Json },
       }
+      // When each was last used, for the Memory page (src/knowledge/use.ts).
+      void (async () => {
+        for (const h of hits) await recordUse(s, { kind: 'memory', id: h.memory.id }, fork.data.employeeId, fork.id)
+      })().catch((err) => log.warn('could not record memory use', { err: errorMessage(err) }))
       return { ...payload, entries: [...payload.entries, entry] }
     } catch (err) {
       // Memory is a convenience: the delivery goes ahead without it.

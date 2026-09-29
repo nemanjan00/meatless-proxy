@@ -50,6 +50,7 @@ import { createMockMcpApi } from './mcp.ts'
 import { createMockAttachmentsApi } from './attachments.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
+import { createMockKnowledgeApi } from './knowledge.ts'
 import { createMockLimitsApi } from './limits.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
@@ -1257,6 +1258,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Procedures: how they start, their runs and context (./procedures.ts).
     ...createMockProceduresApi({ db, iso, delay, write, get, all, whoami: () => api.me() }),
+
+    // Memory, skills and people (./knowledge.ts).
+    ...createMockKnowledgeApi({ db, iso, delay, write, get, all, me, tokens }),
 
     // Notification preferences (./notifications.ts).
     ...createMockNotificationsApi({ delay }),

@@ -165,7 +165,8 @@ export function memoryKeywords(text: string): string[] {
 const MAX_WORDS = 8
 const SCOPE_KIND: Record<MemoryScopeType, string | null> = { company: null, project: 'project', contact: 'contact' }
 
-function dedupeKey(d: Pick<MemoryData, 'summary' | 'scope' | 'employeeId'>): string {
+/** The record key that makes one fact one memory: the same normalized summary, scope and workspace. */
+export function memoryKey(d: Pick<MemoryData, 'summary' | 'scope' | 'employeeId'>): string {
   const h = createHash('sha256').update(normalizeSummary(d.summary)).digest('hex').slice(0, 32)
   return `${d.employeeId ?? '*'}|${d.scope.type}|${d.scope.id ?? ''}|${h}`
 }
@@ -215,7 +216,7 @@ export function createMemory({ records, clock = systemClock }: MemoryDeps): Memo
       for (const [k, v] of Object.entries(data)) if (v === undefined) delete (data as any)[k]
       if (!data.summary) throw new ValidationError('summary is required')
       checkScope(data.scope)
-      const key = dedupeKey(data)
+      const key = memoryKey(data)
       const o = actor ? { actor } : {}
 
       const updateExisting = async (existing: Memory) => {
@@ -253,7 +254,7 @@ export function createMemory({ records, clock = systemClock }: MemoryDeps): Memo
       const current = await service.require(id)
       const next = { ...current.data, ...patch } as MemoryData
       if (patch.scope) checkScope(patch.scope)
-      const key = dedupeKey(next)
+      const key = memoryKey(next)
       const m = await records.update<MemoryData>('memory', id, patch, {
         ...(opts.actor ? { actor: opts.actor } : {}),
         ...(opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {}),

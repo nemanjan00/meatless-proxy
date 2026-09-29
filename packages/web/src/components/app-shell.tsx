@@ -290,7 +290,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
           items={[
             { to: '/projects', label: 'Projects', icon: <FolderKanban /> },
             { to: '/procedures', label: 'Procedures', icon: <BookOpen /> },
-            { to: '/contacts', label: 'Contacts', icon: <Users /> },
+            { to: '/contacts', label: 'People', icon: <Users /> },
             { to: '/memory', label: 'Memory', icon: <Brain /> },
             { to: '/skills', label: 'Skills', icon: <Sparkles /> },
             { to: '/files', label: 'Files', icon: <FileText /> },

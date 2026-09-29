@@ -17,7 +17,7 @@ export const NAV_SHORTCUTS: Shortcut[] = [
   { keys: ['G', 'E'], label: 'Events', to: '/events' },
   { keys: ['G', 'P'], label: 'Projects', to: '/projects' },
   { keys: ['G', 'R'], label: 'Procedures', to: '/procedures' },
-  { keys: ['G', 'O'], label: 'Contacts', to: '/contacts' },
+  { keys: ['G', 'O'], label: 'People', to: '/contacts' },
   { keys: ['G', 'M'], label: 'Memory', to: '/memory' },
   { keys: ['G', 'K'], label: 'Skills', to: '/skills' },
   { keys: ['G', 'F'], label: 'Files', to: '/files' },

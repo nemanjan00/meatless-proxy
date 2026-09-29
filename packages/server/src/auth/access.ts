@@ -29,6 +29,12 @@ export const accessField: FieldDef = {
   description: 'Sign-in access: viewer (read only), member (chat, sessions, knowledge) or admin. Missing means viewer.',
 }
 
+/** Set by an admin who deactivated someone (src/knowledge/people.ts): they can't sign in; their history stays. */
+export const deactivatedFields: FieldDef[] = [
+  { name: 'deactivatedAt', type: 'timestamp', description: 'When an admin deactivated them: they cannot sign in.' },
+  { name: 'deactivatedBy', type: 'ref', ref: 'contact', description: 'The admin who deactivated them.' },
+]
+
 /** A one-time sign-in link. The record key is the sha256 of the link's token. */
 export const loginLinkSchema: KindSchema = {
   kind: 'login_link',
@@ -86,12 +92,14 @@ export function defineAuthKinds(records: Records) {
   if (!records.kinds.has('auth_session')) records.kinds.define(authSessionSchema)
   const contact = records.kinds.get('contact')
   if (!(contact.extensions ?? []).some((f) => f.name === 'access')) records.kinds.extend('contact', [accessField])
+  if (!(records.kinds.get('contact').extensions ?? []).some((f) => f.name === 'deactivatedAt'))
+    records.kinds.extend('contact', deactivatedFields)
 }
 
-/** A contact's access, or null when it may not sign in at all (an AI employee, or someone who left). */
+/** A contact's access, or null when it may not sign in at all (an AI employee, someone who left, or someone deactivated). */
 export function accessOf(contact: StoredRecord<ContactData> | null | undefined): Access | null {
   if (!contact) return null
-  if (contact.data.kind !== 'person' || contact.data.status === 'left') return null
+  if (contact.data.kind !== 'person' || contact.data.status === 'left' || contact.data.deactivatedAt) return null
   const a = contact.data.access
   return typeof a === 'string' && (ACCESS_LEVELS as readonly string[]).includes(a) ? (a as Access) : 'viewer'
 }

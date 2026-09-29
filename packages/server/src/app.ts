@@ -24,6 +24,7 @@ import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
 import { procedureRoutes } from './procedures/index.ts'
+import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
 import { projectRoutes } from './projects/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { registerThreadContext } from './thread-context.ts'
@@ -74,6 +75,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   registerSessionMemory(services)
   registerThreadContext(services)
   registerSessionProjects(services)
+  registerKnowledgeUse(services)
   if (config.MP_BOOTSTRAP && (await isEmpty(services))) {
     const r = await bootstrap(services)
     log.info('bootstrap done', { employeeId: r.employeeId, routerSessionId: r.routerSessionId })
@@ -149,6 +151,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', mcpServerRoutes(services))
   app.route('/', projectRoutes(services))
   app.route('/', procedureRoutes(services))
+  app.route('/', knowledgeRoutes(services, auth.visibility)) // Memory, Skills and People (src/knowledge)
   app.route('/', notificationPrefsRoutes(services))
   app.route('/', limitRoutes(services)) // Settings → Limits and Pricing (src/http/limits.ts)
   app.route('/', chatAttachmentRoutes(services, auth.visibility))

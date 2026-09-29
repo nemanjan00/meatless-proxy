@@ -23,7 +23,7 @@ and the page it opens.
 | `src/styles/globals.css` | the stylebook tokens verbatim (`:root` / `.dark`), shadcn's `@theme inline` mapping, extra Linear tokens (`text-fg-tertiary`, `bg-level-2`, status colours), the type scale (`text-tiny` … `text-title3`), 510/590/680 weights, focus, selection, motion |
 | `src/components/ui/` | shadcn/ui components (generated with `npx shadcn add`, then tuned for density: 13 px menus and buttons, 32 px buttons, 2 px accent focus ring) |
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects shown readably, raw JSON on edit; references are picked by name with `<RecordPicker kinds>`, a typeahead over `GET /api/records/:kind?text=`, never typed as ids), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
-| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Procedures (list and page, see below), Projects / Contacts / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
+| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Procedures (list and page, see below), Memory, Skills and People (see below), Projects (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
 | `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
 | `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events, chat and new inbox items |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
@@ -117,6 +117,35 @@ Data comes from `@mp/api`'s `createApiClient` and `createLiveClient`; pages load
 HTTP and apply live events from `/ws` (streamed deltas are applied in place, chat
 messages, edits, deletions and reactions are replaced in place, other changes trigger a
 debounced reload). With `VITE_MOCK=1` the same interfaces are served by `src/mock`.
+
+### Memory, skills and people
+
+Over the typed knowledge API (`@mp/api` `KNOWLEDGE_ROUTES`), not the generic records:
+
+- **`/memory`** (`src/pages/memory.tsx`): an explainer, a filter bar (search, employee or shared, kind, what it's about,
+  who taught it, about me, sort; in the URL, with counts from the server's facets) and a row per memory: its kind icon,
+  a lock when it's personal, the summary, chips for people and projects, the employee, when it was learned and last
+  used. **`/memory/:id`** opens it in a drawer: details, who remembers it, what it's about, when it comes up, where it
+  came from (person, session, message), last use, history with correction notes, and **Correct it** (a required note),
+  **Edit**, **Still true** and **Forget** (confirmed). **Add memory** (`src/components/new-memory-dialog.tsx`, members):
+  summary, kind, details, who remembers it, what it's about and when it comes up, with a note when it's about a person.
+- **`/skills`** (`src/pages/skills.tsx`): an explainer, then company-wide skills and each project's, with what each helps
+  with, when to use it, who used it lately, "off" and "replaces company". **`/skills/:id`**: the instructions with an
+  editor with a live preview (`steps-editor.tsx`), **Versions** with restore, **Edit** (name, description, when to use
+  it, where it applies), an on/off switch, usage, procedures naming it, **Download SKILL.md**, **Duplicate**, **Delete**.
+  **New skill** / **Import** (`src/components/new-skill-dialog.tsx`): from a template, or a pasted or uploaded `SKILL.md`.
+- **`/contacts`** ("People", `src/pages/people.tsx`): people, AI employees and agents in tabs, access and team filters,
+  deactivated on request, search over names, emails, teams and handles; rows with the avatar, title, email and handles,
+  projects, access and last sign-in (admins). AI employees link to their employee page. **Add person**
+  (`src/components/new-person-dialog.tsx`, admins): name, email, access, title, team, manager, handles and **Send a
+  sign-in link** (shown to copy, and sent as a Slack DM when possible). **`/contacts/:id`**: profile, projects, memories
+  about them (count and a link to the filtered Memory page), recent requests, API tokens (list and revoke), and a side
+  panel with access, sign-ins, **Sign-in link** and **Deactivate** / **Reactivate** (confirmed).
+
+The mock (`src/mock/knowledge.ts`, data in `src/mock/knowledge-data.ts`) applies the same memory privacy and access rules
+as the server, with thirteen memories (personal ones, one corrected), seven skills (one switched off, one project skill
+replacing a company one, one with three versions), people with access and handles, a deactivated person, a local agent,
+sign-ins, tokens and when employees used each memory and skill.
 
 ### Notifications
 
@@ -264,6 +293,13 @@ page (triggers in words, approvals, runs, rebuilding an out-of-date context, Run
 schedule trigger, the catch-all message, editing steps with the preview and a new version, history, archiving,
 read-only for viewers), and New procedure (one call, once on a double submit, template, @tag, a role approver; a
 missing name or purpose; members told about triggers).
+`knowledge.test.tsx`: Memory (explainer, rows, filters, members not seeing others' memories, the drawer with source
+and history, a correction needing a note, forgetting after a confirmation, adding one about a person, viewers without Add),
+Skills (grouping, when to use, usage, off and replaces-company marks, New skill from the template and a taken name,
+importing a SKILL.md, editing with the preview, versions and restore, switching off, SKILL.md parsing), and People (the
+list and its filters, Add person with a Slack-sent link, members without Add, a person's page with memories, requests
+and tokens, revoking a token, changing access, a sign-in link, deactivating after a confirmation, editing handles, and
+what members don't see).
 `chat-activity.test.tsx`: the activity state (delivering, outcomes and their notices, expiry, load, `expectsWork`)
 and the chat page: a worker under its message updating live to paused and failed, "3 working", "Delivering…"
 replaced by the router and then the hand-off, nothing for plain chat, and a static dot with reduced motion.

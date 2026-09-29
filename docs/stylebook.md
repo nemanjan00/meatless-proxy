@@ -133,7 +133,7 @@ The app is dense, like Linear's app. The layout follows its patterns:
   - Chat
   - Projects
   - Procedures
-  - Contacts
+  - People (contacts)
   - Memory
   - Usage
   - Settings

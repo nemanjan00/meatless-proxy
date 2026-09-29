@@ -343,6 +343,12 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   with their own [permissions](#permissions), not a role. A
   [local agent](#local-agents-as-chat-participants) acts with its sponsor's
   access, capped at `member`, and never signs in itself.
+- **Deactivating** someone (admins, on their page in People) is how a person
+  leaves without losing history: their contact gets `deactivatedAt`, which the
+  sign-in link, identity provider, session cookie, API token and MCP checks all
+  refuse, and their sign-ins and tokens are revoked at once. Their sessions,
+  messages and memories stay. An admin can't deactivate themselves or the last
+  admin, and can reactivate someone (who then needs a new sign-in link).
 - **Every write is attributed** to the signed-in contact, in revisions and in
   chat. The WebSocket and the MCP server require the same sign-in.
 - **What people see** follows the confidentiality rules: DMs only for their
@@ -1581,9 +1587,15 @@ for it, so skills cost almost no context until they're used.
   only in sessions that work on that project, and they can refine or override
   a company skill with the same name.
 - A skill is a record with an extendable schema: `name`, `description` (used
-  to decide relevance), `body` (markdown instructions, which can link to docs,
-  contacts and procedures), `scope` (company or a project id), and optional
-  attached files (scripts, templates).
+  to decide relevance), `whenToUse` (optional, the situations that call for it,
+  shown with the description), `body` (markdown instructions, which can link to
+  docs, contacts and procedures), `scope` (company or a project id), `enabled`
+  (false switches it off: no session lists or loads it, and a switched-off
+  project skill doesn't override the company one), and optional attached files
+  (scripts, templates).
+- **`SKILL.md`.** A skill can be imported from, and downloaded as, a Claude
+  skill file: YAML front matter with `name`, `description` and optionally
+  `when_to_use`, then the instructions.
 - **Versioned and editable** in the [web UI](#web-ui), with edit history like
   every other record. A session records which skill versions it loaded.
 - Skills complement [procedures](#procedures). A procedure says *what has to
@@ -2228,6 +2240,29 @@ in automatically when a session starts working on a project or with a person.
 - **Scope and visibility.** A memory can be scoped to a contact, a project, or
   the whole company. It is only recalled in sessions allowed to see it, under
   the same confidentiality rules as the [employee](employee.md#4-boundaries).
+- **Use.** Each time an employee recalls a memory (`memory.recall`, or loaded at
+  the start of work), the time and a count are kept per employee, apart from
+  the memory itself, so using a memory makes no new version.
+
+#### Who sees a memory
+
+Memories are also shown to people, in the web UI ([Memory](#memory-1)). The
+rule:
+
+- A memory is **personal** when it's about a person: scoped to their contact,
+  or linked to it with role `about`. Only that person and admins see a personal
+  memory. Every other memory (about a project, an AI employee, or the company)
+  is seen by everyone signed in.
+- **Changing:** admins change any memory, and members the ones they see. Anyone
+  may correct or forget a memory about themselves, even a viewer: it's their
+  own data. Members add memories (a person teaching an employee something).
+- A correction carries a note (what was wrong), kept in the memory's history,
+  and marks it confirmed now. Forgetting deletes it for good.
+- The generic records API serves memory records to admins only; everyone else
+  reads them through `/api/memories`, and links from other records to memories
+  they may not see are left out.
+- The employees themselves still recall a personal memory where its scope
+  allows: the rule is about what people see, not about what employees know.
 
 #### Tooling
 
@@ -2241,8 +2276,6 @@ in automatically when a session starts working on a project or with a person.
 Open questions:
 
 - Is recall based on keywords, embeddings, or both?
-- Who can see and edit memories: can people review what the employee remembers
-  about them, and correct it or have it deleted?
 - When a session is forked, do memories written in one branch become visible to
   the others right away?
 - Is there a size limit, or some process to compact and prune old memories?
@@ -2451,6 +2484,70 @@ All of these update live over the WebSocket.
   its trigger and its context in one step. A double submit creates one.
 - Viewers read; members create, edit, run, rebuild and archive procedures;
   only admins change their triggers, as with every trigger.
+
+#### Memory
+
+- **Memory** (`/memory`) starts with one line on what the employees remember
+  and why. A filter bar narrows it by employee (or shared by all), kind, what
+  it's about (a person or a project), who taught it, "about me" and text, and
+  sorts by newest, last used or recently changed; filters live in the URL and
+  counts come from the server (`GET /api/memories`).
+- Each row shows the kind (an icon), a lock for a personal memory, the summary,
+  chips for the people and projects it's about, the employee (or "shared"),
+  when it was learned and when it was last used.
+- A memory opens in a drawer (`/memory/<id>`): its details, who remembers it,
+  what it's about, when it comes up (its scope in words), where it came from
+  (who said it, the session, and the chat message that started that session,
+  unless it's private work you can't read), when it was last used, and its
+  history (with correction notes). **Correct it** (an edit with a required
+  note), **Edit**, **Still true** (confirms it now) and **Forget** (with a
+  confirmation), as [Who sees a memory](#who-sees-a-memory) allows.
+- **Add memory** (members): the summary, kind, details, which employee
+  remembers it (or every employee), what it's about and when it comes up. The
+  form says when it's about a person and so only they and admins will see it.
+
+#### Skills
+
+- **Skills** (`/skills`) starts with one line on what a skill is: reusable
+  know-how, company-wide or per project, that employees load when a task calls
+  for it. The list is grouped: company-wide first, then each project. Rows show
+  the name, what it helps with, when to use it, the employees that loaded it in
+  the last 30 days, "off" and "replaces company" marks, and the last update.
+- **A skill's page** shows its instructions rendered, edited with a live preview
+  (every save is a version; **Versions** reads any version and restores its
+  text as a new one), **Edit** (name, description, when to use it, where it
+  applies), an on/off switch, who used it lately, the procedures that name it,
+  **Download SKILL.md**, **Duplicate** and **Delete** (with a confirmation).
+- **New skill** (members): name, what it helps with, when to use it, where it
+  applies (company or a project), and instructions from a template. **Import**
+  reads a pasted or uploaded `SKILL.md` into the same form. A name already used
+  in that scope is refused with a message.
+
+#### People
+
+- **People** (`/contacts`, "People" in the sidebar) lists people, AI employees
+  and local agents, in tabs, with filters for access and team, "deactivated"
+  and a search over name, email, team and handles. Rows show the avatar, name,
+  title and team, email and handles, projects, access (or "AI employee",
+  "agent", "deactivated") and, for admins, the last sign-in. AI employees link
+  to their employee page.
+- **Add person** (admins): name, email, access (with what each level may do),
+  title, team, manager, handles (Slack, GitLab, Linear or any system), and
+  **Send a sign-in link** (on by default): the one-time link is shown to copy
+  (valid 15 minutes) and, when they have a Slack handle and Slack is set up, sent
+  to them as a Slack DM; the dialog says which. A double submit adds one person.
+- **A person's page**: their profile (email, handles, manager, reports, what
+  they may ask for), projects, how many memories are about them (with a link to
+  the filtered Memory page; only for themselves and admins), their recent
+  requests (sessions they asked for), and their API tokens (admins and
+  themselves: list and revoke; new ones in Settings › API tokens). The side
+  panel has their access (admins change it), last sign-in and last activity
+  (admins and themselves), **Sign-in link**, and **Deactivate** / **Reactivate**
+  (admins, with a confirmation).
+- Everyone reads the directory; members edit people's profiles (not AI
+  employees or agents); admins add people, change access, send sign-in links
+  and deactivate. The API is `GET/POST /api/people`, `GET/PATCH
+  /api/people/:id` and `POST /api/people/:id/{sign-in-link,deactivate,reactivate}`.
 
 #### Knowledge
 

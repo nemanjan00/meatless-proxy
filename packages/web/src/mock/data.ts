@@ -30,6 +30,7 @@ import type {
   UsageData,
 } from '@mp/api'
 import { seedProcedures } from './procedures-data.ts'
+import { seedKnowledge } from './knowledge-data.ts'
 import { seedListSessions } from './session-list.ts'
 
 /**
@@ -2731,6 +2732,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
   void [bi1, bi2, rc1, p10, p11, ro1]
   seedProcedures(db, at)
   seedListSessions(db, at)
+  seedKnowledge(db, at)
   return db
 }
 

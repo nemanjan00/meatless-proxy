@@ -130,6 +130,24 @@ describe('skills', () => {
     expect(await skills.available()).toEqual([])
   })
 
+  it('switched-off skills are neither listed nor loaded, and do not override', async () => {
+    const company = await skills.create({ name: 'Deploy', ...base, whenToUse: 'Before any production change.' })
+    const project = await skills.create({ name: 'Deploy', ...base, body: 'project', scope: { type: 'project', projectId: p1 } })
+    expect((await skills.available()).map((s) => s.whenToUse)).toEqual(['Before any production change.'])
+    await skills.update(project.id, { enabled: false })
+    // The company skill is back for the project's work.
+    expect((await skills.load('Deploy', { projectIds: [p1] })).skill.id).toBe(company.id)
+    expect((await skills.available({ projectIds: [p1] }))[0]).not.toHaveProperty('overrides')
+    await skills.update(company.id, { enabled: false })
+    expect(await skills.available({ projectIds: [p1] })).toEqual([])
+    await expect(skills.load(company.id)).rejects.toThrow(NotFoundError)
+    // Still there for the web UI, and switched back on.
+    expect((await skills.list()).map((s) => s.data.enabled)).toEqual([false, false])
+    await skills.update(company.id, { enabled: true })
+    expect((await skills.available()).map((s) => s.name)).toEqual(['Deploy'])
+    await expect(skills.create({ name: 'Bad', ...base, enabled: 'yes' } as any)).rejects.toThrow(ValidationError)
+  })
+
   it('supports extension fields', async () => {
     records.kinds.extend('skill', [{ name: 'tags', type: 'list', of: { type: 'string' } }])
     await expect(skills.create({ name: 'T', ...base, tags: 'x' } as any)).rejects.toThrow(ValidationError)

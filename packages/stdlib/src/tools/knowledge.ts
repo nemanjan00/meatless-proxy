@@ -346,6 +346,7 @@ export function registerKnowledgeTools(kit: Kit): void {
         skills: list.map((s) => ({
           name: s.name,
           description: s.description,
+          ...(s.whenToUse ? { whenToUse: s.whenToUse } : {}),
           ...(s.scope.type === 'project' ? { projectId: s.scope.projectId! } : {}),
         })),
       })

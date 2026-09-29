@@ -13,6 +13,7 @@ export const skillSchema: KindSchema = {
   core: [
     { name: 'name', type: 'string', required: true },
     { name: 'description', type: 'string', required: true, description: 'One line, used to decide relevance.' },
+    { name: 'whenToUse', type: 'string', description: 'When to load it, in plain words; shown with the description.' },
     { name: 'body', type: 'text', required: true, description: 'Markdown instructions. Link records with [[kind:id]].' },
     {
       name: 'scope',
@@ -35,6 +36,7 @@ export const skillSchema: KindSchema = {
         ],
       },
     },
+    { name: 'enabled', type: 'boolean', description: 'False switches it off: no session sees or loads it. Default true.' },
   ],
 }
 
@@ -51,9 +53,12 @@ export interface SkillFile {
 export interface SkillData extends Record<string, unknown> {
   name: string
   description: string
+  whenToUse?: string
   body: string
   scope: SkillScope
   files?: SkillFile[]
+  /** False: switched off (not listed or loaded anywhere). Default true. */
+  enabled?: boolean
 }
 
 export type Skill = StoredRecord<SkillData>
@@ -63,6 +68,7 @@ export interface SkillSummary {
   id: string
   name: string
   description: string
+  whenToUse?: string
   version: number
   scope: SkillScope
   /** The company skill this project skill overrides, if any. */
@@ -92,7 +98,7 @@ export interface SkillsService {
   /**
    * Company skills plus the skills of `projectIds`, one per name. A project
    * skill overrides a company skill with the same name; between projects, the
-   * one listed first wins.
+   * one listed first wins. Switched-off skills (`enabled: false`) are left out, and don't override.
    */
   available(ctx?: SkillContext): Promise<SkillSummary[]>
   /** Loads the skill with this name (or id) as `available` resolves it. `NotFoundError` if there's none. */
@@ -122,6 +128,7 @@ const summary = (s: Skill, overrides?: string): SkillSummary => ({
   id: s.id,
   name: s.data.name,
   description: s.data.description,
+  ...(s.data.whenToUse ? { whenToUse: s.data.whenToUse } : {}),
   version: s.version,
   scope: s.data.scope,
   ...(overrides ? { overrides } : {}),
@@ -133,7 +140,9 @@ export function createSkills({ records }: SkillsDeps): SkillsService {
 
   /** Name -> the winning skill, plus the company skill it replaced. */
   const resolve = async (ctx: SkillContext = {}) => {
-    const all = (await records.query<SkillData>('skill', { orderBy: { field: 'createdAt' } })).items
+    const all = (await records.query<SkillData>('skill', { orderBy: { field: 'createdAt' } })).items.filter(
+      (s) => s.data.enabled !== false,
+    )
     const out = new Map<string, { skill: Skill; overrides?: string }>()
     for (const s of all) if (s.data.scope.type === 'company') out.set(normName(s.data.name), { skill: s })
     const claimed = new Set<string>()

@@ -113,7 +113,7 @@ describe('pages against the mock API', () => {
   })
 
   it('References are picked by name with a typeahead, not typed as ids', async () => {
-    const { data } = renderAt(`/contacts/${CON.ana}`)
+    const { data } = renderAt(`/records/contact/${CON.ana}`)
     const form = await screen.findByTestId('record-form')
     // Manager shows the name; change it by typing a name.
     expect(await within(form).findByText('Dana Park')).toBeInTheDocument()

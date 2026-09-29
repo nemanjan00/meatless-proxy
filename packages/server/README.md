@@ -162,6 +162,8 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
 - Procedures (`@mp/api` `PROCEDURE_ROUTES`, served by `src/procedures`, see [Procedures](#procedures)):
   `GET|POST /api/procedures`, `GET /api/procedures/:id`, `POST /api/procedures/:id/run`, `…/context/rebuild`,
   `…/archive`, `POST /api/procedures/:id/triggers`, `PATCH|DELETE /api/procedures/:id/triggers/:triggerId`.
+- Memory, skills and people (`@mp/api` `KNOWLEDGE_ROUTES`, served by `src/knowledge`, see [Memory, skills and
+  people](#memory-skills-and-people)): `/api/memories`, `/api/skills`, `/api/people` and their `:id` routes.
 - `GET /oauth/mcp/callback`: the end of an MCP server's OAuth sign-in (`src/http/mcp-servers.ts`); it checks the
   signed-in admin against the state itself and redirects back to the UI with `mcp_oauth=connected|error`.
 - `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
@@ -686,6 +688,34 @@ role also loses the project from its older `scope.projects`), `projectPeople`, `
   run, rebuild and archive (procedures are knowledge); triggers, also inside a create, are for admins, as in the
   records API.
 
+## Memory, skills and people
+
+`src/knowledge` (docs/spec.md "Web UI › Memory", "Skills" and "People"): typed views for the three pages.
+
+- `memory-access.ts`: who sees a memory. A memory about a person (scoped to their contact, or linked `about` to it) is
+  personal: that person and admins see it; everyone signed in sees the rest. Admins change any memory, members the
+  ones they see, and anyone may correct or forget a memory about themselves. `canSeeMemoryRecord` applies it to the
+  generic records API: `guard-rules.ts` (merged into `GUARD_RULES`) serves memory records to admins only, a single one
+  to whoever may see it, and `src/http/api.ts` leaves links and backlinks to hidden memories out.
+- `memories.ts`: `GET /api/memories` (filters, sorts, facets over what the viewer may see), `GET|PATCH|DELETE
+  /api/memories/:id`, `POST /api/memories` (a person teaching an employee: `source.contactId` is them; the same summary
+  updates the existing memory, unless it's one they may not change: 409), `POST …/verify`. A correction (`note`) is
+  saved as the memory's `correction` extension field and marks it verified; the history lists each version with its
+  note. The source shows the session (unless it's private work the viewer can't read) and the chat message that
+  started it.
+- `skills.ts`: `GET|POST /api/skills`, `GET|PATCH|DELETE /api/skills/:id`, `POST …/restore` (a version's text as a
+  new version). Rows carry the project, the company skill a project skill overrides, who saved the last version, the
+  employees that loaded it in 30 days and the procedures that name it. Writes for members.
+- `people.ts`: `GET|POST /api/people` (admins add; `sendSignInLink` makes a one-time link and DMs it on Slack when the
+  person has a Slack handle and a Slack bot token is set up, deployment-wide or an employee's; a repeated
+  `idempotencyKey` returns the first person), `GET|PATCH /api/people/:id` (members edit people's profiles; access,
+  AI employees and agents are admins'), `POST …/sign-in-link`, `…/deactivate` (sets `deactivatedAt`, which `accessOf`
+  refuses everywhere, ends their web sessions and revokes their tokens; not yourself, not the last admin) and
+  `…/reactivate`. Last sign-in and tokens are shown to admins and to the person.
+- `use.ts`: `knowledge_use` records (per memory or skill and employee: the last time and a count), written after
+  `memory.recall` and `skills.load` tool calls (an `afterToolCall` hook) and when memories are loaded at the start of
+  work (`src/session-memory.ts`). Kept apart from the records so using one makes no version.
+
 ## Your projects in every run
 
 `src/session-projects.ts` handles the router's `runInput` hook: every run the router starts gets the stdlib's
@@ -871,6 +901,14 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 `npx vitest run --project node packages/server`:
 
 - `api.test.ts`: every `@mp/api` route exists, shapes, error mapping, secrets never returned, pause-all.
+- `knowledge.test.ts`: memory privacy (members and viewers see what's about them and what's not personal, admins all;
+  one memory, facets, the generic records API and links), correcting and forgetting your own memory as a viewer,
+  members editing shared ones, adding with a merge and filters, a refused merge into someone's personal memory, use
+  tracking; skills (grouping, overrides, a taken name, versions and restore, switching off, usage, procedures,
+  access); people (adding with a sign-in link shown or sent as a Slack DM, a bad Slack id, members refused, unique
+  email and handles, idempotency, deactivation ending cookie sessions, tokens and links and reactivation, the last
+  admin, access changes for admins only, filters, sign-ins and tokens for admins and the person only). In memory, and
+  on Postgres + Redis when configured.
 - `limits.test.ts`: the defaults with no configuration and from the environment, defaults applied with no records, a
   run pausing at 100 % of the daily budget (and an override letting it through), the limits API (admins only;
   create, edit, delete, validation; the overview with budget usage and unpriced models), pricing (built-in table,
