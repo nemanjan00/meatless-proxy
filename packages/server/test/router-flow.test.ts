@@ -1,6 +1,7 @@
 import { type ModelRequest, reply, type ScriptResult } from '@mp/model'
 import { afterEach, describe, expect, it } from 'vitest'
 import { THREAD_CONTEXT_HEADER } from '../src/thread-context.ts'
+import { migrateEmployees, OLD_DEFAULT_PERSONALITIES } from '../src/bootstrap.ts'
 import { upgradeEmployees } from '../src/upgrade.ts'
 import { type TestApp, testApp, until } from './helpers.ts'
 
@@ -98,5 +99,27 @@ describe('upgrading employees from earlier versions', () => {
     const again = await upgradeEmployees(s)
     expect(again.reset).toBe(0)
     expect((await s.sessions.history(routerId)).length).toBe(history.length)
+  })
+
+  it('keeps the personality note when an old router is reset, and replaces older router instructions', async () => {
+    t = await testApp({ script: () => reply('ok') })
+    const s = t.a.services
+    const employee = (await s.directory.employees.byHandle('meatless'))!
+    const routerId = employee.data.routerSessionId!
+    await s.directory.employees.update(employee.id, { personality: OLD_DEFAULT_PERSONALITIES[0]! })
+    await s.records.update('session', routerId, { meta: { role: 'router' } })
+    // The same order as a start: the upgrade (with its one-time reset), then the migration.
+    await upgradeEmployees(s)
+    await migrateEmployees(s)
+    const texts = (await s.sessions.history(routerId)).map((e) => JSON.stringify(e.content))
+    expect(texts.some((x) => x.includes("Don't sign off your messages"))).toBe(true)
+
+    // A router on an older instructions version gets the new ones, marked as replacing the old.
+    const cur = await s.sessions.require(routerId)
+    await s.records.update('session', routerId, { meta: { ...cur.data.meta, routerInstructions: 1 } })
+    await upgradeEmployees(s)
+    const last = (await s.sessions.history(routerId)).filter((e) => e.kind === 'system').at(-1)!
+    expect(JSON.stringify(last.content)).toContain('replace your earlier router instructions')
+    expect(JSON.stringify(last.content)).toContain("You don't answer requests yourself")
   })
 })

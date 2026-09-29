@@ -1796,14 +1796,16 @@ For every event, a router run:
    (the issue, MR or thread), e.g. "PAY-123 → @meatless#pay-123-refund"?
 2. **Existing decision:** it forwards the event to that session with
    `sessions.message`. If the session is gone or done, it decides again.
-3. **No decision yet:** it looks around as much as it needs (directory,
-   procedures, docs), then either:
-   - answers directly, if the request is trivial, or
-   - starts a **new session** for the work, with the context that work needs:
-     a fork of the router context carrying an instruction, a
-     [procedure](#procedures) run, or a session from a template. The new
-     session subscribes to the subject, so follow-ups reach it directly
-     without the router.
+3. **No decision yet:** it looks around only as much as it needs to route
+   (directory, procedures, memory), then starts a **new session** that owns
+   the subject, with the context the work needs: a session carrying an
+   instruction (who asked, what, the thread so far), a
+   [procedure](#procedures) run, or a session from a template. The router
+   doesn't answer requests itself, not even quick ones: the session it starts
+   answers, and keeps the conversation, so follow-ups have its full context.
+   The new session subscribes to the subject, so follow-ups reach it directly
+   without the router. The router only ends without a session when nothing
+   is needed (`NO_REPLY`).
 4. **Rolls back with a summary and commits it, for next time.** The run is
    ephemeral, so its exploration is dropped. It commits only a one-line
    decision summary on top of the router's head (`sessions.commit` with a

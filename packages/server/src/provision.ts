@@ -84,7 +84,12 @@ export async function ensureRouterInstructions(s: Services, routerSessionId: str
     actor,
   })
   await s.sessions.transition(run.id, 'queued', 'running')
-  await s.sessions.append(run.id, { kind: 'system', content: { text: s.stdlib.ROUTER_INSTRUCTIONS } })
+  // A router that already has older instructions in its history is told these replace them.
+  const replaces = ((session.data.meta?.routerInstructions as number | undefined) ?? 0) > 0
+  const text = replaces
+    ? `${s.stdlib.ROUTER_INSTRUCTIONS}\n\nThese instructions replace your earlier router instructions above.`
+    : s.stdlib.ROUTER_INSTRUCTIONS
+  await s.sessions.append(run.id, { kind: 'system', content: { text } })
   await s.sessions.commit(run.id)
   await s.sessions.transition(run.id, 'running', 'completed', {
     result: { status: 'completed', output: 'router instructions added' },

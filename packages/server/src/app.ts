@@ -77,10 +77,11 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
-  // Employees from older versions: the old default personality, projects in `scope` instead of links.
-  await migrateEmployees(services)
   // Employees from before a provisioning step existed (router instructions, routing toolset, trigger shape) get it now.
   await upgradeEmployees(services)
+  // Employees from older versions: the old default personality, projects in `scope` instead of links.
+  // After the upgrade, whose one-time router reset would otherwise drop the personality note.
+  await migrateEmployees(services)
   // Router contexts created before a stdlib tool existed (time.now, code.run) get it now.
   await addStdlibToolsToRouters(services)
   const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)
