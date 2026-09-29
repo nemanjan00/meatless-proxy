@@ -27,7 +27,7 @@ import { procedureRoutes } from './procedures/index.ts'
 import { projectRoutes } from './projects/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { registerThreadContext } from './thread-context.ts'
-import { upgradeEmployees, watchEmployeePrompts } from './upgrade.ts'
+import { backfillPrivateWork, upgradeEmployees, watchEmployeePrompts } from './upgrade.ts'
 import { registerSessionProjects } from './session-projects.ts'
 import { createSetup, type Setup, setupRoutes } from './setup/index.ts'
 import { ensureSshKey } from './ssh.ts'
@@ -87,6 +87,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   // Then provisioning they may have missed (router instructions, routing toolset, trigger shape), and a router
   // context rebuilt with the current employee prompt when it changed.
   await upgradeEmployees(services)
+  // Work from DMs handled before sessions were marked private gets its mark once.
+  await backfillPrivateWork(services)
   // An edited employee (personality, instructions, name, role) gets a router context with its current prompt.
   watchEmployeePrompts(services)
   // Router contexts created before a stdlib tool existed (time.now, code.run) get it now.

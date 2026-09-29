@@ -2,7 +2,7 @@ import { callTools, type ModelRequest, reply, type ScriptResult } from '@mp/mode
 import { afterEach, describe, expect, it } from 'vitest'
 import { THREAD_CONTEXT_HEADER } from '../src/thread-context.ts'
 import { migrateEmployees, OLD_DEFAULT_PERSONALITIES } from '../src/bootstrap.ts'
-import { refreshRouterPrompt, upgradeEmployees } from '../src/upgrade.ts'
+import { backfillPrivateWork, refreshRouterPrompt, upgradeEmployees } from '../src/upgrade.ts'
 import { type TestApp, testApp, until } from './helpers.ts'
 
 let t: TestApp | undefined
@@ -288,5 +288,46 @@ describe('one owner per thread', () => {
     await t.req('POST', `/api/chat/channels/${general}/messages`, { text: 'Vegan, anything else?', threadId: root.body.id })
     const named = await s.router.plan((await events())!)
     expect(await actors(named)).toEqual([vegan.id])
+  })
+})
+
+describe('backfilling private work', () => {
+  it('marks DM work from before private marking, once, and leaves router contexts shared', async () => {
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        const called = (name: string) =>
+          req.messages.some((m) => m.tool_calls?.some((c) => c.function.name.replace(/__/g, '.') === name))
+        if (router && !called('sessions.create'))
+          return callTools([{ name: 'sessions.create', args: { title: 'Capital question', instruction: 'Answer it.' } }])
+        if (router && !called('sessions.commit'))
+          return callTools([{ name: 'sessions.commit', args: { summary: 'dm → started a session' } }])
+        return reply('Canberra.')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script })
+    const s = t.a.services
+    const employeeId = (await s.directory.employees.byHandle('meatless'))!.id
+    const dm = await t.req('POST', '/api/chat/dms', { members: [{ kind: 'employee', id: employeeId }] })
+    await t.req('POST', `/api/chat/channels/${dm.body.id}/messages`, { text: 'capital of Australia?' })
+    await settle(t)
+    const marked = (await s.records.query<any>('session', {})).items.filter((x: any) => x.data.private)
+    expect(marked.length).toBeGreaterThan(0)
+    // Pretend it happened before marking existed.
+    for (const kind of ['session', 'run'])
+      for (const r of (await s.records.query<any>(kind, {})).items)
+        if (r.data.private) await s.records.update(kind, r.id, { private: undefined })
+    expect((await s.records.query<any>('session', {})).items.some((x: any) => x.data.private)).toBe(false)
+    await s.settings.set('upgrade.privateBackfill', null as any, { type: 'system', id: 'test' })
+
+    const r = await backfillPrivateWork(s)
+    expect(r.sessions).toBe(marked.length)
+    const again = (await s.records.query<any>('session', {})).items.filter((x: any) => x.data.private)
+    expect(again.map((x: any) => x.id).sort()).toEqual(marked.map((x: any) => x.id).sort())
+    const router = await s.sessions.require((await s.routerSessionFor())!)
+    expect(router.data.private).toBeUndefined()
+    // Once only.
+    expect(await backfillPrivateWork(s)).toEqual({ runs: 0, sessions: 0 })
   })
 })

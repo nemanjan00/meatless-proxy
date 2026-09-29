@@ -1,4 +1,6 @@
 import { errorMessage } from '@mp/core'
+import { covers, dmMarkOfEvent, markOf, mergeMarks, type PrivateMark } from './auth/visibility.ts'
+import { isSharedContext } from './private-work.ts'
 import { DEFAULT_REQUESTS_CHANNEL, provisionEmployee, routerToolset } from './provision.ts'
 import type { Services } from './services.ts'
 import { SettingNames } from './settings.ts'
@@ -202,4 +204,49 @@ export async function upgradeEmployees(s: Services): Promise<{ upgraded: number;
     }
   }
   return { upgraded, reset }
+}
+
+const PRIVATE_BACKFILL = 'upgrade.privateBackfill'
+
+/**
+ * Private work is marked when it happens (src/private-work.ts). Work from before that existed isn't:
+ * this marks it once, oldest run first, so a mark flows from the run a DM caused to the runs and
+ * sessions it started. Shared contexts (routers, procedure and trigger contexts) stay readable, as
+ * for new work. Runs once per deployment (a setting records it).
+ */
+export async function backfillPrivateWork(s: Services): Promise<{ runs: number; sessions: number }> {
+  if (await s.settings.get(PRIVATE_BACKFILL)) return { runs: 0, sessions: 0 }
+  const actor = { type: 'system' as const, id: 'upgrade' }
+  const marks = new Map<string, PrivateMark>()
+  let runs = 0
+  let sessions = 0
+  const pageSize = 500
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await s.records.query<Record<string, any>>('run', {
+      orderBy: { field: 'createdAt', dir: 'asc' },
+      limit: pageSize,
+      offset,
+    })
+    for (const run of page.items) {
+      const cause = (run.data.cause ?? {}) as { eventId?: string; parentRunId?: string }
+      let mark: PrivateMark | null = markOf(run as any)
+      if (cause.eventId) mark = mergeMarks(mark, await dmMarkOfEvent(s, await s.records.get('event', cause.eventId)))
+      if (cause.parentRunId) mark = mergeMarks(mark, marks.get(cause.parentRunId) ?? null)
+      if (!mark) continue
+      marks.set(run.id, mark)
+      if (!covers(markOf(run as any), mark)) {
+        await s.records.update('run', run.id, { private: mark as any })
+        runs++
+      }
+      const session = await s.sessions.get(String(run.data.sessionId))
+      if (session && !(await isSharedContext(s.records, session)) && !covers(markOf(session as any), mark)) {
+        await s.records.update('session', session.id, { private: mergeMarks(markOf(session as any), mark) as any })
+        sessions++
+      }
+    }
+    if (page.items.length < pageSize) break
+  }
+  await s.settings.set(PRIVATE_BACKFILL, { at: s.clock.iso(), runs, sessions }, actor)
+  if (runs || sessions) s.logger.info('upgrade: marked earlier DM work private', { runs, sessions })
+  return { runs, sessions }
 }
