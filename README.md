@@ -123,4 +123,4 @@ by writing a new package against the same interface. See
 
 ## License
 
-Not chosen yet.
+[MIT](LICENSE)

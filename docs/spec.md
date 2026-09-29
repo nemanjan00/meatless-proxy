@@ -1245,6 +1245,30 @@ It is built with shadcn/ui and styled after Linear. See the
   a session to its parent, its children, and linked sessions, and see at a
   glance which branches are running, waiting, done or failed.
 
+#### Visualisation
+
+The harness is a web of sessions, runs, events and links. The UI has to make
+it easy to see what is happening, and why:
+
+- **Session trees.** Forks and loops drawn as an actual tree graph: each node
+  is a session with its status, slug, employee and token use. You can zoom,
+  collapse subtrees, and click through to any session.
+- **Origins.** For any session or run, a **lineage view** showing where it came
+  from: the outside event (a Linear issue, a Slack message), the trigger or
+  subscription that routed it, the context that handled it, and the forks, loops
+  and procedure forks it started. You can follow it both ways: from an event to
+  everything it caused, and from a session back to the event that started it.
+- **Triggers.** A map of triggers and subscriptions: which sources and event
+  types go to which contexts and employees, how often each one fired, and
+  recent events per trigger. Events that nothing matched, and that went to the
+  router, stand out.
+- **History timeline.** A session's history drawn as its entry tree, with
+  rewinds, summaries, offloads and pointers shown as branches.
+- **Links graph.** For a contact, project, procedure or memory, a graph of what
+  it's linked to.
+
+All of these update live over the WebSocket.
+
 #### Chat
 
 - [Harness chat](#harness-chat) is available in the UI: channels, threads and
