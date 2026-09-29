@@ -371,6 +371,25 @@ describe('roles', () => {
     expect(await status('POST', '/api/control/pause-all', viewer)).toBe(403)
   })
 
+  it('guards file uploads: sign-in and member access first, then the file permissions', async () => {
+    const upload = `/api/files/${employeeId}/content?path=${encodeURIComponent('/drop/a.bin')}`
+    const body = { content: 'AAEC', encoding: 'base64' }
+    expect(await status('PUT', upload, anon, body)).toBe(401)
+    // A viewer never writes, even where a write share covers the path: the guard stops it.
+    await t.a.services.files.write(employeeId, '/drop/.keep', '')
+    const viewerId = (await t.req('GET', '/api/me', undefined, viewer)).body.contactId
+    await t.a.services.files.share(employeeId, '/drop', viewerId, 'write')
+    expect(await status('PUT', upload, viewer, body)).toBe(403)
+    // A member needs a write share; an admin doesn't.
+    expect(await status('PUT', upload, member, body)).toBe(403)
+    await t.a.services.files.share(employeeId, '/drop', memberId, 'write')
+    expect(await status('PUT', upload, member, body)).toBe(200)
+    expect(await status('PUT', upload, (await t.admin()).headers, body)).toBe(200)
+    expect(Buffer.from((await t.a.services.files.read(employeeId, '/drop/a.bin')).content, 'base64')).toEqual(
+      Buffer.from([0, 1, 2]),
+    )
+  })
+
   it('members chat, edit knowledge and steer their own work; admins the rest', async () => {
     const general = (await t.a.services.chat.channelByName('general'))!.id
     expect(await status('POST', `/api/chat/channels/${general}/messages`, member, { text: 'hi' })).toBe(201)

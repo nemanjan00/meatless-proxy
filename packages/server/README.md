@@ -281,7 +281,11 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   the employee's paths, marked with the grant's permission, and writes only
   under a `write` grant (and as a member). With nothing shared the top level is
   empty, and deeper paths are 403. What other employees share with this one
-  (`/shared/…`) is for admins.
+  (`/shared/…`) is for admins. `PUT /api/files/:employeeId/content` takes
+  `{ content, version?, encoding? }`: `encoding: 'base64'` for binary uploads
+  (malformed base64 is 422), at most `FILE_WRITE_MAX_BYTES` (10 MB) after
+  decoding, else 413 (refused from `Content-Length` before the body is read
+  when it can be). Reads return `encoding` and `size`.
 - **CSRF**: a cookie-authenticated POST, PUT, PATCH or DELETE needs an `Origin`
   matching `PUBLIC_URL` (else the request's host), or `x-mp-csrf` repeating the
   `mp_csrf` cookie (the web UI sends it). A cookie-authenticated WebSocket must
@@ -1081,7 +1085,8 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   links (once, 15 minutes, local `next` only), cookie flags, sliding expiry and rotation with a grace minute,
   sign-out, AI employees and leavers refused, CSRF (origin, double submit, `PUBLIC_URL`, bearer exempt), tokens
   (shown once, list, revoke, others' for admins, the same token on `/mcp`), brute-force limits, what viewers,
-  members and admins may do, the admin bootstrap and its link, security headers.
+  members and admins may do (file uploads: sign-in, then member access, then the file grant), the admin bootstrap and
+  its link, security headers.
 - `visibility.test.ts`: DMs hidden from others and admins over HTTP (lists, reads, search, unread, records,
   events) and over the WebSocket (subscriptions, live events); a cross-site cookie socket refused.
 - `private-sessions.test.ts`: work from a DM is marked (work session, runs, router run but not the router
@@ -1091,7 +1096,8 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   Slack-style DM event hidden (list, unmatched, detail, records) and its work private; live entries, deltas and
   a new DM request's router entries only for the member; the MCP tools. Postgres too with `DATABASE_URL`.
 - `private-files.test.ts`: employee files over the API: nothing without a grant, read and write grants (and
-  only what they cover, compare-and-swap kept), `/shared` for admins only, admins can do everything.
+  only what they cover, compare-and-swap kept), `/shared` for admins only, admins can do everything; binary
+  uploads as base64 under the same grants (version 0 only creates), bad encodings, and the 10 MB limit.
 - `oidc.test.ts`: a fake identity provider (discovery, JWKS, PKCE-checking token endpoint): RS256 and ES256,
   unknown emails, bad signatures, audiences, nonces, issuers, expiry, unverified emails, forged state cookies.
 - `metrics.test.ts`: access, and every metric through a strict parser of the text format.

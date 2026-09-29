@@ -6,6 +6,7 @@ import {
   type ApiEvent,
   type ApiRecord,
   ApiRequestError,
+  FILE_WRITE_MAX_BYTES,
   type ChannelData,
   type Checklist,
   type ChecklistData,
@@ -1188,7 +1189,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
             path: p,
             name,
             type: 'file',
-            size: new TextEncoder().encode(f.content).length,
+            size: f.size ?? new TextEncoder().encode(f.content).length,
             updatedAt: f.updatedAt,
             ...(p.startsWith('/shared/') ? { shared: { ownerEmployeeId: mockId('emp', 2), permission: 'read' as const } } : {}),
           })
@@ -1201,14 +1202,24 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       const f = db.files.get(employeeId)?.get(p)
       return f ? delay(f) : fail(notFound('file'))
     },
-    writeFile: (employeeId, p, content, version) => {
+    writeFile: (employeeId, p, content, version, opts = {}) => {
       if (p.startsWith('/shared/')) return fail(new ApiRequestError(403, 'denied', 'shared read-only'))
+      if (me.access && me.access !== 'admin') return fail(new ApiRequestError(403, 'denied', 'only admins, or a write share'))
+      const encoding = opts.encoding ?? 'utf8'
+      if (encoding === 'base64' && !/^[A-Za-z0-9+/]*={0,2}$/.test(content))
+        return fail(new ApiRequestError(422, 'validation', 'content is not valid base64'))
+      const size =
+        encoding === 'base64'
+          ? Math.floor((content.length * 3) / 4) - (content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0)
+          : new TextEncoder().encode(content).length
+      if (size > FILE_WRITE_MAX_BYTES) return fail(new ApiRequestError(413, 'validation', 'a file can be at most 10 MB'))
       if (!db.files.has(employeeId)) db.files.set(employeeId, new Map())
       const files = db.files.get(employeeId)!
       const prev = files.get(p)
-      if (prev && version !== undefined && prev.version !== version)
-        return fail(new ApiRequestError(409, 'conflict', 'file changed', prev))
-      const next = { path: p, content, version: (prev?.version ?? 0) + 1, updatedAt: iso() }
+      // Version 0: only if the file doesn't exist yet.
+      if (version !== undefined && (prev ? prev.version !== version : version > 0))
+        return fail(new ApiRequestError(409, 'conflict', `${p} changed`, prev ? { version: prev.version } : undefined))
+      const next = { path: p, content, encoding, size, version: (prev?.version ?? 0) + 1, updatedAt: iso() }
       files.set(p, next)
       return delay(next)
     },

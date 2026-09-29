@@ -1,34 +1,54 @@
 import type { FileEntry } from '@mp/api'
-import { ChevronRight, File, FileText, Folder, Share2 } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronRight, Download, File, FileText, Folder, Share2, Upload } from 'lucide-react'
+import { type DragEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, LoadingRows } from '@/components/empty.tsx'
+import { base64ToBytes, parentDir, useFileUploads } from '@/components/file-upload.tsx'
 import { Page } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi, useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
+import { formatBytes } from '@/lib/environments.ts'
 import { useEmployees } from '@/lib/employees.tsx'
 import { formatDateTime } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
+type Permission = 'read' | 'write'
+
+/** The directory uploads go to, with your permission there (people who aren't admins have only what was shared). */
+interface Cwd {
+  path: string
+  permission?: Permission
+}
+
 function Dir({
   employeeId,
   dir,
+  permission,
   depth,
   selected,
+  refresh,
   onSelect,
+  onDir,
 }: {
   employeeId: string
   dir: string
+  /** Your permission on this directory, when it was shared with you. */
+  permission?: Permission
   depth: number
   selected: string | null
-  /** With the permission of a file shared with you (people who aren't admins see only those). */
-  onSelect(p: string, permission?: 'read' | 'write'): void
+  /** Changes to reload the listing (after an upload). */
+  refresh: number
+  /** With the permission of a file shared with you, and of its directory. */
+  onSelect(p: string, permission?: Permission, dirPermission?: Permission): void
+  /** A folder was opened (it is the current directory now) or closed (its parent is). */
+  onDir(cwd: Cwd): void
 }) {
-  const list = useLoad((a) => a.listFiles(employeeId, dir), [employeeId, dir])
+  const list = useLoad((a) => a.listFiles(employeeId, dir), [employeeId, dir, refresh])
   const [open, setOpen] = useState<Set<string>>(new Set(depth === 0 ? ['/notes'] : []))
   if (!list.data) return depth === 0 ? <LoadingRows rows={4} /> : null
   return (
@@ -40,11 +60,18 @@ function Dir({
             onClick={() => {
               if (f.type === 'dir') {
                 const n = new Set(open)
-                if (n.has(f.path)) n.delete(f.path)
-                else n.add(f.path)
+                if (n.has(f.path)) {
+                  n.delete(f.path)
+                  onDir({ path: dir, ...(permission ? { permission } : {}) })
+                } else {
+                  n.add(f.path)
+                  onDir({ path: f.path, ...(f.shared ? { permission: f.shared.permission } : {}) })
+                }
                 setOpen(n)
-              } else onSelect(f.path, f.shared?.permission)
+              } else onSelect(f.path, f.shared?.permission, permission)
             }}
+            data-dir={f.type === 'dir' ? f.path : dir}
+            data-permission={(f.type === 'dir' ? f.shared?.permission : permission) ?? ''}
             className={cn(
               'flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left hover:bg-secondary',
               selected === f.path && 'bg-secondary text-foreground',
@@ -72,7 +99,16 @@ function Dir({
             )}
           </button>
           {f.type === 'dir' && open.has(f.path) && (
-            <Dir employeeId={employeeId} dir={f.path} depth={depth + 1} selected={selected} onSelect={onSelect} />
+            <Dir
+              employeeId={employeeId}
+              dir={f.path}
+              {...(f.shared ? { permission: f.shared.permission } : {})}
+              depth={depth + 1}
+              selected={selected}
+              refresh={refresh}
+              onSelect={onSelect}
+              onDir={onDir}
+            />
           )}
         </div>
       ))}
@@ -87,6 +123,7 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
   if (!file.data) return <LoadingRows rows={4} />
   const f = file.data
   const readOnly = path.startsWith('/shared/') || permission === 'read'
+  const binary = f.encoding === 'base64'
   const save = async (content: string) => {
     const next = await api.writeFile(employeeId, path, content, f.version)
     file.setData(next)
@@ -103,7 +140,9 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
         {readOnly && <span className="rounded-sm border px-1 text-tiny">shared · read-only</span>}
         {permission === 'write' && <span className="rounded-sm border px-1 text-tiny">shared with you</span>}
       </div>
-      {path.endsWith('.md') ? (
+      {binary ? (
+        <BinaryFile path={path} content={f.content} size={f.size} />
+      ) : path.endsWith('.md') ? (
         <DocumentEditor value={f.content} onSave={readOnly ? undefined : save} />
       ) : (
         <div className="flex flex-col gap-2">
@@ -130,19 +169,85 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
   )
 }
 
-/** Each employee's own filesystem: browse, read and edit (markdown rendered). */
+/** A file that isn't text: its size and a download, no editor. */
+function BinaryFile({ path, content, size }: { path: string; content: string; size?: number }) {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([base64ToBytes(content)], { type: 'application/octet-stream' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+  return (
+    <div className="flex items-center gap-3 rounded-lg border bg-level-1 px-4 py-3" data-testid="binary-file">
+      <File className="size-4 text-fg-tertiary" />
+      <span className="flex-1 text-fg-secondary">Binary file · {formatBytes(size ?? Math.floor((content.length * 3) / 4))}</span>
+      <Button variant="secondary" size="sm" onClick={download}>
+        <Download />
+        Download
+      </Button>
+    </div>
+  )
+}
+
+/** Each employee's own filesystem: browse, read and edit (markdown rendered), and upload into it. */
 export function FilesPage() {
   const { employees, current } = useEmployees()
   const [params, setParams] = useSearchParams()
   const employeeId = params.get('employee') ?? current?.id ?? employees[0]?.id ?? null
   const path = params.get('path')
-  const [permission, setPermission] = useState<'read' | 'write' | undefined>()
+  const [permission, setPermission] = useState<Permission | undefined>()
+  const [cwd, setCwd] = useState<Cwd>(() => ({ path: path ? parentDir(path) : '/' }))
+  const [refresh, setRefresh] = useState(0)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const picker = useRef<HTMLInputElement>(null)
+  const { can } = useAuth()
   const emp = employees.find((e) => e.id === employeeId)
   const set = (k: string, v: string) => {
     const n = new URLSearchParams(params)
     n.set(k, v)
     if (k === 'employee') n.delete('path')
     setParams(n, { replace: true })
+  }
+  // Admins write anywhere but /shared (other employees' files); members where a write share covers it.
+  const canWrite = useCallback(
+    (c: Cwd) =>
+      can('admin') ? !(c.path === '/shared' || c.path.startsWith('/shared/')) : can('member') && c.permission === 'write',
+    [can],
+  )
+  const onUploaded = useCallback(() => setRefresh((n) => n + 1), [])
+  const uploads = useFileUploads(employeeId ?? '', onUploaded)
+  const writable = useMemo(() => canWrite(cwd), [canWrite, cwd])
+
+  /** Where a drag is over: the folder row under the pointer (a file row: its folder), else the current directory. */
+  const targetOf = (e: DragEvent): Cwd => {
+    const row = (e.target as HTMLElement).closest?.('[data-dir]') as HTMLElement | null
+    if (!row) return cwd
+    const perm = row.dataset.permission as Permission | ''
+    return { path: row.dataset.dir ?? cwd.path, ...(perm ? { permission: perm } : {}) }
+  }
+  const isFileDrag = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes('Files')
+  const dragOver = (e: DragEvent) => {
+    if (!isFileDrag(e)) return
+    const t = targetOf(e)
+    if (!canWrite(t)) {
+      setDropTarget(null)
+      return
+    }
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    setDropTarget(t.path)
+  }
+  const drop = (e: DragEvent) => {
+    setDropTarget(null)
+    const files = e.dataTransfer?.files
+    if (!files?.length) return
+    const t = targetOf(e)
+    if (!canWrite(t)) return
+    e.preventDefault()
+    void uploads.upload([...files], t.path)
   }
   return (
     <Page title="Files" icon={<FileText />} className="flex flex-col overflow-auto md:flex-row md:overflow-hidden">
@@ -151,15 +256,27 @@ export function FilesPage() {
       ) : (
         <>
           <nav
-            className="flex shrink-0 flex-col gap-2 overflow-auto border-b bg-level-1 p-2 max-md:max-h-72 md:w-64 md:border-r md:border-b-0"
+            className={cn(
+              'flex shrink-0 flex-col gap-2 overflow-auto border-b bg-level-1 p-2 transition-quick max-md:max-h-72 md:w-64 md:border-r md:border-b-0',
+              dropTarget && 'bg-accent-tint ring-2 ring-ring ring-inset',
+            )}
             aria-label="Files"
+            data-testid="file-list"
+            onDragOver={dragOver}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null)
+            }}
+            onDrop={drop}
           >
             <div className="flex flex-wrap gap-1">
               {employees.map((e) => (
                 <button
                   key={e.id}
                   type="button"
-                  onClick={() => set('employee', e.id)}
+                  onClick={() => {
+                    setCwd({ path: '/' })
+                    set('employee', e.id)
+                  }}
                   className={cn(
                     'flex h-6 items-center gap-1 rounded-md border border-transparent px-1.5 text-micro text-fg-tertiary hover:text-foreground',
                     e.id === employeeId && 'border-border bg-secondary text-foreground',
@@ -170,16 +287,53 @@ export function FilesPage() {
                 </button>
               ))}
             </div>
+            <div className="flex items-center gap-1.5 px-1">
+              <span className="min-w-0 flex-1 truncate text-micro text-fg-tertiary" data-testid="upload-target">
+                {dropTarget ? 'Drop to upload to ' : 'In '}
+                <span className="font-mono text-fg-secondary">{dropTarget ?? cwd.path}</span>
+              </span>
+              {writable && (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    disabled={uploads.busy}
+                    onClick={() => picker.current?.click()}
+                    title={`Upload files to ${cwd.path} (or drop them here)`}
+                  >
+                    <Upload />
+                    Upload
+                  </Button>
+                  <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    data-testid="upload-input"
+                    aria-label={`Upload files to ${cwd.path}`}
+                    onChange={(e) => {
+                      const files = [...(e.target.files ?? [])]
+                      e.target.value = ''
+                      void uploads.upload(files, cwd.path)
+                    }}
+                  />
+                </>
+              )}
+            </div>
+            {uploads.view}
             <Dir
               key={employeeId}
               employeeId={employeeId}
               dir="/"
               depth={0}
               selected={path}
-              onSelect={(p, perm) => {
+              refresh={refresh}
+              onSelect={(p, perm, dirPerm) => {
                 setPermission(perm)
+                setCwd({ path: parentDir(p), ...(dirPerm ? { permission: dirPerm } : {}) })
                 set('path', p)
               }}
+              onDir={setCwd}
             />
             <p className="mt-auto px-1 text-tiny text-fg-quaternary">
               Private to {emp?.data.name ?? 'this employee'}'s sessions and admins. You see what it shared with you; files others

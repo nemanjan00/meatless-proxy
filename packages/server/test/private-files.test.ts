@@ -1,3 +1,4 @@
+import { FILE_WRITE_MAX_BYTES } from '@mp/api'
 import { reply } from '@mp/model'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { testApp, type TestApp } from './helpers.ts'
@@ -100,6 +101,48 @@ describe('employee files over the API', () => {
     expect((await write(admin, '/secret/pay.md', 'new bands')).status).toBe(200)
     expect((await write(admin, '/fresh.md', 'hello')).status).toBe(200)
     expect((await t.a.services.files.read(employeeId, '/fresh.md')).content).toBe('hello')
+  })
+
+  it('uploads binary files as base64, within the same permissions', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0xff, 0xfe])
+    const b64 = bytes.toString('base64')
+    const upload = (h: Record<string, string>, path: string, body: Record<string, unknown>) =>
+      t.req('PUT', `/api/files/${employeeId}/content?path=${encodeURIComponent(path)}`, body, h)
+
+    const w = await upload(admin, '/uploads/logo.png', { content: b64, encoding: 'base64', version: 0 })
+    expect(w.status).toBe(200)
+    expect(w.body).toMatchObject({ path: '/uploads/logo.png', encoding: 'base64', size: bytes.length })
+    const stored = await t.a.services.files.read(employeeId, '/uploads/logo.png')
+    expect(Buffer.from(stored.content, 'base64').equals(bytes)).toBe(true)
+    const r = await read(admin, '/uploads/logo.png')
+    expect(r.body).toMatchObject({ encoding: 'base64', content: b64, size: bytes.length })
+    // Version 0 means "only if it doesn't exist yet".
+    expect((await upload(admin, '/uploads/logo.png', { content: b64, encoding: 'base64', version: 0 })).status).toBe(409)
+
+    // A write grant on a directory lets a member add files to it; nothing else does.
+    await t.a.services.files.write(employeeId, '/inbox/.keep', '')
+    await t.a.services.files.share(employeeId, '/inbox', bobId, 'write')
+    expect((await upload(bob, '/inbox/scan.bin', { content: b64, encoding: 'base64' })).status).toBe(200)
+    expect((await upload(bob, '/uploads/other.bin', { content: b64, encoding: 'base64' })).status).toBe(403)
+    expect((await upload(carol, '/notes/c.bin', { content: b64, encoding: 'base64' })).status).toBe(403)
+    expect((await upload(bob, '/shared/emp_x/a.bin', { content: b64, encoding: 'base64' })).status).toBe(403)
+  })
+
+  it('refuses bad encodings and files over the size limit', async () => {
+    const upload = (body: Record<string, unknown>) =>
+      t.req('PUT', `/api/files/${employeeId}/content?path=/uploads/big.bin`, body, admin)
+    expect((await upload({ content: 'abc', encoding: 'hex' })).status).toBe(400)
+    expect([400, 422]).toContain((await upload({ content: 'not base64!', encoding: 'base64' })).status)
+    const big = Buffer.alloc(FILE_WRITE_MAX_BYTES + 1).toString('base64')
+    const r = await upload({ content: big, encoding: 'base64' })
+    expect(r.status).toBe(413)
+    expect(r.body.error.message).toContain('10 MB')
+    expect((await upload({ content: 'x'.repeat(FILE_WRITE_MAX_BYTES + 1) })).status).toBe(413)
+    await expect(t.a.services.files.read(employeeId, '/uploads/big.bin')).rejects.toThrow()
+    // Exactly at the limit is fine.
+    const ok = await upload({ content: Buffer.alloc(FILE_WRITE_MAX_BYTES).toString('base64'), encoding: 'base64' })
+    expect(ok.status).toBe(200)
+    expect(ok.body.size).toBe(FILE_WRITE_MAX_BYTES)
   })
 
   it('leaves the employee’s own tools unchanged', async () => {

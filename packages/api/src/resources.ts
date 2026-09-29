@@ -912,11 +912,27 @@ export interface FileEntry {
   shared?: { ownerEmployeeId: string; permission: 'read' | 'write' }
 }
 
+/** How a file's `content` is carried: text as is, anything else (binary) as base64. */
+export type FileEncoding = 'utf8' | 'base64'
+
+/** The largest file `PUT /api/files/:employeeId/content` accepts, in bytes (after decoding): 10 MB. */
+export const FILE_WRITE_MAX_BYTES = 10 * 1024 * 1024
+
 export interface FileContent {
   path: string
+  /** Text when `encoding` is `utf8`, else the bytes as base64. */
   content: string
+  /** Absent from older servers: treat as `utf8`. */
+  encoding?: FileEncoding
+  /** In bytes. */
+  size?: number
   version: number
   updatedAt: string
+}
+
+export interface WriteFileOptions {
+  /** How `content` is encoded. Default `utf8`; use `base64` for binary (uploaded) files. */
+  encoding?: FileEncoding
 }
 
 // ─── Secrets ────────────────────────────────────────────────────────────────

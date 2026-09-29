@@ -1856,7 +1856,15 @@ repository.
 - **Usable in environments.** Code runs with the files at hand
   ([code execution](#code-execution)), and a session can copy files into its
   checkout or container, and results back out.
-- Browsable and editable in the [web UI](#web-ui).
+- Browsable and editable in the [web UI](#web-ui), and people can **upload**
+  files into them: any file, text or binary, up to 10 MB each, picked or
+  dropped onto the file list, into the directory shown (or the folder it's
+  dropped on). The web UI asks before replacing a file that's there. Uploads
+  follow the same rules as edits: admins anywhere but `/shared`, members only
+  under a `write` grant, viewers never. Binary files are shown with their size
+  and a download, not as text. Over the API it's
+  `PUT /api/files/:employeeId/content` with `encoding: 'base64'`; version `0`
+  writes only if the file doesn't exist yet, and a file over 10 MB is 413.
 - **Upgrading.** Deployments from when files were records are migrated at
   start: each old file record's content is written to the volume, then the
   record is deleted. It is idempotent and safe to interrupt; grants were

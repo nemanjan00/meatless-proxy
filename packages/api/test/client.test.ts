@@ -142,6 +142,19 @@ describe('createApiClient', () => {
     expect(calls[7]!.body).toEqual({ reason: 'looks stuck' })
   })
 
+  it('sends an upload as base64 when asked', async () => {
+    const { fetch, calls } = fakeFetch()
+    const api = createApiClient({ baseUrl: '', fetch })
+    await api.writeFile('emp_1', '/inbox/logo.png', 'iVBORw==', 0, { encoding: 'base64' })
+    await api.writeFile('emp_1', '/inbox/a.txt', 'hi')
+    expect(calls.map((c) => `${c.method} ${decodeURIComponent(c.url)}`)).toEqual([
+      'PUT /api/files/emp_1/content?path=/inbox/logo.png',
+      'PUT /api/files/emp_1/content?path=/inbox/a.txt',
+    ])
+    expect(calls[0]!.body).toEqual({ content: 'iVBORw==', version: 0, encoding: 'base64' })
+    expect(calls[1]!.body).toEqual({ content: 'hi' })
+  })
+
   it('builds the everyday chat requests', async () => {
     const { fetch, calls } = fakeFetch()
     const api = createApiClient({ baseUrl: '', fetch })

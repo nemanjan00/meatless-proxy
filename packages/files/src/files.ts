@@ -159,7 +159,9 @@ type Target =
     }
 
 const shareKey = (owner: string, path: string, contact: string) => `${owner}:${path}:${contact}`
-const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+// A plain character-class loop: a grouped repetition overflows the regex stack on megabytes of base64.
+const BASE64_CHARS = /^[A-Za-z0-9+/]*={0,2}$/
+const isBase64 = (s: string) => s.length % 4 === 0 && BASE64_CHARS.test(s)
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 
 /** Content as text when it is valid UTF-8 without NUL bytes, else base64. */
@@ -177,7 +179,7 @@ export function encodeContent(bytes: Uint8Array): { content: string; encoding: E
 export function decodeContent(content: string, encoding: Encoding): Uint8Array {
   if (typeof content !== 'string') throw new ValidationError('content must be a string')
   if (encoding === 'utf8') return new TextEncoder().encode(content)
-  if (!BASE64.test(content)) throw new ValidationError('content is not valid base64')
+  if (!isBase64(content)) throw new ValidationError('content is not valid base64')
   return new Uint8Array(Buffer.from(content, 'base64'))
 }
 

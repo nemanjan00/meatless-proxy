@@ -130,6 +130,11 @@ describe.each(storages)('files service on %s storage', (_name, makeStorage) => {
       const f = await fs.write(a, '/img.png', png, { encoding: 'base64' })
       expect(f).toMatchObject({ size: 7, mime: 'image/png', encoding: 'base64' })
       await expect(fs.write(a, '/bad.bin', 'not base64!', { encoding: 'base64' })).rejects.toThrow(/base64/)
+      for (const bad of ['AAA', 'A===', 'AA=A', '===='])
+        await expect(fs.write(a, '/bad.bin', bad, { encoding: 'base64' }), bad).rejects.toThrow(/base64/)
+      // Megabytes of base64 are checked without overflowing the regex stack.
+      const big = Buffer.alloc(4 * 1024 * 1024, 7).toString('base64')
+      expect((await fs.write(a, '/big.bin', big, { encoding: 'base64' })).size).toBe(4 * 1024 * 1024)
       expect((await fs.write(a, '/u.txt', 'é')).size).toBe(2)
     })
 

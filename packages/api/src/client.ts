@@ -25,6 +25,7 @@ import type {
   EventDetail,
   FileContent,
   FileEntry,
+  WriteFileOptions,
   Health,
   InboxItem,
   Json,
@@ -479,8 +480,11 @@ export interface ApiClient
   listFiles(employeeId: string, dir?: string): Promise<FileEntry[]>
   /** `GET /api/files/:employeeId/content?path=` → the file. */
   readFile(employeeId: string, path: string): Promise<FileContent>
-  /** `PUT /api/files/:employeeId/content?path=` body `{ content, version? }` → the file. 409 on a version mismatch. */
-  writeFile(employeeId: string, path: string, content: string, version?: number): Promise<FileContent>
+  /**
+   * `PUT /api/files/:employeeId/content?path=` body `{ content, version?, encoding? }` → the file. 409 on a version
+   * mismatch (version 0: only if the file doesn't exist yet), 413 over `FILE_WRITE_MAX_BYTES`.
+   */
+  writeFile(employeeId: string, path: string, content: string, version?: number, opts?: WriteFileOptions): Promise<FileContent>
 
   // ── MCP servers (admins) ─────────────────────────────────────────────────
 
@@ -666,7 +670,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
     listFiles: (employeeId, dir) => call('listFiles', { employeeId }, { dir }),
     readFile: (employeeId, path) => call('readFile', { employeeId }, { path }),
-    writeFile: (employeeId, path, content, version) => call('writeFile', { employeeId }, { path }, { content, version }),
+    writeFile: (employeeId, path, content, version, opts = {}) =>
+      call('writeFile', { employeeId }, { path }, { content, version, ...(opts.encoding ? { encoding: opts.encoding } : {}) }),
 
     mcpServers: (q = {}) => call('listMcpServers', undefined, { ...q }),
     createMcpServer: (body) => call('createMcpServer', undefined, undefined, body),

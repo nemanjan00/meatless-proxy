@@ -14,12 +14,25 @@ import type { Services } from '../services.ts'
 export interface EmployeeFiles {
   list(dir: string): Promise<Api.FileEntry[]>
   read(path: string): Promise<Api.FileContent>
-  write(path: string, content: string, opts: { expectedVersion?: number; actor: Actor }): Promise<Api.FileContent>
+  write(
+    path: string,
+    content: string,
+    opts: { expectedVersion?: number; encoding?: Api.FileEncoding; actor: Actor },
+  ): Promise<Api.FileContent>
+}
+
+/** The size in bytes of a file's content as sent (base64 decodes to 3/4 of its length, less padding). */
+export function fileBytes(content: string, encoding: Api.FileEncoding): number {
+  if (encoding === 'utf8') return Buffer.byteLength(content, 'utf8')
+  const pad = content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0
+  return Math.floor((content.length * 3) / 4) - pad
 }
 
 const content = (f: FileView, path = f.path): Api.FileContent => ({
   path,
   content: f.content,
+  encoding: f.encoding,
+  size: f.size,
   version: f.version,
   updatedAt: f.updatedAt,
 })

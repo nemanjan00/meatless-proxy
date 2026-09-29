@@ -254,6 +254,18 @@ uploads as object URLs (text files also as their text) and seeds images on the P
 and the staging disk incident, two of them with descriptions, plus a `free-disk.sh` script on
 the incident (`mock/attachments.ts`).
 
+Files (`pages/files.tsx`): an employee's files as a tree, read and edited in place (markdown rendered;
+binary files shown with their size and a Download, never as text). The line above the tree names the
+current directory: the folder last opened (closing one goes back to its parent), or the folder of the open
+file. People who may write there (admins anywhere but `/shared`, members under a `write` share) get an
+Upload button with a multi-file picker, and can drop files onto the list: onto a folder row to upload into
+that folder, anywhere else into the current directory. `useFileUploads` (`components/file-upload.tsx`)
+lists the directory first and asks before replacing a file that's there (Replace, Skip existing, Cancel),
+then sends the files one at a time as base64 (`api.writeFile(…, { encoding: 'base64' })`, version `0` for
+a new file so one that appeared meanwhile isn't overwritten), with a panel of their states, bytes sent and
+errors (over 10 MB is refused before sending). The listing reloads after. The mock's `writeFile` takes the
+encoding, the version-0 rule, the 10 MB limit and refuses non-admins, like the server.
+
 ## Screenshots (real server, seeded demo data)
 
 Taken against the real server with `scripts/seed-demo.ts`, three real requests (two in

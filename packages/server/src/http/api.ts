@@ -1,4 +1,5 @@
 import type * as Api from '@mp/api'
+import { FILE_WRITE_MAX_BYTES } from '@mp/api'
 import type { Message as DomainMessage } from '@mp/chat'
 import type { Checklist as DomainChecklist } from '@mp/checklists'
 import { ConflictError, DeniedError, NotFoundError, ValidationError, isMpError, type Json } from '@mp/core'
@@ -17,7 +18,7 @@ import type { Services } from '../services.ts'
 import { rotateSshKey } from '../ssh.ts'
 import { lineage } from './lineage.ts'
 import { querySessionList, sessionOrigins } from './session-list.ts'
-import { employeeFiles } from './files-access.ts'
+import { employeeFiles, fileBytes } from './files-access.ts'
 import { canReadWorkRecord, privateWorkFilter, visibleEventsPage, visibleLineage, visibleTree } from './private-views.ts'
 import { BadRequestError, boolParam, intParam, jsonBody, requireString } from './util.ts'
 import {
@@ -1161,14 +1162,27 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.put('/api/files/:employeeId/content', async (c) => {
     const path = requireString(c.req.query('path'), 'path')
-    const body = await jsonBody<{ content?: unknown; version?: unknown }>(c)
+    const tooLarge = () =>
+      c.json(
+        { error: { code: 'validation', message: `a file can be at most ${Math.round(FILE_WRITE_MAX_BYTES / 1024 / 1024)} MB` } },
+        413,
+      )
+    // Base64 is 4/3 of the bytes; leave room for the rest of the JSON.
+    const declared = Number(c.req.header('content-length') ?? Number.NaN)
+    if (Number.isFinite(declared) && declared > Math.ceil((FILE_WRITE_MAX_BYTES * 4) / 3) + 64 * 1024) return tooLarge()
+    const body = await jsonBody<{ content?: unknown; version?: unknown; encoding?: unknown }>(c)
     if (typeof body.content !== 'string') throw new BadRequestError('content must be a string')
     if (body.version !== undefined && typeof body.version !== 'number') throw new BadRequestError('version must be a number')
+    if (body.encoding !== undefined && body.encoding !== 'utf8' && body.encoding !== 'base64')
+      throw new BadRequestError('encoding must be utf8 or base64')
+    const encoding: Api.FileEncoding = body.encoding ?? 'utf8'
+    if (fileBytes(body.content, encoding) > FILE_WRITE_MAX_BYTES) return tooLarge()
     const employeeId = c.req.param('employeeId')
     await s.directory.employees.require(employeeId)
     // Admins, or a person the path was shared with for writing.
     const f = await employeeFiles(s, principalOf(c), employeeId).write(path, body.content, {
       ...(typeof body.version === 'number' ? { expectedVersion: body.version } : {}),
+      encoding,
       actor: await actor(c),
     })
     return c.json(f satisfies Api.FileContent)
