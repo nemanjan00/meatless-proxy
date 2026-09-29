@@ -69,7 +69,7 @@ touching the rest.
 | L2 | `@mp/queue-bullmq` | BullMQ adapter for `@mp/queue` |
 | L2 | `@mp/model-openai` | OpenAI-compatible HTTP adapter for `@mp/model` (Kimi first) |
 | L2 | `@mp/mcp-sdk` | MCP adapter using the official MCP SDK |
-| L2 | `@mp/containers-docker` | Docker adapter (dockerode) for `@mp/containers` |
+| L2 | `@mp/containers-docker` | Docker adapter (dockerode) for `@mp/containers`, including the allowlisting egress proxy sidecar |
 | L2 | `@mp/git-cli` | git CLI adapter for `@mp/git` |
 | L2 | `@mp/secrets-store` | encrypted secrets stored through `@mp/store` |
 | L3 | `@mp/records` | generic extendable records: kinds, schemas, validation, links with roles, docs with id links, backlinks, revisions |
@@ -85,8 +85,8 @@ touching the rest.
 | L3 | `@mp/files` | each employee's filesystem, and sharing |
 | L4 | `@mp/router` | events → deliveries → runs or inbox items, deterministically |
 | L4 | `@mp/runner` | executes a run: context assembly, model calls, tool calls, journal, outbox, secrets, redaction, suspend and wake, commit |
-| L5 | `@mp/stdlib` | the model's standard library of tools, built on the domain packages |
-| L6 | `@mp/server` | composition root, config, HTTP API, WebSocket, webhook ingest, workers, migrations at startup, health checks, seed data |
+| L5 | `@mp/stdlib` | the model's standard library of tools, the employee prompt, and the policy hooks (checklist gate, docs maintenance, commit on stop, budgets, AI-to-AI streak) |
+| L6 | `@mp/server` | composition root, config, HTTP API, WebSocket, the MCP server at `/mcp` (with notifications), MCP notifications in, webhook ingest, workers, migrations at startup, per-employee git stores and SSH keys, bootstrap, health checks |
 | L6 | `@mp/web` | the web UI (React, Tailwind, shadcn/ui), see [stylebook.md](stylebook.md) |
 
 ### Allowed dependencies
