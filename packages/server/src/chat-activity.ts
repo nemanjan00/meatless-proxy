@@ -230,6 +230,8 @@ export class ChatActivity {
 
   private async attribute(run: Run, depth: number): Promise<(ThreadRef & { chatCaused?: boolean }) | null> {
     const cause = run.data.cause
+    // A message a session only took note of (no model call) isn't work on the thread.
+    if (cause.note?.endsWith(':noted')) return null
     if (cause.eventId) {
       const e = await this.s.rawEvents.get(cause.eventId)
       const ref = threadOf(e)

@@ -46,6 +46,8 @@ export type DeliveryOutcome =
   | { type: 'inbox'; inboxId: string; sessionId: string; runId: string }
   | { type: 'woke'; runId: string; sessionId: string; inboxId: string }
   | { type: 'skipped'; sessionId: string; reason: string }
+  /** Seen, not acted on: the event went into the session's history without a model call. */
+  | { type: 'noted'; sessionId: string; runId: string }
 
 export interface RouteResult {
   eventId: string
@@ -425,6 +427,25 @@ export function createRouter(opts: RouterOptions): Router {
         }
         return { type: 'inbox', inboxId: item.id, sessionId, runId: active.id }
       }
+    }
+
+    // Information only (a subscriber or channel member nobody asked to act): the event goes into the
+    // session's history so it knows next time, without a model call. Waking a model just to decide
+    // NO_REPLY costs a whole prompt per message.
+    if (!d.expectedToAct && mode === 'continuing' && !d.fork) {
+      const noted = await opts.sessions.createRun({
+        sessionId,
+        mode: 'continuing',
+        cause: { type: 'event', eventId: event.id, note: `${d.reason}:noted` },
+        priority: d.priority,
+      })
+      await opts.sessions.transition(noted.id, 'queued', 'running')
+      await opts.sessions.append(noted.id, eventEntry(shown, d))
+      await opts.sessions.commit(noted.id)
+      await opts.sessions.transition(noted.id, 'running', 'completed', {
+        result: { status: 'completed', output: 'noted' },
+      })
+      return { type: 'noted', sessionId, runId: noted.id }
     }
 
     const run = await opts.sessions.createRun({

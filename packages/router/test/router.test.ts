@@ -195,6 +195,29 @@ describe('router', () => {
     expect(handled.map((d) => [d.sessionId, d.reason])).toEqual([[worker.id, 'subscription']])
   })
 
+  it('notes information-only deliveries in the history without starting a model run', async () => {
+    const t = await setup()
+    const watcher = await t.mk('watcher', 'emp_b')
+    const subject = { system: 'mp', id: 'msg_watch' }
+    await t.events.subscriptions.subscribe(watcher.id, subject)
+    const ev = await t.ingest({ source: 'chat', type: 'message.replied', subject, text: 'fyi: deploy done' })
+    const out = await t.router.deliver(ev, {
+      sessionId: watcher.id,
+      reason: 'subscription',
+      expectedToAct: false,
+      trusted: true,
+      fork: false,
+      priority: 0,
+    })
+    expect(out.type).toBe('noted')
+    const run = await t.sessions.getRun((out as any).runId)
+    expect(run!.data.state).toBe('completed')
+    expect(t.queued).not.toContain(run!.id)
+    const history = await t.sessions.history(watcher.id)
+    expect(history.at(-1)!.kind).toBe('event')
+    expect(JSON.stringify(history.at(-1)!.content)).toContain('fyi: deploy done')
+  })
+
   it('without tags only the primary subscriber is expected to act; tags override', async () => {
     const t = await setup()
     const primary = await t.mk('primary')

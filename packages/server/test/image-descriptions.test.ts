@@ -167,7 +167,8 @@ describe('IMAGE_DESCRIBE=view (the default)', () => {
       fork: false,
       priority: 0,
     })
-    expect(out.type).toBe('run')
+    // Information only: noted in the session's history without a model call.
+    expect(out.type).toBe('noted')
     const entry = (await x.s.sessions.runHistory((out as any).runId)).find((e) => e.kind === 'event')!
     expect((entry.content as any).text).toContain(`attachment ${id}: "${DESCRIPTION}"`)
     // The stored event is untouched.
