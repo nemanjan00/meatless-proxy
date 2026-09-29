@@ -24,6 +24,17 @@ import {
 } from './attachments.ts'
 import { addressedName, parseTags } from './tags.ts'
 
+/**
+ * The most of a message an event's text carries. The router decides from it and the work it starts
+ * is briefed from it, so a request must fit (it was 200 characters, and the router passed on half a spec).
+ */
+export const EVENT_TEXT_MAX_CHARS = 4000
+
+const eventText = (text: string) =>
+  text.length > EVENT_TEXT_MAX_CHARS
+    ? `${text.slice(0, EVENT_TEXT_MAX_CHARS)}… [${text.length - EVENT_TEXT_MAX_CHARS} more characters: chat.read for the rest]`
+    : text
+
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
 const refFields = [
@@ -394,7 +405,7 @@ export function createChat(opts: ChatOptions): Chat {
         author: msg.data.author,
         ...extra,
       } as unknown as Json,
-      text: `${type}: ${msg.data.text.slice(0, 200)}`,
+      text: `${type}: ${eventText(msg.data.text)}`,
       ...(actor.kind === 'contact' ? { actorContactId: actor.id } : {}),
     })
     bus?.publish<ChatMessagePosted>(ChatTopics.message, {
@@ -547,7 +558,7 @@ export function createChat(opts: ChatOptions): Chat {
         dedupeKey: `chat:${msg.id}`,
         subject: { system: 'mp', id: threadId ?? msg.id },
         payload: payload as unknown as Json,
-        text: `#${ch.data.name}: ${input.text.length > 200 ? `${input.text.slice(0, 200)}…` : input.text}${lines ? `\n${lines}` : ''}`,
+        text: `#${ch.data.name}: ${eventText(input.text)}${lines ? `\n${lines}` : ''}`,
         ...(author.kind === 'contact' ? { actorContactId: author.id } : {}),
       })
       bus?.publish<ChatMessagePosted>(ChatTopics.message, { channelId: ch.id, threadId, messageId: msg.id })

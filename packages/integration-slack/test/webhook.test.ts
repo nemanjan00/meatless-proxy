@@ -417,11 +417,14 @@ describe('event mapping', () => {
   })
 
   it('clips long text in the rendering, keeps it whole in the payload', async () => {
-    const long = 'x'.repeat(3000)
+    const long = 'x'.repeat(5000)
     const e = (await deliver(msg({ text: long }))).events[0]
-    expect(e?.text.length).toBeLessThan(1100)
-    expect(e?.text.endsWith('…')).toBe(true)
-    expect((e?.payload as { text?: string } | undefined)?.text).toHaveLength(3000)
+    expect(e?.text.length).toBeLessThan(4200)
+    expect(e?.text).toContain('… [1000 more characters: read_thread for the rest]')
+    expect((e?.payload as { text?: string } | undefined)?.text).toHaveLength(5000)
+    // A long request (a spec) fits whole: the router decides and briefs from this text.
+    const spec = (await deliver(msg({ text: 'y'.repeat(3000), ts: '1700000077.000100' }))).events[0]
+    expect(spec?.text).not.toContain('…')
   })
 })
 

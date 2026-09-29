@@ -397,10 +397,19 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
   kit.tool(
     {
       name: 'git.write_file',
-      description: 'Create or replace a file in your checkout (path relative to the repository root). Commit with git.commit.',
+      description:
+        'Create or replace a file in your checkout (path relative to the repository root). Commit with git.commit. A file starting with #! (a script, a CLI entry point) is made executable; executable: true or false says so explicitly.',
       effect: 'idempotent',
       params: {
-        properties: { path: { type: 'string' }, content: { type: 'string' }, repo: repoProp },
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+          executable: {
+            type: 'boolean',
+            description: 'Set (true) or clear (false) the executable bit. Default: set for #! files, else unchanged.',
+          },
+          repo: repoProp,
+        },
         required: ['path', 'content'],
       },
     },
@@ -408,11 +417,15 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const w = await worktree(ctx, a.repo)
       const rel = safeRelPath(w.path, a.path)
       if (!rel) return fail('path is a directory')
-      await fs.write(w.path, rel, String(a.content))
+      const content = String(a.content)
+      await fs.write(w.path, rel, content)
+      const executable = typeof a.executable === 'boolean' ? a.executable : content.startsWith('#!') ? true : undefined
+      if (executable !== undefined && fs.setExecutable) await fs.setExecutable(w.path, rel, executable)
       return ok({
         key: w.key,
         path: rel,
-        size: String(a.content).length,
+        size: content.length,
+        ...(executable ? { executable: true } : {}),
         ...(await newInstructions(ctx.sessionId, w, rel, false)),
       })
     },

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { DeniedError, ValidationError } from '@mp/core'
 import type { WorktreeFs } from './types.ts'
@@ -53,6 +53,12 @@ export function nodeWorktreeFs(): WorktreeFs {
       await mkdir(dirname(abs), { recursive: true })
       await inside(root, abs)
       await writeFile(abs, content, 'utf8')
+    },
+    async setExecutable(root, rel, executable) {
+      const abs = join(root, rel)
+      await inside(root, abs)
+      const mode = (await stat(abs)).mode & 0o777
+      await chmod(abs, executable ? mode | 0o111 : mode & ~0o111)
     },
     async list(root, rel) {
       const abs = join(root, rel)

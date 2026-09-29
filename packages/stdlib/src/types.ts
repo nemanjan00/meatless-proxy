@@ -98,6 +98,8 @@ export interface StdlibDeps {
 export interface WorktreeFs {
   read(root: string, rel: string): Promise<string>
   write(root: string, rel: string, content: string): Promise<void>
+  /** Sets or clears a file's executable bits (git records them). Optional: without it, modes stay as they are. */
+  setExecutable?(root: string, rel: string, executable: boolean): Promise<void>
   list(root: string, rel: string): Promise<{ name: string; type: 'file' | 'dir' }[]>
 }
 

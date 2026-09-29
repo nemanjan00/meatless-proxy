@@ -1350,6 +1350,9 @@ and can run it.
 - Each session works on its **own branch**, e.g. `mp/<employee>/<session-slug>`,
   because git allows a branch to be checked out in only one worktree. A fork
   gets a new worktree at the same commit, on its own branch.
+- `git.write_file` makes a file starting with `#!` executable (scripts, CLI
+  entry points), or sets or clears the bit when told (`executable`); git
+  records it. Live, a CLI's `bin/` entry point was committed without it.
 - `git.checkout` doesn't tell the model where the worktree is on the
   harness's disk: it says where the checkout can be reached (the `git.*`
   tools, and `/workspace` and `/repos/<name>` in an environment) and that it
@@ -2942,6 +2945,12 @@ the section it links to.
   system, where people track work ([runaway protection](#real-forks-go-through-the-task-system)).
 
 ### Routing without a person in the middle
+
+The event of a chat message carries its text up to 4,000 characters (Slack
+too), so the router decides from, and briefs work with, a whole request; a
+longer one ends with how many characters are left and the tool to read them
+(`chat.read`, `read_thread`). It used to be 200 characters, and the router
+handed a spec on half-read.
 
 - **Triggers to contexts, not to new sessions.** New work goes to the context
   assigned to that kind of work ([triggers](#triggers)).

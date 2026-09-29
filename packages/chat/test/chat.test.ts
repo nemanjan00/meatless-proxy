@@ -181,6 +181,16 @@ describe('messages', () => {
     expect(posted.map((p) => p.payload)).toEqual([{ channelId: ch.id, threadId: null, messageId: msg.id }])
   })
 
+  it('an event carries a whole request up to 4000 characters, and says how to read a longer one', async () => {
+    const ch = await chat.createChannel({ name: 'specs', createdBy: { kind: 'contact', id: ana } })
+    const spec = `implement jsondiff: ${'details '.repeat(300)}`
+    const m1 = await chat.post({ channelId: ch.id, author: { kind: 'contact', id: ana }, text: spec })
+    const m2 = await chat.post({ channelId: ch.id, author: { kind: 'contact', id: ana }, text: 'z'.repeat(4500) })
+    const text = async (id: string) => (await events.query({ source: 'chat' })).find((e) => e.key === `chat:${id}`)!.data.text
+    expect(await text(m1.id)).toBe(`#specs: ${spec}`)
+    expect(await text(m2.id)).toContain('… [500 more characters: chat.read for the rest]')
+  })
+
   it('replies go to the thread root and are events on the thread', async () => {
     const ch = await chat.createChannel({ name: 'billing', createdBy: { kind: 'contact', id: ana } })
     const root = await chat.post({ channelId: ch.id, author: { kind: 'contact', id: ana }, text: 'root' })

@@ -4,7 +4,7 @@ import type { IntegrationEvent } from '@mp/mcp'
 export const SLACK_SOURCE = 'integration:slack'
 export const SLACK_SYSTEM = 'slack'
 /** Longest message text in an event's `text`; the full text is in the payload. */
-export const SLACK_MAX_TEXT = 1000
+export const SLACK_MAX_TEXT = 4000
 
 /** The Events API outer envelope (`event_callback`). */
 export interface SlackEnvelope {
@@ -64,7 +64,10 @@ const isSelf = (m: SlackMessage | undefined, self: SelfIdentity) =>
     (m.bot_id !== undefined && self.botIds.has(m.bot_id)) ||
     (self.appId !== undefined && (m.app_id === self.appId || m.bot_profile?.app_id === self.appId)))
 
-const clip = (s: string) => (s.length > SLACK_MAX_TEXT ? `${s.slice(0, SLACK_MAX_TEXT)}…` : s)
+const clip = (s: string) =>
+  s.length > SLACK_MAX_TEXT
+    ? `${s.slice(0, SLACK_MAX_TEXT)}… [${s.length - SLACK_MAX_TEXT} more characters: read_thread for the rest]`
+    : s
 
 /** Files of a message, as the model reads them: `[file: name, slack file F…]`, so it knows to call get_file. */
 export const filesText = (files: SlackMessage['files']) =>

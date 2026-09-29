@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, mkdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -229,6 +229,28 @@ describe('worktree paths', () => {
     await symlink(outside, join(root, 'link'))
     await expect(fs.read(root, 'link/secret')).rejects.toThrow(/outside the worktree/)
     await expect(fs.write(root, 'link/new', 'x')).rejects.toThrow(/outside the worktree/)
+    // Executable bits, for scripts and CLI entry points (git records them).
+    await fs.write(root, 'bin/cli.js', '#!/usr/bin/env node\n')
+    await fs.setExecutable!(root, 'bin/cli.js', true)
+    expect((await stat(join(root, 'bin/cli.js'))).mode & 0o111).toBe(0o111)
+    await fs.setExecutable!(root, 'bin/cli.js', false)
+    expect((await stat(join(root, 'bin/cli.js'))).mode & 0o111).toBe(0)
+    await expect(fs.setExecutable!(root, 'link/secret', true)).rejects.toThrow(/outside the worktree/)
+  })
+
+  it('git.write_file makes #! files executable, and follows executable when given', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    const root = await checkoutPath(t, t.session.id)
+    const cli = await t.out('git.write_file', { path: 'bin/cli.js', content: '#!/usr/bin/env node\nconsole.log(1)\n' })
+    expect(cli.executable).toBe(true)
+    expect(t.worktreeFs.executables.has(`${root}/bin/cli.js`)).toBe(true)
+    await t.out('git.write_file', { path: 'README.md', content: '# x' })
+    expect(t.worktreeFs.executables.has(`${root}/README.md`)).toBe(false)
+    await t.out('git.write_file', { path: 'run', content: 'echo hi', executable: true })
+    expect(t.worktreeFs.executables.has(`${root}/run`)).toBe(true)
+    await t.out('git.write_file', { path: 'bin/cli.js', content: '#!/bin/sh\n', executable: false })
+    expect(t.worktreeFs.executables.has(`${root}/bin/cli.js`)).toBe(false)
   })
 })
 

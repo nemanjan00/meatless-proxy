@@ -22,8 +22,14 @@ export const REPO = 'https://github.com/acme/billing.git'
 /** A worktree filesystem in memory that also tells the fake git cache about writes. */
 export function memoryWorktreeFs(onWrite: (root: string, rel: string, content: string) => void) {
   const files = new Map<string, string>()
-  const fs: WorktreeFs & { files: Map<string, string> } = {
+  const executables = new Set<string>()
+  const fs: WorktreeFs & { files: Map<string, string>; executables: Set<string> } = {
     files,
+    executables,
+    async setExecutable(root, rel, executable) {
+      if (executable) executables.add(`${root}/${rel}`)
+      else executables.delete(`${root}/${rel}`)
+    },
     async read(root, rel) {
       const v = files.get(`${root}/${rel}`)
       if (v === undefined) throw new NotFoundError('file', rel)
