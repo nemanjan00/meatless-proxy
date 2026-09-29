@@ -259,22 +259,6 @@ export function createRouter(opts: RouterOptions): Router {
         add({ sessionId: routerSession, reason: 'employee_tag', expectedToAct: true, trusted: true, fork: false })
     }
 
-    // 3b. Untagged follow-ups from a person go to the employees already in the conversation.
-    const untagged = tags.sessions.length === 0 && tags.employees.length === 0
-    if (untagged && !tags.authorSessionId && opts.participantsOf && human) {
-      for (const employeeId of await opts.participantsOf(event)) {
-        let handled = false
-        for (const d of out.values()) {
-          if (!d.expectedToAct) continue
-          if ((await opts.sessions.get(d.sessionId))?.data.employeeId === employeeId) handled = true
-        }
-        if (handled) continue
-        const routerSession = await opts.routerSessionFor(employeeId)
-        if (routerSession)
-          add({ sessionId: routerSession, reason: 'thread_participant', expectedToAct: true, trusted: true, fork: false })
-      }
-    }
-
     // 4. Triggers, only for work nobody has claimed yet.
     if (!claimed()) {
       const triggers = await opts.events.triggers.match(event)
@@ -292,6 +276,22 @@ export function createRouter(opts: RouterOptions): Router {
             triggerId: t.id,
           })
         }
+      }
+    }
+
+    // 4b. Untagged follow-ups from a person go to the employees already in the conversation (when no trigger took them).
+    const untagged = tags.sessions.length === 0 && tags.employees.length === 0
+    if (!claimed() && untagged && !tags.authorSessionId && opts.participantsOf && human) {
+      for (const employeeId of await opts.participantsOf(event)) {
+        let handled = false
+        for (const d of out.values()) {
+          if (!d.expectedToAct) continue
+          if ((await opts.sessions.get(d.sessionId))?.data.employeeId === employeeId) handled = true
+        }
+        if (handled) continue
+        const routerSession = await opts.routerSessionFor(employeeId)
+        if (routerSession)
+          add({ sessionId: routerSession, reason: 'thread_participant', expectedToAct: true, trusted: true, fork: false })
       }
     }
 
