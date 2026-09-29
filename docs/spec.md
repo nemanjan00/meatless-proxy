@@ -81,6 +81,8 @@ Behaviour:
   contact through `handles`. That way, the same person is recognised in chat and
   in the task system.
 - The model can look up contacts: by id, by handle, by name, or by any field.
+- A contact's projects, and the contact's role on each one, come from the
+  [links between contacts and projects](#links-between-contacts-and-projects).
 
 The [employee definition](employee.md#people) lists the fields the employee
 role expects. Most of them are extensions, not core fields.
@@ -110,8 +112,8 @@ Core fields:
 | `aliases`     | list of string, optional      | other names people use for it          |
 | `description` | string                        | one paragraph                          |
 | `status`      | string                        | e.g. active / maintenance / sunset     |
-| `owner`       | contact id                    | the person accountable for the project |
-| `members`     | list of {contact id, role}    | role on this project, e.g. `reviewer`  |
+| `owner`       | contact id                    | the person accountable for the project; a view of the [links](#links-between-contacts-and-projects) |
+| `members`     | list of {contact id, role}    | role on this project, e.g. `reviewer`; a view of the links |
 | `links`       | list of {system, ref}         | repos, task boards, chat channels      |
 
 Extension works the same way as for contacts: a deployment can declare extra
@@ -144,6 +146,36 @@ Open questions:
   a normal markdown link with a special scheme?
 - Can projects nest (sub-projects or components), or is the ownership of
   components expressed some other way?
+
+### Links between contacts and projects
+
+Contacts and projects are linked. A link is a first-class record, not just an
+id copied into both sides:
+
+| Field     | Type        | Notes                                                |
+|-----------|-------------|------------------------------------------------------|
+| `contact` | contact id  |                                                      |
+| `project` | project id  |                                                      |
+| `role`    | string      | e.g. `owner`, `member`, `reviewer`, `stakeholder`    |
+
+- **Stored once, read from both sides.** The project's `owner` and `members`,
+  and the list of a contact's projects, are both views of the same links. The
+  two sides can never disagree.
+- **Many-to-many.** A contact can be on many projects, and a project has many
+  contacts. A contact can have more than one role on the same project.
+- **Extendable.** Links take extra fields the same way contacts and projects do,
+  for example `since`, `until` or `allocation`.
+- **Queryable.** "Who owns X?", "What is Ana on?", "Who reviews for X?" and
+  "Who to ask about X if the owner is away?" are all answered from these links.
+- **Referential integrity.** A link can't point to a contact or project that
+  doesn't exist. What happens to the links when either one is removed is still
+  open (see below).
+
+Open questions:
+
+- When a contact leaves the company, are their links deleted, or kept and
+  marked as past?
+- Is the set of roles fixed, or can each deployment define its own?
 
 ## Unique features
 
