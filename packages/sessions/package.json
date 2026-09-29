@@ -1,0 +1,15 @@
+{
+  "name": "@mp/sessions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sessions, the entry tree and its operations (fork, loop, commit, rewind, offload, restore, compact), runs and their state machine, waits, inbox and templates.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0"
+  }
+}
