@@ -454,12 +454,19 @@ export class HarnessMcpServer {
       'chat_attachment',
       {
         description:
-          'Look at an image attached to a chat message you can see (the id from chat_read, chat_search or a notification).',
-        inputSchema: { id: z.string().describe('The attachment id (att_…)') },
+          'Look at an image attached to a chat message you can see (the id from chat_read, chat_search or a notification), with its saved description. describe_only: true returns just the description and the text visible in it (cheap; made once if there is none yet).',
+        inputSchema: {
+          id: z.string().describe('The attachment id (att_…)'),
+          describe_only: z.boolean().optional().describe('Only the description and visible text, not the image'),
+        },
       },
-      async ({ id }) => {
+      async ({ id, describe_only }) => {
         try {
-          return await mcpAttachmentContent(s, id, async (channelId) => canSee((await actor()).contact, channelId))
+          const contact = (await actor()).contact
+          return await mcpAttachmentContent(s, id, async (channelId) => canSee(contact, channelId), {
+            describeOnly: describe_only === true,
+            requesterId: contact.id,
+          })
         } catch (e) {
           return fail(isMpError(e) || e instanceof Error ? e.message : errorMessage(e))
         }

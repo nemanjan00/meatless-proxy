@@ -54,9 +54,10 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
-import { useData, useLiveReload, useLiveStatus, useLoad } from '@/lib/api.tsx'
+import { useData, useLiveStatus } from '@/lib/api.tsx'
 import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
+import { NotificationsProvider, useNotifications } from '@/lib/notifications.tsx'
 import { NAV_SHORTCUTS } from '@/lib/shortcuts.ts'
 import { useTheme } from '@/lib/theme.tsx'
 import { cn } from '@/lib/utils.ts'
@@ -109,7 +110,11 @@ function NavGroup({ label, items }: { label?: string; items: NavItem[] }) {
                     </TooltipContent>
                   )}
                 </Tooltip>
-                {item.badge ? <SidebarMenuBadge className="text-tiny text-fg-tertiary">{item.badge}</SidebarMenuBadge> : null}
+                {item.badge ? (
+                  <SidebarMenuBadge className="text-tiny text-fg-tertiary" data-testid={`badge-${item.label.toLowerCase()}`}>
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </SidebarMenuBadge>
+                ) : null}
               </SidebarMenuItem>
             )
           })}
@@ -242,9 +247,7 @@ function UserMenu() {
 }
 
 export function AppSidebar({ onSearch }: { onSearch: () => void }) {
-  const inbox = useLoad((api) => api.inbox(), [])
-  useLiveReload(['now'], inbox.reload, ['run.state'])
-  const unread = inbox.data?.filter((i) => !i.read).length ?? 0
+  const { unread } = useNotifications()
   return (
     <Sidebar collapsible="offcanvas">
       <SidebarHeader className="gap-1 p-2">
@@ -317,7 +320,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
   )
 }
 
-/** The app shell: collapsible sidebar, the page, the command menu and global shortcuts. */
+/** The app shell: collapsible sidebar, the page, the command menu, global shortcuts and live notifications. */
 export function AppShell() {
   const [open, setOpen] = useState(false)
   const { toggle } = useTheme()
@@ -337,14 +340,16 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', on)
   }, [employees, setCurrentId])
   return (
-    <SidebarProvider>
-      <AppSidebar onSearch={() => setOpen(true)} />
-      <SidebarInset className="min-w-0">
-        <Suspense fallback={<div className="h-11 border-b" aria-busy="true" />}>
-          <Outlet />
-        </Suspense>
-      </SidebarInset>
-      <CommandMenu open={open} onOpenChange={setOpen} onToggleTheme={toggle} />
-    </SidebarProvider>
+    <NotificationsProvider>
+      <SidebarProvider>
+        <AppSidebar onSearch={() => setOpen(true)} />
+        <SidebarInset className="min-w-0">
+          <Suspense fallback={<div className="h-11 border-b" aria-busy="true" />}>
+            <Outlet />
+          </Suspense>
+        </SidebarInset>
+        <CommandMenu open={open} onOpenChange={setOpen} onToggleTheme={toggle} />
+      </SidebarProvider>
+    </NotificationsProvider>
   )
 }

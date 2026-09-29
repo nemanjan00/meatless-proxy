@@ -1,4 +1,4 @@
-import type { ApiActor, ApiEntry, ApiEvent, Checklist, Json, Message, Run, RunState, TokenUsage } from './resources.ts'
+import type { ApiActor, ApiEntry, ApiEvent, Checklist, InboxItem, Json, Message, Run, RunState, TokenUsage } from './resources.ts'
 
 /**
  * The live-update protocol on the WebSocket at `/ws`.
@@ -13,8 +13,16 @@ import type { ApiActor, ApiEntry, ApiEvent, Checklist, Json, Message, Run, RunSt
  * - `chat:<channelId>`: messages in a channel (including thread replies)
  * - `records:<kind>`: record changes of one kind
  * - `events`: newly ingested events
+ * - `person:<contactId>`: your new inbox items and read marks (only you may subscribe to yours)
  */
-export type LiveChannel = 'now' | 'events' | `session:${string}` | `run:${string}` | `chat:${string}` | `records:${string}`
+export type LiveChannel =
+  | 'now'
+  | 'events'
+  | `session:${string}`
+  | `run:${string}`
+  | `chat:${string}`
+  | `records:${string}`
+  | `person:${string}`
 
 /** Channel name helpers. */
 export const channels = {
@@ -24,6 +32,7 @@ export const channels = {
   run: (id: string) => `run:${id}` as const,
   chat: (channelId: string) => `chat:${channelId}` as const,
   records: (kind: string) => `records:${kind}` as const,
+  person: (contactId: string) => `person:${contactId}` as const,
 }
 
 /** Payload per topic. Every run-related payload carries `runId` and `sessionId`. */
@@ -64,6 +73,10 @@ export interface LiveTopics {
   'preview.commit': { sessionId: string; envId: string; sha: string; subject?: string; repo?: string }
   /** The global pause flag changed. */
   'control.changed': { paused: boolean }
+  /** Something just became an inbox item for this person (the shape of `GET /api/inbox`). */
+  'inbox.item': { contactId: string; item: InboxItem }
+  /** This person marked items read (`ids`) or cleared their inbox (`clear`), on any device. */
+  'inbox.read': { contactId: string; ids?: string[]; clear?: boolean }
 }
 
 export type LiveTopic = keyof LiveTopics
@@ -112,6 +125,9 @@ export function channelsFor<T extends LiveTopic>(topic: T, payload: LiveTopics[T
       return [channels.events]
     case 'control.changed':
       return [channels.now]
+    case 'inbox.item':
+    case 'inbox.read':
+      return [channels.person((p as LiveTopics['inbox.read']).contactId)]
     case 'entry.appended':
     case 'session.head':
       if (sessionId) out.push(channels.session(sessionId))

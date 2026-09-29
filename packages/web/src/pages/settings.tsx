@@ -1,5 +1,6 @@
 import type { Access, ApiRecord, ContactData, CreatedApiToken, EmployeeData, SecretScope, TriggerData } from '@mp/api'
 import {
+  Bell,
   CirclePause,
   CirclePlay,
   Copy,
@@ -36,6 +37,7 @@ import { useEmployees } from '@/lib/employees.tsx'
 import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 import { McpServers } from '@/components/mcp-servers.tsx'
+import { NotificationSettings } from '@/components/notification-settings.tsx'
 
 /** Settings sections; `admin` ones are hidden from everyone else (the server refuses them anyway). */
 const SECTIONS = [
@@ -48,6 +50,7 @@ const SECTIONS = [
   { key: 'control', label: 'Kill switch', icon: Power, admin: true },
   { key: 'people', label: 'People and access', icon: UserCog, admin: true },
   { key: 'tokens', label: 'API tokens', icon: Ticket, admin: false },
+  { key: 'notifications', label: 'Notifications', icon: Bell, admin: false },
 ] as const
 
 /** `mcp.tasks.*` style patterns (`**` too) → does the tool match? The deny list wins. */
@@ -747,6 +750,7 @@ export function SettingsPage() {
         {allowed && section === 'control' && <Control />}
         {allowed && section === 'people' && <People />}
         {allowed && section === 'tokens' && <Tokens />}
+        {allowed && section === 'notifications' && <NotificationSettings />}
       </div>
     </Page>
   )

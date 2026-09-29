@@ -123,3 +123,25 @@ describe('upgrading employees from earlier versions', () => {
     expect(JSON.stringify(last.content)).toContain("You don't answer requests yourself")
   })
 })
+
+describe('follow-ups in a thread that tagged an employee', () => {
+  it('reach the tagged employee even before it posted there (e.g. an alert)', async () => {
+    // No workers: nobody answers the root, so the employee is in the thread only through the tag.
+    t = await testApp({ script: () => reply('ok'), workers: false })
+    const s = t.a.services
+    const general = (await s.chat.channelByName('general'))!.id
+    // Tagging the employee, like an alert does.
+    const root = (await t.req('POST', `/api/chat/channels/${general}/messages`, { text: 'run failed @meatless' })).body
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: 'why did it fail?', threadId: root.id })
+    const events = await s.records.query<any>('event', {
+      where: { type: 'message.replied' },
+      orderBy: { field: 'createdAt', dir: 'desc' },
+      limit: 5,
+    })
+    const followUp = events.items.find((e: any) => (e.data.text ?? '').includes('why did it fail?'))!
+    const plan = await s.router.plan(followUp)
+    expect(plan).toContainEqual(
+      expect.objectContaining({ sessionId: (await s.routerSessionFor())!, reason: 'thread_participant' }),
+    )
+  })
+})

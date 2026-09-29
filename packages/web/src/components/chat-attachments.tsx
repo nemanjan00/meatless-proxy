@@ -1,8 +1,9 @@
-import type { ChatAttachment } from '@mp/api'
-import { ChevronLeft, ChevronRight, Download, ImageOff, X } from 'lucide-react'
+import type { AttachmentDescription, ChatAttachment } from '@mp/api'
+import { ChevronLeft, ChevronRight, Download, ImageOff, Pencil, RefreshCw, Sparkles, Trash2, X } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button.tsx'
+import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi, useOptionalApi } from '@/lib/api.tsx'
 import { cn } from '@/lib/utils.ts'
 
@@ -17,6 +18,9 @@ export function formatBytes(n: number): string {
 }
 
 const sizeOf = (a: ChatAttachment) => (a.width && a.height ? `${a.width}×${a.height}` : '')
+
+/** An image's alt text: its saved description when there is one, else its name. */
+export const altOf = (a: ChatAttachment) => a.description || a.name
 
 /**
  * A message's images as a grid of thumbnails (one image shows larger). The browser scales them;
@@ -68,7 +72,8 @@ function Thumb({ attachment, src, fit }: { attachment: ChatAttachment; src: stri
   return (
     <img
       src={src}
-      alt={attachment.name}
+      alt={altOf(attachment)}
+      title={attachment.description ? `${attachment.name}: ${attachment.description}` : undefined}
       loading="lazy"
       decoding="async"
       onError={() => setBroken(true)}
@@ -91,7 +96,10 @@ export function Lightbox({
   onClose(): void
 }) {
   const api = useApi()
-  const a = attachments[index]!
+  // Edits made here, by attachment id (the message catches up when it reloads).
+  const [edited, setEdited] = useState<Record<string, ChatAttachment>>({})
+  const base = attachments[index]!
+  const a = edited[base.id] ?? base
   const many = attachments.length > 1
   const move = useCallback(
     (d: number) => onIndex((index + d + attachments.length) % attachments.length),
@@ -155,7 +163,7 @@ export function Lightbox({
             <img
               key={a.id}
               src={api.attachmentUrl(a.id)}
-              alt={a.name}
+              alt={altOf(a)}
               className="max-h-full max-w-full rounded-md object-contain shadow-high"
               data-testid="lightbox-image"
             />
@@ -166,9 +174,151 @@ export function Lightbox({
               </>
             )}
           </div>
+          <DescriptionCaption key={a.id} attachment={a} onChange={(next) => setEdited((m) => ({ ...m, [next.id]: next }))} />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  )
+}
+
+/**
+ * The lightbox caption: the image's saved description ("Description (AI)", or edited by a person), with
+ * the text visible in the image behind a toggle. Admins and the uploader can edit, clear or redo it (the
+ * server says who may, and enforces it).
+ */
+function DescriptionCaption({ attachment: a, onChange }: { attachment: ChatAttachment; onChange(a: ChatAttachment): void }) {
+  const api = useApi()
+  const [info, setInfo] = useState<AttachmentDescription | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(a.description ?? '')
+  const [showText, setShowText] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    api.attachmentDescription(a.id).then(
+      (d) => live && setInfo(d),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [api, a.id])
+
+  const apply = (d: AttachmentDescription) => {
+    setInfo(d)
+    onChange(d.attachment)
+    setDraft(d.attachment.description ?? '')
+  }
+  const run = async (fn: () => Promise<AttachmentDescription>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      apply(await fn())
+      setEditing(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const canEdit = info?.canEdit ?? false
+  const canDescribe = canEdit && (info?.available ?? false)
+  if (!a.description && !canDescribe && !editing) return null
+  const edited = !!a.descriptionEditedBy
+  const btn = 'h-6 px-1.5 text-micro text-[#d0d6e0] hover:bg-white/10 hover:text-[#f7f8f8] dark:hover:bg-white/10'
+  return (
+    <div
+      className="mx-auto mb-4 w-full max-w-3xl shrink-0 rounded-md border border-white/10 bg-black/60 px-3 py-2 text-mini text-[#d0d6e0]"
+      data-testid="image-description"
+    >
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1 font-medium text-micro text-[#8a8f98] uppercase tracking-wide">
+          <Sparkles className="size-3" />
+          {edited ? `Description (edited${info?.editedByName ? ` by ${info.editedByName}` : ''})` : 'Description (AI)'}
+        </span>
+        {canEdit && !editing && (
+          <div className="ml-auto flex items-center gap-0.5">
+            <Button variant="ghost" size="xs" className={btn} onClick={() => setEditing(true)} disabled={busy}>
+              <Pencil /> Edit
+            </Button>
+            {a.description && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className={btn}
+                disabled={busy}
+                onClick={() => run(() => api.updateAttachment(a.id, { description: null }))}
+              >
+                <Trash2 /> Clear
+              </Button>
+            )}
+            {canDescribe && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className={btn}
+                disabled={busy}
+                onClick={() => run(() => api.describeAttachment(a.id))}
+              >
+                <RefreshCw /> {a.description ? 'Redo' : 'Describe'}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+      {editing ? (
+        <div className="mt-1.5">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            aria-label="Image description"
+            className="min-h-14 border-white/15 bg-black/40 text-small text-[#f7f8f8]"
+          />
+          <div className="mt-1 flex justify-end gap-1">
+            <Button variant="ghost" size="xs" className={btn} onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              disabled={busy}
+              onClick={() => run(() => api.updateAttachment(a.id, { description: draft.trim() || null }))}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      ) : a.description ? (
+        <p className="mt-1 text-small text-[#f7f8f8]" data-testid="image-description-text">
+          {a.description}
+        </p>
+      ) : (
+        <p className="mt-1 text-[#8a8f98]">No description yet.</p>
+      )}
+      {a.visibleText && !editing && (
+        <div className="mt-1">
+          <button
+            type="button"
+            className="text-micro text-[#8a8f98] underline-offset-2 hover:text-[#d0d6e0] hover:underline"
+            aria-expanded={showText}
+            onClick={() => setShowText((v) => !v)}
+          >
+            {showText ? 'Hide visible text' : 'Show visible text'}
+          </button>
+          {showText && (
+            <pre
+              className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-sm bg-black/40 p-2 font-mono text-micro text-[#d0d6e0]"
+              data-testid="image-visible-text"
+            >
+              {a.visibleText}
+            </pre>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-1 text-micro text-[#eb5757]">{error}</p>}
+    </div>
   )
 }
 

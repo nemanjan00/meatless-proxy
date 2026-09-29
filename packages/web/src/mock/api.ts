@@ -50,6 +50,7 @@ import { createMockMcpApi } from './mcp.ts'
 import { createMockAttachmentsApi } from './attachments.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
+import { createMockNotificationsApi } from './notifications.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -112,7 +113,13 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
   }
   const fail = (e: Error): Promise<never> => Promise.reject(e)
   const tokens: ApiToken[] = []
-  const attachments = createMockAttachmentsApi({ db, meId: me.id, ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}) })
+  const attachments = createMockAttachmentsApi({
+    db,
+    meId: me.id,
+    meName: me.name,
+    access: () => me.access ?? 'admin',
+    ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}),
+  })
 
   const kindMap = (kind: string) => {
     if (!db.records.has(kind)) db.records.set(kind, new Map())
@@ -809,6 +816,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     markInboxRead: (q) => {
       if (q.clear) db.inbox = []
       else for (const i of db.inbox) if (q.ids?.includes(i.id)) i.read = true
+      emit('inbox.read', { contactId: me.id, ...(q.ids ? { ids: q.ids } : {}), ...(q.clear ? { clear: true } : {}) })
       return delay(undefined)
     },
 
@@ -1247,6 +1255,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Procedures: how they start, their runs and context (./procedures.ts).
     ...createMockProceduresApi({ db, iso, delay, write, get, all, whoami: () => api.me() }),
+
+    // Notification preferences (./notifications.ts).
+    ...createMockNotificationsApi({ delay }),
   }
   return api
 }

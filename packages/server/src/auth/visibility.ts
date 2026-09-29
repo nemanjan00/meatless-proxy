@@ -13,11 +13,19 @@ export class ChatVisibility {
 
   /** The ids of DMs this contact is not a member of. */
   async hiddenChannels(contactId: string): Promise<Set<string>> {
+    return (await this.dmChannels(contactId)).hidden
+  }
+
+  /** The ids of DMs, split into the ones this contact is a member of and the ones hidden from them. */
+  async dmChannels(contactId: string): Promise<{ member: Set<string>; hidden: Set<string> }> {
     const dms = await this.s.records.query<ChannelData>('channel', { where: { dm: true }, limit: 100_000 })
-    if (!dms.items.length) return new Set()
+    if (!dms.items.length) return { member: new Set(), hidden: new Set() }
     const mine = await this.s.store.links.query({ to: { kind: 'contact', id: contactId }, role: 'member' })
-    const member = new Set(mine.filter((l) => l.from.kind === 'channel').map((l) => l.from.id))
-    return new Set(dms.items.filter((c) => !member.has(c.id)).map((c) => c.id))
+    const linked = new Set(mine.filter((l) => l.from.kind === 'channel').map((l) => l.from.id))
+    const member = new Set<string>()
+    const hidden = new Set<string>()
+    for (const c of dms.items) (linked.has(c.id) ? member : hidden).add(c.id)
+    return { member, hidden }
   }
 
   /** Whether the contact may see the channel (unknown channels: true, so the caller answers 404). */

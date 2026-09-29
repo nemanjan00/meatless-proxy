@@ -6,6 +6,7 @@ import { asEmployee } from './git-store.ts'
 import { wireMcpAlerts } from './mcp-servers/index.ts'
 import { startScheduler } from './scheduler.ts'
 import { startAttachmentCleanup } from './attachments.ts'
+import { startDescribeWorker } from './image-descriptions.ts'
 import { QUEUES, activeJobs, enqueueEvent } from './queues.ts'
 import type { Services } from './services.ts'
 
@@ -73,6 +74,7 @@ export function startWorkers(s: Services): Workers {
   const alerts = s.config.ALERTS_ENABLED ? startAlerts(s) : null
   handles.push(startScheduler(s), ...(alerts ? [alerts] : []))
   handles.push(startAttachmentCleanup(s.attachments, log))
+  handles.push(startDescribeWorker(s.queue, s.attachments, s.describer, log))
   // A runtime MCP server that needs a new sign-in is an alert too (src/mcp-servers/alerts.ts).
   if (alerts) {
     const off = wireMcpAlerts(s, alerts)

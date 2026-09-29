@@ -25,7 +25,7 @@ and the page it opens.
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects shown readably, raw JSON on edit; references are picked by name with `<RecordPicker kinds>`, a typeahead over `GET /api/records/:kind?text=`, never typed as ids), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
 | `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Procedures (list and page, see below), Projects / Contacts / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
 | `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
-| `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events and chat |
+| `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events, chat and new inbox items |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
 | `scripts/screenshots.ts` | screenshots of every page in dark and light (playwright-core with a system Chromium), with a report of console errors and horizontal scroll |
 
@@ -117,6 +117,22 @@ Data comes from `@mp/api`'s `createApiClient` and `createLiveClient`; pages load
 HTTP and apply live events from `/ws` (streamed deltas are applied in place, chat
 messages, edits, deletions and reactions are replaced in place, other changes trigger a
 debounced reload). With `VITE_MOCK=1` the same interfaces are served by `src/mock`.
+
+### Notifications
+
+`NotificationsProvider` (`src/lib/notifications.tsx`, mounted in the app shell) holds the inbox for the Inbox
+page and the sidebar badge, and subscribes to `person:<contactId>`. A new `inbox.item` is added to the list and
+told, unless its channel is muted: a toast (`src/components/inbox-toast.tsx`: avatar, name with an AI badge,
+place, two lines, Open / Mark read; warning style for paused runs, limits and alerts), a WebAudio chime and a
+desktop notification while the tab is hidden, as the person's preferences say. There's no toast while the
+visible page shows that channel, thread or session; more than 3 within 10 s become one grouped toast
+(`Burst`, `src/lib/notify.ts`). `inbox.read` from any tab marks items read and dismisses their toasts. The
+unread count is in the badge and the document title. Settings → Notifications
+(`src/components/notification-settings.tsx`) edits the preferences (`GET/PUT /api/me/notifications`): toasts,
+desktop (asks for permission, explains a refusal), hide DM text, sound, and muted channels from a picker.
+The mock (`src/mock/notifications.ts`) keeps the preferences in memory and has a notifier that sends a
+mention, reply, DM, paused run or alert: every 45 s in `dev:mock` (`window.mpMock.notifier` has `push()`,
+`start(ms)` and `stop()`), and only on `data.notifier.push()` in tests.
 Placeholders, hints and examples come from real records (employee handles, people's
 chat handles) or are generic; nothing outside `src/mock` knows a mock name.
 
@@ -147,9 +163,12 @@ Images (`components/chat-attachments.tsx`): the composer (channels and threads) 
 attach button and takes pasted and dropped images, uploading each at once
 (`usePendingAttachments`: thumbnails with progress and remove; only PNG, JPEG, GIF and
 WebP, at most 10); a message shows its images as thumbnails (`AttachmentGrid`, one image
-larger) and a click opens `Lightbox` (Esc closes, ←/→ move, download link). The mock keeps
-uploads as object URLs and seeds images on the PAY-123 thread and the staging disk incident
-(`mock/attachments.ts`).
+larger) and a click opens `Lightbox` (Esc closes, ←/→ move, download link). A saved
+description is the image's alt text and the lightbox caption (`DescriptionCaption`:
+"Description (AI)", or edited by a person; the visible text behind a toggle; edit, clear and
+redo for whoever the server's `canEdit` allows). The mock keeps
+uploads as object URLs and seeds images on the PAY-123 thread and the staging disk incident,
+two of them with descriptions (`mock/attachments.ts`).
 
 ## Screenshots (real server, seeded demo data)
 
@@ -194,6 +213,10 @@ Lineage, Triggers, Chat posting, Usage, a project's generated form, Secrets, Inb
 `polish.test.tsx`: usage buckets and labels, routing outcomes, recent-run summaries, chat
 helpers (tag suggestions, DM labels, reactions, search grouping), label and link helpers,
 and the chat page's autocomplete, search, reactions, edit, delete, new DM and unread badges.
+`notifications.test.tsx`: a toast for a new item (Open, Mark read), none while viewing its thread or channel
+(but one when the tab is hidden), grouping, the warning style, the badge and title from new items and other tabs'
+reads, muted channels, toasts off, desktop notifications only while hidden (a click opens the item, DM text
+hidden on request, never without permission), and Settings → Notifications (toggles, muting, a refused permission).
 `employee.test.tsx`: the employee page (profile, SSH key, card states), the GitLab panel and "Add it for me", the
 secret form (a refused token, a stored one never shown again), members read-only, rotating the key, the new
 employee dialog (derived handle, a taken handle, a missing name), and the Settings → Integrations overview links.

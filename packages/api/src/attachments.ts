@@ -15,6 +15,32 @@ export interface ChatAttachment {
   size: number
   width?: number
   height?: number
+  /** What the image shows: its saved description, made by the model (or edited by a person). Untrusted. */
+  description?: string
+  /** Important text visible in the image, verbatim. */
+  visibleText?: string
+  /** Set when a person edited the description. */
+  descriptionEditedBy?: { kind: string; id: string }
+}
+
+/** `GET /api/chat/attachments/:id/description` (and what `POST …/describe` and `PATCH` return). */
+export interface AttachmentDescription {
+  attachment: ChatAttachment
+  /** When the description was made (or first made, for an edited one). */
+  describedAt?: string
+  /** The model that made it. */
+  describedBy?: string
+  editedAt?: string
+  /** The name of the person who edited it. */
+  editedByName?: string
+  /** Whether descriptions can be made (`IMAGE_DESCRIBE` isn't off and the model can see images). */
+  available: boolean
+  /** Why not, when they can't. */
+  unavailableReason?: string
+  /** `view`, `upload` or `off`. */
+  mode: string
+  /** Whether the signed-in person may edit, clear or redo it (an admin, or the uploader). */
+  canEdit: boolean
 }
 
 /** `POST /api/chat/attachments` → the pending upload. */
@@ -28,6 +54,9 @@ export interface UploadedAttachment {
 export const ATTACHMENT_ROUTES = {
   uploadAttachment: ['POST', '/api/chat/attachments'],
   getAttachment: ['GET', '/api/chat/attachments/:id'],
+  attachmentDescription: ['GET', '/api/chat/attachments/:id/description'],
+  describeAttachment: ['POST', '/api/chat/attachments/:id/describe'],
+  updateAttachment: ['PATCH', '/api/chat/attachments/:id'],
 } as const
 
 export interface UploadOptions {
@@ -50,6 +79,15 @@ export interface AttachmentsApi {
    * for `<img src>`. `download` asks for `Content-Disposition: attachment`.
    */
   attachmentUrl(id: string, opts?: { download?: boolean }): string
+  /** `GET /api/chat/attachments/:id/description`: the saved description (same visibility as the image). */
+  attachmentDescription(id: string): Promise<AttachmentDescription>
+  /** `POST /api/chat/attachments/:id/describe`: makes, or redoes, the description (admins and the uploader). */
+  describeAttachment(id: string): Promise<AttachmentDescription>
+  /**
+   * `PATCH /api/chat/attachments/:id` `{ description }`: edits the description (marked as edited by you),
+   * or clears it with `null`. Admins and the uploader.
+   */
+  updateAttachment(id: string, body: { description: string | null }): Promise<AttachmentDescription>
 }
 
 export interface RawRequest {
@@ -62,10 +100,16 @@ interface ErrorBody {
   error?: Partial<ApiErrorBody>
 }
 
-/** The `AttachmentsApi` half of `createApiClient`. `fail` turns an error response into the client's error. */
+/** The `AttachmentsApi` half of `createApiClient`. `fail` turns an error response into the client's error; `call` is its JSON request. */
 export function attachmentsMethods(
   raw: RawRequest,
   fail: (status: number, body: ErrorBody | undefined, fallback: string) => Error,
+  call: <T>(
+    route: keyof typeof ATTACHMENT_ROUTES,
+    params?: Record<string, string>,
+    query?: undefined,
+    body?: unknown,
+  ) => Promise<T>,
 ): AttachmentsApi {
   const urlFor = (name?: string) =>
     `${raw.base}${ATTACHMENT_ROUTES.uploadAttachment[1]}${name ? `?name=${encodeURIComponent(name)}` : ''}`
@@ -115,5 +159,8 @@ export function attachmentsMethods(
     },
     attachmentUrl: (id, opts = {}) =>
       `${raw.base}/api/chat/attachments/${encodeURIComponent(id)}${opts.download ? '?download=1' : ''}`,
+    attachmentDescription: (id) => call('attachmentDescription', { id }),
+    describeAttachment: (id) => call('describeAttachment', { id }, undefined, {}),
+    updateAttachment: (id, body) => call('updateAttachment', { id }, undefined, body),
   }
 }

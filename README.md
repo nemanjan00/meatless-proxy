@@ -217,6 +217,8 @@ can see the channel can open them.
 | `MODEL_VISION` | `auto` | whether the model can see images: `auto` asks the provider's model list, then goes by the model's name; `true` or `false` to say so |
 | `MODEL_IMAGE_MAX_SIDE` | 1568 | images for the model are downscaled to this many pixels on the longest side (PNG; other types pass through) |
 | `MODEL_IMAGE_MAX_BYTES` | 5 MB | larger images aren't sent to the model |
+| `IMAGE_DESCRIBE` | `view` | saved image descriptions, one model call per image, reused everywhere: `view` describes an image on its first look, `upload` in the background when it's posted, `off` never (needs vision) |
+| `IMAGE_DESCRIBE_MODEL` | `MODEL` | the model that describes images, on the same provider |
 | `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached image |
 | `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | images per message |
 

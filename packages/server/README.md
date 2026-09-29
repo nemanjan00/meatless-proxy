@@ -118,8 +118,15 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
 
 - `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
 - `GET /api/inbox` and `POST /api/inbox/read { ids?, clear? }` (`src/inbox.ts`, `PersonInbox`): the signed-in person's
-  mentions, replies in their threads (started, posted in or tagged in) and paused runs, minus their own messages and
-  hidden DMs; read ids and `clearedAt` live in an `inbox_state` record keyed by the contact id (any signed-in person).
+  mentions, messages in their DMs, replies in their threads (started, posted in or tagged in), alerts that tag them
+  (`alert`), and runs they asked for that paused (`paused_run`, `limit`) or wait on a delivery (`waiting`); admins also
+  get paused runs nobody asked for. Never their own messages or hidden DMs. The rule is `messageItemType` and
+  `runItemType`, shared with the live stream (`itemForMessage`, `itemForRun`). Read ids and `clearedAt` live in an
+  `inbox_state` record keyed by the contact id (any signed-in person); marking read publishes `inbox.read` on the bus.
+- `GET /api/me/notifications` and `PUT /api/me/notifications { toasts?, desktop?, sound?, hideDmText?, mutedChannels? }`
+  (`src/notification-prefs.ts`): the signed-in person's own notification preferences (viewers too), one
+  `notification_prefs` record keyed by the contact id, defaults until changed; unknown fields and wrong types are 400.
+  `inbox_state` and `notification_prefs` are hidden from the records API.
 - `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
 - The employee page's routes (`@mp/api` `SETUP_ROUTES`, served by `src/setup`, see [Employees and guided
   setup](#employees-and-guided-setup)): `POST /api/employees`, `GET /api/employees/:id/ssh-key`,
@@ -311,10 +318,19 @@ The `@mp/api` live protocol: `subscribe` / `unsubscribe` / `ping`, answered by
 `subscribed`, `pong` and `event` messages. Bus topics (`record.changed`,
 `link.changed`, `entry.appended`, `run.state`, `session.head`, `model.delta`,
 `tool.called`, `tool.result`, `usage.recorded`, `checklist.changed`,
-`chat.message`, `event.ingested`, `event.routed`, `control.changed`) are mapped
+`chat.message`, `event.ingested`, `event.routed`, `control.changed`, `inbox.read`) are mapped
 to the API payloads and fanned out with `channelsFor`. Messages are forwarded in
 order; a socket that stops draining (buffer over 1 MiB and 500 queued messages)
 is closed with 1013.
+
+`person:<contactId>` is a person's own channel: a socket may subscribe only to its
+signed-in contact's (anything else is refused like an unknown channel). On
+`chat.message` and `run.state` (to `paused` or `suspended`) the hub asks
+`PersonInbox.itemForMessage` / `itemForRun` for each socket on its person channel
+and sends `inbox.item { contactId, item }`: once per item per socket (edits and
+reactions republish a message), never for messages over two minutes old, read
+items or items from before a clear. `inbox.read { contactId, ids?, clear? }` goes
+to the same channel.
 
 ## MCP server (`/mcp`)
 
@@ -331,8 +347,10 @@ returns the thread id), `session_get`, `sessions_search`, `docs_search`,
 and joining need `member` access (a viewer's token reads and searches only).
 Chat reads, posts and search follow `ChatVisibility`: DMs only for members.
 Images (`src/mcp-attachments.ts`): `chat_read`, `chat_search` and deliveries
-carry a message's `attachments`, `chat_attachment` (id) returns one as MCP
-`image` content plus its metadata, and `chat_post` takes `attachments: [{ name?,
+carry a message's `attachments` (with `description` and `visibleText`),
+`chat_attachment` (id) returns one as MCP `image` content plus its metadata and
+saved description (`describe_only: true`: only the text, describing it first if
+needed, for the caller), and `chat_post` takes `attachments: [{ name?,
 mime?, data }]` (base64; the web upload's limits, and a `mime` the bytes don't
 bear out is refused).
 
@@ -596,6 +614,18 @@ never changes when someone assigns one. A failure only logs a warning.
 - `imageLoader({ attachments, storage, maxSide, maxBytes })` is the runner's
   `loadImage`: it reads the attachment or file, checks the sha256, and
   downscales (`prepareImage`).
+- Image descriptions (`src/image-descriptions.ts`): `buildDescriber` makes
+  `services.describer` (`IMAGE_DESCRIBE`, `IMAGE_DESCRIBE_MODEL`, vision from
+  `resolveVision`), recording each call in the usage ledger (a session's run,
+  employee and root, or the requester). `upload` mode: chat's `onAttachments`
+  queues one `images` job per image (`describe:<id>`, 3 attempts), run by
+  `startDescribeWorker`. `describedEvent` is the router's `prepareEvent`: a
+  chat event's image lines get the saved descriptions at delivery.
+  `GET /api/chat/attachments/:id/description`, `POST …/describe` (redo; admins
+  and the uploader, 503 when descriptions can't be made) and `PATCH
+  /api/chat/attachments/:id { description }` (edit or clear; admins and the
+  uploader). `chat_attachment` and `image_description` records are hidden from
+  the generic records API.
 
 ## Router contexts in chat
 

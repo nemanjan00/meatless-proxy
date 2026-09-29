@@ -52,6 +52,7 @@ import type {
 } from './resources.ts'
 import type { McpOAuthStart, McpServerCreate, McpServerInfo, McpServerPatch, McpServerTool } from './mcp-servers.ts'
 import { ATTACHMENT_ROUTES, type AttachmentsApi, attachmentsMethods } from './attachments.ts'
+import { NOTIFICATION_ROUTES, type NotificationsApi, notificationsMethods } from './notifications.ts'
 import { PROJECT_ROUTES, type ProjectsApi, projectsMethods } from './projects.ts'
 import { PROCEDURE_ROUTES, type ProceduresApi, proceduresMethods } from './procedures.ts'
 import { SETUP_ROUTES, type SetupApi, setupMethods } from './setup.ts'
@@ -157,6 +158,7 @@ export const ROUTES = {
   ...PROJECT_ROUTES,
   ...ATTACHMENT_ROUTES,
   ...PROCEDURE_ROUTES,
+  ...NOTIFICATION_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -244,7 +246,7 @@ export interface ApiClientOptions {
  * (and its mock) code against this interface. Errors are thrown as
  * `ApiRequestError` (see errors.ts for the error body and status codes).
  */
-export interface ApiClient extends SetupApi, ProjectsApi, ProceduresApi, AttachmentsApi {
+export interface ApiClient extends SetupApi, ProjectsApi, ProceduresApi, AttachmentsApi, NotificationsApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -664,8 +666,10 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
           body?.error?.message ?? fallback,
           body?.error?.details,
         ),
+      call,
     ),
     ...proceduresMethods(call),
+    ...notificationsMethods(call),
   }
 }
 

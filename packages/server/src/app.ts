@@ -17,6 +17,7 @@ import { webhookRoutes } from './http/webhooks.ts'
 import { mcpServerRoutes } from './http/mcp-servers.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
+import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
@@ -107,7 +108,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.get(
     '/ws',
     ws.upgradeWebSocket((c) => {
-      const viewer = { contactId: principalOf(c).contactId }
+      const p = principalOf(c)
+      const viewer = { contactId: p.contactId, admin: p.access === 'admin' }
       let conn: ReturnType<LiveHub['connect']> | null = null
       return {
         onOpen: (_evt, socket) => {
@@ -137,6 +139,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', mcpServerRoutes(services))
   app.route('/', projectRoutes(services))
   app.route('/', procedureRoutes(services))
+  app.route('/', notificationPrefsRoutes(services))
   app.route('/', chatAttachmentRoutes(services, auth.visibility))
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()

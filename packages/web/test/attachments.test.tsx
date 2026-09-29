@@ -26,7 +26,9 @@ describe('images in chat', () => {
     const grid = await within(thread).findByTestId('attachments')
     const thumbs = within(grid).getAllByTestId('attachment-thumb')
     expect(thumbs).toHaveLength(2)
-    expect(within(thumbs[0]!).getByRole('img')).toHaveAttribute('alt', 'charges-timeline.png')
+    // The saved description is the alt text; an image without one keeps its name.
+    expect(within(thumbs[0]!).getByRole('img')).toHaveAttribute('alt', expect.stringMatching(/^A timeline of invoice INV-1002/))
+    expect(within(thumbs[1]!).getByRole('img')).toHaveAttribute('alt', 'provider-dashboard.png')
 
     fireEvent.click(thumbs[0]!)
     const box = await screen.findByTestId('lightbox')
@@ -111,5 +113,63 @@ describe('images in chat', () => {
     const del = await api.deleteMessage(m.id)
     expect(del.data.attachments).toBeUndefined()
     expect(api.attachmentUrl(up.attachment.id)).toBe('')
+  })
+
+  it('the lightbox captions an image with its AI description, with the visible text behind a toggle', async () => {
+    renderAt(`/chat/${CHN.billing}/${THREAD}`)
+    const thread = await screen.findByTestId('thread')
+    const thumbs = within(await within(thread).findByTestId('attachments')).getAllByTestId('attachment-thumb')
+    fireEvent.click(thumbs[0]!)
+    const box = await screen.findByTestId('lightbox')
+    const caption = within(box).getByTestId('image-description')
+    expect(within(caption).getByText('Description (AI)')).toBeInTheDocument()
+    expect(within(caption).getByTestId('image-description-text')).toHaveTextContent(/two \$412\.00 charges/)
+    expect(within(box).getByTestId('lightbox-image')).toHaveAttribute('alt', expect.stringMatching(/^A timeline/))
+    expect(within(caption).queryByTestId('image-visible-text')).not.toBeInTheDocument()
+    fireEvent.click(within(caption).getByRole('button', { name: 'Show visible text' }))
+    expect(within(caption).getByTestId('image-visible-text')).toHaveTextContent('INV-1002 · charges on Sep 27')
+  })
+
+  it('an admin or the uploader edits and clears a description, marked as edited by them', async () => {
+    renderAt(`/chat/${CHN.billing}/${THREAD}`)
+    const thread = await screen.findByTestId('thread')
+    const thumbs = within(await within(thread).findByTestId('attachments')).getAllByTestId('attachment-thumb')
+    fireEvent.click(thumbs[0]!)
+    const box = await screen.findByTestId('lightbox')
+    const caption = within(box).getByTestId('image-description')
+    // The server says who may edit (the mock's person is an admin).
+    fireEvent.click(await within(caption).findByRole('button', { name: /Edit/ }))
+    const field = within(caption).getByLabelText('Image description')
+    fireEvent.change(field, { target: { value: 'Two duplicate charges on INV-1002.' } })
+    await act(async () => {
+      fireEvent.click(within(caption).getByRole('button', { name: 'Save' }))
+    })
+    await waitFor(() => expect(within(caption).getByText(/Description \(edited by /)).toBeInTheDocument())
+    expect(within(caption).getByTestId('image-description-text')).toHaveTextContent('Two duplicate charges on INV-1002.')
+    expect(within(box).getByTestId('lightbox-image')).toHaveAttribute('alt', 'Two duplicate charges on INV-1002.')
+    await act(async () => {
+      fireEvent.click(within(caption).getByRole('button', { name: /Clear/ }))
+    })
+    await waitFor(() => expect(within(caption).getByText('No description yet.')).toBeInTheDocument())
+    expect(within(box).getByTestId('lightbox-image')).toHaveAttribute('alt', 'charges-timeline.png')
+    // Describe makes a new one.
+    await act(async () => {
+      fireEvent.click(within(caption).getByRole('button', { name: /Describe/ }))
+    })
+    await waitFor(() => expect(within(caption).getByText('Description (AI)')).toBeInTheDocument())
+  })
+
+  it('the mock keeps descriptions to those who may change them', async () => {
+    const data = createMockDataLayer({ now: Date.now() })
+    const withImages = (t: Awaited<ReturnType<typeof data.api.thread>>) =>
+      [t.root, ...t.replies].find((m) => m.data.attachments?.length)!
+    const att = withImages(await data.api.thread(THREAD)).data.attachments![0]!
+    const d = await data.api.attachmentDescription(att.id)
+    expect(d).toMatchObject({ available: true, canEdit: true, attachment: { description: expect.any(String) } })
+    const edited = await data.api.updateAttachment(att.id, { description: 'New.' })
+    expect(edited.attachment).toMatchObject({ description: 'New.', descriptionEditedBy: { kind: 'contact' } })
+    // The message has it too.
+    expect(withImages(await data.api.thread(THREAD)).data.attachments![0]!.description).toBe('New.')
+    await expect(data.api.attachmentDescription('att_nope')).rejects.toMatchObject({ status: 404 })
   })
 })

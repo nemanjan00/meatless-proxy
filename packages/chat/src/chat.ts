@@ -14,7 +14,14 @@ import {
 import type { Events } from '@mp/events'
 import { parseDocLinks, type Records } from '@mp/records'
 import type { Actor, Condition, Ref, StoredRecord } from '@mp/store'
-import { type Attachment, type ChatAttachments, attachmentLine, attachmentsOf } from './attachments.ts'
+import {
+  type Attachment,
+  type AttachmentData,
+  type ChatAttachments,
+  attachmentLine,
+  attachmentSchema,
+  attachmentsOf,
+} from './attachments.ts'
 import { parseTags } from './tags.ts'
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
@@ -225,6 +232,11 @@ export interface ChatOptions {
   resolveSessionSlug: (employeeId: string, slug: string) => Promise<string | null>
   /** Image attachments. Without it, messages can't have any. */
   attachments?: ChatAttachments
+  /**
+   * Called after a message with images is posted (and its event ingested), e.g. to describe them in
+   * the background. Errors are the caller's to handle: a failure here doesn't fail the post.
+   */
+  onAttachments?: (message: Message, attachments: Attachment[]) => Promise<void>
 }
 
 export interface CreateChannelInput {
@@ -270,7 +282,10 @@ export interface Chat {
   thread(rootId: string): Promise<Message[]>
   /** Top-level messages of a channel, oldest first: the latest `limit` (default 50) before `before` (a message id). */
   messages(channelId: string, q?: { limit?: number; before?: string }): Promise<Message[]>
-  /** Messages whose text contains `text` (case-insensitive), newest first. An empty text matches everything the filters allow. */
+  /**
+   * Messages whose text contains `text` (case-insensitive), or with an image whose saved description or
+   * visible text contains it, newest first. An empty text matches everything the filters allow.
+   */
   search(text: string, q?: SearchQuery): Promise<Message[]>
   /**
    * Changes a message's text. Only its author may (`DeniedError` otherwise). Tags are resolved
@@ -514,7 +529,7 @@ export function createChat(opts: ChatOptions): Chat {
         ...(attachments.length ? { attachments } : {}),
       }
       // Images are named, not shown: the session looks at one with image.view when it needs to.
-      const lines = attachments.map(attachmentLine).join('\n')
+      const lines = attachments.map((a) => attachmentLine(a)).join('\n')
       await events.ingest({
         source: 'chat',
         type: threadId ? 'message.replied' : 'message.posted',
@@ -525,6 +540,7 @@ export function createChat(opts: ChatOptions): Chat {
         ...(author.kind === 'contact' ? { actorContactId: author.id } : {}),
       })
       bus?.publish<ChatMessagePosted>(ChatTopics.message, { channelId: ch.id, threadId, messageId: msg.id })
+      if (attachments.length && opts.onAttachments) await opts.onAttachments(msg, attachments).catch(() => {})
       return msg
     },
     getMessage: (id) => records.get<MessageData>('message', id),
@@ -554,6 +570,32 @@ export function createChat(opts: ChatOptions): Chat {
       if (!q.includeDeleted) where.push({ field: 'deleted', op: 'ne', value: true })
       const limit = q.limit ?? 50
       let items = (await records.query<MessageData>('message', { where, orderBy: { field: 'id', dir: 'desc' } })).items
+      if (text && opts.attachments) {
+        // Images match by their saved description and the text visible in them (on the attachment records).
+        const seen = new Set(items.map((m) => m.id))
+        const extra: Message[] = []
+        for (const field of ['description', 'visibleText']) {
+          const found = await records.query<AttachmentData>(attachmentSchema.kind, {
+            where: [
+              { field, op: 'like', value: text },
+              { field: 'messageId', op: 'exists', value: true },
+            ],
+            limit: 1000,
+          })
+          for (const a of found.items) {
+            const id = a.data.messageId!
+            if (seen.has(id)) continue
+            seen.add(id)
+            const m = await records.get<MessageData>('message', id)
+            if (!m) continue
+            if (q.channelId && m.data.channelId !== q.channelId) continue
+            if (q.author && (m.data.author.kind !== q.author.kind || m.data.author.id !== q.author.id)) continue
+            if (!q.includeDeleted && m.data.deleted) continue
+            extra.push(m)
+          }
+        }
+        if (extra.length) items = [...items, ...extra].sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      }
       if (q.threadId) items = items.filter((m) => m.id === q.threadId || m.data.threadId === q.threadId)
       if (q.tagged) items = items.filter((m) => m.data.tags.some((t) => tagIds(t).includes(q.tagged!)))
       return items.slice(0, limit)

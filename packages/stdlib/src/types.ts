@@ -4,7 +4,7 @@
  */
 import type { Clock, EventBus, Logger } from '@mp/core'
 import type { Checklists } from '@mp/checklists'
-import type { Chat, ChatAttachments } from '@mp/chat'
+import type { Chat, ChatAttachments, ImageDescriber } from '@mp/chat'
 import type { ContainerRuntime } from '@mp/containers'
 import type { Directory } from '@mp/directory'
 import type { Events } from '@mp/events'
@@ -37,6 +37,12 @@ export interface StdlibDeps {
    * Off (the default): image.view says so.
    */
   vision?: { enabled: boolean; maxSide?: number; maxBytes?: number }
+  /**
+   * Saved image descriptions (`IMAGE_DESCRIBE`): image.view makes one on the first look (and returns
+   * it, or only it with `describe_only`), chat.read on request. Optional: without it images have no
+   * descriptions.
+   */
+  describer?: ImageDescriber
   /** Optional: without them the git and env tools aren't registered. */
   git?: GitCache
   containers?: ContainerRuntime

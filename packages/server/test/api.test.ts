@@ -394,8 +394,9 @@ describe('chat', () => {
 
     const channels = await t.req('GET', '/api/chat/channels')
     const inc = channels.body.find((c: any) => c.channel.id === ch.body.id)
-    // The question, the reply, and the employee's answer in the thread.
-    expect(inc.messages).toBe(3)
+    // The question, the employee's answer, the person's untagged follow-up (it reaches the tagged employee
+    // too, docs/execution.md "Follow-ups"), and the scripted model's answer to it.
+    expect(inc.messages).toBe(4)
     expect(inc.lastMessageAt).toBeTruthy()
   })
 })

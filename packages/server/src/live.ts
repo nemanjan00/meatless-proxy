@@ -1,4 +1,5 @@
 import {
+  type InboxItem,
   channelsFor,
   type ApiEntry,
   type LiveChannel,
@@ -13,6 +14,7 @@ import type { Message } from '@mp/chat'
 import type { Run } from '@mp/sessions'
 import type { Services } from './services.ts'
 import { ChatVisibility } from './auth/visibility.ts'
+import { INBOX_READ_TOPIC, type InboxViewer, PersonInbox } from './inbox.ts'
 import { Views, mapChecklist, mapEvent } from './http/views.ts'
 
 /** What the Now page shows about a live run beyond its record (see `NowItem`). */
@@ -89,6 +91,10 @@ interface Client {
   socket: LiveSocket
   /** The signed-in contact: DMs they aren't in are never sent to them. Unset: no filtering (in-process use). */
   contactId?: string
+  /** Whether they are an admin (their inbox also has paused runs nobody asked for). */
+  admin?: boolean
+  /** Inbox item ids already sent on `person:` (edits and reactions republish a message; it toasts once). */
+  sentItems: Set<string>
   channels: Set<LiveChannel>
   queue: string[]
   closed: boolean
@@ -112,6 +118,7 @@ export const LIVE_TOPICS = [
   'event.routed',
   'control.changed',
   'preview.commit',
+  INBOX_READ_TOPIC,
 ] as const
 
 export interface LiveHubOptions {
@@ -121,7 +128,11 @@ export interface LiveHubOptions {
   maxBuffered?: number
 }
 
-const CHANNEL_RE = /^(now|events|(session|run|chat|records):[A-Za-z0-9_.:-]+)$/
+const CHANNEL_RE = /^(now|events|(session|run|chat|records|person):[A-Za-z0-9_.:-]+)$/
+/** A new chat message or run state older than this isn't news (a reaction republishes an old message). */
+const FRESH_MS = 2 * 60_000
+/** Inbox item ids remembered per socket. */
+const MAX_SENT_ITEMS = 500
 /** Record kinds that can belong to a DM. */
 const CHAT_RECORD_KINDS = new Set(['channel', 'message', 'event'])
 
@@ -137,6 +148,7 @@ export class LiveHub {
   private maxQueue: number
   private maxBuffered: number
   private visibility: ChatVisibility
+  private inbox: PersonInbox
   /** `contact:channel` → whether they may see it, briefly cached (one lookup per event and client otherwise). */
   private seen = new Map<string, { at: number; ok: boolean }>()
 
@@ -147,6 +159,7 @@ export class LiveHub {
     this.maxQueue = opts.maxQueue ?? 500
     this.maxBuffered = opts.maxBuffered ?? 1024 * 1024
     this.visibility = new ChatVisibility(s)
+    this.inbox = new PersonInbox(s, this.visibility)
     for (const topic of LIVE_TOPICS) {
       this.offs.push(
         s.bus.subscribe(topic, (m) => {
@@ -167,13 +180,14 @@ export class LiveHub {
    * Registers a socket, for the signed-in `viewer` (whose DMs filter what it gets). Returns the
    * handlers to call for its messages and its close.
    */
-  connect(socket: LiveSocket, viewer?: { contactId: string }): { message(data: unknown): void; close(): void } {
+  connect(socket: LiveSocket, viewer?: InboxViewer): { message(data: unknown): void; close(): void } {
     const client: Client = {
       socket,
       channels: new Set(),
       queue: [],
       closed: false,
-      ...(viewer ? { contactId: viewer.contactId } : {}),
+      sentItems: new Set(),
+      ...(viewer ? { contactId: viewer.contactId, ...(viewer.admin ? { admin: true } : {}) } : {}),
     }
     this.clients.add(client)
     return {
@@ -223,12 +237,17 @@ export class LiveHub {
     this.send(client, { type: 'error', message: `unknown message type ${(msg as { type?: unknown }).type}` })
   }
 
-  /** Subscribes, except to DMs the client isn't in (answered like unknown channels, so they stay private). */
+  /**
+   * Subscribes, except to DMs the client isn't in and to someone else's `person:` channel
+   * (answered like unknown channels, so they stay private).
+   */
   private async subscribe(client: Client, chans: LiveChannel[]) {
     const refused: string[] = []
     for (const c of chans) {
       const chat = c.startsWith('chat:') ? c.slice(5) : null
+      const person = c.startsWith('person:') ? c.slice(7) : null
       if (chat && !(await this.maySee(client, chat))) refused.push(c)
+      else if (person !== null && (!client.contactId || person !== client.contactId)) refused.push(c)
       else client.channels.add(c)
     }
     if (refused.length) this.send(client, { type: 'error', message: `unknown channels: ${refused.join(', ')}` })
@@ -362,6 +381,7 @@ export class LiveHub {
   }
 
   private async forward(m: BusMessage) {
+    if (m.topic === 'chat.message' || m.topic === 'run.state') await this.notify(m)
     const built = await this.payload(m)
     if (!built) return
     const chans: LiveChannel[] =
@@ -375,6 +395,42 @@ export class LiveHub {
         if (!client.channels.has(channel)) continue
         this.send(client, { type: 'event', channel, topic: built.topic, payload: built.payload, at } as LiveServerMessage)
       }
+    }
+  }
+
+  /**
+   * A new message or run state that is an inbox item for someone on their `person:` channel is
+   * sent to them as `inbox.item`, with the inbox's own rule (`PersonInbox.itemFor*`), once per socket.
+   */
+  private async notify(m: BusMessage) {
+    const listening = [...this.clients].filter((c) => c.contactId && c.channels.has(`person:${c.contactId}`))
+    if (!listening.length) return
+    const p = m.payload as { messageId?: string; runId?: string; to?: string }
+    const views = new Views(this.s)
+    const now = this.s.clock.now()
+    let find: (viewer: InboxViewer) => Promise<InboxItem | null>
+    if (m.topic === 'chat.message') {
+      const msg = typeof p.messageId === 'string' ? await this.s.chat.getMessage(p.messageId) : null
+      if (!msg || now - Date.parse(msg.data.createdAt) > FRESH_MS) return
+      find = (viewer) => this.inbox.itemForMessage(msg, viewer, views)
+    } else {
+      if (p.to !== 'paused' && p.to !== 'suspended') return
+      const run = typeof p.runId === 'string' ? ((await this.s.sessions.getRun(p.runId)) as Run | null) : null
+      if (!run) return
+      find = (viewer) => this.inbox.itemForRun(run, viewer, views)
+    }
+    const at = new Date(m.at).toISOString()
+    const byPerson = new Map<string, Promise<InboxItem | null>>()
+    for (const client of listening) {
+      const contactId = client.contactId!
+      const key = `${contactId}:${client.admin ? 1 : 0}`
+      if (!byPerson.has(key)) byPerson.set(key, find({ contactId, admin: !!client.admin }))
+      const item = await byPerson.get(key)!
+      if (!item || item.read || client.sentItems.has(item.id)) continue
+      client.sentItems.add(item.id)
+      if (client.sentItems.size > MAX_SENT_ITEMS) client.sentItems.delete(client.sentItems.values().next().value!)
+      const channel = `person:${contactId}` as LiveChannel
+      this.send(client, { type: 'event', channel, topic: 'inbox.item', payload: { contactId, item }, at })
     }
   }
 }

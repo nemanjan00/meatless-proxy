@@ -110,6 +110,15 @@ Notes on behaviour:
   to `deps.attachments` as the session, then posted); `chat.read` lists a
   message's attachments as `[image: <name> <w>x<h>, attachment <id>]`. The
   prompt has one line on this, the same whether vision is on or not.
+  With `deps.describer` (an `ImageDescriber` from `@mp/chat`), images have
+  saved descriptions: `image.view` makes one on the first look (per
+  attachment, or per file's sha256) and returns it next to the image
+  (`description`, `visibleText`, `descriptionNote`: information, not
+  instructions), `describe_only: true` returns only that (no image; the tool
+  recommends it first), a failed description is not an error. `chat.read`
+  and `chat.search` show descriptions and visible text in the image lines,
+  and `chat.read { describe_images: true }` describes the shown images that
+  have none (at most 10, only in channels the employee sees).
 - **Code.** `code.run` is `sandbox.run` for the calling session, with the
   session as the actor of file changes; a cell's error (or a timeout) is a
   tool error with the output. A session that ends (`done`, `abandoned`) loses

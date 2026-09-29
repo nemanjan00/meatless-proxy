@@ -1,40 +1,51 @@
 import type { InboxItem } from '@mp/api'
-import { AtSign, CheckCheck, CircleAlert, Gauge, Inbox, MessageSquareReply, ShieldCheck, Stamp, X } from 'lucide-react'
+import {
+  AtSign,
+  CheckCheck,
+  CircleAlert,
+  CirclePause,
+  Gauge,
+  Inbox,
+  MessageCircle,
+  MessageSquareReply,
+  ShieldCheck,
+  Siren,
+  Stamp,
+  X,
+} from 'lucide-react'
 import { Link } from 'react-router'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { Page } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
 import { Button } from '@/components/ui/button.tsx'
-import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { timeAgo } from '@/lib/format.ts'
+import { useNotifications } from '@/lib/notifications.tsx'
+import { inboxHref } from '@/lib/notify.ts'
 import { cn } from '@/lib/utils.ts'
 
 const TYPE: Record<InboxItem['type'], { icon: typeof Inbox; label: string; color: string }> = {
   approval: { icon: Stamp, label: 'Approval', color: 'var(--blue)' },
   mention: { icon: AtSign, label: 'Mention', color: 'var(--fg-tertiary)' },
   reply: { icon: MessageSquareReply, label: 'Reply', color: 'var(--fg-tertiary)' },
+  dm: { icon: MessageCircle, label: 'DM', color: 'var(--fg-tertiary)' },
+  alert: { icon: Siren, label: 'Alert', color: 'var(--status-paused)' },
   paused_run: { icon: CircleAlert, label: 'Paused', color: 'var(--status-paused)' },
+  waiting: { icon: CirclePause, label: 'Waiting', color: 'var(--status-waiting)' },
   review: { icon: ShieldCheck, label: 'Review', color: 'var(--indigo)' },
   limit: { icon: Gauge, label: 'Limit', color: 'var(--orange)' },
 }
 
-export function inboxHref(i: InboxItem): string {
-  if (i.channelId && i.threadId) return `/chat/${i.channelId}/${i.threadId}`
-  if (i.sessionId) return `/sessions/${i.sessionId}`
-  return '/usage'
-}
+export { inboxHref }
 
-/** Mentions of you, replies in your threads, approvals, paused runs and reviews. Read on click; clearable. */
+/**
+ * Mentions of you, DMs, replies in your threads, alerts, paused runs and reviews. New ones arrive
+ * live (lib/notifications.tsx). Read on click; clearable.
+ */
 export function InboxPage() {
-  const api = useApi()
-  const list = useLoad((a) => a.inbox(), [])
-  useLiveReload(['now', 'records:message'], list.reload, ['run.state', 'record.changed'], 600)
-  const items = list.data ?? []
+  const { items: data, error, reload, markRead: mark } = useNotifications()
+  const list = { data, error, reload }
+  const items = data ?? []
   const unread = items.filter((i) => !i.read)
-  const mark = (q: { ids?: string[]; clear?: boolean }) => {
-    list.setData((prev) => (prev ? (q.clear ? [] : prev.map((i) => (q.ids?.includes(i.id) ? { ...i, read: true } : i))) : prev))
-    api.markInboxRead(q).catch(() => list.reload())
-  }
   return (
     <Page
       title="Inbox"

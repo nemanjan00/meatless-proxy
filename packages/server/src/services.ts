@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { createChat, createChatAttachments, type Chat, type ChatAttachments } from '@mp/chat'
+import { createChat, createChatAttachments, type Chat, type ChatAttachments, type ImageDescriber } from '@mp/chat'
 import { createChecklists, type Checklists } from '@mp/checklists'
 import type { ContainerRuntime } from '@mp/containers'
 import { dockerRuntime } from '@mp/containers-docker'
@@ -42,6 +42,7 @@ import { createUsage, type UsageService } from '@mp/usage'
 import pg from 'pg'
 import type { Config } from './config.ts'
 import { imageLoader, resolveVision, type VisionSettings } from './attachments.ts'
+import { buildDescriber, describedEvent, enqueueDescriptions } from './image-descriptions.ts'
 import { createControl, type Control } from './control.ts'
 import { wireMcpNotifications } from './mcp-in.ts'
 import { enqueueOnIngest, withJobDefaults, QUEUES } from './queues.ts'
@@ -113,6 +114,8 @@ export interface Services {
   attachments: ChatAttachments
   /** Whether the model can see images (MODEL_VISION), and the image limits. */
   vision: VisionSettings
+  /** Saved image descriptions (IMAGE_DESCRIBE, src/image-descriptions.ts). */
+  describer: ImageDescriber
   tools: ToolRegistry
   usage: UsageService
   settings: Settings
@@ -242,12 +245,15 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     logger: logger.child({ component: 'attachments' }),
     limits: { maxBytes: config.CHAT_ATTACHMENT_MAX_BYTES, maxPerMessage: config.CHAT_ATTACHMENTS_PER_MESSAGE },
   })
+  // Set once vision is known (below); `upload` mode queues a describe job per posted image.
+  let describer: ImageDescriber | null = null
   const chat = createChat({
     records,
     events,
     clock,
     bus,
     attachments,
+    onAttachments: enqueueDescriptions(queue, () => describer, logger),
     async resolveName(name) {
       const emp = await directory.employees.byHandle(name)
       if (emp) return { type: 'employee', employeeId: emp.id, contactId: emp.data.contactId }
@@ -335,12 +341,17 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
     resolvers: [channelMembers],
-    // Employees whose sessions already posted in a chat thread hear a person's untagged follow-up there.
+    // Chat events show the saved descriptions of their images (made after the event was stored).
+    prepareEvent: describedEvent(attachments),
+    // Employees in a chat thread (their sessions posted in it, or it tagged them, e.g. an alert) hear a person's
+    // untagged follow-up there.
     participantsOf: async (event) => {
-      const p = event.data.payload as { threadId?: unknown } | undefined
+      const p = event.data.payload as { threadId?: unknown; messageId?: unknown } | undefined
       if (event.data.source !== 'chat' || event.data.type !== 'message.replied' || typeof p?.threadId !== 'string') return []
       const employees = new Set<string>()
       for (const m of await chat.thread(p.threadId)) {
+        if (m.id === p.messageId) continue
+        for (const tag of m.data.tags) if (tag.type === 'employee' || tag.type === 'session') employees.add(tag.employeeId)
         if (m.data.author.kind !== 'session') continue
         const employeeId = (await sessions.get(m.data.author.id))?.data.employeeId
         if (employeeId) employees.add(employeeId)
@@ -362,6 +373,19 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   })
 
   const vision = await resolveVision(config, model, logger)
+  describer = buildDescriber({
+    records,
+    attachments,
+    model,
+    sessions,
+    usage,
+    clock,
+    bus,
+    logger: logger.child({ component: 'describe' }),
+    mode: config.IMAGE_DESCRIBE,
+    modelName: config.IMAGE_DESCRIBE_MODEL,
+    vision,
+  })
   const runner = createRunner({
     sessions,
     tools,
@@ -440,6 +464,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     chat,
     attachments,
     vision,
+    describer,
     tools,
     usage,
     settings,
@@ -485,6 +510,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       usage,
       attachments,
       vision: { enabled: vision.enabled, maxSide: vision.maxSide, maxBytes: vision.maxBytes },
+      describer,
       git,
       ...(containers ? { containers } : {}),
       ...(sandbox ? { sandbox } : {}),

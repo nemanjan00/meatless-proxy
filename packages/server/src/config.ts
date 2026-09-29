@@ -198,6 +198,21 @@ export const configSchema = z.object({
     .int()
     .min(1024)
     .default(5 * 1024 * 1024),
+  /**
+   * Saved image descriptions (one model call per image, reused everywhere): `view` (default) describes an
+   * image on its first image.view, `upload` in the background when a message with images is posted,
+   * `off` never. Needs a model that can see images (MODEL_VISION).
+   */
+  IMAGE_DESCRIBE: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? '').trim().toLowerCase() || 'view')
+    .pipe(z.enum(['view', 'upload', 'off'])),
+  /** The model for describe calls, on the same provider. Default: MODEL. */
+  IMAGE_DESCRIBE_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
   /** Chat attachments: bytes per image (PNG, JPEG, GIF, WebP). */
   CHAT_ATTACHMENT_MAX_BYTES: z.coerce
     .number()
@@ -332,6 +347,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     defaultEgress: c.DEFAULT_EGRESS.length ? c.DEFAULT_EGRESS : 'none',
     files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
     vision: c.MODEL_VISION,
+    imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },
     sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),
     bootstrap: c.MP_BOOTSTRAP,

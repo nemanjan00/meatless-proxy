@@ -792,11 +792,17 @@ export interface ChatThread {
 
 // ─── Inbox ──────────────────────────────────────────────────────────────────
 
-/** `GET /api/inbox`: things that need a person. */
+/**
+ * `GET /api/inbox`: things that need a person. The same items arrive live on `person:<contactId>`
+ * (topic `inbox.item`) as they happen.
+ */
 export interface InboxItem {
   id: string
-  /** `reply`: someone answered in a thread you're in. */
-  type: 'mention' | 'reply' | 'approval' | 'paused_run' | 'review' | 'limit'
+  /**
+   * `reply`: someone answered in a thread you're in. `dm`: a message in a DM you're in. `alert`: an
+   * alert in `#alerts` that tags you. `waiting`: a run you asked for waits on a reply.
+   */
+  type: 'mention' | 'reply' | 'dm' | 'alert' | 'approval' | 'paused_run' | 'waiting' | 'review' | 'limit'
   title: string
   /** One line of context. */
   detail?: string
@@ -807,6 +813,10 @@ export interface InboxItem {
   channelId?: string
   threadId?: string
   employee?: EmployeeSummary
+  /** Who wrote it, for chat items. */
+  author?: MessageData['author']
+  /** Where it happened, for chat items: the channel's name, and whether it is a DM. */
+  channel?: { id: string; name: string; dm: boolean }
 }
 
 // ─── Usage ──────────────────────────────────────────────────────────────────

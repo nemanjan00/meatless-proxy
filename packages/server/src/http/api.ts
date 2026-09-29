@@ -31,7 +31,17 @@ import {
 import type { NowTracker } from '../live.ts'
 
 /** Kinds the generic records API never exposes: secrets and credentials, and MCP servers (their own admin API). */
-const HIDDEN_KINDS = new Set<string>(['secret', ...AUTH_KINDS, 'mcp_server', 'mcp_oauth_state'])
+// A person's inbox state and notification preferences are theirs alone (src/inbox.ts, src/notification-prefs.ts).
+const HIDDEN_KINDS = new Set<string>([
+  'secret',
+  ...AUTH_KINDS,
+  'mcp_server',
+  'mcp_oauth_state',
+  'inbox_state',
+  'notification_prefs',
+])
+// Chat images' metadata and saved descriptions have their own API, with the image's visibility (a DM's images are private).
+for (const k of ['chat_attachment', 'image_description']) HIDDEN_KINDS.add(k)
 /** Kinds whose records can belong to a DM (and are then visible to its members only). */
 const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 
@@ -576,7 +586,10 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json({ items, paused: (await s.control.state()).paused, counts } satisfies Api.NowSnapshot)
   })
 
-  app.get('/api/inbox', async (c) => c.json((await inbox.items(me_(c), views())) satisfies Api.InboxItem[]))
+  app.get('/api/inbox', async (c) => {
+    const viewer = { contactId: me_(c), admin: principalOf(c).access === 'admin' }
+    return c.json((await inbox.items(viewer, views())) satisfies Api.InboxItem[])
+  })
 
   app.post('/api/inbox/read', async (c) => {
     const body = await jsonBody<{ ids?: unknown; clear?: unknown }>(c)

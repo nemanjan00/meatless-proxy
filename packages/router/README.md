@@ -46,6 +46,9 @@ exactly its trigger through `events.triggers.match`.
   with when it arrived, `eventTime(receivedAt)`, e.g. `Tue 2026-09-29 12:07 UTC`,
   so sessions know the time without a clock in the (cached) system prompt.
 - `beforeDeliver` and `afterFork` (hook points), `QUEUES`.
+- `prepareEvent(event)` (an option) brings an event up to date just before it
+  is rendered for a session, e.g. the saved descriptions of a chat message's
+  images. The stored event is left alone; on an error, it's rendered as stored.
 
 ## Tests
 

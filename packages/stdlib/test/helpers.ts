@@ -1,5 +1,5 @@
 import { ManualClock, NotFoundError, createEventBus, createHooks, memoryLogger, newId, type Json } from '@mp/core'
-import { createChat, createChatAttachments } from '@mp/chat'
+import { createChat, createChatAttachments, createImageDescriber, type ImageDescribeMode } from '@mp/chat'
 import { createChecklists } from '@mp/checklists'
 import { fakeRuntime } from '@mp/containers'
 import { createDirectory } from '@mp/directory'
@@ -7,6 +7,7 @@ import { createEvents } from '@mp/events'
 import { createFiles } from '@mp/files'
 import { fakeGitCache } from '@mp/git'
 import { createMemory } from '@mp/memory'
+import type { ModelClient } from '@mp/model'
 import { createDocs, createRecords } from '@mp/records'
 import { createSandbox, fakeSandboxRuntime } from '@mp/sandbox'
 import { createSessions } from '@mp/sessions'
@@ -56,6 +57,9 @@ export interface StackOptions {
   enqueueRun?: (runId: string) => Promise<void>
   /** Whether the model can see images (image.view). Default on. */
   vision?: boolean
+  /** Saved image descriptions, made by this model (e.g. a scripted one). Default: none. */
+  describeModel?: ModelClient
+  describeMode?: ImageDescribeMode
 }
 
 export async function stack(opts: StackOptions = {}) {
@@ -98,6 +102,16 @@ export async function stack(opts: StackOptions = {}) {
   const woken: string[] = []
   const worktreeFs = memoryWorktreeFs((root, rel, content) => git.writeFile(root, rel, content))
 
+  const describer = opts.describeModel
+    ? createImageDescriber({
+        records,
+        attachments,
+        model: opts.describeModel,
+        vision: opts.vision ?? true,
+        clock,
+        ...(opts.describeMode ? { mode: opts.describeMode } : {}),
+      })
+    : undefined
   const deps: StdlibDeps = {
     records,
     docs,
@@ -112,6 +126,7 @@ export async function stack(opts: StackOptions = {}) {
     usage,
     attachments,
     vision: { enabled: opts.vision ?? true },
+    ...(describer ? { describer } : {}),
     ...(opts.git === false ? {} : { git }),
     ...(opts.containers === false ? {} : { containers }),
     ...(opts.sandbox === false ? {} : { sandbox }),
@@ -230,6 +245,7 @@ export async function stack(opts: StackOptions = {}) {
     skills,
     files,
     attachments,
+    describer,
     checklists,
     usage,
     git,

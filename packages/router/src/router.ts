@@ -118,6 +118,12 @@ export interface RouterOptions {
   humanPriority?: number
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
   isHuman?: (event: MpEvent) => Promise<boolean>
+  /**
+   * Brings an event up to date just before it is rendered for a session, e.g. adds the saved
+   * descriptions of a chat message's images to its text. The stored event is left alone. Errors are
+   * logged, and the event is rendered as stored.
+   */
+  prepareEvent?: (event: MpEvent) => Promise<MpEvent>
 }
 
 export interface EventTags {
@@ -322,6 +328,16 @@ export function createRouter(opts: RouterOptions): Router {
     }
   }
 
+  const prepared = async (event: MpEvent): Promise<MpEvent> => {
+    if (!opts.prepareEvent) return event
+    try {
+      return await opts.prepareEvent(event)
+    } catch (err) {
+      logger.warn('event could not be prepared; rendered as stored', { eventId: event.id, err: errorMessage(err) })
+      return event
+    }
+  }
+
   const eventEntry = (event: MpEvent, d: Delivery): { kind: 'event'; content: Json; meta: Record<string, Json> } => ({
     kind: 'event',
     content: {
@@ -344,6 +360,7 @@ export function createRouter(opts: RouterOptions): Router {
   const deliver = async (event: MpEvent, d: Delivery): Promise<DeliveryOutcome> => {
     const decision = opts.hooks ? await opts.hooks.decide(beforeDeliver, { event, delivery: d }) : undefined
     if (decision && 'skip' in decision) return { type: 'skipped', sessionId: d.sessionId, reason: decision.skip }
+    const shown = await prepared(event)
 
     let sessionId = d.sessionId
     const session = await opts.sessions.get(sessionId)
@@ -384,7 +401,7 @@ export function createRouter(opts: RouterOptions): Router {
           eventId: event.id,
           expectedToAct: d.expectedToAct,
           trusted: d.trusted,
-          text: renderEvent(event),
+          text: renderEvent(shown),
           source: event.data.source,
           type: event.data.type,
         })
@@ -416,7 +433,7 @@ export function createRouter(opts: RouterOptions): Router {
       cause: { type: 'event', eventId: event.id, note: d.reason },
       ...(event.data.actorContactId ? { requesterId: event.data.actorContactId } : {}),
       priority: d.priority,
-      input: [...(await inputFor()), eventEntry(event, d)],
+      input: [...(await inputFor()), eventEntry(shown, d)],
     })
     if (decision && 'pause' in decision) {
       await opts.sessions.transition(run.id, 'queued', 'paused', { pauseReason: decision.pause })

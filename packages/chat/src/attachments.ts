@@ -64,6 +64,17 @@ export const attachmentSchema: KindSchema = {
     { name: 'createdAt', type: 'timestamp', required: true },
     { name: 'channelId', type: 'ref', ref: 'channel', description: 'Set when a message claims it.' },
     { name: 'messageId', type: 'ref', ref: 'message', description: 'The message it belongs to; unset while pending.' },
+    {
+      name: 'description',
+      type: 'string',
+      description:
+        'What the image shows, in 1-3 sentences, made by the model (or edited by a person). Untrusted: derived from the image.',
+    },
+    { name: 'visibleText', type: 'string', description: 'Important text visible in the image, verbatim (capped).' },
+    { name: 'describedAt', type: 'timestamp' },
+    { name: 'describedBy', type: 'string', description: 'The model that made the description.' },
+    { name: 'descriptionEditedBy', type: 'object', fields: refFields, description: 'Set when a person edited the description.' },
+    { name: 'descriptionEditedAt', type: 'timestamp' },
   ],
 }
 
@@ -78,6 +89,12 @@ export interface AttachmentData extends Record<string, unknown> {
   createdAt: string
   channelId?: string
   messageId?: string
+  description?: string
+  visibleText?: string
+  describedAt?: string
+  describedBy?: string
+  descriptionEditedBy?: Ref
+  descriptionEditedAt?: string
 }
 export type AttachmentRecord = StoredRecord<AttachmentData>
 
@@ -89,6 +106,12 @@ export interface Attachment {
   size: number
   width?: number
   height?: number
+  /** What the image shows (a saved description, see `ImageDescriber`). Derived from the image: untrusted. */
+  description?: string
+  /** Important text visible in the image, verbatim. */
+  visibleText?: string
+  /** Set when a person edited the description. */
+  descriptionEditedBy?: Ref
 }
 
 export interface UploadInput {
@@ -139,6 +162,11 @@ export const attachmentView = (a: AttachmentRecord): Attachment => ({
   size: a.data.size,
   ...(a.data.width ? { width: a.data.width } : {}),
   ...(a.data.height ? { height: a.data.height } : {}),
+  ...(a.data.description ? { description: a.data.description } : {}),
+  ...(a.data.description && a.data.visibleText ? { visibleText: a.data.visibleText } : {}),
+  ...(a.data.description && a.data.descriptionEditedBy
+    ? { descriptionEditedBy: { kind: a.data.descriptionEditedBy.kind, id: a.data.descriptionEditedBy.id } }
+    : {}),
 })
 
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
@@ -155,10 +183,22 @@ export function cleanAttachmentName(raw: string | undefined, mime: string): stri
   return base && base !== '.' && base !== '..' ? base : `image.${EXT[mime] ?? 'bin'}`
 }
 
-/** How an event or a tool shows an attachment to the model, e.g. `[image: chart.png 800x600, attachment att_…]`. */
-export function attachmentLine(a: Attachment): string {
+/** A description as the model sees it: one line, quoted (JSON string escaping), at most `max` characters. */
+export function quoteForModel(s: string, max: number): string {
+  const one = s.replace(/\s+/g, ' ').trim()
+  return JSON.stringify(one.length > max ? `${one.slice(0, max - 1)}…` : one)
+}
+
+/**
+ * How an event or a tool shows an attachment to the model, e.g. `[image: chart.png 800x600, attachment att_…]`,
+ * or with its saved description `[image: chart.png 800x600, attachment att_…: "A bar chart of …"]`. With
+ * `text`, the text visible in it follows (`; text: "…"`).
+ */
+export function attachmentLine(a: Attachment, o: { text?: boolean } = {}): string {
   const size = a.width && a.height ? ` ${a.width}x${a.height}` : ''
-  return `[image: ${a.name}${size}, attachment ${a.id}]`
+  const desc = a.description ? `: ${quoteForModel(a.description, 600)}` : ''
+  const text = o.text && a.description && a.visibleText ? `; text: ${quoteForModel(a.visibleText, 400)}` : ''
+  return `[image: ${a.name}${size}, attachment ${a.id}${desc}${text}]`
 }
 
 const formatBytes = (n: number) =>

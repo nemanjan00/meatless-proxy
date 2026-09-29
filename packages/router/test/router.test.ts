@@ -1,5 +1,5 @@
 import { ManualClock, createEventBus, createHooks, type Json } from '@mp/core'
-import { SCHEDULE_FIRED, SCHEDULE_SOURCE, createEvents } from '@mp/events'
+import { SCHEDULE_FIRED, SCHEDULE_SOURCE, createEvents, type MpEvent } from '@mp/events'
 import { memoryQueue } from '@mp/queue'
 import { createRecords } from '@mp/records'
 import { createSessions } from '@mp/sessions'
@@ -7,7 +7,13 @@ import { memoryStore } from '@mp/store'
 import { describe, expect, it } from 'vitest'
 import { beforeDeliver, runInput, chatTags, createRouter, eventTime, renderEvent, type RecipientResolver } from '../src/index.ts'
 
-async function setup(opts: { resolvers?: RecipientResolver[]; participantsOf?: (e: any) => Promise<string[]> } = {}) {
+async function setup(
+  opts: {
+    resolvers?: RecipientResolver[]
+    participantsOf?: (e: any) => Promise<string[]>
+    prepareEvent?: (e: MpEvent) => Promise<MpEvent>
+  } = {},
+) {
   const bus = createEventBus()
   const records = createRecords({ store: memoryStore({ bus }) })
   const sessions = createSessions({ records, bus })
@@ -31,6 +37,7 @@ async function setup(opts: { resolvers?: RecipientResolver[]; participantsOf?: (
     procedureContext: async (id) => (id === 'prc_access' ? procedureCtx.id : null),
     ...(opts.resolvers ? { resolvers: opts.resolvers } : {}),
     ...(opts.participantsOf ? { participantsOf: opts.participantsOf } : {}),
+    ...(opts.prepareEvent ? { prepareEvent: opts.prepareEvent } : {}),
   })
   const queued: string[] = []
   queue.process<{ runId: string }>('runs', async (j) => void queued.push(j.data.runId))
@@ -434,5 +441,32 @@ describe('reactions', () => {
     const fork = await t.sessions.require(res.deliveries[0]!.outcome.sessionId)
     expect(fork.data.parent?.sessionId).toBe(ctx.id)
     expect((await t.events.triggers.get(scheduled.id))!.data.fired).toBe(1)
+  })
+})
+
+describe('prepareEvent', () => {
+  it('renders the prepared event (e.g. with image descriptions), leaves the stored one alone, and falls back on errors', async () => {
+    let fail = false
+    const t = await setup({
+      prepareEvent: async (e) => {
+        if (fail) throw new Error('lookup failed')
+        return { ...e, data: { ...e.data, text: `${e.data.text} (prepared)` } }
+      },
+    })
+    const work = await t.mk('work')
+    await t.events.subscriptions.subscribe(work.id, { system: 'mp', id: 'msg_1' }, { primary: true })
+    const ev = await t.ingest({ source: 'chat', type: 'message.replied', subject: { system: 'mp', id: 'msg_1' }, text: 'hello' })
+    const res = await t.router.route(ev.id)
+    const runId = (res.deliveries[0]!.outcome as any).runId
+    expect((await firstEvent(t.sessions, runId)).text).toMatch(/hello \(prepared\)$/)
+    expect((await t.events.require(ev.id)).data.text).toBe('hello')
+    // A failing prepareEvent: rendered as stored.
+    fail = true
+    const other = await t.mk('other')
+    const ev2 = await t.ingest({ source: 'chat', type: 'message.replied', subject: { system: 'mp', id: 'msg_2' }, text: 'again' })
+    await t.events.subscriptions.subscribe(other.id, { system: 'mp', id: 'msg_2' }, { primary: true })
+    const res2 = await t.router.route(ev2.id)
+    const run2 = (res2.deliveries[0]!.outcome as any).runId
+    expect((await firstEvent(t.sessions, run2)).text).toMatch(/\nagain$/)
   })
 })
