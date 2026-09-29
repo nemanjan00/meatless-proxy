@@ -39,6 +39,14 @@ module to it:
 | procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
 
+## Terminology
+
+**Session** and **context** mean the same thing for the most part, and this
+spec uses both words. "Context" tends to be used for a long-lived session that
+work is routed to or forked from, such as an intake context or a
+[procedure context](#procedure-contexts). It is still an ordinary session:
+everything in [Sessions](#sessions) applies to it.
+
 ## Structure
 
 This document is written incrementally. Common harness features come first,
