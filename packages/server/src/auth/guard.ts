@@ -318,8 +318,10 @@ export const bearerOf = (c: Context): string | null => {
 }
 
 /**
- * The origin a cookie-authenticated unsafe request must come from: `PUBLIC_URL`,
- * else the request's own host.
+ * The origin a cookie-authenticated unsafe request must come from: `PUBLIC_URL`, or the request's
+ * own host (same-origin). The second keeps the UI working when `PUBLIC_URL` names another address
+ * (a wrong tunnel, a second hostname): a cross-site page's origin never matches the harness's host,
+ * previews run on another port or domain, and a rebound hostname never gets the harness's cookie.
  */
 function originAllowed(c: Context, s: Services, origin: string): boolean {
   let o: URL
@@ -328,7 +330,7 @@ function originAllowed(c: Context, s: Services, origin: string): boolean {
   } catch {
     return false
   }
-  if (s.config.PUBLIC_URL) return o.origin === new URL(s.config.PUBLIC_URL).origin
+  if (s.config.PUBLIC_URL && o.origin === new URL(s.config.PUBLIC_URL).origin) return true
   const host = c.req.header('host') ?? new URL(c.req.url).host
   return o.host === host
 }

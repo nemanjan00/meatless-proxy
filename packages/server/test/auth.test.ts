@@ -252,7 +252,7 @@ describe('CSRF', () => {
     expect(r.status).toBe(204)
   })
 
-  it('checks against PUBLIC_URL when it is set', async () => {
+  it("accepts PUBLIC_URL and the request's own host, and refuses other sites", async () => {
     const p = await make({ env: { PUBLIC_URL: 'https://mp.example.com' } })
     const ana = await person(p, 'Ana Example', 'member')
     const { cookies } = await login(p, (await createLoginLink(p.a.services, ana)).token)
@@ -263,7 +263,9 @@ describe('CSRF', () => {
         body: JSON.stringify({ scope: 'chn_x' }),
       })
     expect((await req('https://mp.example.com')).status).toBe(204)
-    expect((await req('http://mp.local')).status).toBe(403)
+    // Same-origin still works when PUBLIC_URL names another address (e.g. a wrong tunnel).
+    expect((await req('http://mp.local')).status).toBe(204)
+    expect((await req('https://evil.example.net')).status).toBe(403)
   })
 })
 
