@@ -39,6 +39,7 @@ export interface Revision<T = Record<string, unknown>> {
 /**
  * A condition on a record. `field` is `id`, `key`, `version`, `createdAt`,
  * `updatedAt`, or a dot path into `data` (e.g. `status`, `scope.projectId`).
+ * Anything else, including `kind`, is a path into `data` (queries are per kind anyway).
  */
 export type Condition =
   | { field: string; op: 'eq' | 'ne'; value: Json }

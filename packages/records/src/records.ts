@@ -77,6 +77,11 @@ export interface Records {
   ): Promise<LinkedRecord<T>[]>
   /** Records whose text fields mention `ref` with `[[kind:id]]`. */
   backlinks(ref: Ref): Promise<StoredRecord[]>
+  /**
+   * Runs `fn` with a `Records` bound to one store transaction: everything it
+   * writes commits together or not at all. Nested calls reuse the transaction.
+   */
+  transaction<T>(fn: (tx: Records) => Promise<T>): Promise<T>
 }
 
 export interface RecordsOptions {
@@ -114,9 +119,10 @@ export function createKindRegistry(): KindRegistry {
  * kept in sync as `mentions` links, so backlinks are a link query.
  */
 export function createRecords(opts: RecordsOptions): Records {
-  const store = opts.store
-  const kinds = createKindRegistry()
+  return buildRecords(opts.store, createKindRegistry())
+}
 
+function buildRecords(store: Store, kinds: KindRegistry): Records {
   const textFields = (schema: KindSchema) =>
     allFields(schema)
       .filter((f) => f.type === 'text')
@@ -235,6 +241,8 @@ export function createRecords(opts: RecordsOptions): Records {
       if (dir !== 'out') await collect(await store.links.query({ to: ref, ...(role ? { role } : {}) }), (l) => l.from)
       return out
     },
+
+    transaction: (fn) => store.transaction((tx) => fn(buildRecords(tx, kinds))),
 
     async backlinks(ref) {
       const ls = await store.links.query({ to: ref, role: MENTIONS })

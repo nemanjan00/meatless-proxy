@@ -165,6 +165,12 @@ export function storeContract(name: string, make: (ctx: ContractContext) => Prom
         expect(await store.records.kinds()).toEqual(['other', 'person'])
       })
 
+      it('treats `kind` as a data field (queries are per kind)', async () => {
+        await store.records.create('memory', { kind: 'fact', n: 1 })
+        await store.records.create('memory', { kind: 'preference', n: 2 })
+        expect((await store.records.query<any>('memory', { where: { kind: 'fact' } })).items.map((r) => r.data.n)).toEqual([1])
+      })
+
       it('orders by top-level fields', async () => {
         const a = await store.records.create('t', { n: 1 })
         const b = await store.records.create('t', { n: 2 })

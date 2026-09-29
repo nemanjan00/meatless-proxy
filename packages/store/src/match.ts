@@ -8,7 +8,7 @@ export function normalizeWhere(where: Where | undefined): Condition[] {
   return Object.entries(where).map(([field, value]) => ({ field, op: 'eq', value }) as Condition)
 }
 
-const TOP = new Set(['id', 'key', 'kind', 'version', 'createdAt', 'updatedAt'])
+const TOP = new Set(['id', 'key', 'version', 'createdAt', 'updatedAt'])
 
 export function fieldValue(record: StoredRecord<any>, field: string): unknown {
   if (TOP.has(field)) return (record as unknown as Record<string, unknown>)[field]

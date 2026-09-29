@@ -140,3 +140,25 @@ describe('docs', () => {
     expect(await docs.forOwner(owner, 'other')).toEqual([])
   })
 })
+
+describe('records.transaction', () => {
+  it('commits or rolls back several record calls together', async () => {
+    const records = createRecords({ store: memoryStore() })
+    records.kinds.define(contact)
+    records.kinds.define(project)
+    await expect(
+      records.transaction(async (tx) => {
+        const a = await tx.create('contact', { name: 'Ana' })
+        const p = await tx.create('project', { name: 'P' })
+        await tx.link({ kind: 'contact', id: a.id }, { kind: 'project', id: p.id }, 'owner')
+        throw new Error('nope')
+      }),
+    ).rejects.toThrow('nope')
+    expect((await records.query('contact')).total).toBe(0)
+    const ok = await records.transaction(async (tx) => {
+      const a = await tx.create('contact', { name: 'Bob' })
+      return tx.transaction(async (inner) => inner.update('contact', a.id, { bio: 'nested' }))
+    })
+    expect((await records.get<any>('contact', ok.id))?.data.bio).toBe('nested')
+  })
+})

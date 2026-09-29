@@ -30,14 +30,13 @@ const iso = (col: string) => `to_char(${col} at time zone 'UTC', 'YYYY-MM-DD"T"H
 
 const TOP: Record<string, string> = {
   id: 'to_jsonb(r.id)',
-  kind: 'to_jsonb(r.kind)',
   key: `coalesce(to_jsonb(r.key), 'null'::jsonb)`,
   version: 'to_jsonb(r.version)',
   createdAt: `to_jsonb(${iso('r.created_at')})`,
   updatedAt: `to_jsonb(${iso('r.updated_at')})`,
 }
 
-const TEXT_COLS: Record<string, string> = { id: 'r.id', kind: 'r.kind', key: 'r.key' }
+const TEXT_COLS: Record<string, string> = { id: 'r.id', key: 'r.key' }
 
 /**
  * A field as a `jsonb` expression: top-level fields are converted, anything
@@ -104,7 +103,6 @@ export function whereSql(kind: string, where: Where | undefined, p: Params, text
 
 const ORDER_COLS: Record<string, string> = {
   id: 'r.id collate "C"',
-  kind: 'r.kind collate "C"',
   key: 'r.key collate "C"',
   version: 'r.version',
   createdAt: 'r.created_at',
