@@ -338,3 +338,39 @@ describe('chat composer', () => {
     expect(document.activeElement).toBe(box)
   })
 })
+
+describe('thread panel width', () => {
+  it('resizes with the keyboard and by dragging, stays within bounds and is remembered', async () => {
+    const { usePanelWidth } = await import('../src/hooks/use-panel-width.ts')
+    localStorage.removeItem('test.width')
+    function Panel() {
+      const { width, handleProps } = usePanelWidth('test.width', { initial: 380, min: 300, max: 600 })
+      return (
+        <div data-testid="panel" style={{ width }}>
+          {/* biome-ignore lint/a11y/useSemanticElements: mirrors the thread panel's resize handle */}
+          <div {...handleProps} role="separator" aria-label="Resize" />
+        </div>
+      )
+    }
+    const { unmount } = render(<Panel />)
+    const handle = screen.getByRole('separator')
+    const panel = screen.getByTestId('panel')
+    expect(panel.style.width).toBe('380px')
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(panel.style.width).toBe('396px')
+    fireEvent.keyDown(handle, { key: 'End' })
+    expect(panel.style.width).toBe('300px')
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(panel.style.width).toBe('300px')
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500, pointerId: 1 })
+    fireEvent.pointerMove(window, { clientX: 400, pointerId: 1 })
+    fireEvent.pointerUp(window, { pointerId: 1 })
+    fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 })
+    expect(panel.style.width).toBe('400px')
+    unmount()
+    render(<Panel />)
+    expect(screen.getByTestId('panel').style.width).toBe('400px')
+    fireEvent.doubleClick(screen.getByRole('separator'))
+    expect(screen.getByTestId('panel').style.width).toBe('380px')
+  })
+})

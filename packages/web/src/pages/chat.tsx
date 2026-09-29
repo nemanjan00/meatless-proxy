@@ -25,6 +25,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from '@/components/ui/input.tsx'
 import { Kbd } from '@/components/ui/kbd.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
+import { usePanelWidth } from '@/hooks/use-panel-width.ts'
 import { useApi, useLive, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { Can, ReadOnlyNote, useAuth } from '@/lib/auth.tsx'
 import {
@@ -364,11 +365,29 @@ function ThreadPanel({
   )
   const actions = useMessageActions(onChange)
   useMarkRead(threadId, thread.data?.replies.length ?? 0, onRead)
+  const { width, handleProps } = usePanelWidth('mp.chat.threadWidth', {
+    initial: 380,
+    min: 300,
+    max: 900,
+    // The app sidebar and the channel list, plus room for the channel itself.
+    reserve: 840,
+  })
   return (
     <aside
-      className="flex shrink-0 flex-col border-l bg-background max-md:absolute max-md:inset-0 max-md:z-20 md:w-[380px]"
+      className="relative flex shrink-0 flex-col border-l bg-background max-md:absolute max-md:inset-0 max-md:z-20 max-md:w-auto!"
+      style={{ width }}
       data-testid="thread"
     >
+      {/* biome-ignore lint/a11y/useSemanticElements: a focusable, draggable resize handle, not a rule */}
+      <div
+        {...handleProps}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize thread"
+        title="Drag to resize, double-click to reset"
+        className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors hover:after:bg-ring/60 focus-visible:after:bg-ring max-md:hidden"
+        data-testid="thread-resize"
+      />
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4">
         <span className="font-medium">Thread</span>
         <Button variant="ghost" size="icon-xs" className="ml-auto" onClick={onClose} aria-label="Close thread">
