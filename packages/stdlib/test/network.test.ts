@@ -53,6 +53,27 @@ describe('networkFor', () => {
   })
 })
 
+describe('the deployment default network (DEFAULT_NETWORK)', () => {
+  it('applies to an employee with no setting of its own, and never over one it has', () => {
+    expect(networkFor({ defaultNetwork: 'direct', projectAllow: ['pypi.org'] })).toMatchObject({
+      direct: true,
+      source: 'employee-direct',
+    })
+    expect(networkFor({ defaultNetwork: 'none' }).allow).toEqual([])
+    expect(networkFor({ defaultNetwork: 'project', projectAllow: ['pypi.org'] })).toMatchObject({
+      allow: ['pypi.org'],
+      source: 'project',
+    })
+    // The employee's own setting wins.
+    expect(networkFor({ network: 'none', defaultNetwork: 'direct' }).direct).toBeUndefined()
+    expect(networkFor({ network: { allow: ['a.example.com'] }, defaultNetwork: 'direct' })).toMatchObject({
+      allow: ['a.example.com'],
+    })
+    // Direct turned off for the deployment: no network, saying why.
+    expect(networkFor({ defaultNetwork: 'direct', direct: false })).toMatchObject({ allow: [], source: 'direct-disabled' })
+  })
+})
+
 describe('directNetworkName', () => {
   it('is <handle>-direct, cleaned, short and distinct', () => {
     expect(directNetworkName('ana')).toBe('ana-direct')

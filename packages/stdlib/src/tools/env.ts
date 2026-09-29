@@ -122,6 +122,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       projectAllow: project?.data.egress?.allow,
       fallback: kit.deps.config.defaultEgress ?? [],
       direct: kit.deps.config.directNetwork ?? true,
+      defaultNetwork: kit.deps.config.defaultNetwork,
     })
     return { net, emp, projectId: pid, project }
   }

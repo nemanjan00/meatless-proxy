@@ -1517,20 +1517,23 @@ person follows a project's contributing guide.
   - `direct`: a [direct network](#direct-network), with no proxy and no
     allowlist. The project's allowlist doesn't narrow it: it only applies to
     the proxy.
-  - `project` (the default): the project's allowlist.
+  - No setting of its own: the deployment's `DEFAULT_NETWORK`, which is
+    `direct` unless set (`project` or `none` otherwise). The owner's call:
+    with a closed default, work couldn't install its dependencies (pytest,
+    npm packages) and left test suites unrun. A direct network is
+    unrestricted and not logged, so an admin sets `project` or `none` per
+    employee (or `DEFAULT_NETWORK=project` for the deployment) where that
+    matters.
+  - `project`: the project's allowlist.
   - `{ allow: [hosts] }`: the employee's own hosts. With a project allowlist,
     only what both allow (the narrower host and port of each pair).
   - A session with no project (or a project without a list) falls back to the
     employee's own list, or else to the deployment default `DEFAULT_EGRESS`
-    (`*` unless set; `none` for no network).
-  - `['*']` allows any public host, and it is the deployment default: work has
-    to install its dependencies (npm, pip) and a closed default left test
-    suites unrun. IP literals and private, loopback and link-local addresses
-    stay blocked unless listed exactly, and every request is still logged by
-    the egress proxy. A project's allowlist or an employee's own list narrows
-    it; `DEFAULT_EGRESS=none` closes it for a deployment. The trade-off,
-    accepted deliberately: a model steered by untrusted content can reach any
-    public host, which the proxy log shows but doesn't stop.
+    (none unless set).
+  - `['*']` allows any public host. It's only ever an admin's explicit choice
+    for one employee, never a default. IP literals and private, loopback and
+    link-local addresses stay blocked unless listed exactly, and every request
+    is still logged.
   - The model can only narrow the result, with `env.up { egress }`: fewer
     hosts, or from a direct network to proxied hosts. It can never ask for a
     direct network or widen a proxied one to it.

@@ -6,7 +6,7 @@ import type { Clock, EventBus, Logger } from '@mp/core'
 import type { Checklists } from '@mp/checklists'
 import type { Chat, ChatAttachments, ImageDescriber } from '@mp/chat'
 import type { ContainerRuntime } from '@mp/containers'
-import type { Directory } from '@mp/directory'
+import type { Directory, EmployeeNetwork } from '@mp/directory'
 import type { Events } from '@mp/events'
 import type { FilesService } from '@mp/files'
 import type { GitCache, PushPolicy } from '@mp/git'
@@ -141,6 +141,8 @@ export interface StdlibConfig {
    * (`DOCKER_DIRECT_NETWORK`). Default true; false turns it into no network.
    */
   directNetwork?: boolean
+  /** The network setting of an employee that has none (`DEFAULT_NETWORK`). Default `project`. */
+  defaultNetwork?: EmployeeNetwork
   /** Environment profiles env.up offers by name (`ENV_PROFILES`). Default: `DEFAULT_ENV_PROFILES`. */
   envProfiles?: import('./env-profiles.ts').EnvProfile[]
   /**

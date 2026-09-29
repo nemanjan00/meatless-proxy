@@ -31,7 +31,8 @@ export interface NetworkDecision {
  * - `none`: never any network, whatever the project allows.
  * - `direct`: a direct network, whatever the project allows (its allowlist only applies to the proxy).
  *   With `direct: false` (the deployment's `DOCKER_DIRECT_NETWORK=false`), no network instead.
- * - `project` (the default): the project's allowlist; without one, the deployment default.
+ * - `project`: the project's allowlist; without one, the deployment default (`DEFAULT_EGRESS`).
+ * - No setting of its own: the deployment's `DEFAULT_NETWORK` (`direct` unless set), else `project`.
  * - `{ allow }`: with a project allowlist, only what both allow; without one, the employee's list.
  */
 export function networkFor(opts: {
@@ -40,6 +41,8 @@ export function networkFor(opts: {
   fallback?: string[]
   /** Whether the deployment allows direct networks. Default true. */
   direct?: boolean | undefined
+  /** The setting of an employee that has none of its own (`DEFAULT_NETWORK`). Default `project`. */
+  defaultNetwork?: EmployeeNetwork | undefined
 }): NetworkDecision {
   if (invalidNetwork(opts.network))
     return {
@@ -47,7 +50,7 @@ export function networkFor(opts: {
       source: 'employee-none',
       reason: "no network: this employee's network setting is malformed. Ask an admin to fix it on the employee's page",
     }
-  const n = opts.network ?? 'project'
+  const n = opts.network ?? opts.defaultNetwork ?? 'project'
   const project = opts.projectAllow?.length ? opts.projectAllow : undefined
   if (n === 'none')
     return {

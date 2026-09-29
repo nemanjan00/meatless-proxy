@@ -301,6 +301,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
               network: emp?.data.network,
               fallback: config.DEFAULT_EGRESS,
               direct: config.DOCKER_DIRECT_NETWORK,
+              defaultNetwork: config.DEFAULT_NETWORK,
             })
             return net.direct ? { direct: directNetworkName(emp?.key ?? id) } : net.allow
           },
@@ -619,6 +620,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         pushPolicy: { protected: ['main', 'master', 'production', 'release/**'], allow: ['mp/**'] },
         defaultEgress: config.DEFAULT_EGRESS,
         directNetwork: config.DOCKER_DIRECT_NETWORK,
+        defaultNetwork: config.DEFAULT_NETWORK,
         ...(config.ENV_PROFILES?.length ? { envProfiles: config.ENV_PROFILES } : {}),
         ...(config.ENV_DEFAULT_PROFILE ? { envDefaultProfile: config.ENV_DEFAULT_PROFILE } : {}),
         // Environments get the employee's own files at /files, when they are on disk here.
