@@ -397,9 +397,15 @@ stays the same across calls, runs and forks:
 | postgres  | the database                                                      |
 | redis     | BullMQ's queues                                                   |
 
-- The **app** container mounts the host's **Docker socket**. It uses it to
-  start and stop the [project environments](spec.md#docker-orchestration) as
-  sibling containers on the host, not nested inside itself.
+- The **app** container mounts the host's **full Docker socket**, with no
+  proxy in between. It uses it to start and stop the
+  [project environments](spec.md#docker-orchestration) as sibling containers
+  on the host, not nested inside itself.
+- This is an accepted risk: full socket access means the app has root-level
+  control of the host. That's why the host should be dedicated to the
+  harness, and why the model never gets raw Docker access. It only reaches
+  Docker through the harness's own environment tools, which set the limits,
+  networks and mounts.
 - The git cache and harness data live in volumes mounted into the app
   container.
 - Project environments get their own networks, separate from the harness's
@@ -413,9 +419,6 @@ run without it.
 
 Open questions:
 
-- Access to the Docker socket gives the app root-level control of the host.
-  Should it go through a socket proxy that only allows the calls it needs
-  (create, start, stop and remove containers, networks and volumes)?
 - How are Postgres and Redis provided in development without Docker: native
   installs, or in-process substitutes for tests (e.g. PGlite)?
 
