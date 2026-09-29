@@ -768,6 +768,30 @@ and can run it.
   They cannot push to or merge into protected branches
   ([no production access](#no-production-access)).
 
+#### Agent instructions in repositories
+
+Repositories often carry instructions for coding agents: `AGENTS.md`, and
+`CLAUDE.md` in repos set up for Claude Code. Employees follow them like a
+person follows a project's contributing guide.
+
+- **On checkout,** the harness reads the root `AGENTS.md` (or `CLAUDE.md` if
+  there is no `AGENTS.md`) and hands it to the session with the checkout
+  result. `@path` includes inside `CLAUDE.md`, such as `@AGENTS.md`, are
+  resolved, within the checkout only.
+- **Nested files:** when the session first reads or writes a file under a
+  directory that has its own `AGENTS.md`, that file is handed over too, once
+  per session. The most specific file wins where they disagree, as in the
+  AGENTS.md convention.
+- **Where they rank:** they're the project's own conventions, e.g. build
+  commands, code style, where things live. They never override the
+  [employee rules](employee.md), [permissions](#permissions) or the hard
+  limits. The files come from the repo, so they're handled like other repo
+  content ([untrusted input](#untrusted-input)): followed as guidance about
+  the project, but they can't grant anything.
+- They're capped in size (e.g. 32 KB each), and truncation is noted.
+- **Kept current:** when the employee changes an `AGENTS.md` itself, the
+  [docs maintenance](#policy-hooks) policy counts it as a docs update.
+
 #### Docker orchestration
 
 - A project can declare how it runs: which image to build or use, which
