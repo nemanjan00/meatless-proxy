@@ -420,12 +420,47 @@ and commits to itself only what it needs to remember.
 - **Traceability.** Every run records the event that started it, so the web UI
   can show a chain from event to context to child sessions.
 
+#### Subscriptions
+
+Triggers route *new* things, like a new task, to the context assigned to them.
+Once a session is working on an existing thing, it **subscribes** to that
+thing's notifications directly. Its events then skip the routing and go
+straight to the session, which keeps going.
+
+Example: a session is working on ticket PAY-123. It subscribes to PAY-123 and
+to its PR. When someone comments on the ticket, or CI fails on the PR, the
+event is delivered to that session. The intake context doesn't see it again
+and doesn't have to work out who handles it, the way a person would have to
+forward it.
+
+- **Subscribe to specific things:** a task, a chat thread, a PR, a repo branch,
+  a running environment, or another session.
+- **Delivery.** A subscribed event starts a run in the subscribed session (or
+  wakes it if it's waiting). The run continues from the session's history and
+  is committed by default, because it continues the same piece of work.
+- **Precedence.** When a subscription matches an event, it takes that event
+  instead of the general triggers, so the work isn't routed twice.
+- **Lifetime.** A subscription ends when the session unsubscribes, when the
+  session ends, or when the thing itself is closed (the ticket resolved, the PR
+  merged). Subscriptions are handed on when a session forks or passes the work
+  to another session.
+- **Any session can subscribe.** It's part of the session library, like fork
+  and loop.
+
+| Tool         | What it does                                               |
+|--------------|------------------------------------------------------------|
+| subscribe    | deliver events for a given thing directly to this session  |
+| unsubscribe  | stop receiving them                                        |
+| subscriptions | list what this session is subscribed to                   |
+
 Open questions:
 
 - What happens when events arrive faster than a context can handle them: queue
   them, run them in parallel, or batch them into one run?
-- Can a context create or change triggers itself, as part of scripting its own
-  work?
+- Besides subscriptions, can a context create or change general triggers
+  itself?
+- Can several sessions subscribe to the same thing, and if so, which one handles
+  each event?
 
 ### Memory
 
