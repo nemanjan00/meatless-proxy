@@ -81,6 +81,7 @@ module to it:
 | triggers          | [Triggers](#triggers)                         |
 | procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
+| supervision, limits | [Runaway protection](#runaway-protection)   |
 
 ## Terminology
 
@@ -643,6 +644,7 @@ The model has tools for working with sessions:
 | save template  | turn a session into a template                                |
 | wait           | block until the given children (one, some or all) finish, and return their results |
 | commit         | keep the current run: add it to the session's history          |
+| rewind         | jump back to an earlier point and append a summary of what happened since |
 
 #### Runs: ephemeral or committed
 
@@ -662,6 +664,30 @@ Every session can do both. Sessions created by a loop are usually ephemeral
 runs of one context, and a context commits a run when there is something worth
 carrying forward.
 
+#### Context management: rewind, not compaction
+
+Classic compaction summarises the whole conversation and throws the original
+away. Sessions don't do that by default. Instead, a session **rewinds**:
+
+1. It jumps back to an earlier point in its own history, e.g. the start of the
+   current task, or the last point where its context was in good shape.
+2. It appends a **summary** of everything it did after that point: what it
+   tried, what it found, what it decided, and what's still open.
+3. It carries on from there. Its active context is now the history up to that
+   point plus the summary.
+
+- **No context is lost.** Everything before the rewind point is kept word for
+  word, and everything after it is still stored in full in the database. The
+  session (or anyone in the [web UI](#web-ui)) can look up the detail behind
+  any summary.
+- **Cache-friendly.** The history up to the rewind point is unchanged, so its
+  cached prefix stays valid ([model calls](#model-calls)).
+- **Committing a summary.** A run can commit itself as a summary instead of its
+  full history. This is the same mechanism, applied at the end of a run.
+- **Real compaction only when required**, meaning when even the rewound
+  context would be too large. It is then done explicitly and recorded, and the
+  full history is still kept in the database.
+
 #### Waiting
 
 After a fork or a loop, **the parent decides whether to wait**:
@@ -679,13 +705,70 @@ Open questions:
 - What is a "point" in a session's history when forking: a message, a tool
   call, or any turn?
 - Can two sessions in a tree be merged back together?
-- Are forks limited, e.g. by depth or by how many children one loop can have?
 - Does `wait` take a timeout, and can the parent cancel children it no longer
   needs?
 - Is a run ephemeral by default and committed only on `commit`, or can a
   trigger or template set the default?
-- Can a run commit only part of itself, for example a summary instead of the
-  full history?
+- How does a session choose its rewind point: by itself, at run and task
+  boundaries, or when a context size threshold is reached?
+
+### Runaway protection
+
+Self-scripting, loops and employees chatting with each other make it easy for
+work to spread further than it should, or never stop. There are three
+protections against this.
+
+#### Supervisor
+
+A **supervisor** watches sessions for **scope creep**: work that has drifted
+beyond what was asked.
+
+- It compares what a session (or a whole tree) is doing with the task it was
+  given: the original request, the ticket, the procedure.
+- It also looks for runaway patterns: employees or sessions going back and forth
+  without making progress, loops that keep spawning, and repeated retries of the
+  same failing step.
+- When it finds something, it can flag it, pause the session or tree, or ask the
+  requester or owner whether the extra scope is wanted. Every finding is
+  recorded and shown in the [web UI](#web-ui).
+- The supervisor is a session itself, with its own triggers, and it is subject
+  to the limits below.
+
+#### Real forks go through the task system
+
+Lightweight forks and loops stay inside the harness. A **real fork**, meaning a
+separate piece of work that people should be able to see, is created as a
+**task in the task system** (e.g. Linear), such as a sub-issue of the original
+task.
+
+- The work becomes visible to people where they already track work, with an
+  owner, a status and a link back to the parent task.
+- The session doing it is linked to the task and
+  [subscribed](#subscriptions) to it.
+- Spreading work out is therefore bounded and reviewable, and can't disappear
+  into an internal tree nobody looks at.
+
+#### Configurable limits
+
+Limits are set per deployment, and can be tightened per employee, template,
+procedure or session:
+
+- fork depth and fan-out (children per loop)
+- number of sessions running at once
+- tokens and cost, per run, per session, per tree, per employee and per period
+- wall-clock time per run and per session
+- messages between employees in one thread without a person taking part
+
+When a limit is reached, the work pauses and the relevant owner or requester is
+asked whether to continue. It is never silently dropped.
+
+Open questions:
+
+- When is a fork "real", so that it gets a task in the task system: is it
+  chosen by the session, set by the template or procedure, or by a threshold
+  (e.g. expected size)?
+- Does the supervisor check continuously, at run boundaries, or on a sample?
+- Is there a global kill switch that pauses all employees at once?
 
 ### Triggers
 
