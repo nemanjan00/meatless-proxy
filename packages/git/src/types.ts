@@ -1,4 +1,4 @@
-import { DeniedError, globMatch } from '@mp/core'
+import { DeniedError, ValidationError, globMatch } from '@mp/core'
 
 export interface Author {
   name: string
@@ -36,29 +36,58 @@ export interface GitCache {
   status(path: string): Promise<{ clean: boolean; files: string[] }>
 }
 
-/** The hard rule: pushing to protected branches is never allowed, whoever asks. */
+/**
+ * A branch name git would accept that can't be abused in a refspec: no `:`, `+`, spaces,
+ * control characters, `..`, `@{`, glob characters, leading `-` or `.` components.
+ */
+export function isValidBranchName(name: string): boolean {
+  if (!name || name === '@' || name.length > 255) return false
+  if ([...name].some((ch) => ch.charCodeAt(0) <= 0x20 || ch.charCodeAt(0) === 0x7f) || /[~^:?*[\\+]/.test(name)) return false
+  if (name.includes('..') || name.includes('@{') || name.includes('//')) return false
+  if (name.startsWith('-') || name.startsWith('/') || name.endsWith('/') || name.endsWith('.')) return false
+  return name.split('/').every((c) => !c.startsWith('.') && !c.endsWith('.lock'))
+}
+
+/** The hard rule: pushing to protected branches is never allowed, whoever asks. Invalid names are denied too. */
 export function assertPushAllowed(branch: string, policy: PushPolicy): void {
   const name = branch.replace(/^refs\/heads\//, '')
+  if (!isValidBranchName(name)) throw new DeniedError(`not a valid branch name: ${JSON.stringify(branch)}`)
   if (policy.protected.some((p) => globMatch(p, name))) throw new DeniedError(`branch ${name} is protected`)
   if (!policy.allow.some((p) => globMatch(p, name))) throw new DeniedError(`pushing to ${name} is not allowed`)
 }
 
-/** `https://github.com/acme/billing.git` -> `github.com/acme/billing`. Also handles `git@host:path`. */
+/**
+ * `https://github.com/acme/billing.git` -> `github.com/acme/billing`. Also handles `git@host:path`,
+ * `ssh://`, `file://` (under `local/`) and plain paths. The result is always a safe relative path:
+ * no empty, `.` or `..` segments, and only `[A-Za-z0-9._~@:+-]` characters in each segment.
+ */
 export function mirrorKey(url: string): string {
-  let u = url.trim()
-  const scp = /^[\w.-]+@([^:]+):(.+)$/.exec(u)
-  if (scp) u = `${scp[1]}/${scp[2]}`
-  else {
+  let u = url.trim().replace(/\\/g, '/')
+  let host = ''
+  let path: string
+  const scp = /^[\w.-]+@([^:/]+):(.*)$/.exec(u)
+  if (scp) {
+    host = scp[1]!
+    path = scp[2]!
+  } else {
+    let parsed: URL | null = null
     try {
-      const parsed = new URL(u)
-      u = parsed.protocol === 'file:' ? `local${parsed.pathname}` : `${parsed.host}${parsed.pathname}`
+      parsed = /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? new URL(u) : null
     } catch {
-      u = `local/${u}`
+      parsed = null
+    }
+    if (parsed && parsed.protocol !== 'file:') {
+      host = parsed.host
+      path = parsed.pathname
+    } else {
+      host = 'local'
+      path = parsed ? parsed.pathname : u
     }
   }
-  return u
-    .replace(/\.git$/, '')
-    .replace(/\/+/g, '/')
-    .replace(/^\/|\/$/g, '')
-    .replace(/\.\.+/g, '_')
+  u = path.replace(/\/+$/, '').replace(/\.git$/, '')
+  const segments = [host.toLowerCase(), ...u.split('/')]
+    .filter((s) => s !== '' && s !== '.')
+    .map((s) => (/^\.+$/.test(s) ? '_' : s.replace(/[^\w.~@:+-]/g, '_')))
+  if (segments.length < 2) throw new ValidationError(`not a repository url: ${url}`)
+  return segments.join('/')
 }

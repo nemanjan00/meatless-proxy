@@ -1,0 +1,14 @@
+{
+  "name": "@mp/git-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "git CLI adapter for the @mp/git port: bare cache repositories, worktrees, commits and guarded pushes.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/git": "0.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@mp/containers-docker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Docker adapter (dockerode) for the @mp/containers port.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/containers": "0.0.0",
+    "@mp/core": "0.0.0",
+    "dockerode": "^5.0.1"
+  }
+}

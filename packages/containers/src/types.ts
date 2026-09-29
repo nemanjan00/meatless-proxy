@@ -1,3 +1,5 @@
+import { MpError } from '@mp/core'
+
 export interface Mount {
   hostPath: string
   containerPath: string
@@ -34,9 +36,11 @@ export interface EnvInfo {
 export interface ExecOptions {
   env?: Record<string, string>
   workdir?: string
+  /** On timeout the result has `timedOut: true` and exit code `TIMEOUT_EXIT_CODE`. */
   timeoutMs?: number
   /** Streamed output as it arrives. */
   onOutput?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
+  /** Aborting makes `exec` reject with `ExecAbortedError`. */
   signal?: AbortSignal
 }
 
@@ -56,4 +60,14 @@ export interface ContainerRuntime {
   logs(envId: string, opts?: { tail?: number }): Promise<string>
   /** Removes the environment's containers, network and volumes. Idempotent. */
   destroyEnv(envId: string): Promise<void>
+}
+
+/** Exit code reported for a command that ran out of time (like coreutils `timeout`). */
+export const TIMEOUT_EXIT_CODE = 124
+
+/** Thrown by `exec` when its `signal` is aborted. Implementations stop waiting for the command. */
+export class ExecAbortedError extends MpError {
+  constructor(message = 'exec aborted') {
+    super('aborted', message)
+  }
 }

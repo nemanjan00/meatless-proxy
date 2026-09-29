@@ -1,0 +1,15 @@
+{
+  "name": "@mp/secrets-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Secrets adapter: SecretStore values encrypted with AES-256-GCM and stored as records through @mp/store.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/secrets": "0.0.0",
+    "@mp/store": "0.0.0"
+  }
+}
