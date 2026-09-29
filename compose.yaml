@@ -1,0 +1,71 @@
+# `docker compose up` is the install. Configuration goes in .env (see .env.example).
+name: meatless-proxy
+
+services:
+  app:
+    build: .
+    image: meatless-proxy:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/meatless_proxy
+      # node-postgres reads the password from PGPASSWORD, so it isn't part of the URL.
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      REDIS_URL: redis://redis:6379
+      DOCKER_ENABLED: "true"
+      DOCKER_SOCKET: /var/run/docker.sock
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: "3000"
+      NODE_ENV: production
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - data:/data
+      # Full Docker socket access (an accepted risk, see docs/execution.md#deployment):
+      # project environments run as sibling containers on this host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The app runs as a non-root user; give it the socket's group (`stat -c %g /var/run/docker.sock`).
+    group_add:
+      - "${DOCKER_GID:-0}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    stop_grace_period: 45s
+
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: meatless_proxy
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d meatless_proxy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  data:
+  pgdata:
+  redisdata:

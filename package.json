@@ -22,7 +22,8 @@
     "migrate": "tsx packages/server/src/migrate.ts",
     "seed": "tsx packages/server/src/seed-cli.ts",
     "lint": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "token": "tsx packages/server/src/token-cli.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",

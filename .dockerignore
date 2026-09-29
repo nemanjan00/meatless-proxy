@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.data
+.env
+.env.*
+!.env.example
+dist
+**/dist
+coverage
+.git
+.github
+*.log
+.DS_Store
