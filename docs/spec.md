@@ -114,7 +114,8 @@ Core fields:
 | `status`      | string                        | e.g. active / maintenance / sunset     |
 | `owner`       | contact id                    | the person accountable for the project; a view of the [links](#links-between-contacts-and-projects) |
 | `members`     | list of {contact id, role}    | role on this project, e.g. `reviewer`; a view of the links |
-| `links`       | list of {system, ref}         | repos, task boards, chat channels      |
+| `repositories`| list of repository            | see [git repositories](#git-repositories) |
+| `links`       | list of {system, ref}         | task boards, chat channels, other      |
 
 Extension works the same way as for contacts: a deployment can declare extra
 fields with a name, a type and a description, and the core fields can't be
@@ -176,6 +177,55 @@ Open questions:
 - When a contact leaves the company, are their links deleted, or kept and
   marked as past?
 - Is the set of roles fixed, or can each deployment define its own?
+
+### Project code and runtime
+
+Beyond records and docs, the harness has access to each project's actual code
+and can run it.
+
+#### Git repositories
+
+- A project links to one or more git repositories, each with a remote URL, a
+  default branch, and an optional path within the repo (for monorepos).
+- The harness keeps a **local cache** of every linked repository, so reading
+  code doesn't need a network round trip and a fresh clone isn't needed for each
+  task.
+- The cache is kept up to date by fetching: on a schedule, when a task starts,
+  and when the task system or chat reports new changes (e.g. a push or a merged
+  PR).
+- Each task works in its **own checkout** (for example a git worktree taken
+  from the cache), so concurrent tasks can't interfere with each other or with
+  the cache.
+- Access is scoped: the harness uses credentials that allow what the project
+  needs (read by default, write only where tasks need it), and it follows the
+  project's branch and review rules.
+
+#### Docker orchestration
+
+- A project can declare how it runs: which image to build or use, which
+  services it needs (databases, queues), and the commands for build, test and
+  run. By default this is read from files the repo already has, such as a
+  `Dockerfile` or `compose.yaml`.
+- The harness starts the project in containers to build it, run its tests,
+  reproduce a bug, or check that a change works.
+- Each task gets its **own isolated environment**, with its own containers,
+  network and volumes, mounted on the task's checkout. It's torn down when the
+  task ends.
+- Resource limits (CPU, memory, time) apply per environment, and network access
+  from the containers is restricted to what the project needs.
+- Output from builds, tests and running services (logs, exit codes, artifacts)
+  is captured and available to the model and in the task's
+  [audit trail](employee.md#4-boundaries).
+
+Open questions:
+
+- Where does the cache live and how big can it get: one host, or shared between
+  several harness hosts?
+- How are secrets the project needs at runtime provided to its containers?
+- Is Docker the only runtime, or should the orchestration layer also allow
+  others (Podman, Kubernetes, remote runners)?
+- How long can an environment stay up, for example for someone to look at a
+  running preview?
 
 ## Unique features
 
