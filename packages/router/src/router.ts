@@ -88,8 +88,14 @@ export function chatTags(event: MpEvent): EventTags {
   return {
     sessions: tags.filter((t) => t?.type === 'session' && typeof t.sessionId === 'string').map((t) => t.sessionId),
     employees: tags.filter((t) => t?.type === 'employee' && typeof t.employeeId === 'string').map((t) => t.employeeId),
-    ...(p?.author?.kind === 'session' && typeof p.author.id === 'string' ? { authorSessionId: p.author.id } : {}),
+    // Who acted: the reactor for a reaction (`by`), else the message's author.
+    ...(actorSession(p) ? { authorSessionId: actorSession(p)! } : {}),
   }
+}
+
+function actorSession(p: any): string | undefined {
+  const who = p?.by ?? p?.author
+  return who?.kind === 'session' && typeof who.id === 'string' ? who.id : undefined
 }
 
 /** The text a session sees for an event. */

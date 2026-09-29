@@ -165,6 +165,17 @@ export function storeContract(name: string, make: (ctx: ContractContext) => Prom
         expect(await store.records.kinds()).toEqual(['other', 'person'])
       })
 
+      it('ne and nin match records where the field is missing', async () => {
+        await store.records.create('flag', { n: 1 })
+        await store.records.create('flag', { n: 2, deleted: false })
+        await store.records.create('flag', { n: 3, deleted: true })
+        const ns = async (where: any) =>
+          (await store.records.query<any>('flag', { where, orderBy: { field: 'n' } })).items.map((r) => r.data.n)
+        expect(await ns([{ field: 'deleted', op: 'ne', value: true }])).toEqual([1, 2])
+        expect(await ns([{ field: 'deleted', op: 'nin', value: [true] }])).toEqual([1, 2])
+        expect(await ns([{ field: 'deleted', op: 'eq', value: true }])).toEqual([3])
+      })
+
       it('treats `kind` as a data field (queries are per kind)', async () => {
         await store.records.create('memory', { kind: 'fact', n: 1 })
         await store.records.create('memory', { kind: 'preference', n: 2 })

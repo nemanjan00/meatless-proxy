@@ -252,3 +252,37 @@ describe('router pause into a busy session', () => {
     expect((await t.sessions.requireRun(active.id)).data).toMatchObject({ state: 'paused', pauseReason: 'AI streak' })
   })
 })
+
+describe('reactions', () => {
+  it("a person's reaction reaches the session that wrote the message; a session's own reaction doesn't echo", async () => {
+    const t = await setup()
+    const writer = await t.mk('writer')
+    const subject = { system: 'mp', id: 'msg_root2' }
+    await t.events.subscriptions.subscribe(writer.id, subject, { primary: true })
+    const byPerson = await t.ingest({
+      source: 'chat',
+      type: 'reaction.added',
+      subject,
+      actorContactId: 'con_ana',
+      payload: {
+        messageId: 'msg_root2',
+        emoji: '✅',
+        author: { kind: 'session', id: writer.id },
+        by: { kind: 'contact', id: 'con_ana' },
+      },
+    })
+    expect((await t.router.plan(byPerson)).map((d) => d.sessionId)).toEqual([writer.id])
+    const bySelf = await t.ingest({
+      source: 'chat',
+      type: 'reaction.added',
+      subject,
+      payload: {
+        messageId: 'msg_root2',
+        emoji: '👀',
+        author: { kind: 'contact', id: 'con_ana' },
+        by: { kind: 'session', id: writer.id },
+      },
+    })
+    expect((await t.router.plan(bySelf)).map((d) => d.sessionId)).toEqual([])
+  })
+})

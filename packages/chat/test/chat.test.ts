@@ -227,3 +227,120 @@ describe('messages', () => {
     expect((await events.query({ source: 'chat' })).length).toBe(10)
   })
 })
+
+describe('everyday chat features', () => {
+  const A = () => ({ kind: 'contact', id: ana })
+  const S = () => ({ kind: 'session', id: ses })
+  const setupThread = async () => {
+    const ch = await chat.createChannel({ name: 'general', createdBy: A() })
+    const root = await chat.post({ channelId: ch.id, author: A(), text: 'Deploy today? @billing-bot' })
+    return { ch, root }
+  }
+  const eventTypes = async () => (await events.query({ source: 'chat' })).map((e) => e.data.type)
+
+  it('edits own messages: tags are resolved again, history kept, the thread hears about it', async () => {
+    const { root } = await setupThread()
+    clock.advance(1000)
+    const edited = await chat.edit(root.id, 'Deploy tomorrow? @ana', A())
+    expect(edited.data).toMatchObject({ text: 'Deploy tomorrow? @ana', editedAt: clock.iso() })
+    expect(edited.data.tags).toEqual([{ raw: '@ana', type: 'person', contactId: ana }])
+    const revs = await records.revisions<any>('message', root.id)
+    expect(revs.map((r) => r.data?.text)).toEqual(['Deploy today? @billing-bot', 'Deploy tomorrow? @ana'])
+    expect(await eventTypes()).toContain('message.edited')
+    const ev = (await events.query({ type: 'message.edited' }))[0]!
+    expect(ev.data.subject).toEqual({ system: 'mp', id: root.id })
+    expect((ev.data.payload as any).previousText).toBe('Deploy today? @billing-bot')
+  })
+
+  it("refuses edits and deletions of someone else's message", async () => {
+    const { root } = await setupThread()
+    await expect(chat.edit(root.id, 'hijack', S())).rejects.toThrow('only the author')
+    await expect(chat.delete(root.id, S())).rejects.toThrow('only the author')
+    await expect(chat.edit('msg_missing', 'x', A())).rejects.toBeInstanceOf(NotFoundError)
+    await expect(chat.edit(root.id, '  ', A())).rejects.toBeInstanceOf(ValidationError)
+  })
+
+  it('deletes: the text is gone, a placeholder stays, search skips it', async () => {
+    const { ch, root } = await setupThread()
+    const reply = await chat.post({ channelId: ch.id, threadId: root.id, author: S(), text: 'on it' })
+    const del = await chat.delete(root.id, A())
+    expect(del.data).toMatchObject({ deleted: true, text: '', tags: [] })
+    expect((await chat.delete(root.id, A())).version).toBe(del.version) // idempotent
+    expect((await chat.thread(root.id)).map((m) => m.id)).toEqual([root.id, reply.id])
+    expect(await chat.search('deploy')).toEqual([])
+    expect((await chat.search('', { includeDeleted: true, channelId: ch.id })).map((m) => m.id)).toContain(root.id)
+    await expect(chat.edit(root.id, 'back', A())).rejects.toBeInstanceOf(ConflictError)
+    await expect(chat.react(root.id, '✅', S())).rejects.toBeInstanceOf(ConflictError)
+    expect(await eventTypes()).toContain('message.deleted')
+  })
+
+  it('reactions: idempotent, concurrent-safe, and an event for the thread', async () => {
+    const { root } = await setupThread()
+    await Promise.all([chat.react(root.id, '✅', A()), chat.react(root.id, '✅', S()), chat.react(root.id, '👀', A())])
+    await chat.react(root.id, '✅', A())
+    let m = (await chat.getMessage(root.id))!
+    expect(m.data.reactions!['✅']!.map((r) => r.id).sort()).toEqual([ana, ses].sort())
+    expect(m.data.reactions!['👀']).toEqual([A()])
+    const added = await events.query({ type: 'reaction.added' })
+    expect(added).toHaveLength(3)
+    expect(added.every((e) => e.data.subject?.id === root.id)).toBe(true)
+    expect(
+      added.find((e) => (e.data.payload as any).by.id === ana && (e.data.payload as any).emoji === '✅')?.data.actorContactId,
+    ).toBe(ana)
+    m = await chat.unreact(root.id, '👀', A())
+    expect(m.data.reactions!['👀']).toBeUndefined()
+    await chat.unreact(root.id, '👀', A())
+    await expect(chat.react(root.id, 'not an emoji', A())).rejects.toBeInstanceOf(ValidationError)
+  })
+
+  it('search filters by channel, author, thread and tag', async () => {
+    const { ch, root } = await setupThread()
+    const other = await chat.createChannel({ name: 'ops', createdBy: A() })
+    await chat.post({ channelId: other.id, author: S(), text: 'deploy done @ana' })
+    const reply = await chat.post({ channelId: ch.id, threadId: root.id, author: S(), text: 'deploy at 5' })
+    expect((await chat.search('deploy')).length).toBe(3)
+    expect((await chat.search('deploy', { channelId: ch.id })).map((m) => m.id).sort()).toEqual([root.id, reply.id].sort())
+    expect((await chat.search('deploy', { author: S() })).length).toBe(2)
+    expect((await chat.search('', { threadId: root.id })).map((m) => m.id).sort()).toEqual([root.id, reply.id].sort())
+    expect((await chat.search('', { tagged: EMP })).map((m) => m.id)).toEqual([root.id])
+    expect((await chat.search('', { tagged: ana })).map((m) => m.data.text)).toEqual(['deploy done @ana'])
+    expect(await chat.search('deploy', { limit: 1 })).toHaveLength(1)
+  })
+
+  it('unread counts and mentions per reader, with markers that only move forward', async () => {
+    const { ch, root } = await setupThread()
+    const ops = await chat.createChannel({ name: 'ops', createdBy: A() })
+    clock.advance(1000)
+    await chat.post({ channelId: ch.id, threadId: root.id, author: S(), text: 'ping @ana' })
+    await chat.post({ channelId: ops.id, author: S(), text: 'fyi' })
+    let state = await chat.unread(A())
+    const by = (id: string) => state.find((x) => x.channelId === id)!
+    // Ana's own message doesn't count; the reply tagging her does, and is a mention.
+    expect(by(ch.id)).toMatchObject({ unread: 1, mentions: 1, lastReadAt: null })
+    expect(by(ops.id)).toMatchObject({ unread: 1, mentions: 0 })
+    clock.advance(1000)
+    await chat.markRead(A(), ch.id)
+    state = await chat.unread(A(), { channelIds: [ch.id, ops.id] })
+    expect(by(ch.id)).toMatchObject({ unread: 0, mentions: 0 })
+    // Moving a marker back to an older message is ignored.
+    await chat.markRead(A(), ch.id, { messageId: root.id })
+    expect((await chat.unread(A(), { channelIds: [ch.id] }))[0]!.unread).toBe(0)
+    // The bot, tagged as an employee, counts a mention through taggedIds.
+    const bot = await chat.unread({ kind: 'contact', id: botContact }, { channelIds: [ch.id], taggedIds: [EMP] })
+    expect(bot[0]).toMatchObject({ mentions: 1 })
+  })
+
+  it('opens one DM per set of members, whatever the order', async () => {
+    const dm1 = await chat.openDm([A(), S()], A())
+    const dm2 = await chat.openDm([S(), A(), A()], S())
+    expect(dm2.id).toBe(dm1.id)
+    expect(dm1.data.dm).toBe(true)
+    expect((await chat.members(dm1.id)).map((m) => m.id).sort()).toEqual([ana, ses].sort())
+    const [x, y] = await Promise.all([
+      chat.openDm([A(), { kind: 'contact', id: botContact }], A()),
+      chat.openDm([{ kind: 'contact', id: botContact }, A()], A()),
+    ])
+    expect(x.id).toBe(y.id)
+    await expect(chat.openDm([A()], A())).rejects.toBeInstanceOf(ValidationError)
+  })
+})

@@ -1,4 +1,15 @@
-import { ConflictError, ValidationError, systemClock, type Clock, type EventBus, type Json, type KindSchema } from '@mp/core'
+import { createHash } from 'node:crypto'
+import {
+  ConflictError,
+  DeniedError,
+  NotFoundError,
+  ValidationError,
+  systemClock,
+  type Clock,
+  type EventBus,
+  type Json,
+  type KindSchema,
+} from '@mp/core'
 import type { Events } from '@mp/events'
 import { parseDocLinks, type Records } from '@mp/records'
 import type { Actor, Condition, Ref, StoredRecord } from '@mp/store'
@@ -27,6 +38,7 @@ export const channelSchema: KindSchema = {
       ref: 'session',
       description: 'The context the channel is assigned to. Informational: routing uses triggers.',
     },
+    { name: 'dm', type: 'boolean', description: 'A direct message between its members, not a named channel.' },
   ],
 }
 
@@ -43,7 +55,49 @@ export const messageSchema: KindSchema = {
     { name: 'tags', type: 'list', of: { type: 'json' }, required: true },
     { name: 'mentions', type: 'list', of: { type: 'object', fields: refFields }, required: true },
     { name: 'createdAt', type: 'timestamp', required: true },
+    { name: 'editedAt', type: 'timestamp', description: 'Set when the text was edited. Earlier texts are in the revisions.' },
+    {
+      name: 'deleted',
+      type: 'boolean',
+      description: 'Deleted by its author: the text is gone, a placeholder stays in the thread.',
+    },
+    { name: 'reactions', type: 'json', description: 'Emoji -> list of `{kind, id}` who reacted.' },
   ],
+}
+
+/** A reader's position in a channel or thread: everything up to `lastReadAt` has been seen. Key `reader|scope`. */
+export const readMarkerSchema: KindSchema = {
+  kind: 'chat_read',
+  prefix: 'crd',
+  description: 'How far a person or session has read in a channel or thread.',
+  core: [
+    { name: 'reader', type: 'object', required: true, fields: refFields },
+    { name: 'scope', type: 'string', required: true, description: 'A channel id, or a thread root message id.' },
+    { name: 'lastReadAt', type: 'timestamp', required: true },
+    { name: 'lastReadMessageId', type: 'ref', ref: 'message' },
+  ],
+}
+
+/** The ids a tag points at: employee, session and contact ids. */
+export function tagIds(t: ChatTag): string[] {
+  switch (t.type) {
+    case 'employee':
+      return [t.employeeId]
+    case 'session':
+      return [t.sessionId, t.employeeId]
+    case 'person':
+      return [t.contactId]
+    default:
+      return []
+  }
+}
+
+const EMOJI_MAX = 32
+
+function checkEmoji(emoji: string): string {
+  const e = typeof emoji === 'string' ? emoji.trim() : ''
+  if (!e || e.length > EMOJI_MAX || /\s/.test(e)) throw new ValidationError('a reaction is one emoji or a short :name:')
+  return e
 }
 
 /** Role of links from a channel to its members (contacts, employees, sessions). */
@@ -70,6 +124,7 @@ export interface ChannelData extends Record<string, unknown> {
   createdBy: Ref
   archived: boolean
   contextSessionId?: string
+  dm?: boolean
 }
 export type Channel = StoredRecord<ChannelData>
 
@@ -81,8 +136,42 @@ export interface MessageData extends Record<string, unknown> {
   tags: ChatTag[]
   mentions: Ref[]
   createdAt: string
+  editedAt?: string
+  deleted?: boolean
+  /** Emoji -> who reacted with it. */
+  reactions?: Record<string, Ref[]>
 }
 export type Message = StoredRecord<MessageData>
+
+export interface ReadMarkerData extends Record<string, unknown> {
+  reader: Ref
+  scope: string
+  lastReadAt: string
+  lastReadMessageId?: string
+}
+
+/** Unread state of one channel for one reader. */
+export interface UnreadState {
+  channelId: string
+  /** Messages (top-level and replies) by others since the reader's marker. */
+  unread: number
+  /** Of those, messages that tag the reader. */
+  mentions: number
+  lastReadAt: string | null
+}
+
+export interface SearchQuery {
+  channelId?: string
+  /** Messages by this contact or session. */
+  author?: Ref
+  /** Messages that tag this employee, session or contact (by id). */
+  tagged?: string
+  /** Replies in this thread (and its root). */
+  threadId?: string
+  /** Include deleted messages (their text is empty, so they only match other filters). Default false. */
+  includeDeleted?: boolean
+  limit?: number
+}
 
 export interface ChannelMember extends Ref {
   addedAt: string
@@ -150,8 +239,28 @@ export interface Chat {
   thread(rootId: string): Promise<Message[]>
   /** Top-level messages of a channel, oldest first: the latest `limit` (default 50) before `before` (a message id). */
   messages(channelId: string, q?: { limit?: number; before?: string }): Promise<Message[]>
-  /** Messages whose text contains `text` (case-insensitive), newest first. */
-  search(text: string, q?: { channelId?: string; limit?: number }): Promise<Message[]>
+  /** Messages whose text contains `text` (case-insensitive), newest first. An empty text matches everything the filters allow. */
+  search(text: string, q?: SearchQuery): Promise<Message[]>
+  /**
+   * Changes a message's text. Only its author may (`DeniedError` otherwise). Tags are resolved
+   * again, the earlier text stays in the record's revisions, and a `message.edited` event goes to the thread.
+   */
+  edit(messageId: string, text: string, by: Ref): Promise<Message>
+  /** Deletes a message: only its author may. The text is cleared and a placeholder stays in the thread. */
+  delete(messageId: string, by: Ref): Promise<Message>
+  /** Adds a reaction (idempotent). A `reaction.added` event goes to the thread, so a subscribed session can act on it. */
+  react(messageId: string, emoji: string, by: Ref): Promise<Message>
+  /** Removes a reaction (idempotent). */
+  unreact(messageId: string, emoji: string, by: Ref): Promise<Message>
+  /** Moves a reader's marker in a channel or thread to now (or to a given message). */
+  markRead(reader: Ref, scope: string, opts?: { messageId?: string }): Promise<void>
+  /** Unread counts and mentions per channel, for the given channels (default: all that aren't archived). */
+  unread(reader: Ref, opts?: { channelIds?: string[]; taggedIds?: string[] }): Promise<UnreadState[]>
+  /**
+   * The DM between exactly these members, created if it doesn't exist yet. Order doesn't matter;
+   * the same set of members always gets the same DM.
+   */
+  openDm(members: Ref[], createdBy: Ref): Promise<Channel>
 }
 
 export const ChatTopics = {
@@ -183,7 +292,7 @@ export function createChat(opts: ChatOptions): Chat {
   const { records, events } = opts
   const clock = opts.clock ?? systemClock
   const bus = opts.bus
-  for (const s of [channelSchema, messageSchema]) if (!records.kinds.has(s.kind)) records.kinds.define(s)
+  for (const s of [channelSchema, messageSchema, readMarkerSchema]) if (!records.kinds.has(s.kind)) records.kinds.define(s)
 
   const requireChannel = (id: string) => records.require<ChannelData>('channel', id)
 
@@ -202,6 +311,65 @@ export function createChat(opts: ChatOptions): Chat {
       else out.push({ raw: t.raw, type: 'person', contactId: r.contactId })
     }
     return out
+  }
+
+  const ownMessage = async (messageId: string, by: Ref) => {
+    const msg = await records.get<MessageData>('message', messageId)
+    if (!msg) throw new NotFoundError('message', messageId)
+    if (msg.data.author.kind !== by.kind || msg.data.author.id !== by.id)
+      throw new DeniedError('only the author can change a message')
+    return msg
+  }
+
+  /** A durable event on the message's thread, so subscribed sessions hear about edits, deletions and reactions. */
+  const threadEvent = async (msg: Message, type: string, extra: Record<string, unknown>, by?: Ref) => {
+    const threadId = msg.data.threadId ?? msg.id
+    const actor = by ?? msg.data.author
+    await events.ingest({
+      source: 'chat',
+      type,
+      dedupeKey: `chat:${msg.id}:${type}:${msg.version}:${actor.kind}:${actor.id}:${clock.now()}`,
+      subject: { system: 'mp', id: threadId },
+      payload: {
+        messageId: msg.id,
+        channelId: msg.data.channelId,
+        threadId: msg.data.threadId,
+        author: msg.data.author,
+        ...extra,
+      } as unknown as Json,
+      text: `${type}: ${msg.data.text.slice(0, 200)}`,
+      ...(actor.kind === 'contact' ? { actorContactId: actor.id } : {}),
+    })
+    bus?.publish<ChatMessagePosted>(ChatTopics.message, {
+      channelId: msg.data.channelId,
+      threadId: msg.data.threadId,
+      messageId: msg.id,
+    })
+  }
+
+  /** Compare-and-swap on a message's reactions, retried on conflicts. `fn` returns null for "no change". */
+  const changeReactions = async (
+    messageId: string,
+    fn: (cur: Record<string, Ref[]>) => Promise<Record<string, Ref[]> | null>,
+  ): Promise<{ message: Message; changed: boolean }> => {
+    for (let i = 0; ; i++) {
+      const msg = await records.get<MessageData>('message', messageId)
+      if (!msg) throw new NotFoundError('message', messageId)
+      if (msg.data.deleted) throw new ConflictError('a deleted message cannot get reactions')
+      const next = await fn(msg.data.reactions ?? {})
+      if (!next) return { message: msg, changed: false }
+      try {
+        const updated = await records.update<MessageData>(
+          'message',
+          msg.id,
+          { reactions: next },
+          { expectedVersion: msg.version },
+        )
+        return { message: updated, changed: true }
+      } catch (err) {
+        if (!(err instanceof ConflictError) || i >= 10) throw err
+      }
+    }
   }
 
   const chat: Chat = {
@@ -319,10 +487,143 @@ export function createChat(opts: ChatOptions): Chat {
       return page.items.reverse()
     },
     async search(text, q = {}) {
-      const where: Condition[] = [{ field: 'text', op: 'like', value: text }]
+      const where: Condition[] = []
+      if (text) where.push({ field: 'text', op: 'like', value: text })
       if (q.channelId) where.push({ field: 'channelId', op: 'eq', value: q.channelId })
-      return (await records.query<MessageData>('message', { where, orderBy: { field: 'id', dir: 'desc' }, limit: q.limit ?? 50 }))
-        .items
+      if (q.author) where.push({ field: 'author', op: 'eq', value: { kind: q.author.kind, id: q.author.id } })
+      if (!q.includeDeleted) where.push({ field: 'deleted', op: 'ne', value: true })
+      const limit = q.limit ?? 50
+      let items = (await records.query<MessageData>('message', { where, orderBy: { field: 'id', dir: 'desc' } })).items
+      if (q.threadId) items = items.filter((m) => m.id === q.threadId || m.data.threadId === q.threadId)
+      if (q.tagged) items = items.filter((m) => m.data.tags.some((t) => tagIds(t).includes(q.tagged!)))
+      return items.slice(0, limit)
+    },
+
+    async edit(messageId, text, by) {
+      if (typeof text !== 'string' || !text.trim()) throw new ValidationError('message text is required')
+      const msg = await ownMessage(messageId, by)
+      if (msg.data.deleted) throw new ConflictError('a deleted message cannot be edited')
+      const tags = await resolveTags(text)
+      const mentions = parseDocLinks(text).map((l) => ({ kind: l.kind, id: l.id }))
+      const next = await records.update<MessageData>(
+        'message',
+        msg.id,
+        { text, tags, mentions, editedAt: clock.iso() },
+        { actor: authorActor(msg.data.author), expectedVersion: msg.version },
+      )
+      await threadEvent(next, 'message.edited', { text, tags, previousText: msg.data.text })
+      return next
+    },
+
+    async delete(messageId, by) {
+      const msg = await ownMessage(messageId, by)
+      if (msg.data.deleted) return msg
+      const next = await records.update<MessageData>(
+        'message',
+        msg.id,
+        { text: '', tags: [], mentions: [], deleted: true, editedAt: clock.iso() },
+        { actor: authorActor(msg.data.author), expectedVersion: msg.version },
+      )
+      await threadEvent(next, 'message.deleted', {})
+      return next
+    },
+
+    async react(messageId, emoji, by) {
+      const e = checkEmoji(emoji)
+      return changeReactions(messageId, async (cur) => {
+        const list = cur[e] ?? []
+        if (list.some((r) => r.kind === by.kind && r.id === by.id)) return null
+        return { ...cur, [e]: [...list, { kind: by.kind, id: by.id }] }
+      }).then(async (r) => {
+        if (r.changed) await threadEvent(r.message, 'reaction.added', { emoji: e, by: { kind: by.kind, id: by.id } }, by)
+        return r.message
+      })
+    },
+
+    async unreact(messageId, emoji, by) {
+      const e = checkEmoji(emoji)
+      const r = await changeReactions(messageId, async (cur) => {
+        const list = cur[e] ?? []
+        if (!list.some((x) => x.kind === by.kind && x.id === by.id)) return null
+        const rest = list.filter((x) => !(x.kind === by.kind && x.id === by.id))
+        const next = { ...cur }
+        if (rest.length) next[e] = rest
+        else delete next[e]
+        return next
+      })
+      return r.message
+    },
+
+    async markRead(reader, scope, o = {}) {
+      const key = `${reader.kind}:${reader.id}|${scope}`
+      let at = clock.iso()
+      if (o.messageId) at = (await records.require<MessageData>('message', o.messageId)).data.createdAt
+      const data: ReadMarkerData = {
+        reader: { kind: reader.kind, id: reader.id },
+        scope,
+        lastReadAt: at,
+        ...(o.messageId ? { lastReadMessageId: o.messageId } : {}),
+      }
+      const existing = await records.getByKey<ReadMarkerData>('chat_read', key)
+      if (!existing) {
+        try {
+          await records.create<ReadMarkerData>('chat_read', data, { key })
+          return
+        } catch (err) {
+          if (!(err instanceof ConflictError)) throw err
+        }
+      }
+      const cur = (await records.getByKey<ReadMarkerData>('chat_read', key))!
+      // Markers only move forward.
+      if (cur.data.lastReadAt >= data.lastReadAt) return
+      await records.update<ReadMarkerData>('chat_read', cur.id, data, { replace: true })
+    },
+
+    async unread(reader, o = {}) {
+      const channelIds = o.channelIds ?? (await chat.listChannels({ archived: false })).map((c) => c.id)
+      const tagged = new Set([reader.id, ...(o.taggedIds ?? [])])
+      const out: UnreadState[] = []
+      for (const channelId of channelIds) {
+        const marker = await records.getByKey<ReadMarkerData>('chat_read', `${reader.kind}:${reader.id}|${channelId}`)
+        const since = marker?.data.lastReadAt ?? null
+        const where: Condition[] = [
+          { field: 'channelId', op: 'eq', value: channelId },
+          { field: 'deleted', op: 'ne', value: true },
+        ]
+        if (since) where.push({ field: 'createdAt', op: 'gt', value: since })
+        const msgs = (await records.query<MessageData>('message', { where })).items.filter(
+          (m) => !(m.data.author.kind === reader.kind && m.data.author.id === reader.id),
+        )
+        out.push({
+          channelId,
+          unread: msgs.length,
+          mentions: msgs.filter((m) => m.data.tags.some((t) => tagIds(t).some((id) => tagged.has(id)))).length,
+          lastReadAt: since,
+        })
+      }
+      return out
+    },
+
+    async openDm(members, createdBy) {
+      const uniq = [...new Map(members.map((m) => [`${m.kind}:${m.id}`, { kind: m.kind, id: m.id }])).values()]
+      if (uniq.length < 2) throw new ValidationError('a DM needs at least two members')
+      const key = uniq
+        .map((m) => `${m.kind}:${m.id}`)
+        .sort()
+        .join(',')
+      const name = `dm-${createHash('sha256').update(key).digest('hex').slice(0, 16)}`
+      const existing = await records.getByKey<ChannelData>('channel', name)
+      if (existing) return existing
+      try {
+        const ch = await chat.createChannel({ name, createdBy, members: uniq })
+        return records.update<ChannelData>('channel', ch.id, { dm: true })
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          const again = await records.getByKey<ChannelData>('channel', name)
+          if (again) return again
+        }
+        throw err
+      }
     },
   }
   return chat
