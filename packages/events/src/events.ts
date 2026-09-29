@@ -1,3 +1,4 @@
+import sift from 'sift'
 import {
   ConflictError,
   NotFoundError,
@@ -72,6 +73,12 @@ export interface TriggerMatch {
    * Scalars compare equal, objects match partially, arrays match exactly (see `deepMatch` in @mp/store).
    */
   where?: Record<string, Json>
+  /**
+   * A MongoDB-style query (evaluated with sift) over the event, e.g.
+   * `{ "payload.priority": { "$gte": 2 }, "payload.labels": { "$in": ["bug"] } }`.
+   * Stored as JSON, so triggers stay data.
+   */
+  filter?: Json
 }
 
 export interface TriggerData extends Record<string, unknown> {
@@ -105,6 +112,8 @@ export interface SubscriptionData extends Record<string, unknown> {
   subjectKey: string
   primary: boolean
   types?: string[]
+  /** MongoDB-style query (sift) the event must match, e.g. `{ "payload.author.kind": "contact" }`. */
+  filter?: Json
   active: boolean
   endedReason?: string
 }
@@ -140,12 +149,14 @@ export interface Subscriptions {
   subscribe(
     sessionId: string,
     subject: Subject,
-    opts?: { primary?: boolean; types?: string[]; actor?: Actor },
+    opts?: { primary?: boolean; types?: string[]; filter?: Json; actor?: Actor },
   ): Promise<Subscription>
   /** Ends the subscription (kept as a record with `endedReason: 'unsubscribed'`). No-op if there is none. */
   unsubscribe(sessionId: string, subject: Subject): Promise<void>
   /** Active subscriptions to a subject, oldest first; with `eventType`, only those whose `types` match it. */
   forSubject(subject: Subject, eventType?: string): Promise<Subscription[]>
+  /** Active subscriptions that should receive this event: same subject, matching `types` and `filter`. */
+  forEvent(event: EventData): Promise<Subscription[]>
   /** Active subscriptions of a session. */
   forSession(sessionId: string): Promise<Subscription[]>
   /** Hands every active subscription of one session to another (e.g. when passing work on). Returns the new ones. */
@@ -221,6 +232,31 @@ const checkTarget = (t: unknown): TriggerTarget => {
 }
 
 /** Whether a trigger's `match` fits an event. Exported for the router and for tests. */
+const filterCache = new Map<string, (event: EventData) => boolean>()
+
+/**
+ * Compiles a MongoDB-style JSON query (sift) into a predicate over events.
+ * Invalid queries throw `ValidationError`.
+ */
+export function eventFilter(query: Json): (event: EventData) => boolean {
+  const key = JSON.stringify(query)
+  let f = filterCache.get(key)
+  if (!f) {
+    if (query === null || typeof query !== 'object' || Array.isArray(query))
+      throw new ValidationError('filter must be a query object')
+    try {
+      const test = sift(query as any)
+      f = (event) => test(event)
+      f({ source: '', type: '', routed: false, receivedAt: '' })
+    } catch (err) {
+      throw new ValidationError(`invalid filter: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (filterCache.size > 1000) filterCache.clear()
+    filterCache.set(key, f)
+  }
+  return f
+}
+
 export function triggerMatches(match: TriggerMatch, event: EventData): boolean {
   if (match.source !== undefined && !globMatch(match.source, event.source)) return false
   if (match.type !== undefined && !globMatch(match.type, event.type)) return false
@@ -229,6 +265,7 @@ export function triggerMatches(match: TriggerMatch, event: EventData): boolean {
     if (match.subject.system !== undefined && !globMatch(match.subject.system, event.subject.system)) return false
     if (match.subject.id !== undefined && !globMatch(match.subject.id, event.subject.id)) return false
   }
+  if (match.filter !== undefined && !eventFilter(match.filter)(event)) return false
   if (match.where) {
     const asRecord = { data: event } as StoredRecord<any>
     for (const [path, expected] of Object.entries(match.where)) {
@@ -269,6 +306,7 @@ export function createEvents(opts: EventsOptions): Events {
   const triggers: Triggers = {
     async create(input, actor) {
       if (!input.name) throw new ValidationError('trigger name is required')
+      if (input.match?.filter !== undefined) eventFilter(input.match.filter)
       const data: TriggerData = {
         name: input.name,
         employeeId: input.employeeId,
@@ -288,6 +326,7 @@ export function createEvents(opts: EventsOptions): Events {
       delete p.fired
       delete p.lastFiredAt
       if (p.target !== undefined) p.target = checkTarget(p.target)
+      if (p.match?.filter !== undefined) eventFilter(p.match.filter)
       return records.update<TriggerData>('trigger', id, p, actor ? { actor } : {})
     },
     async list(q = {}) {
@@ -340,12 +379,14 @@ export function createEvents(opts: EventsOptions): Events {
       const subj = checkSubject(subject, 'subject')
       if (o.types !== undefined && (!Array.isArray(o.types) || o.types.some((t) => typeof t !== 'string')))
         throw new ValidationError('types must be a list of strings')
+      if (o.filter !== undefined) eventFilter(o.filter)
       const data: SubscriptionData = {
         sessionId,
         subject: subj,
         subjectKey: subjectKey(subj),
         primary: o.primary ?? false,
         ...(o.types ? { types: o.types } : {}),
+        ...(o.filter !== undefined ? { filter: o.filter } : {}),
         active: true,
       }
       validateRecord(records.kinds.get('subscription'), data)
@@ -366,6 +407,7 @@ export function createEvents(opts: EventsOptions): Events {
           patch.endedReason = undefined
         }
         if (o.primary !== undefined && o.primary !== cur.data.primary) patch.primary = o.primary
+        if (o.filter !== undefined) patch.filter = o.filter
         if (o.types !== undefined && JSON.stringify(o.types) !== JSON.stringify(cur.data.types)) patch.types = o.types
         else if (o.types === undefined && !cur.data.active && cur.data.types !== undefined) patch.types = undefined
         return Object.keys(patch).length ? patch : null
@@ -390,6 +432,12 @@ export function createEvents(opts: EventsOptions): Events {
       ).items
       if (eventType === undefined) return subs
       return subs.filter((s) => !s.data.types || s.data.types.some((g) => globMatch(g, eventType)))
+    },
+
+    async forEvent(event) {
+      if (!event.subject) return []
+      const subs = await subscriptions.forSubject(event.subject, event.type)
+      return subs.filter((s) => s.data.filter === undefined || eventFilter(s.data.filter)(event))
     },
     async forSession(sessionId) {
       return (

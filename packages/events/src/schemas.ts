@@ -53,6 +53,11 @@ export const triggerSchema: KindSchema = {
         { name: 'type', type: 'string', description: 'Glob, e.g. `task.*`.' },
         { name: 'subject', type: 'json', description: '`{ system?, id? }`, each a glob.' },
         { name: 'where', type: 'json', description: 'Dot path into the event (`payload.x`, `subject.id`) -> expected value.' },
+        {
+          name: 'filter',
+          type: 'json',
+          description: 'MongoDB-style query over the event (sift), e.g. `{"payload.priority":{"$gte":2}}`.',
+        },
       ],
     },
     {
@@ -79,6 +84,7 @@ export const subscriptionSchema: KindSchema = {
     { name: 'subjectKey', type: 'string', required: true },
     { name: 'primary', type: 'boolean', required: true, description: 'Expected to act on untagged events.' },
     { name: 'types', type: 'list', of: { type: 'string' }, description: 'Event type globs; all types when missing.' },
+    { name: 'filter', type: 'json', description: 'MongoDB-style query (sift) the event must match.' },
     { name: 'active', type: 'boolean', required: true },
     { name: 'endedReason', type: 'string' },
   ],
