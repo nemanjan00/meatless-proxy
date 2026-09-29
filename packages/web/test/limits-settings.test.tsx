@@ -204,7 +204,8 @@ describe('Settings → Pricing', () => {
     await renderAt('/usage', (d) => {
       d.api.db.usage = d.api.db.usage.map((u) => ({ ...u, cost: 0 }))
     })
-    const link = await screen.findByRole('link', { name: 'set prices' })
+    // The usage page renders charts first; slow CI machines need more than the default second.
+    const link = await screen.findByRole('link', { name: 'set prices' }, { timeout: 5000 })
     expect(link).toHaveAttribute('href', '/settings/pricing')
   })
 })
