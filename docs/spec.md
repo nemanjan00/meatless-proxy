@@ -36,6 +36,7 @@ module to it:
 | repos, runtime    | [Project code and runtime](#project-code-and-runtime) |
 | sessions          | [Sessions](#sessions)                         |
 | triggers          | [Triggers](#triggers)                         |
+| procedures        | [Procedures](#procedures)                     |
 | memory            | [Memory](#memory)                             |
 
 ## Structure
@@ -461,6 +462,65 @@ Open questions:
   itself?
 - Can several sessions subscribe to the same thing, and if so, which one handles
   each event?
+
+### Procedures
+
+The employee knows the company's [procedures](employee.md#procedures). In the
+harness, each procedure is a record and also a context that knows how to carry
+it out.
+
+#### Procedure records
+
+Same pattern as the other modules: structured metadata plus a markdown document,
+with an extendable schema, linked to contacts and projects.
+
+| Field       | Type                      | Notes                                        |
+|-------------|---------------------------|----------------------------------------------|
+| `id`        | string                    | stable, harness-assigned                     |
+| `name`      | string                    | e.g. "production deploy", "access request"   |
+| `applies`   | string                    | when it applies, in plain words              |
+| `owner`     | contact id                | who to ask when it's unclear or out of date  |
+| `approvals` | list of contact / role    | who has to say yes                           |
+| `context`   | session id                | the procedure context, see below             |
+
+The steps and details are in the markdown document. Links connect a procedure
+to the projects it applies to and to the contacts that take part in it.
+
+#### Procedure contexts
+
+Every procedure has a **procedure context**: a session that has read the
+procedure, its linked docs and its history, and is ready to run it.
+
+- **Routing to forks.** When a piece of work needs a procedure, it's routed to a
+  **fork** of the procedure context. That covers a trigger ("new access
+  request"), a subscribed event, or a step inside another session ("this change
+  needs a deploy"). Each instance of the procedure is its own fork.
+- **Why fork.** Every fork starts already knowing the procedure, so it doesn't
+  need to re-read documents or ask who to involve. This removes round trips.
+  Forks share the same starting history, so the model provider's prompt cache
+  can be reused, which cuts latency and cost.
+- **Isolation.** Forks don't affect the procedure context or each other. Each
+  fork links to the work it serves and subscribes to what it needs.
+- **Improving the procedure.** The procedure context changes only through
+  committed runs: when the procedure document changes, or when a fork finds
+  something that should apply to every future run (e.g. "the approver changed").
+  Such changes go through the procedure's owner, per the
+  [employee rules](employee.md#procedures).
+- **Routing without a person.** Since the employee knows which procedure applies,
+  work is routed straight to the right procedure fork. Nobody has to decide
+  "who handles this".
+
+| Tool            | What it does                                                   |
+|-----------------|----------------------------------------------------------------|
+| find procedure  | find the procedures that apply to a piece of work               |
+| run procedure   | fork the procedure context for this work and start the fork     |
+
+Open questions:
+
+- When a procedure document is edited, is the procedure context rebuilt from
+  scratch or updated with a committed run?
+- Should forks that are still running continue with the old version of the
+  procedure, or be told about the change?
 
 ### Memory
 
