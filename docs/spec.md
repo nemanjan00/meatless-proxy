@@ -97,6 +97,9 @@ everything in [Sessions](#sessions) applies to it.
 This document is written incrementally. Common harness features come first,
 and the features unique to meatless-proxy follow later.
 
+How it all runs is in [execution.md](execution.md), the execution model (a
+draft for review).
+
 ## Common features
 
 ### Model calls
