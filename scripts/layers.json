@@ -32,7 +32,8 @@
     "@mp/runner": 4,
     "@mp/stdlib": 5,
     "@mp/server": 6,
-    "@mp/web": 6
+    "@mp/web": 6,
+    "@mp/evals": 6
   },
   "domainOrder": [
     "@mp/records",
@@ -48,8 +49,12 @@
     "@mp/usage"
   ],
   "adapterLayer": 2,
-  "adapterConsumers": ["@mp/server"],
+  "adapterConsumers": [
+    "@mp/server"
+  ],
   "restricted": {
-    "@mp/web": ["@mp/api"]
+    "@mp/web": [
+      "@mp/api"
+    ]
   }
 }

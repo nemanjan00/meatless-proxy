@@ -11,6 +11,7 @@
     "@mp/core": "0.0.0",
     "@mp/records": "0.0.0",
     "@mp/store": "0.0.0",
+    "cron-parser": "^5.10.1",
     "sift": "^17.1.3"
   }
 }
