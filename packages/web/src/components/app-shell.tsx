@@ -8,7 +8,9 @@ import {
   FileText,
   FolderKanban,
   Inbox,
+  KeyRound,
   Layers,
+  LogOut,
   MessagesSquare,
   Moon,
   Radio,
@@ -21,9 +23,9 @@ import {
   Zap,
 } from 'lucide-react'
 import { type ReactNode, Suspense, useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { CommandMenu } from '@/components/command-menu.tsx'
-import { EmployeeAvatar } from '@/components/people.tsx'
+import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +54,7 @@ import {
 } from '@/components/ui/sidebar.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useData, useLiveReload, useLiveStatus, useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { NAV_SHORTCUTS } from '@/lib/shortcuts.ts'
 import { useTheme } from '@/lib/theme.tsx'
@@ -189,6 +192,46 @@ function ThemeToggle() {
   )
 }
 
+/** The signed-in person, in the sidebar footer: their access, their API tokens, and signing out. */
+function UserMenu() {
+  const { me, signOut } = useAuth()
+  const navigate = useNavigate()
+  if (!me) return null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <SidebarMenuButton className="h-9 gap-2 px-2 data-[state=open]:bg-sidebar-accent" aria-label="Your account">
+          <PersonAvatar name={me.name} className="size-5" />
+          <span className="min-w-0 truncate text-foreground">{me.name}</span>
+          <span className="ml-auto rounded-sm border px-1 text-tiny text-fg-tertiary">{me.access}</span>
+        </SidebarMenuButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-56">
+        <DropdownMenuLabel className="font-normal">
+          <div className="truncate text-foreground">{me.name}</div>
+          <div className="truncate text-micro text-fg-tertiary">{me.email ?? `Signed in as a ${me.access}`}</div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <NavLink to="/settings/tokens">
+            <KeyRound className="size-4" />
+            API tokens
+          </NavLink>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={async () => {
+            await signOut()
+            navigate('/login', { replace: true })
+          }}
+        >
+          <LogOut className="size-4" />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function AppSidebar({ onSearch }: { onSearch: () => void }) {
   const inbox = useLoad((api) => api.inbox(), [])
   useLiveReload(['now'], inbox.reload, ['run.state'])
@@ -249,9 +292,16 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
           ]}
         />
       </SidebarContent>
-      <SidebarFooter className="flex-row items-center justify-between p-2">
-        <LiveIndicator />
-        <ThemeToggle />
+      <SidebarFooter className="gap-1 p-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <UserMenu />
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <div className="flex items-center justify-between">
+          <LiveIndicator />
+          <ThemeToggle />
+        </div>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

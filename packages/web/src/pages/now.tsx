@@ -10,6 +10,7 @@ import { StatusIcon } from '@/components/status-icon.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Progress } from '@/components/ui/progress.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useApi, useLive, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { duration, formatCost, formatTokens, timeAgo } from '@/lib/format.ts'
@@ -268,6 +269,7 @@ export function NowPage() {
   useLiveReload(['now'], snap.reload, ['run.state', 'control.changed'])
   const items = (snap.data?.items ?? []).filter((i) => !currentId || i.employee.id === currentId)
   const paused = snap.data?.paused ?? false
+  const { can } = useAuth()
 
   const toggleAll = async () => {
     setPausing(true)
@@ -298,10 +300,12 @@ export function NowPage() {
               </span>
             ))}
           </div>
-          <Button size="sm" variant={paused ? 'default' : 'outline'} onClick={toggleAll} disabled={pausing}>
-            {paused ? <CirclePlay /> : <CirclePause />}
-            {paused ? 'Resume all' : 'Pause all'}
-          </Button>
+          {can('admin') && (
+            <Button size="sm" variant={paused ? 'default' : 'outline'} onClick={toggleAll} disabled={pausing}>
+              {paused ? <CirclePlay /> : <CirclePause />}
+              {paused ? 'Resume all' : 'Pause all'}
+            </Button>
+          )}
         </>
       }
     >

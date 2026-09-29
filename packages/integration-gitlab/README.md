@@ -99,27 +99,52 @@ url, branches, labels, reviewers, note body and discussion id, pipeline and job 
 
 ## Setup on GitLab
 
-1. **A bot account.** Either a dedicated user for the employee (for example `billing-bot`, with a name that says it's an
-   AI), or a project or group access token, which creates a bot user for you. Give it the **Developer** role on the
-   projects it works on: enough to push branches and open MRs, not to merge into protected branches.
-2. **A token** for that account with the **`api`** scope. Add `write_repository` only if the harness ever pushes over
-   HTTPS; it doesn't: it pushes over SSH. Set an expiry and rotate it.
+Each employee has **its own GitLab identity**: a service account with its own token and SSH key, so its branches,
+merge requests and comments show who did them, and its access can be limited and revoked on its own. The server
+(`packages/server/src/integrations`) builds one instance per employee from that employee's secrets.
+
+1. **A service account per employee.** On GitLab Premium or Ultimate, create a *service account* (group *Settings →
+   Service accounts*, or *Admin → Service accounts* on self-managed). Otherwise use a dedicated user for the employee
+   (for example `billing-bot`, with a name that says it's an AI). Give it the **Developer** role on the projects it
+   works on: enough to push branches and open MRs, not to merge into protected branches.
+2. **A personal access token** for that account with the **`api`** scope. Add `write_repository` only if the harness
+   ever pushes over HTTPS; it doesn't: it pushes over SSH. Set an expiry and rotate it.
 3. **The employee's SSH key.** The harness generates an ed25519 keypair per employee and shows the public key in the web
-   UI. Add it to the bot user (*User settings → SSH Keys*), or as a deploy key with write access on the project.
-   Commits and pushes then go through that key.
+   UI. Add it to the service account (*User settings → SSH Keys*, or through the API for a service account), or as a
+   deploy key with write access on the project. Commits and pushes then go through that key.
 4. **Protected branches.** Protect `main` (and release branches) with *Allowed to merge* and *Allowed to push and merge*
-   set to Maintainers only, or to specific people, and not the bot. The harness also refuses to push to protected
-   branches, but GitLab must enforce it too. Leave *Allowed to force push* off. If you use merge request approvals, don't
-   count the bot as an eligible approver.
-5. **The project webhook** (*Settings → Webhooks → Add new webhook*), or a group webhook for many projects:
-   - URL: `https://<harness>/webhooks/gitlab`
-   - Secret token: a long random value, the same as `GITLAB_WEBHOOK_SECRET` below
+   set to Maintainers only, or to specific people, and not the service accounts. The harness also refuses to push to
+   protected branches, but GitLab must enforce it too. Leave *Allowed to force push* off. If you use merge request
+   approvals, don't count the service accounts as eligible approvers.
+5. **Webhooks** (*Settings → Webhooks → Add new webhook*):
+   - Deployment-wide: a group (or project) webhook with URL `https://<harness>/webhooks/gitlab`. Its events belong to no
+     employee in particular, so any employee's triggers and subscriptions can take them.
+   - Per employee (optional): `https://<harness>/webhooks/gitlab/<employee id or handle>`, for hooks that belong to one
+     employee's identity. Its events belong to that employee.
+   - Secret token: a long random value, the same as `GITLAB_WEBHOOK_SECRET` below (each URL has its own).
    - Trigger: **Push events** (all branches, or a wildcard like `mp/*`), **Comments**, **Issues events**, **Merge request
      events**, **Job events**, **Pipeline events**
    - SSL verification: on
-6. **Secrets** in the harness (names as the server wires them): the token (e.g. `GITLAB_TOKEN`), the webhook secret
-   (e.g. `GITLAB_WEBHOOK_SECRET`), and for self-hosted GitLab the base URL. The integration is enabled when its secrets
-   are set.
+6. **Secrets** in the harness (docs/spec.md#secrets):
+   - `GITLAB_TOKEN`: the employee's token from step 2, **scoped to the employee**.
+   - `GITLAB_WEBHOOK_SECRET`: global scope for `/webhooks/gitlab`; scoped to the employee for
+     `/webhooks/gitlab/<employee>`.
+   - `GITLAB_BASE_URL` (optional): for self-hosted GitLab. The server's `GITLAB_BASE_URL` environment variable sets it
+     for the deployment; a secret of that name overrides it (per employee or globally).
+
+   Set them in the web UI under *Settings → Secrets*, or through the API:
+
+   ```sh
+   curl -X PUT https://<harness>/api/secrets -H 'content-type: application/json' \
+     -d '{ "name": "GITLAB_TOKEN", "value": "glpat-…", "scope": { "type": "employee", "id": "emp_…" } }'
+   ```
+
+   A global secret is the fallback for an employee without its own. GitLab is enabled for an employee when its
+   `GITLAB_TOKEN` resolves; until then its `mcp.gitlab.*` tools answer "GitLab isn't set up for this employee: set the
+   GITLAB_TOKEN secret". A webhook URL without a secret answers `404`.
+7. **Handles**: give each person's contact a handle `{ system: 'gitlab', id: '<username>' }`. Otherwise the server
+   looks the actor up (`resolveUser`), matches the contact by the user's public email and records the handle on it. It
+   never creates contacts from webhooks.
 
 ### Self-hosted GitLab
 
@@ -134,8 +159,8 @@ Network → Outbound requests*). If the instance uses a private CA, the harness'
 New issues assigned to the employee start work through a trigger. Once a session is working on something, it
 subscribes to it, so what happens next comes straight back to it and not to the intake context.
 
-A trigger (`CreateTriggerInput` in `@mp/events`) for open issues assigned to the employee, routed to its intake
-context:
+Triggers are not created automatically. A trigger (`CreateTriggerInput` in `@mp/events`, e.g. created by the employee
+with its `triggers.create` tool) for open issues assigned to the employee, routed to its intake context:
 
 ```json
 {
@@ -150,9 +175,10 @@ context:
 }
 ```
 
-After the session pushes its branch (`git.push`) and calls `mcp.gitlab.create_merge_request`, it calls
-`subscriptions.subscribe` for the MR, so pipeline results, failed jobs and review comments on it go straight to that
-session. The filter skips the bot's own comments and MR updates:
+After the session pushes its branch (`git.push`) and calls `mcp.gitlab.create_merge_request`, the server subscribes the
+session to the MR as its primary subscriber (subject `gitlab:<project path>!<iid>`, read from the result's `web_url`), so
+pipeline results, failed jobs and review comments on it go straight to that session. The employee's own MRs need no
+trigger. To also skip the bot's own comments and MR updates, the session can subscribe again with a filter:
 
 ```json
 {
@@ -163,8 +189,8 @@ session. The filter skips the bot's own comments and MR updates:
 }
 ```
 
-The subscription should end when the MR is merged or closed: the server ends subscriptions to the subject
-(`subscriptions.endForSubject`) on `merge_request.merged` and `merge_request.closed`. A review comment arrives as `comment.created` with the
+The subscription ends when the MR is merged or closed: after delivering `merge_request.merged` or
+`merge_request.closed`, the server ends every subscription to the subject (`subscriptions.endForSubject`). A review comment arrives as `comment.created` with the
 `discussion_id`, so the session can fix the code, push, and answer with `reply_discussion`. A failed pipeline arrives as
 `pipeline.failed` naming the failed jobs, so the session can read `job_log` and fix it.
 

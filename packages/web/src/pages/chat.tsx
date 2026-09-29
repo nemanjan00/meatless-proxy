@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input.tsx'
 import { Kbd } from '@/components/ui/kbd.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useApi, useLive, useLiveReload, useLoad } from '@/lib/api.tsx'
+import { Can, ReadOnlyNote, useAuth } from '@/lib/auth.tsx'
 import {
   channelLabel,
   dmWithEmployee,
@@ -282,34 +283,40 @@ function ChannelList({
       <div>
         <div className="flex h-7 items-center px-2 text-micro font-medium text-fg-tertiary">
           Channels
-          <button
-            type="button"
-            onClick={onNew}
-            className="ml-auto rounded p-0.5 hover:bg-secondary hover:text-foreground"
-            aria-label="New channel"
-          >
-            <Plus className="size-3.5" />
-          </button>
+          <Can>
+            <button
+              type="button"
+              onClick={onNew}
+              className="ml-auto rounded p-0.5 hover:bg-secondary hover:text-foreground"
+              aria-label="New channel"
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </Can>
         </div>
         {rooms.map(item)}
       </div>
       <div>
         <div className="flex h-7 items-center px-2 text-micro font-medium text-fg-tertiary">
           Direct messages
-          <button
-            type="button"
-            onClick={onNewMessage}
-            className="ml-auto rounded p-0.5 hover:bg-secondary hover:text-foreground"
-            aria-label="New message"
-          >
-            <PenSquare className="size-3.5" />
-          </button>
+          <Can>
+            <button
+              type="button"
+              onClick={onNewMessage}
+              className="ml-auto rounded p-0.5 hover:bg-secondary hover:text-foreground"
+              aria-label="New message"
+            >
+              <PenSquare className="size-3.5" />
+            </button>
+          </Can>
         </div>
         {dms.map(item)}
         {dms.length === 0 && (
-          <button type="button" onClick={onNewMessage} className="px-2 text-micro text-fg-quaternary hover:text-fg-secondary">
-            Start a conversation
-          </button>
+          <Can fallback={<span className="px-2 text-micro text-fg-quaternary">No direct messages</span>}>
+            <button type="button" onClick={onNewMessage} className="px-2 text-micro text-fg-quaternary hover:text-fg-secondary">
+              Start a conversation
+            </button>
+          </Can>
         )}
       </div>
     </nav>
@@ -398,15 +405,17 @@ function ThreadPanel({
               <MessageItem key={m.id} m={m} me={me} actions={actions} highlight={highlight === m.id} />
             ))}
           </div>
-          <Composer
-            compact
-            placeholder="Reply…"
-            suggestions={suggestions}
-            onSend={async (text) => {
-              const m = await api.postMessage(channelId, { text, threadId })
-              onChange(m)
-            }}
-          />
+          <Can fallback={<ReadOnlyNote />}>
+            <Composer
+              compact
+              placeholder="Reply…"
+              suggestions={suggestions}
+              onSend={async (text) => {
+                const m = await api.postMessage(channelId, { text, threadId })
+                onChange(m)
+              }}
+            />
+          </Can>
         </>
       )}
     </aside>
@@ -414,6 +423,7 @@ function ThreadPanel({
 }
 
 function AddMember({ existing, onAdd }: { existing: string[]; onAdd(m: ChatMember): void }) {
+  const { can } = useAuth()
   const people = useLoad(
     (a) =>
       Promise.all([
@@ -431,7 +441,7 @@ function AddMember({ existing, onAdd }: { existing: string[]; onAdd(m: ChatMembe
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-xs" aria-label="Add member">
+        <Button variant="ghost" size="icon-xs" aria-label="Add member" disabled={!can('member')}>
           <UserPlus />
         </Button>
       </DropdownMenuTrigger>
@@ -684,14 +694,16 @@ export function ChatPage() {
       actions={
         <>
           {searchInput}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => setDmOpen(true)} aria-label="New message">
-                <PenSquare />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>New message</TooltipContent>
-          </Tooltip>
+          <Can>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" onClick={() => setDmOpen(true)} aria-label="New message">
+                  <PenSquare />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New message</TooltipContent>
+            </Tooltip>
+          </Can>
         </>
       }
     >
@@ -805,15 +817,17 @@ export function ChatPage() {
                   )}
                   <div ref={end} />
                 </div>
-                <Composer
-                  placeholder={`Message ${channel.data.dm ? channelLabel(channel, me.data?.contactId) : `#${channel.data.name}`}`}
-                  examples={tagExamples(channel, suggestions)}
-                  suggestions={suggestions}
-                  onSend={async (text) => {
-                    const m = await api.postMessage(channel.id, { text })
-                    onChange(m)
-                  }}
-                />
+                <Can fallback={<ReadOnlyNote />}>
+                  <Composer
+                    placeholder={`Message ${channel.data.dm ? channelLabel(channel, me.data?.contactId) : `#${channel.data.name}`}`}
+                    examples={tagExamples(channel, suggestions)}
+                    suggestions={suggestions}
+                    onSend={async (text) => {
+                      const m = await api.postMessage(channel.id, { text })
+                      onChange(m)
+                    }}
+                  />
+                </Can>
               </>
             ) : (
               <EmptyState text="Pick a channel." />

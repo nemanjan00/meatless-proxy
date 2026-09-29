@@ -4,23 +4,27 @@
  * and egress allowlists, a procedure with a checklist, skills, memories, a file
  * and an extra trigger. Nothing here calls a model.
  *
- *   npx tsx packages/web/scripts/seed-demo.ts http://localhost:3000
+ *   MP_TOKEN=mpt_… npx tsx packages/web/scripts/seed-demo.ts http://localhost:3000
+ *
+ * MP_TOKEN is an admin's API token (`npm run token -- --contact <admin id>`, or
+ * Settings → API tokens). The admin becomes "Dana Whitfield".
  *
  * Only fake names and example.com addresses.
  */
 import { createApiClient, type ApiRecord, type EmployeeData } from '@mp/api'
 
 const base = process.argv[2] ?? 'http://localhost:3000'
-const api = createApiClient({ baseUrl: base })
+const token = process.env.MP_TOKEN
+if (!token) throw new Error("set MP_TOKEN to an admin's API token")
+const api = createApiClient({ baseUrl: base, headers: { authorization: `Bearer ${token}` } })
 
 const employees = await api.listRecords<EmployeeData>('employee')
 const employee = employees.items[0]
 if (!employee) throw new Error('no employee: start the server with MP_BOOTSTRAP=1')
 
-// The web UI posts as the default web contact: give it a name.
-const contacts = await api.listRecords<{ name: string; kind: string }>('contact')
-const web = contacts.items.find((c) => c.data.name === 'Web user' || c.data.name === 'Dana Whitfield')
-if (!web) throw new Error('no web contact')
+// The signed-in admin posts in the screenshots: give them a name.
+const me = await api.me()
+const web = await api.getRecord<{ name: string; kind: string }>('contact', me.contactId)
 const dana = await api.updateRecord(
   'contact',
   web.id,

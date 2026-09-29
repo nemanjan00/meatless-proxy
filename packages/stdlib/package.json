@@ -26,9 +26,8 @@
     "@mp/tools": "0.0.0",
     "@mp/usage": "0.0.0",
     "@mp/router": "0.0.0",
-    "@mp/runner": "0.0.0"
-  },
-  "devDependencies": {
+    "@mp/runner": "0.0.0",
     "@mp/model": "0.0.0"
-  }
+  },
+  "devDependencies": {}
 }

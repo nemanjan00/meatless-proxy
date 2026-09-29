@@ -29,16 +29,17 @@ async function make() {
     const r = await t.req('POST', `/api/chat/channels/${ch.id}/messages`, { text }, headers)
     expect(r.status).toBe(201)
     await quiet()
-    const forks = await s.sessions.children(employee.data.routerSessionId!)
-    const fork = forks.at(-1)!
-    const [run] = await s.sessions.runs({ sessionId: fork.id })
-    return { fork, run: run!, history: await s.sessions.runHistory(run!.id) }
+    // Requests run on the router context itself (docs/spec.md, "The router context").
+    const router = await s.sessions.require(employee.data.routerSessionId!)
+    const runs = await s.sessions.runs({ sessionId: router.id })
+    const run = runs.at(-1)!
+    return { router, run, history: await s.sessions.runHistory(run.id) }
   }
   return { t, s, employee, requests, request }
 }
 
 describe('memory at session start', () => {
-  it('puts relevant memories into a request fork, after the fork point and before the event', async () => {
+  it("puts relevant memories into the router's run, after its history and before the event", async () => {
     const { s, employee, requests, request } = await make()
     const { memory } = await s.memory.remember({
       summary: 'The staging database password rotates every Friday',
@@ -47,20 +48,21 @@ describe('memory at session start', () => {
     })
     await s.memory.remember({ summary: 'Ben likes tea', content: 'Green, no sugar.' })
 
-    const { fork, history } = await request('How do I rotate the staging database password?')
-    const routerHistory = await s.sessions.history(employee.data.routerSessionId!)
-    // The fork point is the router's head: the run's history starts with it, unchanged.
-    expect(history.slice(0, routerHistory.length).map((e) => e.id)).toEqual(routerHistory.map((e) => e.id))
-    const added = history.slice(routerHistory.length)
-    expect(added.map((e) => e.kind)).toEqual(['system', 'event', 'assistant'])
+    const { run, history } = await request('How do I rotate the staging database password?')
+    // The run starts at the router's head as it was (its prompt and instructions), unchanged: the cached prefix.
+    const base = history.findIndex((e) => e.id === run.data.base)
+    expect(base).toBe(1)
+    const added = history.slice(base + 1)
+    expect(added.slice(0, 2).map((e) => e.kind)).toEqual(['system', 'event'])
     const text = (added[0]!.content as { text: string }).text
     expect(text.startsWith(SESSION_MEMORY_HEADER)).toBe(true)
     expect(text).toContain(`- The staging database password rotates every Friday (fact, ${memory.id}): Ask the platform team`)
     expect(text).not.toContain('Ben likes tea')
     expect(added[0]!.meta.recalledMemories).toEqual([memory.id])
     expect((added[1]!.content as { text: string }).text).toContain('How do I rotate the staging database password?')
-    // The fork itself still shares the router's committed history (the cached prefix).
-    expect(fork.data.parent?.entryId).toBe(routerHistory.at(-1)!.id)
+    // The memory belonged to the run only: the router kept its one-line decision, not the memory.
+    const committed = await s.sessions.history(employee.data.routerSessionId!)
+    expect(committed.some((e) => (e.content as any)?.text?.startsWith?.(SESSION_MEMORY_HEADER))).toBe(false)
     // And the model saw the memory before the request.
     const msgs = requests[0]!.messages.map((m) => m.content ?? '')
     const mi = msgs.findIndex((m) => m.startsWith(SESSION_MEMORY_HEADER))

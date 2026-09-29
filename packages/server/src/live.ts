@@ -12,6 +12,7 @@ import { errorMessage, type BusMessage } from '@mp/core'
 import type { Message } from '@mp/chat'
 import type { Run } from '@mp/sessions'
 import type { Services } from './services.ts'
+import { ChatVisibility } from './auth/visibility.ts'
 import { Views, mapChecklist, mapEvent } from './http/views.ts'
 
 /** What the Now page shows about a live run beyond its record (see `NowItem`). */
@@ -86,6 +87,8 @@ export interface LiveSocket {
 
 interface Client {
   socket: LiveSocket
+  /** The signed-in contact: DMs they aren't in are never sent to them. Unset: no filtering (in-process use). */
+  contactId?: string
   channels: Set<LiveChannel>
   queue: string[]
   closed: boolean
@@ -118,6 +121,8 @@ export interface LiveHubOptions {
 }
 
 const CHANNEL_RE = /^(now|events|(session|run|chat|records):[A-Za-z0-9_.:-]+)$/
+/** Record kinds that can belong to a DM. */
+const CHAT_RECORD_KINDS = new Set(['channel', 'message', 'event'])
 
 /**
  * The WebSocket fan-out: turns bus messages into `@mp/api` live events and
@@ -130,6 +135,9 @@ export class LiveHub {
   private chain: Promise<void> = Promise.resolve()
   private maxQueue: number
   private maxBuffered: number
+  private visibility: ChatVisibility
+  /** `contact:channel` → whether they may see it, briefly cached (one lookup per event and client otherwise). */
+  private seen = new Map<string, { at: number; ok: boolean }>()
 
   constructor(
     private s: Services,
@@ -137,6 +145,7 @@ export class LiveHub {
   ) {
     this.maxQueue = opts.maxQueue ?? 500
     this.maxBuffered = opts.maxBuffered ?? 1024 * 1024
+    this.visibility = new ChatVisibility(s)
     for (const topic of LIVE_TOPICS) {
       this.offs.push(
         s.bus.subscribe(topic, (m) => {
@@ -153,9 +162,18 @@ export class LiveHub {
     return this.clients.size
   }
 
-  /** Registers a socket. Returns the handlers to call for its messages and its close. */
-  connect(socket: LiveSocket): { message(data: unknown): void; close(): void } {
-    const client: Client = { socket, channels: new Set(), queue: [], closed: false }
+  /**
+   * Registers a socket, for the signed-in `viewer` (whose DMs filter what it gets). Returns the
+   * handlers to call for its messages and its close.
+   */
+  connect(socket: LiveSocket, viewer?: { contactId: string }): { message(data: unknown): void; close(): void } {
+    const client: Client = {
+      socket,
+      channels: new Set(),
+      queue: [],
+      closed: false,
+      ...(viewer ? { contactId: viewer.contactId } : {}),
+    }
     this.clients.add(client)
     return {
       message: (data) => this.onMessage(client, data),
@@ -189,15 +207,64 @@ export class LiveHub {
       const chans = Array.isArray(msg.channels) ? msg.channels.filter((c) => typeof c === 'string') : []
       const bad = chans.filter((c) => !CHANNEL_RE.test(c))
       if (bad.length) this.send(client, { type: 'error', message: `unknown channels: ${bad.join(', ')}` })
-      for (const c of chans) {
-        if (!CHANNEL_RE.test(c)) continue
-        if (msg.type === 'subscribe') client.channels.add(c)
-        else client.channels.delete(c)
+      if (msg.type === 'unsubscribe') {
+        for (const c of chans) client.channels.delete(c as LiveChannel)
+        return
       }
-      if (msg.type === 'subscribe') this.send(client, { type: 'subscribed', channels: [...client.channels] })
+      this.chain = this.chain.then(() =>
+        this.subscribe(client, chans.filter((c) => CHANNEL_RE.test(c)) as LiveChannel[]).catch((err) => {
+          this.s.logger.warn('live subscribe failed', { err: errorMessage(err) })
+          this.send(client, { type: 'error', message: 'subscribe failed' })
+        }),
+      )
       return
     }
     this.send(client, { type: 'error', message: `unknown message type ${(msg as { type?: unknown }).type}` })
+  }
+
+  /** Subscribes, except to DMs the client isn't in (answered like unknown channels, so they stay private). */
+  private async subscribe(client: Client, chans: LiveChannel[]) {
+    const refused: string[] = []
+    for (const c of chans) {
+      const chat = c.startsWith('chat:') ? c.slice(5) : null
+      if (chat && !(await this.maySee(client, chat))) refused.push(c)
+      else client.channels.add(c)
+    }
+    if (refused.length) this.send(client, { type: 'error', message: `unknown channels: ${refused.join(', ')}` })
+    this.send(client, { type: 'subscribed', channels: [...client.channels] })
+  }
+
+  private async maySee(client: Client, channelId: string): Promise<boolean> {
+    if (!client.contactId) return true
+    const key = `${client.contactId}:${channelId}`
+    const hit = this.seen.get(key)
+    const now = this.s.clock.now()
+    if (hit && now - hit.at < 5000) return hit.ok
+    const ok = await this.visibility.canSeeChannel(client.contactId, channelId)
+    if (this.seen.size > 10_000) this.seen.clear()
+    this.seen.set(key, { at: now, ok })
+    return ok
+  }
+
+  /** The chat channel a live event is about (to hide DMs from non-members), if any. */
+  private async chatChannelOf(topic: string, payload: Record<string, any>): Promise<string | null | undefined> {
+    if (topic === 'chat.message') return payload.channelId
+    if (topic === 'event.ingested') {
+      const e = payload.event as { data?: { source?: string; payload?: { channelId?: unknown } } } | undefined
+      return e?.data?.source === 'chat' && typeof e.data.payload?.channelId === 'string' ? e.data.payload.channelId : null
+    }
+    if (topic === 'record.changed' && CHAT_RECORD_KINDS.has(payload.kind)) {
+      if (payload.kind === 'channel') return payload.id
+      const r = await this.s.records.get(payload.kind, payload.id)
+      // A chat record we can't place is dropped rather than risk showing a DM.
+      if (!r) return undefined
+      return this.visibility.channelOfRecord(r)
+    }
+    if (topic === 'link.changed') {
+      const from = payload.from as { kind?: string; id?: string } | undefined
+      return from?.kind === 'channel' ? (from.id ?? null) : null
+    }
+    return null
   }
 
   private send(client: Client, msg: LiveServerMessage) {
@@ -300,7 +367,9 @@ export class LiveHub {
       built.topic === 'event.routed' ? ['events'] : channelsFor(built.topic as LiveTopic, built.payload as never)
     if (!chans.length) return
     const at = new Date(m.at).toISOString()
+    const chat = await this.chatChannelOf(built.topic, built.payload)
     for (const client of this.clients) {
+      if (client.contactId && chat !== null && (chat === undefined || !(await this.maySee(client, chat)))) continue
       for (const channel of chans) {
         if (!client.channels.has(channel)) continue
         this.send(client, { type: 'event', channel, topic: built.topic, payload: built.payload, at } as LiveServerMessage)

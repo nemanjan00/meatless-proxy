@@ -111,32 +111,50 @@ email (cached per user).
 
 ## Setup on the Linear side
 
-1. **An API key for the employee's Linear account.** Sign in to Linear as the account the employee acts as (a
-   dedicated member such as "Kai", so its work is visible as its own), then open *Settings → Account → Security &
-   access → Personal API keys → New API key*. Give it read and write access, limited to the teams it works in if you
-   like. The key starts with `lin_api_`.
+Each employee acts in Linear as **its own member**, with its own API key, so its issues and comments show who did them.
+The server (`packages/server/src/integrations`) builds one instance per employee from that employee's secrets.
+
+1. **An API key per employee.** Invite a dedicated member for the employee (such as "Kai", with a name that says it's
+   an AI), sign in as it, then open *Settings → Account → Security & access → Personal API keys → New API key*. Give it
+   read and write access, limited to the teams it works in if you like. The key starts with `lin_api_`.
    - Or an **OAuth app** (*Settings → API → OAuth applications → New*), installed with `actor=app` so the app acts as
      its own user. Scopes: `read`, `write` (or `issues:create` and `comments:create`). Set the secret to
      `Bearer <access token>`.
-2. **A webhook**: *Settings → API → Webhooks → New webhook*.
-   - URL: `https://<harness>/webhooks/linear`
+2. **A webhook**: *Settings → API → Webhooks → New webhook*. Linear webhooks belong to the workspace, so usually there is
+   one for the deployment; a webhook per employee works too.
+   - URL: `https://<harness>/webhooks/linear` (deployment-wide), or `https://<harness>/webhooks/linear/<employee id or
+     handle>` (its events then belong to that employee, and only its triggers match them).
    - Data change events (resource types): **Issues**, **Comments**, **Issue labels**, and optionally **Emoji
      reactions**.
    - Teams: the teams the employees work in, or all public teams.
    - Save, then copy the **signing secret** Linear shows for the webhook.
-3. **Secrets** in the harness (docs/spec.md#secrets), scoped to the `linear` integration:
-   - `LINEAR_API_KEY`: the key from step 1 (or `Bearer <token>`)
-   - `LINEAR_WEBHOOK_SECRET`: the signing secret from step 2
+3. **Secrets** in the harness (docs/spec.md#secrets):
+   - `LINEAR_API_KEY`: the employee's key from step 1, **scoped to the employee**.
+   - `LINEAR_WEBHOOK_SECRET`: the signing secret from step 2. Global scope for `/webhooks/linear`; scoped to the
+     employee for `/webhooks/linear/<employee>`.
 
-   The server passes them as `secrets: { apiKey, webhookSecret }`. The integration is enabled when they're set.
+   Set them in the web UI under *Settings → Secrets*, or through the API:
+
+   ```sh
+   curl -X PUT https://<harness>/api/secrets -H 'content-type: application/json' \
+     -d '{ "name": "LINEAR_API_KEY", "value": "lin_api_…", "scope": { "type": "employee", "id": "emp_…" } }'
+   ```
+
+   A global secret is the fallback for an employee without its own. Linear is enabled for an employee when its
+   `LINEAR_API_KEY` resolves; until then its `mcp.linear.*` tools answer "Linear isn't set up for this employee: set
+   the LINEAR_API_KEY secret". A webhook URL without a signing secret answers `404`. The server passes the values as
+   `secrets: { apiKey, webhookSecret }`.
 4. **Handles**: give each person's contact a handle `{ system: 'linear', id: '<their Linear user id>' }` (the ids are
-   in `list_users`), or let the server match actors by email through `resolveUser`. Call `viewer` with the
-   employee's key to learn its own Linear user id.
+   in `list_users`). Otherwise the server looks the actor up with `resolveUser`, matches the contact by email and
+   records the handle on it. It never creates contacts from webhooks. Call `viewer` with the employee's key to learn
+   its own Linear user id.
 
 ## Recommended trigger
 
-A new issue assigned to the employee starts work in its intake context (docs/spec.md#triggers). `<kai-linear-id>` is
-the `id` that `viewer` returns for the employee's key:
+Triggers are not created automatically: add this one per employee, e.g. by asking the employee in harness chat to
+create it with its `triggers.create` tool. A new issue assigned to the employee then goes to its router context
+([the router context](../../docs/spec.md#the-router-context)): it checks its log of decisions, starts a session for the
+issue (which then owns it), and keeps a one-line decision. `<kai-linear-id>` is the `id` that `viewer` returns for the employee's key:
 
 ```json
 {
@@ -147,15 +165,17 @@ the `id` that `viewer` returns for the employee's key:
     "type": "issue.assigned",
     "where": { "payload.assignee.id": "<kai-linear-id>" }
   },
-  "target": { "type": "session", "sessionId": "ses_intake" },
-  "mode": "ephemeral",
-  "fork": false
+  "target": { "type": "router" },
+  "fork": false,
+  "mode": "ephemeral"
 }
 ```
 
 The session that takes the issue subscribes to `{ system: 'linear', id: 'PAY-123' }`, so comments, state changes and
 reassignments on it (all with that subject) go straight to it instead of to the trigger
-(docs/spec.md#subscriptions).
+(docs/spec.md#subscriptions). When the issue is removed (`issue.removed`) or moves to a completed or canceled state
+(`issue.state_changed` with `stateType` `completed` or `canceled`), the server ends every subscription to it after
+delivering that event.
 
 ## Real forks: the employee's `taskSystem`
 

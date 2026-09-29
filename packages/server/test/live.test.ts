@@ -4,16 +4,19 @@ import { LiveHub } from '../src/live.ts'
 import { testApp, until, type TestApp } from './helpers.ts'
 
 let t: TestApp & { port: number | null }
+let auth: Record<string, string>
 
 beforeAll(async () => {
   t = await testApp({ http: true, script: [reply('Streaming a longer answer to the socket, in several chunks.')] })
+  auth = (await t.admin()).headers
 })
 afterAll(async () => {
   await t.close()
 })
 
-function connect(port: number) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+/** A signed-in socket (Node's WebSocket takes headers as a second argument). */
+function connect(port: number, headers: Record<string, string> = auth) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers } as never)
   const messages: any[] = []
   ws.onmessage = (ev) => messages.push(JSON.parse(String(ev.data)))
   const open = new Promise<void>((resolve, reject) => {
@@ -43,7 +46,7 @@ describe('websocket /ws', () => {
     // A message straight to the router session: it runs there, so its stream is on session:<routerId>.
     const post = await fetch(`http://127.0.0.1:${t.port}/api/sessions/${routerId}/message`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...auth },
       body: JSON.stringify({ text: 'Hi over the socket' }),
     })
     expect(post.status).toBe(200)

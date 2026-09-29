@@ -1,4 +1,6 @@
 import {
+  type Access,
+  type ApiToken,
   type ApiClient,
   type ApiEntry,
   type ApiEvent,
@@ -50,8 +52,8 @@ export interface MockApiOptions {
   /** Artificial latency per call, in ms. 0 in tests. */
   latencyMs?: number
   emit?: Emit
-  /** The person using the UI (posts chat messages as them). */
-  me?: { id: string; name: string }
+  /** The person using the UI (posts chat messages as them): a signed-in admin by default. */
+  me?: { id: string; name: string; access?: Access }
 }
 
 const notFound = (what: string) => new ApiRequestError(404, 'not_found', `${what} not found`)
@@ -94,6 +96,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     return new Promise((r) => setTimeout(() => r(structuredClone(v)), opts.latencyMs))
   }
   const fail = (e: Error): Promise<never> => Promise.reject(e)
+  const tokens: ApiToken[] = []
 
   const kindMap = (kind: string) => {
     if (!db.records.has(kind)) db.records.set(kind, new Map())
@@ -1001,7 +1004,45 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         }),
       )
     },
-    me: () => delay({ contactId: me.id, name: me.name }),
+    me: () => delay({ contactId: me.id, name: me.name, access: me.access ?? 'admin', via: 'session' as const }),
+
+    authConfig: () => delay({ oidc: false }),
+    logout: () => delay(undefined),
+    listTokens: (q = {}) =>
+      delay(
+        tokens
+          .filter((x) => (q.all ? true : x.contactId === (q.contactId ?? me.id)))
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+      ),
+    createToken: (body = {}) => {
+      const t = {
+        id: mockId('mtk', tokens.length + 1),
+        contactId: body.contactId ?? me.id,
+        ...(body.name ? { name: body.name } : {}),
+        createdAt: iso(),
+        revoked: false,
+      }
+      tokens.push(t)
+      return delay({ ...t, token: `mpt_mock${Math.random().toString(36).slice(2, 14)}` })
+    },
+    revokeToken: (id) => {
+      const t = tokens.find((x) => x.id === id)
+      if (!t) return fail(notFound(`token ${id}`))
+      t.revoked = true
+      return delay(t)
+    },
+    createLoginLink: (who) => {
+      const c =
+        'contactId' in who
+          ? get<{ name: string }>('contact', who.contactId)
+          : all<{ email?: string }>('contact').find((x) => x.data.email?.toLowerCase() === who.email.toLowerCase())
+      if (!c) return fail(new ApiRequestError(400, 'bad_request', 'no such contact'))
+      return delay({
+        contactId: c.id,
+        url: `${typeof location === 'undefined' ? 'http://localhost' : location.origin}/auth/login?token=mpl_mock${c.id.slice(-6)}`,
+        expiresAt: new Date(db.now() + 15 * 60_000).toISOString(),
+      })
+    },
 
     usageTotals: (f) => delay(totalsFor(usageMatch(f))),
     usageBreakdown: (groupBy, f) => {

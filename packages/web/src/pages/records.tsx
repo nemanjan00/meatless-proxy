@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input.tsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.tsx'
 import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
+import { Can } from '@/lib/auth.tsx'
 import { hrefFor, linkRole, plainDoc } from '@/lib/doclinks.ts'
 import { useNames } from '@/lib/names.ts'
 import { formatDateTime, timeAgo } from '@/lib/format.ts'
@@ -180,9 +181,11 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
       icon={ICONS[kind]}
       actions={
         schema && (
-          <Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>
-            <Plus /> New {kind}
-          </Button>
+          <Can>
+            <Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>
+              <Plus /> New {kind}
+            </Button>
+          </Can>
         )
       }
       filters={
@@ -209,9 +212,11 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
           text={text ? `No ${title.toLowerCase()} match “${text}”.` : `No ${title.toLowerCase()} yet.`}
           action={
             schema && (
-              <Button size="sm" onClick={() => setNewOpen(true)}>
-                New {kind}
-              </Button>
+              <Can>
+                <Button size="sm" onClick={() => setNewOpen(true)}>
+                  New {kind}
+                </Button>
+              </Can>
             )
           }
         />

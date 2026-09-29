@@ -40,7 +40,7 @@ describe('routes', () => {
       })
       const res = await t.a.app.request(url, {
         method,
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(await t.admin()).headers },
         ...(method === 'GET' || method === 'DELETE' ? {} : { body: '{}' }),
       })
       const body = (await res.text()) || '{}'
@@ -162,11 +162,11 @@ describe('sessions and runs', () => {
     const post = await t.req('POST', `/api/chat/channels/${requestsId}/messages`, { text: 'hello router' })
     expect(post.status).toBe(201)
     await quiet(t)
-    // The request runs in its own fork of the router context.
-    const reqId = (await t.a.services.sessions.children(routerId))[0]!.id
+    // The request runs on the router context itself, as an ephemeral run.
+    const reqId = routerId
     const list = await t.req('GET', `/api/sessions?employeeId=${employeeId}&status=active,waiting`)
     const row = list.body.items.find((x: any) => x.session.id === reqId)
-    expect(row).toMatchObject({ employee: { id: employeeId, name: 'Meatless' }, runState: 'completed', children: 0 })
+    expect(row).toMatchObject({ employee: { id: employeeId, name: 'Meatless' }, runState: 'completed' })
     expect(row.tokens.calls).toBeGreaterThan(0)
 
     const detail = await t.req('GET', `/api/sessions/${reqId}`)
@@ -176,20 +176,28 @@ describe('sessions and runs', () => {
 
     const history = await t.req('GET', `/api/sessions/${reqId}/history`)
     expect(history.body[0]).toMatchObject({ kind: 'system', parent: null })
-    // A continuing run: its work is committed to the request session's history.
-    expect(history.body.map((e: any) => e.kind)).toEqual(['system', 'event', 'assistant'])
+    // An ephemeral run that keeps only its one-line decision: prompt, router instructions, decision.
+    expect(history.body.map((e: any) => e.kind)).toEqual(['system', 'system', 'summary'])
     const tree = await t.req('GET', `/api/sessions/${routerId}/tree`)
     expect(tree.body).toMatchObject({ id: routerId, origin: 'root', employee: { name: 'Meatless' } })
-    expect(tree.body.children.map((c: any) => [c.id, c.origin])).toEqual([[reqId, 'fork']])
 
     const runs = await t.req('GET', `/api/sessions/${reqId}/runs`)
-    expect(runs.body[0].data).toMatchObject({ state: 'completed', mode: 'continuing' })
+    expect(runs.body[0].data).toMatchObject({ state: 'completed', mode: 'ephemeral' })
     const runId = runs.body[0].id
     const entryTree = await t.req('GET', `/api/sessions/${reqId}/entry-tree`)
     expect(entryTree.body.runs.map((r: any) => r.id)).toContain(runId)
+    // The run's exploration is in the entry tree, but not in the committed history.
+    expect(entryTree.body.entries.length).toBeGreaterThan(history.body.length)
 
     const runHistory = await t.req('GET', `/api/runs/${runId}/history`)
-    expect(runHistory.body.map((e: any) => e.kind)).toEqual(['system', 'event', 'assistant'])
+    expect(runHistory.body.map((e: any) => e.kind)).toEqual([
+      'system',
+      'system',
+      'event',
+      'assistant',
+      'tool_result',
+      'assistant',
+    ])
     const children = await t.req('GET', `/api/entries/${history.body[0].id}/children`)
     expect(children.body.length).toBeGreaterThanOrEqual(1)
     expect((await t.req('GET', '/api/entries/ent_missing/children')).status).toBe(404)
@@ -323,7 +331,7 @@ describe('events and triggers', () => {
     expect(tr).toMatchObject({
       employee: { id: employeeId },
       context: { id: routerId },
-      trigger: { data: { source: 'chat', type: 'message.posted' } },
+      trigger: { data: { source: 'chat', type: 'message.*', fork: false, mode: 'ephemeral' } },
     })
     expect(tr.fires).toBeGreaterThanOrEqual(1)
     expect(tr.recentEvents.length).toBeGreaterThanOrEqual(1)
@@ -346,7 +354,7 @@ describe('chat', () => {
     const root = await t.req('POST', `/api/chat/channels/${ch.body.id}/messages`, { text: 'Is prod down? @meatless' })
     expect(root.body.data).toMatchObject({
       threadId: null,
-      author: { type: 'person', name: 'Web user' },
+      author: { type: 'person', name: 'Admin' },
       tags: [{ type: 'employee', id: employeeId, text: '@meatless' }],
     })
     const replyMsg = await t.req('POST', `/api/chat/channels/${ch.body.id}/messages`, {
@@ -383,7 +391,7 @@ describe('chat', () => {
 describe('everyday chat', () => {
   let otherId: string
   let channelId: string
-  const asOther = () => ({ 'x-mp-contact': otherId })
+  const asOther = () => ({ 'x-mp-contact': otherId }) // signed in as Robin (see helpers.ts)
 
   beforeAll(async () => {
     const other = await t.req('POST', '/api/records/contact', {
@@ -396,7 +404,7 @@ describe('everyday chat', () => {
   it('tells the UI who it is', async () => {
     const me = await t.req('GET', '/api/me')
     expect(me.status).toBe(200)
-    expect(me.body).toMatchObject({ name: 'Web user' })
+    expect(me.body).toMatchObject({ name: 'Admin', access: 'admin', via: 'token' })
     expect(me.body.contactId).toMatch(/^con_/)
   })
 
@@ -441,7 +449,7 @@ describe('everyday chat', () => {
     // Messages in the same millisecond as the marker count as read.
     await new Promise((r) => setTimeout(r, 5))
     await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'hello' }, asOther())
-    await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'ping @web' }, asOther())
+    await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'ping @admin' }, asOther())
     const unread = await t.req('GET', '/api/chat/unread')
     expect(unread.status).toBe(200)
     expect(unread.body.find((u: any) => u.channelId === channelId)).toMatchObject({ unread: 2, mentions: 1 })
@@ -585,19 +593,19 @@ describe('MCP tokens', () => {
   })
 })
 
-describe('web contact', () => {
-  it('uses x-mp-contact as the author when given', async () => {
+describe('the signed-in person', () => {
+  it('is the author, and an x-mp-contact header changes nothing', async () => {
     const contact = (await t.req('POST', '/api/records/contact', { data: { name: 'Di Example', kind: 'person' } })).body
-    const m = await t.req(
-      'POST',
-      `/api/chat/channels/${requestsId}/messages`,
-      { text: 'from Di' },
-      { 'x-mp-contact': contact.id },
-    )
+    const di = await t.as(contact.id)
+    const m = await t.req('POST', `/api/chat/channels/${requestsId}/messages`, { text: 'from Di' }, di)
     expect(m.body.data.author).toEqual({ type: 'person', id: contact.id, name: 'Di Example' })
-    expect(
-      (await t.req('POST', `/api/chat/channels/${requestsId}/messages`, { text: 'x' }, { 'x-mp-contact': 'con_nope' })).status,
-    ).toBe(400)
+    const other = (await t.req('POST', '/api/records/contact', { data: { name: 'Ed Example', kind: 'person' } })).body
+    const raw = await t.a.app.request(`/api/chat/channels/${requestsId}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...di, 'x-mp-contact': other.id },
+      body: JSON.stringify({ text: 'still Di' }),
+    })
+    expect(((await raw.json()) as any).data.author.id).toBe(contact.id)
     await quiet(t)
   })
 })

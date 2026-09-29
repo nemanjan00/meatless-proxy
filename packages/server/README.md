@@ -50,6 +50,13 @@ first by a small built-in loader; variables already set win.
 | `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |
 | `ALERT_UNAVAILABLE_COUNT` | `3` | Alert when a dependency had this many `unavailable` errors… |
 | `ALERT_UNAVAILABLE_MINUTES` | `10` | …within this many minutes |
+| `PUBLIC_URL` | none | The URL people open, e.g. `https://mp.example.com`: sign-in links, the CSRF origin check, `Secure` cookies, the CSP's `connect-src` |
+| `COOKIE_SECURE` | `auto` | `Secure` on the session cookie: `auto` (when `PUBLIC_URL` or the request is https), `true` or `false` |
+| `TRUST_PROXY` | `false` | Trust `x-forwarded-for` (rate limits) and `x-forwarded-proto` (cookies) from a reverse proxy |
+| `ADMIN_EMAIL` | none | Email of the admin contact the first start creates (or the existing contact made admin) |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL` | none | Optional sign-in with an identity provider: all four or none. The redirect URL is `<PUBLIC_URL>/auth/oidc/callback` |
+| `METRICS_TOKEN` | none | A bearer token (16+ characters) that may read `/metrics`, besides admins |
+| `PREVIEW_DOMAIN` | none | Live previews' domain: the UI may frame `https://*.<PREVIEW_DOMAIN>` and nothing else |
 | `NODE_ENV` | | `production` disables `.env` loading |
 | `DOTENV_PATH` | `.env` | Where the development `.env` is |
 
@@ -74,20 +81,112 @@ becomes an event with source `mcp:<server>`, routed like any other.
 
 Exactly the routes of `@mp/api` (`ROUTES`), plus:
 
-- `POST /api/mcp/tokens` `{ contactId?, name? }` → `{ id, token, contactId }` (201). The token is returned once.
-- `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair.
+- `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
+- `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
+- `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
+- `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
 
 Errors are `{ error: { code, message, details? } }`: not found 404, validation
 422 (issues in `details.issues`), malformed request 400, conflict 409 (the
 current record in `details.current` for stale updates), denied 403, limit 429,
 unavailable 503, anything else 500 with a generic message and no stack trace.
 
-Writes are made by the current person: the contact in the `x-mp-contact`
-header, or the deployment's default "Web user" contact (there is no sign-in yet).
-Routing results are stored on each event (`data.routing`), which is what event
-details, trigger statistics and lineage read. Secrets are write-only: the API
-only ever returns names and scopes. `secret` and `mcp_token` records are hidden
-from the generic records API.
+Every request to `/api` and `/ws` is made by a signed-in person, and every write
+is authored by them. Nothing else says who you are: there is no `x-mp-contact`
+header and no default user any more. Routing results are stored on each event
+(`data.routing`), which is what event details, trigger statistics and lineage
+read. Secrets are write-only: the API only ever returns names and scopes.
+`secret`, `mcp_token`, `login_link` and `auth_session` records are hidden from
+the generic records API.
+
+## Sign-in and access
+
+All of it is in `src/auth/`: `guard.ts` (who is calling, CSRF, the route
+table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
+`visibility.ts` (DMs), `headers.ts` (CSP), `rate-limit.ts`,
+`bootstrap-admin.ts`.
+
+- **Sign-in links.** `npm run login-link -- --contact <id|email>` prints one,
+  admins make them in Settings → People and access (`POST /api/auth/links
+  { contactId | email }`), and the first start logs one (see
+  [Bootstrap](#bootstrap)). A link is a random token, stored as its sha256,
+  that works once within 15 minutes. `GET /auth/login?token=&next=` exchanges it
+  for a session and redirects to `next` (a local path); a bad link redirects to
+  `/login?error=invalid_link`.
+- **Sessions.** The cookie `mp_session` holds a random id, stored as its sha256
+  (`auth_session` records): httpOnly, SameSite=Lax, Path=/, `Secure` over https
+  (`COOKIE_SECURE`), 14 days after the last use (the expiry slides, written at
+  most once a minute). An id older than 4 hours is replaced on its next use (the
+  old one works for one more minute, for requests in flight). `POST
+  /api/auth/logout` ends it.
+- **OIDC** (optional, `OIDC_*`): authorization code flow with PKCE (S256) and
+  discovery, the client secret as HTTP Basic, the id_token verified against the
+  provider's JWKS (RS256 or ES256; issuer, audience, expiry, nonce), state kept in
+  an HMAC-signed cookie for 10 minutes. The person is matched to a contact by
+  email (case-insensitive; an unverified email is refused). Unknown emails are
+  refused, nobody is created. No dependency: `fetch` and `node:crypto`.
+- **API tokens** are the MCP tokens (`mcp_token` records, stored hashed): one
+  token works as `Authorization: Bearer` on `/api`, `/ws` and `/mcp`. `GET|POST
+  /api/auth/tokens`, `DELETE /api/auth/tokens/:id` (revoke). Your own tokens, or
+  anyone's for admins. `npm run token -- --contact <id>` still works.
+- **Access** is the contact's `access` field (an extension field defined here:
+  the contact's `role` is a job title): `viewer` (reads everything except
+  secrets), `member` (chat, messages to sessions, forks, pausing and resuming
+  their own runs, knowledge edits: contacts, projects, procedures, memories,
+  skills, docs, templates, a session's document and title, files) and `admin`
+  (secrets, employees, limits, triggers, settings, the kill switch, others'
+  tokens, sign-in links, import and export, anyone's access). A person without
+  it is a viewer. AI employees and people with `status: left` never sign in.
+- **One place enforces it**: `GUARD_RULES` in `guard.ts`, first match wins.
+  Unlisted routes need `viewer` for GET and `admin` for anything else. Webhooks
+  (`/webhooks/*`, their signature is the auth), `/mcp` (its own bearer check),
+  `/metrics`, `/healthz`, `/readyz`, `/auth/*`, `GET /api/auth/config` and the web
+  UI are public. Two checks need the body and live in the handlers: only admins
+  set `access`, and members edit only a session's document and title.
+- **DMs** are visible to their members only, admins included: the channel
+  list, messages, threads, reactions, search, unread counts, the inbox, events,
+  session threads and the records API (`channel`, `message`, `event`) leave them
+  out or answer 404, and `/ws` refuses `chat:<dm>` subscriptions and drops a DM's
+  live events for everyone else.
+- **CSRF**: a cookie-authenticated POST, PUT, PATCH or DELETE needs an `Origin`
+  matching `PUBLIC_URL` (else the request's host), or `x-mp-csrf` repeating the
+  `mp_csrf` cookie (the web UI sends it). A cookie-authenticated WebSocket must
+  come from the same origin. Bearer tokens need neither.
+- **Brute force**: 20 failed sign-ins (bad links, failed OIDC callbacks) per
+  address per minute, and 30 failed tokens or cookies, then 429 / a
+  `too_many_attempts` error for the rest of the minute. In memory, per process.
+- **Headers**: `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+  same-origin` on everything; on HTML also `X-Frame-Options: DENY` and a CSP:
+  `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'`,
+  `font-src 'self' data:` (the fonts are bundled), `frame-ancestors 'none'`, and
+  `frame-src` `'none'` or `https://*.<PREVIEW_DOMAIN>`.
+
+Tests sign in with `test/auth-helpers.ts`: `t.req` is the bootstrap admin by
+default, `await t.as(contactId)` returns headers for someone else (a bearer
+token; `member` unless they have an access), `signIn(app, id, { via: 'cookie' })`
+goes through a real link and returns the cookie and CSRF headers. As a shortcut,
+`t.req(…, { 'x-mp-contact': id })` means `t.as(id)`: the helper translates it,
+the server ignores the header.
+
+## Metrics
+
+`GET /metrics`, Prometheus text format (written by hand, no dependency), for
+signed-in admins or `Authorization: Bearer <METRICS_TOKEN>`:
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `mp_runs` | gauge (counted on scrape) | `state` |
+| `mp_queue_jobs` | gauge | `queue`, `state` (waiting, delayed, active) |
+| `mp_model_calls_total` | counter | `model` |
+| `mp_model_tokens_total` | counter | `model`, `type` (prompt, completion, cached) |
+| `mp_model_call_duration_seconds` | histogram | `model` |
+| `mp_tool_calls_total`, `mp_tool_errors_total` | counter | `tool` |
+| `mp_events_total` | counter (new events, not duplicates) | `source` |
+| `mp_environments_running` | gauge | |
+| `mp_http_requests_total` | counter | `method`, `route` (the route pattern), `status` |
+
+Counters live in memory from the bus and the runner's hooks, so they restart at
+zero with the process, as Prometheus expects.
 
 ## Live updates (`/ws`)
 
@@ -208,12 +307,21 @@ creates the employee "Meatless" (AI contact, a personality, `toolAllow: ['**']`,
 `env.*` denied without Docker), its router session (system prompt from the
 stdlib's `employeePrompt`), the channels #general and #requests, a trigger
 routing new top-level messages in #requests to the router, the default router
-setting and the default web contact. Every step is idempotent (`npm run seed`).
+setting. Every step is idempotent (`npm run seed`).
+
+With `MP_BOOTSTRAP` on, every start also makes sure there is an admin
+(`src/auth/bootstrap-admin.ts`): if no person has `access: admin`, the contact
+with `ADMIN_EMAIL` becomes one, or an "Admin" contact is created (with that
+email, and the chat handle `@admin`). While no admin has ever signed in, the
+start logs a one-time sign-in link for them (`bootstrap: sign in as the admin
+…`, 15 minutes). Later links come from `npm run login-link`.
 
 ## Operations
 
 - Migrations: applied at startup; `npm run migrate` applies them alone.
-- Tokens: `npm run token -- --contact <contactId> [--name laptop]`, or `POST /api/mcp/tokens`.
+- Sign-in links: `npm run login-link -- --contact <contactId|email>`.
+- Tokens: `npm run token -- --contact <contactId> [--name laptop]`, or Settings → API tokens.
+- Metrics: `GET /metrics` with `METRICS_TOKEN`.
 - Health: `GET /healthz` (process up), `GET /readyz` (database, queue and migrations; 503 otherwise).
 - Deployment: `docker compose up` with the root `Dockerfile` and `compose.yaml`
   (Postgres 18, Redis 8 with AOF, the Docker socket and a `data` volume). Set
@@ -303,6 +411,17 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   other ids, messy CSV rows, matching by email, handle and name, owner replacement, strict mode.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.
+- `auth.test.ts`: nothing without sign-in (`x-mp-contact` ignored), the guard table covers every route, sign-in
+  links (once, 15 minutes, local `next` only), cookie flags, sliding expiry and rotation with a grace minute,
+  sign-out, AI employees and leavers refused, CSRF (origin, double submit, `PUBLIC_URL`, bearer exempt), tokens
+  (shown once, list, revoke, others' for admins, the same token on `/mcp`), brute-force limits, what viewers,
+  members and admins may do, the admin bootstrap and its link, security headers.
+- `visibility.test.ts`: DMs hidden from others and admins over HTTP (lists, reads, search, unread, records,
+  events) and over the WebSocket (subscriptions, live events); a cross-site cookie socket refused.
+- `oidc.test.ts`: a fake identity provider (discovery, JWKS, PKCE-checking token endpoint): RS256 and ES256,
+  unknown emails, bad signatures, audiences, nonces, issuers, expiry, unverified emails, forged state cookies.
+- `metrics.test.ts`: access, and every metric through a strict parser of the text format.
+- `login-link-cli.test.ts`: the CLI prints a link that works once (Postgres, when `DATABASE_URL` is set).
 
 ## Replacing it
 

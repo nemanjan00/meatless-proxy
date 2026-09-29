@@ -278,7 +278,8 @@ Everyone using the web UI, the API or the MCP server is signed in as a
 [contact](#contacts). Nothing trusts a caller's word for who they are.
 
 - **Sign-in.** People sign in to the web UI with a one-time link, from
-  `npm run login-link -- --contact <id>` or sent to their email by an admin.
+  `npm run login-link -- --contact <id>` or made by an admin in the UI, who
+  sends it to them (the harness doesn't send email itself).
   The link starts a session cookie (httpOnly, SameSite=Lax, rotating). Signing
   in through an identity provider (OIDC) is optional and configured with
   `OIDC_*` variables.
@@ -287,14 +288,16 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   the same tokens.
 - **Roles** on a contact: `admin` (secrets, employees, limits, triggers, kill
   switch), `member` (chat, sessions, knowledge, starting and steering work) and
-  `viewer` (read only). AI employees act with their own
-  [permissions](#permissions), not a role.
+  `viewer` (read only). They're stored in the contact's `access` field, because
+  `role` is the job title; a person without one is a viewer. AI employees act
+  with their own [permissions](#permissions), not a role.
 - **Every write is attributed** to the signed-in contact, in revisions and in
   chat. The WebSocket and the MCP server require the same sign-in.
 - **What people see** follows the confidentiality rules: DMs only for their
   members, and secrets never.
-- **Bootstrap.** The first start prints a one-time admin sign-in link to the
-  log.
+- **Bootstrap.** The first start creates an admin contact (with
+  `ADMIN_EMAIL`) and prints a one-time admin sign-in link to the log, again on
+  each start until an admin has signed in.
 
 ### Untrusted input
 

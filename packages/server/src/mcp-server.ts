@@ -8,6 +8,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod'
 import type { Services } from './services.ts'
 import { contactForToken } from './tokens.ts'
+import { accessOf } from './auth/access.ts'
 
 /** What the harness pushes to connected MCP clients, as the `data` of `notifications/message`. */
 export type HarnessNotification =
@@ -52,7 +53,9 @@ export class HarnessMcpServer {
   async handle(req: Request): Promise<Response> {
     const auth = req.headers.get('authorization') ?? ''
     const m = /^Bearer\s+(.+)$/i.exec(auth)
-    const contactId = m ? await contactForToken(this.s.records, m[1]!.trim()) : null
+    const tokenContact = m ? await contactForToken(this.s.records, m[1]!.trim()) : null
+    // Same rule as /api: AI employees and people who left can't sign in, whatever token they hold.
+    const contactId = tokenContact && accessOf(await this.s.directory.contacts.get(tokenContact)) ? tokenContact : null
     if (!contactId) {
       return Response.json(
         { jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: send Authorization: Bearer <token>' }, id: null },

@@ -253,7 +253,7 @@ describe('bootstrap and recovery', () => {
   })
 
   it('rebuilds the queues from the database at start', async () => {
-    const t = await testApp({ workers: false, script: [reply('late but routed')] })
+    const t = await testApp({ workers: false, script: async () => reply('late but routed') })
     try {
       const s = t.a.services
       const requests = (await s.chat.channelByName('requests'))!
@@ -261,7 +261,7 @@ describe('bootstrap and recovery', () => {
       const { event } = await s.rawEvents.ingest({
         source: 'chat',
         type: 'message.posted',
-        payload: { channelId: requests.id, text: 'x' },
+        payload: { channelId: requests.id, text: 'x', author: { kind: 'contact', id: 'con_someone' } },
       })
       expect(event.data.routed).toBe(false)
       await t.a.start({ http: false })

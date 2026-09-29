@@ -6,8 +6,9 @@ The first-party Slack integration ([spec](../../docs/spec.md#integrations)). It 
 - Events API webhooks, which it turns into events.
 - User lookup, for matching Slack users to contacts.
 
-It implements `Integration` from `@mp/mcp`. The server connects to the MCP server in-process and mounts the webhook at
-`/webhooks/slack`.
+It implements `Integration` from `@mp/mcp`. The server (`packages/server/src/integrations`) builds one instance per
+employee from that employee's secrets, connects its MCP server in-process, and mounts the webhooks at
+`/webhooks/slack/<employee>` and `/webhooks/slack`.
 
 ## API
 
@@ -67,7 +68,8 @@ With `member_only`, `list_channels` filters the page client-side, so a page may 
 
 ## Events in
 
-`POST /webhooks/slack` receives the Events API.
+`POST /webhooks/slack/<employee>` (one Slack app per employee) or `POST /webhooks/slack` (a deployment-wide app)
+receives the Events API.
 
 1. **Signature**: the request must have an `X-Slack-Signature` header of the form `v0=` + hex HMAC-SHA256 of
    `v0:<X-Slack-Request-Timestamp>:<raw body>`, keyed with the signing secret. The signature is compared in constant time.
@@ -120,10 +122,15 @@ Notes:
 
 ## Setup
 
-### 1. Create the Slack app from a manifest
+Each employee is its **own Slack bot**: one Slack app per employee, with its own name, bot token and signing secret, so
+people see who they're talking to and every message is posted as the employee that wrote it. Repeat these steps for
+every employee that should be on Slack.
+
+### 1. Create the employee's Slack app from a manifest
 
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**, and pick your workspace.
-2. Paste the manifest below (YAML). Replace `harness.example.com` with the harness's public host.
+2. Paste the manifest below (YAML). Replace `harness.example.com` with the harness's public host, `meatless` in the
+   request URL with the employee's handle (or its id, `emp_…`), and the names with the employee's name.
 3. **Install to Workspace**, and approve the scopes.
 
 ```yaml
@@ -158,7 +165,7 @@ oauth_config:
       - users:read.email
 settings:
   event_subscriptions:
-    request_url: https://harness.example.com/webhooks/slack
+    request_url: https://harness.example.com/webhooks/slack/meatless
     bot_events:
       - app_mention
       - message.channels
@@ -188,14 +195,36 @@ What the scopes are for:
 Slack verifies the request URL when you save the manifest, so the harness must already be running with the signing
 secret set. If it isn't, save the manifest anyway, then retry the URL under **Event Subscriptions** once the harness is up.
 
-### 2. Set the secrets
+### 2. Set the employee's secrets
 
 | Secret | Where to find it |
 |--------|------------------|
-| `botToken` | **OAuth & Permissions** → *Bot User OAuth Token* (`xoxb-…`) |
-| `signingSecret` | **Basic Information** → *App Credentials* → *Signing Secret* |
+| `SLACK_BOT_TOKEN` | **OAuth & Permissions** → *Bot User OAuth Token* (`xoxb-…`) |
+| `SLACK_SIGNING_SECRET` | **Basic Information** → *App Credentials* → *Signing Secret* |
 
-Both are harness [secrets](../../docs/spec.md#secrets). The integration is enabled when they are set.
+Both are harness [secrets](../../docs/spec.md#secrets), **scoped to the employee**: in the web UI under *Settings →
+Secrets* (scope: the employee), or through the API:
+
+```sh
+curl -X PUT https://harness.example.com/api/secrets \
+  -H 'content-type: application/json' \
+  -d '{ "name": "SLACK_BOT_TOKEN", "value": "xoxb-…", "scope": { "type": "employee", "id": "emp_…" } }'
+```
+
+The same secrets with the global scope are the deployment-wide fallback, for an employee without its own app, and they
+verify `POST /webhooks/slack`. Slack is enabled for an employee when its `SLACK_BOT_TOKEN` resolves; until then its
+`mcp.slack.*` tools answer "Slack isn't set up for this employee: set the SLACK_BOT_TOKEN secret". A webhook URL whose
+signing secret isn't set answers `404`. Changed secrets take effect at once (the server drops its cached instances when
+a secret changes, and re-reads secrets at least every minute).
+
+| Webhook URL | Verified with | Events belong to |
+|-------------|---------------|------------------|
+| `/webhooks/slack/<employee id or handle>` | that employee's `SLACK_SIGNING_SECRET` (else the global one) | that employee: only its triggers match |
+| `/webhooks/slack` | the global `SLACK_SIGNING_SECRET` | nobody in particular: any employee's triggers can match |
+
+The server maps each event's actor to a contact through the contact's `slack` handle. When no contact has the handle, it
+looks the user up (`users.info`) and matches the contact by email, then records the handle on it. It never creates
+contacts from webhooks.
 
 ### 3. Invite the app
 
@@ -204,7 +233,10 @@ the app work without an invite.
 
 ### Recommended triggers
 
-This trigger routes mentions and DMs to the employee's router:
+Triggers are not created automatically: add them per employee, e.g. by asking the employee in harness chat to create
+this one with its `triggers.create` tool (`CreateTriggerInput` in `@mp/events`). This one routes the
+employee's mentions and DMs to its router context ([the router context](../../docs/spec.md#the-router-context)), which
+answers directly or starts a session that then owns the thread, and keeps a one-line decision:
 
 ```json
 {
@@ -212,9 +244,16 @@ This trigger routes mentions and DMs to the employee's router:
   "employeeId": "emp_…",
   "match": { "source": "integration:slack", "filter": { "type": { "$in": ["message.mentioned", "message.direct"] } } },
   "target": { "type": "router" },
-  "mode": "continuing"
+  "fork": false,
+  "mode": "ephemeral"
 }
 ```
+
+**Answers go back to Slack.** When a run caused by a Slack event it was expected to act on ends with a final answer (not
+`NO_REPLY`), without posting in Slack itself (`post_message`, `reply`, `update_message`) and without handing the work to
+another session, the server posts that answer in the event's thread with the employee's bot. A working session is then
+subscribed to the thread, so follow-ups come back to it; the router context never subscribes (follow-ups come back
+through its trigger, and it decides again).
 
 To act on every new top-level message in one channel (e.g. `#access-requests`), without double-handling mentions:
 

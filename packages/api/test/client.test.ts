@@ -183,3 +183,46 @@ describe('createApiClient', () => {
     }
   })
 })
+
+describe('sign-in and tokens', () => {
+  it('calls the auth routes', async () => {
+    const { fetch, calls } = fakeFetch((c) => ({ status: c.url.endsWith('/logout') ? 204 : 200, body: {} }))
+    const api = createApiClient({ baseUrl: 'http://x', fetch })
+    await api.authConfig()
+    await api.logout()
+    await api.listTokens({ contactId: 'con_1' })
+    await api.createToken({ name: 'laptop' })
+    await api.revokeToken('mtk_1')
+    await api.createLoginLink({ email: 'ana@example.com' })
+    expect(calls.map((c) => `${c.method} ${c.url.replace('http://x', '')}`)).toEqual([
+      'GET /api/auth/config',
+      'POST /api/auth/logout',
+      'GET /api/auth/tokens?contactId=con_1',
+      'POST /api/auth/tokens',
+      'DELETE /api/auth/tokens/mtk_1',
+      'POST /api/auth/links',
+    ])
+    expect(calls[3]!.body).toEqual({ name: 'laptop' })
+    expect(calls[5]!.body).toEqual({ email: 'ana@example.com' })
+  })
+
+  it('takes headers from a function on every request', async () => {
+    const { fetch, calls } = fakeFetch()
+    let n = 0
+    const api = createApiClient({ baseUrl: '', fetch, headers: () => ({ 'x-mp-csrf': `t${++n}` }) })
+    await api.me()
+    await api.me()
+    expect(calls.map((c) => c.headers['x-mp-csrf'])).toEqual(['t1', 't2'])
+  })
+
+  it('calls onUnauthorized on a 401, then throws', async () => {
+    const { fetch } = fakeFetch(() => ({ status: 401, body: { error: { code: 'unauthorized', message: 'sign in first' } } }))
+    let hits = 0
+    const api = createApiClient({ baseUrl: '', fetch, onUnauthorized: () => hits++ })
+    await expect(api.me()).rejects.toMatchObject({ status: 401, code: 'unauthorized' })
+    expect(hits).toBe(1)
+    const ok = createApiClient({ baseUrl: '', fetch: fakeFetch().fetch, onUnauthorized: () => hits++ })
+    await ok.me()
+    expect(hits).toBe(1)
+  })
+})

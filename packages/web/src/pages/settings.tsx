@@ -1,27 +1,45 @@
-import type { ApiRecord, EmployeeData, SecretScope, TriggerData } from '@mp/api'
-import { CirclePause, CirclePlay, Gauge, KeyRound, Power, Settings, Trash2, Users, Zap } from 'lucide-react'
+import type { Access, ApiRecord, ContactData, CreatedApiToken, EmployeeData, SecretScope, TriggerData } from '@mp/api'
+import {
+  CirclePause,
+  CirclePlay,
+  Copy,
+  Gauge,
+  KeyRound,
+  Link2,
+  Power,
+  Settings,
+  Ticket,
+  Trash2,
+  UserCog,
+  Users,
+  Zap,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { EmptyState, LoadingRows } from '@/components/empty.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
-import { EmployeeAvatar } from '@/components/people.tsx'
+import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { Switch } from '@/components/ui/switch.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi, useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
+/** Settings sections; `admin` ones are hidden from everyone else (the server refuses them anyway). */
 const SECTIONS = [
-  { key: 'employees', label: 'Employees', icon: Users },
-  { key: 'secrets', label: 'Secrets', icon: KeyRound },
-  { key: 'triggers', label: 'Triggers', icon: Zap },
-  { key: 'limits', label: 'Limits', icon: Gauge },
-  { key: 'control', label: 'Kill switch', icon: Power },
+  { key: 'employees', label: 'Employees', icon: Users, admin: true },
+  { key: 'secrets', label: 'Secrets', icon: KeyRound, admin: true },
+  { key: 'triggers', label: 'Triggers', icon: Zap, admin: true },
+  { key: 'limits', label: 'Limits', icon: Gauge, admin: true },
+  { key: 'control', label: 'Kill switch', icon: Power, admin: true },
+  { key: 'people', label: 'People and access', icon: UserCog, admin: true },
+  { key: 'tokens', label: 'API tokens', icon: Ticket, admin: false },
 ] as const
 
 /** `mcp.tasks.*` style patterns (`**` too) → does the tool match? The deny list wins. */
@@ -382,15 +400,199 @@ function Control() {
   )
 }
 
+const copy = async (text: string, what: string) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(`${what} copied`)
+  } catch {
+    toast(`Couldn't copy the ${what.toLowerCase()}`, { description: 'Select it and copy it by hand.' })
+  }
+}
+
+/** Your API tokens: for scripts and agents, on `/api`, `/ws` and `/mcp`. A new token is shown once. */
+function Tokens() {
+  const api = useApi()
+  const list = useLoad((a) => a.listTokens(), [])
+  const [name, setName] = useState('')
+  const [created, setCreated] = useState<CreatedApiToken | null>(null)
+  const create = async () => {
+    const t = await api.createToken(name.trim() ? { name: name.trim() } : {})
+    setCreated(t)
+    setName('')
+    list.reload()
+  }
+  const tokens = list.data ?? []
+  return (
+    <div className="max-w-[760px]" data-testid="tokens">
+      <p className="mb-4 text-fg-tertiary">
+        A token acts as you, with your access, for scripts and other agents: send it as{' '}
+        <code className="font-mono text-micro">Authorization: Bearer …</code>. The same token works for the API, the live socket
+        and the MCP server at <code className="font-mono text-micro">/mcp</code>.
+      </p>
+      {created && (
+        <div className="mb-4 rounded-xl border border-brand/50 bg-brand/10 p-3" role="status">
+          <div className="mb-2 text-mini text-foreground">
+            New token{created.name ? ` “${created.name}”` : ''}: copy it now, it won't be shown again.
+          </div>
+          <div className="flex items-center gap-2">
+            <code
+              className="min-w-0 flex-1 truncate rounded-md border bg-background px-2 py-1 font-mono text-micro"
+              data-testid="new-token"
+            >
+              {created.token}
+            </code>
+            <Button size="sm" variant="secondary" onClick={() => copy(created.token, 'Token')}>
+              <Copy /> Copy
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setCreated(null)}>
+              Done
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className="rounded-xl border">
+        {!tokens.length && <div className="px-3 py-4 text-fg-tertiary">No tokens yet.</div>}
+        {tokens.map((t) => (
+          <div key={t.id} className="flex h-10 items-center gap-3 border-b px-3 last:border-0">
+            <Ticket className={cn('size-3.5', t.revoked ? 'text-fg-quaternary' : 'text-fg-tertiary')} />
+            <span className={cn('min-w-0 truncate', t.revoked ? 'text-fg-quaternary line-through' : 'text-fg-secondary')}>
+              {t.name ?? 'Unnamed token'}
+            </span>
+            <span className="font-mono text-micro text-fg-quaternary">{t.id}</span>
+            <span className="ml-auto text-micro text-fg-quaternary">
+              {t.revoked
+                ? 'revoked'
+                : timeAgo(t.createdAt) === 'now'
+                  ? 'created just now'
+                  : `created ${timeAgo(t.createdAt)} ago`}
+            </span>
+            {!t.revoked && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={`Revoke ${t.name ?? t.id}`}
+                onClick={async () => {
+                  await api.revokeToken(t.id)
+                  toast(`${t.name ?? 'Token'} revoked`, { description: 'It stops working right away.' })
+                  list.reload()
+                }}
+              >
+                Revoke
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+      <SectionTitle className="mt-6 mb-2">New token</SectionTitle>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="What it's for, e.g. laptop"
+          className="w-64"
+          aria-label="Token name"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') create()
+          }}
+        />
+        <Button size="sm" onClick={create}>
+          Create token
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+const ACCESS: Access[] = ['viewer', 'member', 'admin']
+
+/** People's access, and one-time sign-in links to hand out (admins). */
+function People() {
+  const api = useApi()
+  const list = useLoad(
+    (a) =>
+      a.listRecords<ContactData & { access?: Access }>('contact', {
+        where: { kind: 'person' },
+        orderBy: 'name',
+        dir: 'asc',
+        limit: 500,
+      }),
+    [],
+  )
+  const [link, setLink] = useState<{ name: string; url: string } | null>(null)
+  if (!list.data) return <LoadingRows />
+  return (
+    <div className="max-w-[760px]" data-testid="people">
+      <p className="mb-4 text-fg-tertiary">
+        Viewers read, members also chat, steer their own work and edit knowledge, admins manage everything here. A sign-in link
+        works once, for 15 minutes. AI employees never sign in.
+      </p>
+      {link && (
+        <div className="mb-4 rounded-xl border border-brand/50 bg-brand/10 p-3" role="status">
+          <div className="mb-2 text-mini text-foreground">Sign-in link for {link.name}: send it to them privately.</div>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-md border bg-background px-2 py-1 font-mono text-micro">
+              {link.url}
+            </code>
+            <Button size="sm" variant="secondary" onClick={() => copy(link.url, 'Link')}>
+              <Copy /> Copy
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className="rounded-xl border">
+        {list.data.items.map((c) => (
+          <div key={c.id} className="flex h-11 items-center gap-3 border-b px-3 last:border-0">
+            <PersonAvatar name={c.data.name} className="size-5" />
+            <span className="min-w-0 truncate text-fg-secondary">{c.data.name}</span>
+            <span className="hidden truncate text-micro text-fg-quaternary sm:inline">{c.data.email}</span>
+            <select
+              value={c.data.access ?? 'viewer'}
+              aria-label={`Access of ${c.data.name}`}
+              className="ml-auto h-7 rounded-md border bg-transparent px-2 text-mini"
+              onChange={async (e) => {
+                await api.updateRecord('contact', c.id, { access: e.target.value }, c.version)
+                toast(`${c.data.name} is now a ${e.target.value}`)
+                list.reload()
+              }}
+            >
+              {ACCESS.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Sign-in link for ${c.data.name}`}
+              onClick={async () => {
+                const l = await api.createLoginLink({ contactId: c.id })
+                setLink({ name: c.data.name, url: l.url })
+              }}
+            >
+              <Link2 /> Sign-in link
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function SettingsPage() {
-  const { section = 'employees' } = useParams()
+  const { can } = useAuth()
+  const admin = can('admin')
+  const sections = SECTIONS.filter((s) => admin || !s.admin)
+  const { section = sections[0]!.key } = useParams()
+  const current = SECTIONS.find((s) => s.key === section)
+  const allowed = !!current && (admin || !current.admin)
   return (
     <Page title="Settings" icon={<Settings />} className="flex flex-col md:flex-row">
       <nav
         className="flex shrink-0 flex-wrap gap-0.5 border-b p-2 md:block md:w-52 md:border-r md:border-b-0"
         aria-label="Settings"
       >
-        {SECTIONS.map((s) => (
+        {sections.map((s) => (
           <NavLink
             key={s.key}
             to={`/settings/${s.key}`}
@@ -405,12 +607,15 @@ export function SettingsPage() {
         ))}
       </nav>
       <div className="min-w-0 flex-1 overflow-auto px-4 py-6 md:px-8">
-        <h2 className="mb-5 text-title2 font-semibold">{SECTIONS.find((s) => s.key === section)?.label}</h2>
-        {section === 'employees' && <Employees />}
-        {section === 'secrets' && <Secrets />}
-        {section === 'triggers' && <Triggers />}
-        {section === 'limits' && <Limits />}
-        {section === 'control' && <Control />}
+        <h2 className="mb-5 text-title2 font-semibold">{current?.label}</h2>
+        {!allowed && <EmptyState text="Only admins can see this." />}
+        {allowed && section === 'employees' && <Employees />}
+        {allowed && section === 'secrets' && <Secrets />}
+        {allowed && section === 'triggers' && <Triggers />}
+        {allowed && section === 'limits' && <Limits />}
+        {allowed && section === 'control' && <Control />}
+        {allowed && section === 'people' && <People />}
+        {allowed && section === 'tokens' && <Tokens />}
       </div>
     </Page>
   )

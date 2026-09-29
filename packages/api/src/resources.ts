@@ -690,10 +690,49 @@ export interface ChatSearchResult {
   threadId: string
 }
 
-/** `GET /api/me`: who the web UI acts as. */
+/**
+ * What a signed-in person may do: `viewer` reads, `member` also chats, steers
+ * its own work and edits knowledge, `admin` also manages secrets, employees,
+ * limits, triggers, the kill switch, others' tokens and sign-in links. Stored
+ * on the contact as `access` (missing means viewer).
+ */
+export type Access = 'viewer' | 'member' | 'admin'
+
+/** `GET /api/me`: who is signed in. */
 export interface Me {
   contactId: string
   name: string
+  access: Access
+  email?: string
+  /** How this request was authenticated: the web session cookie, or a bearer token. */
+  via: 'session' | 'token'
+}
+
+/** `GET /api/auth/config` (public): what the login page offers. */
+export interface AuthConfig {
+  /** Sign-in with the identity provider is configured (`/auth/oidc/start`). */
+  oidc: boolean
+}
+
+/** `POST /api/auth/links`: a one-time sign-in link to hand to someone (works once, for 15 minutes). */
+export interface LoginLink {
+  contactId: string
+  url: string
+  expiresAt: string
+}
+
+/** An API token's metadata (the token itself is shown only once, when it is created). */
+export interface ApiToken {
+  id: string
+  contactId: string
+  name?: string
+  createdAt: string
+  revoked: boolean
+}
+
+/** `POST /api/auth/tokens`: the new token, with the secret `token` shown this once. */
+export interface CreatedApiToken extends ApiToken {
+  token: string
 }
 
 /** `GET /api/chat/threads/:id`. */

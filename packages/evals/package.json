@@ -20,5 +20,8 @@
     "@mp/server": "0.0.0",
     "@mp/sessions": "0.0.0",
     "@mp/usage": "0.0.0"
+  },
+  "devDependencies": {
+    "@mp/stdlib": "0.0.0"
   }
 }

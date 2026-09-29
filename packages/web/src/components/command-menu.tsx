@@ -16,6 +16,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command.tsx'
 import { useApi } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { NAV_SHORTCUTS, isTypingTarget, routeForSequence } from '@/lib/shortcuts.ts'
 import { sessionStatusKey } from '@/lib/status.ts'
@@ -32,6 +33,7 @@ export function CommandMenu({
 }) {
   const navigate = useNavigate()
   const api = useApi()
+  const { can } = useAuth()
   const { employees, setCurrentId } = useEmployees()
   const [query, setQuery] = useState('')
   const [sessions, setSessions] = useState<SessionListItem[]>([])
@@ -164,28 +166,32 @@ export function CommandMenu({
             Toggle theme
             <CommandShortcut>⇧ T</CommandShortcut>
           </CommandItem>
-          <CommandItem
-            value="pause all employees kill switch"
-            onSelect={async () => {
-              onOpenChange(false)
-              await api.pauseAll()
-              toast('All employees paused', { description: 'Runs stop at their next step boundary.' })
-            }}
-          >
-            <CirclePause />
-            Pause all employees
-          </CommandItem>
-          <CommandItem
-            value="resume all employees"
-            onSelect={async () => {
-              onOpenChange(false)
-              await api.resumeAll()
-              toast('All employees resumed')
-            }}
-          >
-            <CirclePlay />
-            Resume all employees
-          </CommandItem>
+          {can('admin') && (
+            <>
+              <CommandItem
+                value="pause all employees kill switch"
+                onSelect={async () => {
+                  onOpenChange(false)
+                  await api.pauseAll()
+                  toast('All employees paused', { description: 'Runs stop at their next step boundary.' })
+                }}
+              >
+                <CirclePause />
+                Pause all employees
+              </CommandItem>
+              <CommandItem
+                value="resume all employees"
+                onSelect={async () => {
+                  onOpenChange(false)
+                  await api.resumeAll()
+                  toast('All employees resumed')
+                }}
+              >
+                <CirclePlay />
+                Resume all employees
+              </CommandItem>
+            </>
+          )}
           {employees.map((e, i) => (
             <CommandItem
               key={e.id}

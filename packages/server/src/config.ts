@@ -147,6 +147,41 @@ export const configSchema = z.object({
   ALERT_PAUSED_MINUTES: z.coerce.number().min(0).default(30),
   ALERT_UNAVAILABLE_COUNT: z.coerce.number().int().min(1).default(3),
   ALERT_UNAVAILABLE_MINUTES: z.coerce.number().min(0.01).default(10),
+  /** First-party integrations to enable (src/integrations): comma-separated, or `none`. Default all. */
+  INTEGRATIONS: optStr.transform((v) => {
+    if (v === undefined) return ['slack', 'linear', 'gitlab']
+    if (v === 'none') return []
+    return v
+      .split(',')
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean)
+  }),
+  /** Self-hosted GitLab's URL; a `GITLAB_BASE_URL` secret overrides it per employee. Default https://gitlab.com. */
+  GITLAB_BASE_URL: url(['http:', 'https:']),
+  /** Webhook requests per minute per client address. */
+  WEBHOOK_RATE_LIMIT: z.coerce.number().int().min(1).default(300),
+  // ── Sign-in (src/auth) ──
+  /** The public URL people open, e.g. `https://mp.example.com`: sign-in links, the CSRF origin check, cookies. */
+  PUBLIC_URL: url(['http:', 'https:']),
+  /** `Secure` on the session cookie: `auto` (when served over https), `true` or `false`. */
+  COOKIE_SECURE: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 'auto' : v.toLowerCase()))
+    .pipe(z.enum(['auto', 'true', 'false'])),
+  /** Trust `x-forwarded-for` and `x-forwarded-proto` from a reverse proxy. */
+  TRUST_PROXY: bool(false),
+  /** Email of the admin contact the first start creates. */
+  ADMIN_EMAIL: optStr,
+  /** Optional OIDC sign-in: all four, or none. */
+  OIDC_ISSUER: url(['http:', 'https:']),
+  OIDC_CLIENT_ID: optStr,
+  OIDC_CLIENT_SECRET: optStr,
+  OIDC_REDIRECT_URL: url(['http:', 'https:']),
+  /** A bearer token that may read `/metrics` (besides admins). */
+  METRICS_TOKEN: optStr.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters'),
+  /** Domain of live previews (`<env>-<port>.<PREVIEW_DOMAIN>`): the only origins the UI may frame. */
+  PREVIEW_DOMAIN: optStr.refine((v) => v === undefined || /^[a-z0-9.-]+$/i.test(v), 'must be a domain name'),
 })
 
 export type RawConfig = z.infer<typeof configSchema>
@@ -158,7 +193,14 @@ export interface Config extends Omit<RawConfig, 'GIT_CACHE_DIR' | 'WORKTREES_DIR
 }
 
 /** Variables whose values must never be printed. */
-export const SECRET_VARS = ['OPENAI_API_KEY', 'SECRETS_KEY', 'DATABASE_URL', 'REDIS_URL'] as const
+export const SECRET_VARS = [
+  'OPENAI_API_KEY',
+  'SECRETS_KEY',
+  'DATABASE_URL',
+  'REDIS_URL',
+  'OIDC_CLIENT_SECRET',
+  'METRICS_TOKEN',
+] as const
 
 export class ConfigError extends Error {
   constructor(readonly issues: string[]) {
@@ -185,6 +227,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (s.transport === 'stdio' && !s.command) issues.push(`MCP_SERVERS: ${s.name} (stdio) needs a command`)
     if (s.transport === 'http' && !s.url) issues.push(`MCP_SERVERS: ${s.name} (http) needs a url`)
   }
+  const oidc = ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL'] as const
+  if (oidc.some((k) => c[k]) && !oidc.every((k) => c[k]))
+    issues.push(`OIDC: set all of ${oidc.join(', ')}, or none (missing ${oidc.filter((k) => !c[k]).join(', ')})`)
   if (issues.length) throw new ConfigError(issues)
   return {
     ...c,
@@ -210,6 +255,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
     mcpServers: c.MCP_SERVERS.map((s) => s.name),
     bootstrap: c.MP_BOOTSTRAP,
     logLevel: c.LOG_LEVEL,
+    publicUrl: c.PUBLIC_URL ?? null,
+    oidc: c.OIDC_ISSUER ? { issuer: c.OIDC_ISSUER, clientId: c.OIDC_CLIENT_ID } : 'off',
+    metricsToken: c.METRICS_TOKEN ? 'set' : 'unset',
   }
 }
 

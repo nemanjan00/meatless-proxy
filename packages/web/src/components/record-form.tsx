@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useApi, useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { hrefFor } from '@/lib/doclinks.ts'
 import { kindOfId } from '@/lib/names.ts'
 import { DOCUMENT_FIELDS, type FormField, type FormValues, formFields, fromFormValues, toFormValues } from '@/lib/schema-form.ts'
@@ -54,9 +55,19 @@ export function RecordPropertiesForm({
   exclude?: string[]
 }) {
   const api = useApi()
+  const { can } = useAuth()
+  // Viewers read; only admins change someone's access (the server enforces both).
+  const readOnly = !can('member')
+  const admin = can('admin')
   const fields = useMemo(
-    () => formFields(schema).filter((f) => !DOCUMENT_FIELDS.has(f.name) && !exclude.includes(f.name)),
-    [schema, exclude],
+    () =>
+      formFields(schema).filter(
+        (f) =>
+          !DOCUMENT_FIELDS.has(f.name) &&
+          !exclude.includes(f.name) &&
+          (admin || schema.kind !== 'contact' || f.name !== 'access'),
+      ),
+    [schema, exclude, admin],
   )
   const defaults = useMemo(() => toFormValues(fields, record.data), [fields, record.data])
   const form = useForm<FormValues>({ defaultValues: defaults, resolver: schemaResolver(fields) })
@@ -86,7 +97,7 @@ export function RecordPropertiesForm({
         const list = fields.filter((f) => f.group === g.key)
         if (!list.length) return null
         return (
-          <fieldset key={g.key} className="flex flex-col gap-1">
+          <fieldset key={g.key} className="flex flex-col gap-1" disabled={readOnly}>
             <legend className="mb-1 text-micro font-medium text-fg-tertiary">{g.title}</legend>
             {list.map((f) => (
               <FieldRow key={f.name} field={f} error={form.formState.errors[f.name]?.message}>

@@ -13,7 +13,8 @@
  *   --all                          every page (default: the README set)
  *   --chromium /usr/bin/chromium   the browser binary (or $CHROMIUM)
  *
- * Seed data first with scripts/seed-demo.ts.
+ * MP_TOKEN is an admin's API token: the script reads data with it, and signs the
+ * browser in with a one-time sign-in link. Seed data first with scripts/seed-demo.ts.
  */
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -34,7 +35,10 @@ const { values: args } = parseArgs({
   },
 })
 
-const api = createApiClient({ baseUrl: args.base! })
+const token = process.env.MP_TOKEN
+if (!token) throw new Error("set MP_TOKEN to an admin's API token")
+const api = createApiClient({ baseUrl: args.base!, headers: { authorization: `Bearer ${token}` } })
+const me = await api.me()
 const sessions = (await api.listSessions({ limit: 100 })).items
 const router = sessions.find((s) => s.session.data.slug === 'router') ?? sessions[0]
 const work = sessions.find((s) => s.session.data.slug !== 'router') ?? router
@@ -45,7 +49,7 @@ const requests = channels.find((c) => c.channel.data.name === 'requests')?.chann
 const messages = requests ? await api.channelMessages(requests) : []
 const thread = messages.at(-1)?.id ?? ''
 const contacts = (await api.listRecords<{ name: string; kind?: string }>('contact', { limit: 100 })).items
-const contact = contacts.find((c) => c.data.kind !== 'ai' && c.data.name !== 'Web user')?.id ?? ''
+const contact = contacts.find((c) => c.data.kind !== 'ai' && c.id !== me.contactId)?.id ?? ''
 
 const r = router?.session.id ?? ''
 const w = work?.session.id ?? ''
@@ -124,6 +128,9 @@ const problems: string[] = []
 for (const theme of args.themes!.split(',') as ('dark' | 'light')[]) {
   const context = await browser.newContext({ viewport: { width, height: Number(args.height) }, colorScheme: theme })
   const page = await context.newPage()
+  // Sign the browser in: a one-time link sets the session cookie.
+  const link = await api.createLoginLink({ contactId: me.contactId })
+  await page.goto(`${args.base}/auth/login?token=${new URL(link.url).searchParams.get('token')}&next=/now`)
   let errors: string[] = []
   page.on('console', (m) => {
     if (m.type() === 'error' || m.type() === 'warning') errors.push(`${m.type()}: ${m.text().slice(0, 300)}`)

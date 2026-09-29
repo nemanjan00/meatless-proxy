@@ -35,6 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.t
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useApi, useLive, useLoad } from '@/lib/api.tsx'
+import { Can, ReadOnlyNote } from '@/lib/auth.tsx'
 import { hrefFor, linkRole } from '@/lib/doclinks.ts'
 import { useEmployees } from '@/lib/employees.tsx'
 import {
@@ -336,24 +337,26 @@ export function SessionDetailPage() {
       className="overflow-hidden"
       actions={
         <>
-          {live && activeRun.data.state !== 'paused' && (
-            <Button variant="ghost" size="sm" onClick={() => act('pause')}>
-              <CirclePause /> Pause
+          <Can>
+            {live && activeRun.data.state !== 'paused' && (
+              <Button variant="ghost" size="sm" onClick={() => act('pause')}>
+                <CirclePause /> Pause
+              </Button>
+            )}
+            {live && activeRun.data.state === 'paused' && (
+              <Button variant="ghost" size="sm" onClick={() => act('resume')}>
+                <CirclePlay /> Resume
+              </Button>
+            )}
+            {live && (
+              <Button variant="ghost" size="sm" onClick={() => act('cancel')}>
+                <X /> Cancel
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={fork}>
+              <GitFork /> Fork
             </Button>
-          )}
-          {live && activeRun.data.state === 'paused' && (
-            <Button variant="ghost" size="sm" onClick={() => act('resume')}>
-              <CirclePlay /> Resume
-            </Button>
-          )}
-          {live && (
-            <Button variant="ghost" size="sm" onClick={() => act('cancel')}>
-              <X /> Cancel
-            </Button>
-          )}
-          <Button variant="ghost" size="sm" onClick={fork}>
-            <GitFork /> Fork
-          </Button>
+          </Can>
           <Button variant="outline" size="sm" asChild>
             <Link to={`/lineage/${id}`}>
               <Link2 /> Lineage
@@ -418,7 +421,9 @@ export function SessionDetailPage() {
                       onShowBranch={showBranch}
                     />
                     {runs.data && <RecentRuns runs={runs.data} />}
-                    <Composer sessionId={id} onSent={history.reload} />
+                    <Can fallback={<ReadOnlyNote />}>
+                      <Composer sessionId={id} onSent={history.reload} />
+                    </Can>
                   </>
                 ) : (
                   <LoadingRows />

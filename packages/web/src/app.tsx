@@ -1,9 +1,10 @@
-import { type ComponentType, lazy } from 'react'
+import { type ComponentType, lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { AppShell } from '@/components/app-shell.tsx'
 import { Toaster } from '@/components/ui/sonner.tsx'
 import { TooltipProvider } from '@/components/ui/tooltip.tsx'
 import { type DataLayer, DataProvider } from '@/lib/api.tsx'
+import { AuthProvider, RequireAuth } from '@/lib/auth.tsx'
 import { EmployeesProvider } from '@/lib/employees.tsx'
 import { ThemeProvider } from '@/lib/theme.tsx'
 
@@ -16,6 +17,7 @@ const EventsPage = page(() => import('@/pages/events.tsx'), 'EventsPage')
 const FilesPage = page(() => import('@/pages/files.tsx'), 'FilesPage')
 const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
 const LineagePage = page(() => import('@/pages/lineage.tsx'), 'LineagePage')
+const LoginPage = page(() => import('@/pages/login.tsx'), 'LoginPage')
 const NowPage = page(() => import('@/pages/now.tsx'), 'NowPage')
 const RecordDetailPage = page(() => import('@/pages/records.tsx'), 'RecordDetailPage')
 const RecordListPage = page(() => import('@/pages/records.tsx'), 'RecordListPage')
@@ -37,7 +39,23 @@ export const KNOWLEDGE = [
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
+      <Route
+        path="login"
+        element={
+          <Suspense fallback={null}>
+            <LoginPage />
+          </Suspense>
+        }
+      />
+      <Route
+        element={
+          <RequireAuth>
+            <EmployeesProvider>
+              <AppShell />
+            </EmployeesProvider>
+          </RequireAuth>
+        }
+      >
         <Route index element={<Navigate to="/now" replace />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="now" element={<NowPage />} />
@@ -74,12 +92,12 @@ export function App({ data }: { data: DataLayer }) {
   return (
     <ThemeProvider>
       <DataProvider value={data}>
-        <TooltipProvider delayDuration={400}>
-          <EmployeesProvider>
+        <AuthProvider>
+          <TooltipProvider delayDuration={400}>
             <AppRoutes />
-          </EmployeesProvider>
-          <Toaster position="bottom-right" />
-        </TooltipProvider>
+            <Toaster position="bottom-right" />
+          </TooltipProvider>
+        </AuthProvider>
       </DataProvider>
     </ThemeProvider>
   )

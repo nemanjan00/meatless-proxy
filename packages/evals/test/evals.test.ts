@@ -1,3 +1,4 @@
+import { routerAwareScript } from '@mp/stdlib'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,7 +61,7 @@ const lastOutput = (req: ModelRequest): any => {
 }
 const usage = { promptTokens: 100, completionTokens: 20, totalTokens: 120 }
 /** The same scripted model for every run of a scenario. */
-const scripted = (script: Script) => () => scriptedModel(script)
+const scripted = (script: Script) => () => scriptedModel(routerAwareScript(script as any))
 
 describe('checks helpers', () => {
   it('counts sentences and words the way a reader would', () => {
@@ -76,10 +77,12 @@ describe('checks helpers', () => {
 describe('the eval app', () => {
   it('starts the whole app with a scripted model and exposes posting, settling, replies, runs, tool calls and usage', async () => {
     const app = await startEvalApp({
-      model: scriptedModel([
-        callTools([{ name: 'directory.find_project', args: { text: 'payments' } }], undefined, usage),
-        reply('Found it.', usage),
-      ]),
+      model: scriptedModel(
+        routerAwareScript([
+          callTools([{ name: 'directory.find_project', args: { text: 'payments' } }], undefined, usage),
+          reply('Found it.', usage),
+        ]),
+      ),
     })
     try {
       const ctx = app.ctx
@@ -88,10 +91,11 @@ describe('the eval app', () => {
       expect((await ctx.aiReplies(root.id)).map((m) => m.data.text)).toEqual(['Found it.'])
       expect((await ctx.aiMessages()).length).toBe(1)
       expect((await ctx.runs()).map((r) => r.data.state)).toEqual(['completed'])
-      const calls = await ctx.toolCalls()
+      // The router also records its decision (sessions.commit): harness bookkeeping, not the scenario's work.
+      const calls = (await ctx.toolCalls()).filter((c) => c.name !== 'sessions.commit')
       expect(calls.map((c) => [c.name, c.args])).toEqual([['directory.find_project', { text: 'payments' }]])
       expect(calls[0]!.output).toBeDefined()
-      expect((await ctx.usage()).totalTokens).toBe(240)
+      expect((await ctx.usage()).totalTokens).toBeGreaterThanOrEqual(240)
       await expect(ctx.post('nope', 'x')).rejects.toThrow(/no channel/)
     } finally {
       await app.close()
@@ -109,7 +113,9 @@ describe('scenarios with a scripted model', () => {
       ['on-topic', true],
       ['no-top-level-answer', true],
     ])
-    expect(ok).toMatchObject({ pass: true, tokens: 120, modelCalls: 1 })
+    // Plus the router's decision step (sessions.commit), which the scripted wrapper adds.
+    expect(ok).toMatchObject({ pass: true, modelCalls: 2 })
+    expect(ok.tokens).toBeGreaterThanOrEqual(120)
     expect(ok.failure).toBeUndefined()
     expect((await runScenario(brevity, 1, { model: short })).pass).toBe(true)
 
@@ -180,7 +186,7 @@ describe('scenarios with a scripted model', () => {
       { name: 'answered-in-thread', pass: true, reason: '1 AI reply in the thread' },
     ])
     const lazy = await runScenario(usesProcedure, 1, { model: scripted(() => reply('Ask Ana for access.')) })
-    expect(lazy.failure).toMatch(/^procedure-used: no fork of the procedure context; tools used: none/)
+    expect(lazy.failure).toMatch(/^procedure-used: no fork of the procedure context; tools used: (none|sessions\.commit)$/)
   })
 
   it('checklist passes with checklist.check and evidence, and fails when the work is reported done without it', async () => {

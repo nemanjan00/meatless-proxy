@@ -5,7 +5,7 @@ styled after Linear per [docs/stylebook.md](../../docs/stylebook.md). It depends
 only on `@mp/api`.
 
 ```sh
-npm run dev -w @mp/web          # against the server on :3000 (Vite proxies /api, /healthz, /readyz and /ws)
+npm run dev -w @mp/web          # against the server on :3000 (Vite proxies /api, /auth, /healthz, /readyz and /ws)
 npm run dev:mock -w @mp/web     # with the in-browser mock API and live stream (VITE_MOCK=1)
 npm run build -w @mp/web        # typecheck + build into packages/web/dist
 npm run build:mock -w @mp/web && npm run preview -w @mp/web
@@ -23,11 +23,22 @@ and the page it opens.
 | `src/styles/globals.css` | the stylebook tokens verbatim (`:root` / `.dark`), shadcn's `@theme inline` mapping, extra Linear tokens (`text-fg-tertiary`, `bg-level-2`, status colours), the type scale (`text-tiny` … `text-title3`), 510/590/680 weights, focus, selection, motion |
 | `src/components/ui/` | shadcn/ui components (generated with `npx shadcn add`, then tuned for density: 13 px menus and buttons, 32 px buttons, 2 px accent focus ring) |
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects and references shown readably, raw JSON on edit), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
-| `src/pages/` | Inbox, Now, Sessions, Session detail (History, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
-| `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
+| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
+| `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
 | `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events and chat |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
 | `scripts/screenshots.ts` | screenshots of every page in dark and light (playwright-core with a system Chromium), with a report of console errors and horizontal scroll |
+
+### Sign-in
+
+Everything but `/login` needs a signed-in person: `RequireAuth` loads `GET /api/me` and sends
+everyone else to `/login?next=…`, and any 401 from the API does the same. The session cookie goes
+along by itself, and the data layer echoes the `mp_csrf` cookie in `x-mp-csrf`. The sidebar footer
+shows who you are and your access, with API tokens and Sign out. Actions your access doesn't allow
+are hidden (the server refuses them anyway): viewers get no message boxes, no "New" buttons and
+read-only forms; only admins see the kill switch and the admin settings (employees, secrets,
+triggers, limits, people and access with sign-in links). Settings → API tokens creates a token
+(shown once), lists and revokes yours. The mock (`VITE_MOCK=1`) is signed in as an admin.
 
 Data comes from `@mp/api`'s `createApiClient` and `createLiveClient`; pages load over
 HTTP and apply live events from `/ws` (streamed deltas are applied in place, chat
@@ -53,6 +64,8 @@ Taken against the real server with `scripts/seed-demo.ts`, three real requests (
 
 ```sh
 DATABASE_SCHEMA=demo MP_BOOTSTRAP=1 PORT=3113 npx tsx packages/server/src/main.ts
+# sign in with the link it logs, make an API token in Settings → API tokens, then:
+export MP_TOKEN=mpt_…
 npx tsx packages/web/scripts/seed-demo.ts http://localhost:3113
 # … post a few requests in #requests and a DM, then:
 npx tsx packages/web/scripts/screenshots.ts --base http://localhost:3113            # the README set
@@ -87,6 +100,9 @@ Lineage, Triggers, Chat posting, Usage, a project's generated form, Secrets, Inb
 `polish.test.tsx`: usage buckets and labels, routing outcomes, recent-run summaries, chat
 helpers (tag suggestions, DM labels, reactions, search grouping), label and link helpers,
 and the chat page's autocomplete, search, reactions, edit, delete, new DM and unread badges.
+`auth.test.tsx`: signed-out people land on the login page (and a later 401 sends them there),
+login errors and the single sign-on button, the sidebar's user menu and sign-out, what viewers,
+members and admins see (kill switch, settings sections, chat message box), and the tokens page.
 
 ## Notes
 

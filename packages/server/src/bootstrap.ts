@@ -1,7 +1,7 @@
+import type { Actor } from '@mp/store'
 import type { Employee } from '@mp/directory'
 import type { Services } from './services.ts'
 import { SettingNames } from './settings.ts'
-import { defaultWebContact } from './http/api.ts'
 import { ensureSshKey } from './ssh.ts'
 
 export const DEFAULT_EMPLOYEE = {
@@ -70,8 +70,11 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
         toolset,
         document:
           '# Router\n\nRequests that nothing else claims land here. The router decides who handles them and starts the work.\n',
-        entries: [{ kind: 'system', content: { text: prompt } }],
-        meta: { role: 'router' },
+        entries: [
+          { kind: 'system', content: { text: prompt } },
+          ...(s.stdlib ? [{ kind: 'system' as const, content: { text: s.stdlib.ROUTER_INSTRUCTIONS } }] : []),
+        ],
+        meta: { role: 'router', ...(s.stdlib ? { routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION } : {}) },
         actor,
       })
       routerSessionId = session.id
@@ -113,12 +116,18 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
       {
         name: '#requests: new requests',
         employeeId: employee.id,
-        match: { source: 'chat', type: 'message.posted', where: { 'payload.channelId': requestsId } },
+        match: {
+          source: 'chat',
+          type: 'message.*',
+          filter: { type: { $in: ['message.posted', 'message.replied'] }, 'payload.author.kind': 'contact' },
+          where: { 'payload.channelId': requestsId },
+        },
         target: { type: 'router' },
-        // Each request gets its own fork of the router context: it starts out knowing how to take
-        // requests, keeps the conversation (continuing), and follow-ups in the thread come back to it.
-        fork: true,
-        mode: 'continuing',
+        // The router context itself handles requests, in ephemeral runs: it checks its decisions,
+        // answers, forwards or starts a session, and keeps only a one-line decision. Replies in
+        // threads a session owns go to that session through its subscription instead.
+        fork: false,
+        mode: 'ephemeral',
       },
       actor,
     )
@@ -126,14 +135,50 @@ export async function bootstrap(s: Services): Promise<BootstrapResult> {
     created = true
   }
 
-  if (!trigger.data.fork) {
-    // Deployments bootstrapped before requests got their own fork.
-    trigger = await s.events.triggers.update(trigger.id, { fork: true, mode: 'continuing' }, actor)
+  if (trigger.data.fork || trigger.data.mode !== 'ephemeral' || !(trigger.data.match.filter as any)?.['payload.author.kind']) {
+    // Deployments bootstrapped before the router context handled requests itself.
+    trigger = await s.events.triggers.update(
+      trigger.id,
+      {
+        fork: false,
+        mode: 'ephemeral',
+        match: {
+          ...trigger.data.match,
+          type: 'message.*',
+          filter: { type: { $in: ['message.posted', 'message.replied'] }, 'payload.author.kind': 'contact' },
+        },
+      },
+      actor,
+    )
   }
+  await ensureRouterInstructions(s, routerSessionId, actor)
 
-  await defaultWebContact(s)
   await s.settings.set(SettingNames.bootstrap, { at: s.clock.iso(), employeeId: employee.id }, actor)
   return { created, employeeId: employee.id, routerSessionId, channels, triggerId: trigger.id }
+}
+
+/** Router contexts created before the router instructions existed get them as a committed system entry. */
+async function ensureRouterInstructions(s: Services, routerSessionId: string, actor: Actor) {
+  if (!s.stdlib) return
+  const session = await s.sessions.require(routerSessionId)
+  if (((session.data.meta?.routerInstructions as number | undefined) ?? 0) >= s.stdlib.ROUTER_INSTRUCTIONS_VERSION) return
+  const run = await s.sessions.createRun({
+    sessionId: routerSessionId,
+    mode: 'continuing',
+    cause: { type: 'manual', note: 'router instructions' },
+    actor,
+  })
+  await s.sessions.transition(run.id, 'queued', 'running')
+  await s.sessions.append(run.id, { kind: 'system', content: { text: s.stdlib.ROUTER_INSTRUCTIONS } })
+  await s.sessions.commit(run.id)
+  await s.sessions.transition(run.id, 'running', 'completed', {
+    result: { status: 'completed', output: 'router instructions added' },
+  })
+  await s.sessions.update(
+    routerSessionId,
+    { meta: { ...(session.data.meta ?? {}), routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION } },
+    actor,
+  )
 }
 
 /** Whether the store has no employee yet (a fresh deployment). */

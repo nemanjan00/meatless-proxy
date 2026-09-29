@@ -15,6 +15,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': api,
+      '/auth': api,
       '/healthz': api,
       '/readyz': api,
       '/ws': { target: api.replace('http', 'ws'), ws: true },

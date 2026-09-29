@@ -45,7 +45,10 @@ import { enqueueOnIngest, withJobDefaults, QUEUES } from './queues.ts'
 import { SettingNames, createSettings, type Settings } from './settings.ts'
 import { loadStdlib, type StdlibModule } from './stdlib.ts'
 import { employeeGit, type EmployeeGit } from './git-store.ts'
+import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
+import { defineAuthKinds } from './auth/access.ts'
+import type { AuthOptions } from './auth/index.ts'
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -61,6 +64,10 @@ export interface AppOverrides {
   bus?: EventBus
   /** `false` skips the standard library (tests of the bare wiring). Default: load it when it is available. */
   stdlib?: boolean
+  /** Integration options (fetch and base URL overrides for tests). */
+  integrations?: IntegrationsOptions
+  /** Sign-in options (an OIDC `fetch` for tests, rate limits). */
+  auth?: AuthOptions
   /** Runs after the services are wired and before bootstrap: register extra tools or hooks. */
   setup?: (services: Services) => void | Promise<void>
 }
@@ -103,6 +110,8 @@ export interface Services {
   stdlib: StdlibModule | null
   /** Tool names registered from MCP servers. */
   mcpTools: string[]
+  /** The first-party integrations (Slack, Linear, GitLab), null when none is enabled. */
+  integrations: Integrations | null
   /** Postgres pool, when the store is Postgres. */
   pool: pg.Pool | null
   /** The employee's router session, or the default router. */
@@ -192,6 +201,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const docs = createDocs(records)
   const directory = createDirectory({ records })
   defineSshFields(records)
+  defineAuthKinds(records)
   const memory = createMemory({ records, clock })
   const skills = createSkills({ records })
   const files = createFiles({ records })
@@ -358,11 +368,13 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     runner,
     stdlib: null,
     mcpTools: [],
+    integrations: null,
     pool,
     routerSessionFor,
     toolListsFor,
     async close() {
       await queue.close().catch((e) => logger.warn('queue close failed', { err: errorMessage(e) }))
+      await services.integrations?.close().catch((e) => logger.warn('integrations close failed', { err: errorMessage(e) }))
       await mcpHub?.close().catch((e) => logger.warn('mcp close failed', { err: errorMessage(e) }))
       await bus.idle().catch(() => {})
       gitStores?.close()
@@ -425,6 +437,15 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       })
       return undefined
     })
+  }
+
+  // ── First-party integrations (src/integrations) ──────────────────────────
+  if (config.INTEGRATIONS.length) {
+    const baseUrls = { ...(config.GITLAB_BASE_URL ? { gitlab: config.GITLAB_BASE_URL } : {}), ...o.integrations?.baseUrls }
+    services.integrations = await createIntegrations(
+      { tools, hooks, bus, secrets, events, sessions, directory, clock, logger },
+      { enabled: config.INTEGRATIONS, ...o.integrations, baseUrls },
+    )
   }
 
   // ── MCP tools and notifications ──────────────────────────────────────────

@@ -7,8 +7,11 @@ import { pendingMigrations } from '@mp/store-postgres'
 import { Hono } from 'hono'
 import { bootstrap, isEmpty } from './bootstrap.ts'
 import type { Config } from './config.ts'
+import { createAuth, ensureAdmin, principalOf } from './auth/index.ts'
 import { apiRoutes } from './http/api.ts'
+import { Metrics, metricsRoutes } from './http/metrics.ts'
 import { defaultWebDist, serveWeb } from './http/static.ts'
+import { webhookRoutes } from './http/webhooks.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
@@ -49,6 +52,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     const r = await bootstrap(services)
     log.info('bootstrap done', { employeeId: r.employeeId, routerSessionId: r.routerSessionId })
   }
+  // An admin to sign in as, and a one-time link to do it while no admin has signed in yet.
+  if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
 
@@ -59,15 +64,20 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   const app = new Hono()
   app.onError((err, c) => sendError(c, err, log))
   app.notFound((c) => c.json({ error: { code: 'not_found', message: `no route ${c.req.method} ${c.req.path}` } }, 404))
+  // Metrics count every request; then security headers and the sign-in guard (src/auth/guard.ts).
+  const metrics = new Metrics(services)
+  const auth = createAuth(services, overrides.auth)
+  app.use('*', metrics.middleware(), ...auth.middleware)
 
   const ws = createNodeWebSocket({ app })
   app.get(
     '/ws',
-    ws.upgradeWebSocket(() => {
+    ws.upgradeWebSocket((c) => {
+      const viewer = { contactId: principalOf(c).contactId }
       let conn: ReturnType<LiveHub['connect']> | null = null
       return {
         onOpen: (_evt, socket) => {
-          conn = live.connect(socket)
+          conn = live.connect(socket, viewer)
         },
         onMessage: (evt) => conn?.message(typeof evt.data === 'string' ? evt.data : String(evt.data)),
         onClose: () => conn?.close(),
@@ -81,7 +91,10 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     if (!services.pool) return true
     return (await pendingMigrations({ pool: services.pool, schema: config.DATABASE_SCHEMA ?? 'public' })).length === 0
   }
-  app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady }))
+  app.route('/', webhookRoutes(services))
+  app.route('/', auth.routes)
+  app.route('/', metricsRoutes(services, metrics))
+  app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })
 
@@ -117,6 +130,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
       stopping ??= (async () => {
         log.info('shutting down')
         live.close()
+        metrics.close()
         await mcp.close()
         tracker.close()
         const closing = server

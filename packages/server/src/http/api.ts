@@ -1,16 +1,17 @@
 import type * as Api from '@mp/api'
 import type { Message as DomainMessage } from '@mp/chat'
 import type { Checklist as DomainChecklist } from '@mp/checklists'
-import { ConflictError, NotFoundError, isMpError, type Json } from '@mp/core'
+import { ConflictError, DeniedError, NotFoundError, isMpError, type Json } from '@mp/core'
 import type { MpEvent } from '@mp/events'
 import type { SecretScope as DomainScope } from '@mp/secrets'
 import { TERMINAL_RUN_STATES, type RunState, type SessionStatus } from '@mp/sessions'
-import type { Condition, StoredRecord } from '@mp/store'
+import { normalizeWhere, type Condition, type StoredRecord } from '@mp/store'
 import type { UsageData } from '@mp/usage'
 import { Hono, type Context } from 'hono'
+import { AUTH_KINDS } from '../auth/access.ts'
+import { principalOf } from '../auth/guard.ts'
+import type { ChatVisibility } from '../auth/visibility.ts'
 import type { Services } from '../services.ts'
-import { SettingNames } from '../settings.ts'
-import { createMcpToken } from '../tokens.ts'
 import { rotateSshKey } from '../ssh.ts'
 import { lineage } from './lineage.ts'
 import { BadRequestError, boolParam, intParam, jsonBody, requireString } from './util.ts'
@@ -28,8 +29,10 @@ import {
 } from './views.ts'
 import type { NowTracker } from '../live.ts'
 
-/** Kinds the generic records API never exposes. */
-const HIDDEN_KINDS = new Set(['secret', 'mcp_token'])
+/** Kinds the generic records API never exposes: secrets and credentials. */
+const HIDDEN_KINDS = new Set<string>(['secret', ...AUTH_KINDS])
+/** Kinds whose records can belong to a DM (and are then visible to its members only). */
+const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 
 const LIVE_STATES: RunState[] = ['queued', 'running', 'suspended', 'paused']
 const ALL_STATES: RunState[] = ['queued', 'running', 'suspended', 'paused', 'completed', 'failed', 'cancelled']
@@ -40,27 +43,21 @@ export interface ApiDeps {
   version: string
   /** Whether migrations are applied (for /readyz). */
   migrationsReady: () => Promise<boolean>
+  /** Who may see which chat (DMs: their members only). */
+  visibility: ChatVisibility
 }
 
-/** The web contact: the `x-mp-contact` header (a contact id), or the deployment's default web user. */
-export async function currentContact(s: Services, c: Context): Promise<string> {
-  const h = c.req.header('x-mp-contact')
-  if (h) {
-    const contact = await s.directory.contacts.get(h)
-    if (!contact) throw new BadRequestError(`x-mp-contact: unknown contact ${h}`)
-    return contact.id
-  }
-  return defaultWebContact(s)
+/** The signed-in contact making the request (see src/auth: there is no other way to say who you are). */
+export async function currentContact(_s: Services, c: Context): Promise<string> {
+  return principalOf(c).contactId
 }
 
-export async function defaultWebContact(s: Services): Promise<string> {
-  const id = await s.settings.get<string>(SettingNames.webContact)
-  if (typeof id === 'string' && (await s.directory.contacts.get(id))) return id
-  const existing = await s.directory.contacts.byHandle('mp', 'web')
-  const contact =
-    existing ?? (await s.directory.contacts.create({ name: 'Web user', kind: 'person', handles: [{ system: 'mp', id: 'web' }] }))
-  await s.settings.set(SettingNames.webContact, contact.id)
-  return contact.id
+/**
+ * @deprecated There is no default web user any more: everyone signs in. Kept as a no-op
+ * until bootstrap.ts stops calling it.
+ */
+export async function defaultWebContact(_s: Services): Promise<string> {
+  return ''
 }
 
 const toApiScope = (s: DomainScope): Api.SecretScope =>
@@ -92,6 +89,29 @@ export function apiRoutes(deps: ApiDeps): Hono {
   const app = new Hono()
   const views = () => new Views(s)
   const actor = async (c: Context) => actorOf(await currentContact(s, c))
+  const vis = deps.visibility
+  const me_ = (c: Context) => principalOf(c).contactId
+
+  /** Extra conditions hiding DM channels (and their messages and chat events) from people who aren't members. */
+  const dmFilter = async (c: Context, kind: string): Promise<Condition[]> => {
+    if (!CHAT_KINDS.has(kind)) return []
+    const hidden = [...(await vis.hiddenChannels(me_(c)))]
+    if (!hidden.length) return []
+    const field = kind === 'channel' ? 'id' : kind === 'message' ? 'channelId' : 'payload.channelId'
+    return [{ field, op: 'nin', value: hidden }]
+  }
+  /** 404 for a record in a DM the caller isn't in. */
+  const requireVisible = async <R extends StoredRecord | null>(c: Context, r: R): Promise<R> => {
+    if (r && CHAT_KINDS.has(r.kind) && !(await vis.canSeeRecord(me_(c), r))) throw new NotFoundError(r.kind, r.id)
+    return r
+  }
+  /** Only admins change who may do what, or anything of a session but its document and title. */
+  const guardAccessField = (c: Context, kind: string, data: Record<string, unknown>) => {
+    if (principalOf(c).access === 'admin') return
+    if (kind === 'contact' && 'access' in data) throw new DeniedError("only admins can change someone's access")
+    if (kind === 'session' && Object.keys(data).some((k) => k !== 'document' && k !== 'title'))
+      throw new DeniedError("members can edit a session's document and title only")
+  }
 
   const visibleKind = (kind: string) => {
     if (HIDDEN_KINDS.has(kind) || !s.records.kinds.has(kind)) throw new NotFoundError('record kind', kind)
@@ -105,7 +125,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/records/:kind', async (c) => {
     const kind = visibleKind(c.req.param('kind'))
     const q = c.req.query()
-    const where = parseWhere(q.where)
+    const parsed = parseWhere(q.where)
+    const hide = await dmFilter(c, kind)
+    const where = hide.length ? [...normalizeWhere(parsed), ...hide] : parsed
     const page = await s.records.query(kind, {
       ...(where ? { where } : {}),
       ...(q.text ? { text: q.text } : {}),
@@ -117,7 +139,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   })
 
   app.get('/api/records/:kind/:id', async (c) =>
-    c.json(await s.records.require(visibleKind(c.req.param('kind')), c.req.param('id'))),
+    c.json(await requireVisible(c, await s.records.require(visibleKind(c.req.param('kind')), c.req.param('id')))),
   )
 
   app.post('/api/records/:kind', async (c) => {
@@ -126,6 +148,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data))
       throw new BadRequestError('data must be an object')
     if (body.key !== undefined && typeof body.key !== 'string') throw new BadRequestError('key must be a string')
+    guardAccessField(c, kind, body.data as Record<string, unknown>)
     const r = await s.records.create(kind, body.data as Record<string, unknown>, {
       actor: await actor(c),
       ...(typeof body.key === 'string' ? { key: body.key } : {}),
@@ -140,6 +163,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data))
       throw new BadRequestError('data must be an object')
     if (body.version !== undefined && typeof body.version !== 'number') throw new BadRequestError('version must be a number')
+    guardAccessField(c, kind, body.data as Record<string, unknown>)
+    await requireVisible(c, await s.records.get(kind, id))
     const patch: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(body.data as Record<string, unknown>)) patch[k] = v === null ? undefined : v
     try {
@@ -160,7 +185,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.delete('/api/records/:kind/:id', async (c) => {
     const kind = visibleKind(c.req.param('kind'))
     const id = c.req.param('id')
-    const current = await s.records.require(kind, id)
+    const current = await requireVisible(c, await s.records.require(kind, id))
     const version = c.req.query('version')
     if (version !== undefined && version !== '' && Number(version) !== current.version)
       throw new ConflictError(`${kind} ${id} is at version ${current.version}`, { current })
@@ -171,7 +196,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/records/:kind/:id/links', async (c) => {
     const kind = visibleKind(c.req.param('kind'))
     const id = c.req.param('id')
-    await s.records.require(kind, id)
+    await requireVisible(c, await s.records.require(kind, id))
     const dir = c.req.query('direction')
     if (dir && !['out', 'in', 'both'].includes(dir)) throw new BadRequestError('direction must be out, in or both')
     const role = c.req.query('role')
@@ -179,7 +204,10 @@ export function apiRoutes(deps: ApiDeps): Hono {
       { kind, id },
       { direction: (dir as 'out' | 'in' | 'both') || 'both', ...(role ? { role } : {}) },
     )
-    return c.json(linked.filter((l) => !HIDDEN_KINDS.has(l.record.kind)) satisfies Api.ApiLinkedRecord[])
+    const shown = []
+    for (const l of linked)
+      if (!HIDDEN_KINDS.has(l.record.kind) && (await vis.canSeeRecord(me_(c), l.record as StoredRecord))) shown.push(l)
+    return c.json(shown satisfies Api.ApiLinkedRecord[])
   })
 
   app.post('/api/records/:kind/:id/links', async (c) => {
@@ -209,6 +237,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/records/:kind/:id/revisions', async (c) => {
     const kind = visibleKind(c.req.param('kind'))
+    await requireVisible(c, await s.records.get(kind, c.req.param('id')))
     const revs = await s.records.revisions(kind, c.req.param('id'))
     if (!revs.length) throw new NotFoundError(kind, c.req.param('id'))
     return c.json(revs satisfies Api.ApiRevision[])
@@ -217,7 +246,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/records/:kind/:id/backlinks', async (c) => {
     const kind = visibleKind(c.req.param('kind'))
     const id = c.req.param('id')
-    await s.records.require(kind, id)
+    await requireVisible(c, await s.records.require(kind, id))
     return c.json((await s.records.backlinks({ kind, id })).filter((r) => !HIDDEN_KINDS.has(r.kind)) satisfies Api.ApiRecord[])
   })
 
@@ -276,14 +305,15 @@ export function apiRoutes(deps: ApiDeps): Hono {
       const root = rootId === m.id ? m : await s.chat.getMessage(rootId)
       if (root) threads.push({ channelId: root.data.channelId, threadId: root.id, title: root.data.text.slice(0, 80) })
     }
+    const hidden = await vis.hiddenChannels(me_(c))
     return c.json({
       session: session as Api.Session,
       employee,
       checklist: checklist ? mapChecklist(checklist as DomainChecklist) : null,
       activeRun: activeRun as Api.Run | null,
-      links: links.filter((l) => !HIDDEN_KINDS.has(l.record.kind)),
+      links: links.filter((l) => !HIDDEN_KINDS.has(l.record.kind) && !(l.record.kind === 'channel' && hidden.has(l.record.id))),
       tokens,
-      threads,
+      threads: threads.filter((t) => !hidden.has(t.channelId)),
     } satisfies Api.SessionDetail)
   })
 
@@ -375,7 +405,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
       const ref = sub.data.subject.ref
       if (sub.data.subject.system !== 'mp' || !ref.startsWith('msg_') || sub.data.subject.title || titles.has(ref)) continue
       const msg = await s.chat.getMessage(ref)
-      if (msg) titles.set(ref, msg.data.text.replace(/\s+/g, ' ').slice(0, 80))
+      if (msg && (await vis.canSeeChannel(me_(c), msg.data.channelId)))
+        titles.set(ref, msg.data.text.replace(/\s+/g, ' ').slice(0, 80))
     }
     for (const sub of out) {
       const title = titles.get(sub.data.subject.ref)
@@ -562,7 +593,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       })
     }
     const mentions = await s.records.query<DomainMessage['data']>('message', {
-      where: [{ field: 'tags', op: 'contains', value: { type: 'person' } }],
+      where: [{ field: 'tags', op: 'contains', value: { type: 'person' } }, ...(await dmFilter(c, 'message'))],
       orderBy: { field: 'createdAt', dir: 'desc' },
       limit: 50,
     })
@@ -589,7 +620,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/events', async (c) => {
     const q = c.req.query()
-    const where: Condition[] = []
+    const where: Condition[] = [...(await dmFilter(c, 'event'))]
     if (q.source) where.push({ field: 'source', op: 'eq', value: q.source })
     if (q.type) where.push({ field: 'type', op: 'eq', value: q.type })
     if (q.subject) where.push({ field: q.subject.includes(':') ? 'subjectKey' : 'subject.id', op: 'eq', value: q.subject })
@@ -614,6 +645,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/events/:id', async (c) => {
     const e = await s.rawEvents.require(c.req.param('id'))
+    await requireVisible(c, e as unknown as StoredRecord)
     const runs = await s.records.query('run', { where: { 'cause.eventId': e.id }, orderBy: { field: 'createdAt' } })
     const extra = new Set(
       views()
@@ -690,7 +722,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/chat/channels', async (c) => {
     const v = views()
     const out: Api.ChannelSummary[] = []
+    const hidden = await vis.hiddenChannels(me_(c))
     for (const ch of await s.chat.listChannels()) {
+      if (hidden.has(ch.id)) continue
       const last = await s.records.query<DomainMessage['data']>('message', {
         where: { channelId: ch.id },
         orderBy: { field: 'createdAt', dir: 'desc' },
@@ -763,6 +797,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.get('/api/chat/channels/:id/messages', async (c) => {
     const ch = await s.chat.getChannel(c.req.param('id'))
     if (!ch) throw new NotFoundError('channel', c.req.param('id'))
+    await vis.requireChannel(me_(c), ch.id)
     const before = c.req.query('before')
     const msgs = await s.chat.messages(ch.id, {
       limit: intParam(c.req.query('limit'), 'limit', 50, 500, 1),
@@ -773,6 +808,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   })
 
   app.get('/api/chat/threads/:id', async (c) => {
+    await vis.requireMessage(me_(c), c.req.param('id'))
     const msgs = await s.chat.thread(c.req.param('id'))
     const v = views()
     const [root, ...replies] = await Promise.all(msgs.map((m) => v.message(m)))
@@ -799,6 +835,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     if (body.threadId !== undefined && body.threadId !== null && typeof body.threadId !== 'string')
       throw new BadRequestError('threadId must be a string')
     const contactId = await currentContact(s, c)
+    await vis.requireChannel(contactId, c.req.param('id'))
     const msg = await s.chat.post({
       channelId: c.req.param('id'),
       ...(typeof body.threadId === 'string' ? { threadId: body.threadId } : {}),
@@ -808,9 +845,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json(await views().message(msg), 201)
   })
 
-  const messageOr404 = async (id: string) => {
+  const messageOr404 = async (id: string, c: Context) => {
     const m = await s.chat.getMessage(id)
-    if (!m) throw new NotFoundError('message', id)
+    if (!m || !(await vis.canSeeChannel(me_(c), m.data.channelId))) throw new NotFoundError('message', id)
     return m
   }
   const me = async (c: Context) => ({ kind: 'contact', id: await currentContact(s, c) })
@@ -818,12 +855,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
   app.patch('/api/chat/messages/:id', async (c) => {
     const body = await jsonBody<{ text?: unknown }>(c)
     const text = requireString(body.text, 'text')
-    await messageOr404(c.req.param('id'))
+    await messageOr404(c.req.param('id'), c)
     return c.json(await views().message(await s.chat.edit(c.req.param('id'), text, await me(c))))
   })
 
   app.delete('/api/chat/messages/:id', async (c) => {
-    await messageOr404(c.req.param('id'))
+    await messageOr404(c.req.param('id'), c)
     return c.json(await views().message(await s.chat.delete(c.req.param('id'), await me(c))))
   })
 
@@ -835,7 +872,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.post('/api/chat/messages/:id/reactions', async (c) => {
     const body = await jsonBody<{ emoji?: unknown }>(c)
-    await messageOr404(c.req.param('id'))
+    await messageOr404(c.req.param('id'), c)
     return c.json(await views().message(await s.chat.react(c.req.param('id'), emojiOf(body.emoji), await me(c))))
   })
 
@@ -843,7 +880,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     let emoji: unknown = c.req.query('emoji')
     if (emoji === undefined && c.req.header('content-type')?.includes('json'))
       emoji = (await jsonBody<{ emoji?: unknown }>(c)).emoji
-    await messageOr404(c.req.param('id'))
+    await messageOr404(c.req.param('id'), c)
     return c.json(await views().message(await s.chat.unreact(c.req.param('id'), emojiOf(emoji), await me(c))))
   })
 
@@ -858,7 +895,9 @@ export function apiRoutes(deps: ApiDeps): Hono {
 
   app.get('/api/chat/unread', async (c) => {
     const reader = await me(c)
-    return c.json((await s.chat.unread(reader, { taggedIds: [reader.id] })) satisfies Api.ChannelUnread[])
+    const hidden = await vis.hiddenChannels(reader.id)
+    const unread = (await s.chat.unread(reader, { taggedIds: [reader.id] })).filter((u) => !hidden.has(u.channelId))
+    return c.json(unread satisfies Api.ChannelUnread[])
   })
 
   app.post('/api/chat/dms', async (c) => {
@@ -885,13 +924,17 @@ export function apiRoutes(deps: ApiDeps): Hono {
         : [q.author.startsWith('ses_') ? 'session' : 'contact', q.author]
       author = { kind: kind!, id: id! }
     }
-    const found = await s.chat.search(q.text ?? '', {
-      ...(q.channelId ? { channelId: q.channelId } : {}),
-      ...(author ? { author } : {}),
-      ...(q.tagged ? { tagged: q.tagged } : {}),
-      ...(q.threadId ? { threadId: q.threadId } : {}),
-      limit: intParam(q.limit, 'limit', 50, 200, 1),
-    })
+    if (q.channelId) await vis.requireChannel(me_(c), q.channelId)
+    const hidden = await vis.hiddenChannels(me_(c))
+    const found = (
+      await s.chat.search(q.text ?? '', {
+        ...(q.channelId ? { channelId: q.channelId } : {}),
+        ...(author ? { author } : {}),
+        ...(q.tagged ? { tagged: q.tagged } : {}),
+        ...(q.threadId ? { threadId: q.threadId } : {}),
+        limit: intParam(q.limit, 'limit', 50, 200, 1),
+      })
+    ).filter((m) => !hidden.has(m.data.channelId))
     const v = views()
     const channels = new Map<string, { id: string; name: string; dm: boolean }>()
     const out: Api.ChatSearchResult[] = []
@@ -907,15 +950,10 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json(out)
   })
 
-  app.get('/api/me', async (c) => {
-    const id = await currentContact(s, c)
-    const contact = await s.directory.contacts.get(id)
-    return c.json({ contactId: id, name: contact?.data.name ?? id } satisfies Api.Me)
-  })
-
   app.post('/api/chat/channels/:id/members', async (c) => {
     const body = await jsonBody<{ type?: unknown; id?: unknown }>(c)
     const ref = memberRef(body)
+    await vis.requireChannel(me_(c), c.req.param('id'))
     await s.chat.addMember(c.req.param('id'), ref, await actor(c))
     const ch = await s.chat.getChannel(c.req.param('id'))
     return c.json(await views().channel(ch!))
@@ -1123,15 +1161,6 @@ export function apiRoutes(deps: ApiDeps): Hono {
     await s.directory.employees.require(id)
     const publicKey = await rotateSshKey(s, id)
     return c.json({ employeeId: id, publicKey })
-  })
-
-  // ── MCP tokens ───────────────────────────────────────────────────────────
-
-  app.post('/api/mcp/tokens', async (c) => {
-    const body = await jsonBody<{ contactId?: unknown; name?: unknown }>(c)
-    const contactId = typeof body.contactId === 'string' && body.contactId ? body.contactId : await currentContact(s, c)
-    const created = await createMcpToken(s, contactId, typeof body.name === 'string' ? body.name : undefined)
-    return c.json(created, 201)
   })
 
   // ── Control and health ───────────────────────────────────────────────────

@@ -3,6 +3,10 @@ import type {
   ApiEntry,
   ApiRef,
   ApiEvent,
+  ApiToken,
+  AuthConfig,
+  CreatedApiToken,
+  LoginLink,
   ApiKindSchema,
   ApiLink,
   ApiLinkedRecord,
@@ -105,6 +109,13 @@ export const ROUTES = {
   searchChat: ['GET', '/api/chat/search'],
   me: ['GET', '/api/me'],
 
+  authConfig: ['GET', '/api/auth/config'],
+  logout: ['POST', '/api/auth/logout'],
+  listTokens: ['GET', '/api/auth/tokens'],
+  createToken: ['POST', '/api/auth/tokens'],
+  revokeToken: ['DELETE', '/api/auth/tokens/:id'],
+  createLoginLink: ['POST', '/api/auth/links'],
+
   usageTotals: ['GET', '/api/usage/totals'],
   usageBreakdown: ['GET', '/api/usage/breakdown'],
   usageSeries: ['GET', '/api/usage/series'],
@@ -195,8 +206,13 @@ export interface ApiClientOptions {
   baseUrl: string
   /** Defaults to the global `fetch`. */
   fetch?: typeof fetch
-  /** Extra headers on every request (e.g. auth). */
-  headers?: Record<string, string>
+  /**
+   * Extra headers on every request, e.g. `{ authorization: 'Bearer mpt_…' }`. A function is called per
+   * request (the web UI echoes its CSRF cookie this way).
+   */
+  headers?: Record<string, string> | (() => Record<string, string>)
+  /** Called on every 401 (not signed in, or the sign-in expired), before the error is thrown. */
+  onUnauthorized?: () => void
 }
 
 /**
@@ -360,8 +376,26 @@ export interface ApiClient {
    * with their channel and thread. `author` is `kind:id` or an id; `tagged` an employee, session or contact id.
    */
   searchChat(query: ChatSearchQuery): Promise<ChatSearchResult[]>
-  /** `GET /api/me` → the contact the web UI acts as. */
+  /** `GET /api/me` → who is signed in, with their access. 401 when nobody is. */
   me(): Promise<Me>
+
+  // ── Sign-in and tokens ───────────────────────────────────────────────────
+
+  /** `GET /api/auth/config` (no sign-in needed) → what the login page offers, e.g. OIDC. */
+  authConfig(): Promise<AuthConfig>
+  /** `POST /api/auth/logout` → 204. Ends the web session and clears its cookie. */
+  logout(): Promise<void>
+  /** `GET /api/auth/tokens?contactId=&all=` → API tokens, newest first: yours; anyone's (or `all`) for admins. */
+  listTokens(query?: { contactId?: string; all?: boolean }): Promise<ApiToken[]>
+  /**
+   * `POST /api/auth/tokens` body `{ name?, contactId? }` → the new token (201), shown only this once.
+   * The same token works for `/api`, `/ws` and `/mcp`. Tokens for others: admins.
+   */
+  createToken(body?: { name?: string; contactId?: string }): Promise<CreatedApiToken>
+  /** `DELETE /api/auth/tokens/:id` → the token, revoked (idempotent). Others' tokens: admins. */
+  revokeToken(id: string): Promise<ApiToken>
+  /** `POST /api/auth/links` body `{ contactId }` or `{ email }` → a one-time sign-in link (admins). */
+  createLoginLink(who: { contactId: string } | { email: string }): Promise<LoginLink>
 
   // ── Usage ────────────────────────────────────────────────────────────────
 
@@ -437,7 +471,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   async function call<T>(route: RouteName, params?: Record<string, string>, query?: Query, body?: unknown): Promise<T> {
     const [method, template] = ROUTES[route]
     const url = `${base}${buildPath(template, params)}${buildQuery(query)}`
-    const headers: Record<string, string> = { accept: 'application/json', ...opts.headers }
+    const extra = typeof opts.headers === 'function' ? opts.headers() : opts.headers
+    const headers: Record<string, string> = { accept: 'application/json', ...extra }
     const init: RequestInit = { method, headers }
     if (body !== undefined) {
       headers['content-type'] = 'application/json'
@@ -450,6 +485,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       throw new ApiRequestError(0, 'unavailable', err instanceof Error ? err.message : String(err))
     }
     if (res.status === 204) return undefined as T
+    if (res.status === 401) opts.onUnauthorized?.()
     const text = await res.text()
     let parsed: unknown
     try {
@@ -523,6 +559,13 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     openDm: (members) => call('openDm', undefined, undefined, { members }),
     searchChat: (q) => call('searchChat', undefined, { ...q }),
     me: () => call('me'),
+
+    authConfig: () => call('authConfig'),
+    logout: () => call('logout', undefined, undefined, {}),
+    listTokens: (q = {}) => call('listTokens', undefined, { ...q }),
+    createToken: (body = {}) => call('createToken', undefined, undefined, body),
+    revokeToken: (id) => call('revokeToken', { id }),
+    createLoginLink: (who) => call('createLoginLink', undefined, undefined, who),
 
     usageTotals: (f) => call('usageTotals', undefined, usageQuery(f)),
     usageBreakdown: (groupBy, f) => call('usageBreakdown', undefined, { groupBy, ...usageQuery(f) }),

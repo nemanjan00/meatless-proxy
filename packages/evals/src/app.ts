@@ -5,7 +5,7 @@ import type { Message } from '@mp/chat'
 import { memoryLogger, sleep, type LogLine } from '@mp/core'
 import { fakeGitCache } from '@mp/git'
 import type { ModelClient } from '@mp/model'
-import { createApp, loadConfig, type App } from '@mp/server'
+import { createMcpToken, createApp, loadConfig, type App } from '@mp/server'
 import type { AssistantContent, Run, RunState, ToolResultContent } from '@mp/sessions'
 import type { EvalContext, ToolCall } from './types.ts'
 import type { ModelEnv } from './env.ts'
@@ -90,6 +90,25 @@ export async function startEvalApp(opts: EvalAppOptions = {}): Promise<EvalApp> 
       a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
     )
 
+  /** Posts are signed in, like a person would be: a member token for the contact (default: an eval user). */
+  const tokens = new Map<string, string>()
+  const tokenFor = async (contactId?: string): Promise<string> => {
+    let id = contactId
+    if (!id) {
+      const existing = await s.directory.contacts.byEmail('eval-user@example.com')
+      id =
+        existing?.id ??
+        (await s.directory.contacts.create({ name: 'Eval user', kind: 'person', email: 'eval-user@example.com' })).id
+    }
+    const cached = tokens.get(id)
+    if (cached) return cached
+    const contact = await s.directory.contacts.require(id)
+    if (!(contact.data as Record<string, unknown>).access) await s.records.update('contact', id, { access: 'member' })
+    const { token } = await createMcpToken(s, id, 'evals')
+    tokens.set(id, token)
+    return token
+  }
+
   const ctx: EvalContext = {
     app,
     services: s,
@@ -99,7 +118,7 @@ export async function startEvalApp(opts: EvalAppOptions = {}): Promise<EvalApp> 
       const id = await channelId(channel)
       const res = await app.app.request(`/api/chat/channels/${id}/messages`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(o.as ? { 'x-mp-contact': o.as } : {}) },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${await tokenFor(o.as)}` },
         body: JSON.stringify({ text, ...(o.threadId ? { threadId: o.threadId } : {}) }),
       })
       const body = await res.text()

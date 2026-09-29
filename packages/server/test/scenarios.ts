@@ -9,7 +9,7 @@ import { callTools, reply, type ModelRequest, type ScriptResult } from '@mp/mode
 import type { Run, RunState } from '@mp/sessions'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { TestAppOptions } from './helpers.ts'
-import { testApp, until, type TestApp } from './helpers.ts'
+import { ROUTER_MARK, testApp, until, type TestApp } from './helpers.ts'
 
 export interface Backend {
   name: string
@@ -95,23 +95,15 @@ const lastToolOutput = (req: ModelRequest): any => {
   }
 }
 
-/**
- * Each request in #requests runs in its own fork of the router context. The
- * newest such fork, i.e. the session handling the latest request.
- */
+/** Requests in #requests run on the router context itself (docs/spec.md, "The router context"). */
 async function requestSessionId(t: TestApp): Promise<string> {
-  const s = t.a.services
-  const kids = await s.sessions.children((await s.routerSessionFor())!)
-  const id = kids.at(-1)?.id
-  if (!id) throw new Error('no request session yet')
-  return id
+  return (await t.a.services.routerSessionFor())!
 }
 
-/** Every run started by a request in #requests (one per request fork), oldest first. */
+/** Every run a request in #requests started on the router context, oldest first. */
 async function requestRuns(t: TestApp): Promise<Run[]> {
   const s = t.a.services
-  const kids = await s.sessions.children((await s.routerSessionFor())!)
-  const all = (await Promise.all(kids.map((k) => s.sessions.runs({ sessionId: k.id })))).flat()
+  const all = await s.sessions.runs({ sessionId: await requestSessionId(t) })
   return all.filter((r) => r.data.cause.type === 'event').sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 
@@ -148,68 +140,7 @@ export function scenarioSuite(backend: Backend) {
     }
   })
 
-  it('1b. a request answered directly in its fork: the follow-up in the thread comes back to the same session', async () => {
-    let t!: TestApp
-    const script = async (req: ModelRequest): Promise<ScriptResult> => {
-      const rootId = await rootByText(t, 'What is 17 * 23')
-      if (lastMsg(req).role === 'tool') return reply('Replied in the thread.')
-      if ((lastMsg(req).content ?? '').includes('and times 2'))
-        return callTools([{ name: 'chat.reply', args: { threadId: `mp:${rootId}`, text: '782.' } }])
-      return callTools([{ name: 'chat.reply', args: { threadId: rootId, text: '391.' } }])
-    }
-    t = await make({ script })
-    const s = t.a.services
-    const requests = await requestsChannel(t)
-    const root = await post(t, requests, 'What is 17 * 23?')
-    await quiet(t)
-    const reqId = await requestSessionId(t)
-    expect((await s.sessions.require(reqId)).data.title).toBe('#requests: What is 17 * 23?')
-
-    await post(t, requests, 'and times 2?', root.id)
-    await quiet(t)
-    // Only one request session: the follow-up did not become a new request.
-    expect(await s.sessions.children((await s.routerSessionFor())!)).toHaveLength(1)
-    const runs = await s.sessions.runs({ sessionId: reqId })
-    expect(runs.map((r) => [r.data.state, r.data.mode])).toEqual([
-      ['completed', 'continuing'],
-      ['completed', 'continuing'],
-    ])
-    const followUp = await s.rawEvents.require(runs[1]!.data.cause.eventId!)
-    expect((followUp.data as any).routing.deliveries.map((d: any) => d.reason)).toEqual(['subscription'])
-    // The second run saw the first exchange: the conversation was committed to the session.
-    const history = await s.sessions.history(reqId)
-    expect(history.filter((e) => e.kind === 'event')).toHaveLength(2)
-    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
-    expect(thread.body.replies.map((m: any) => m.data.text)).toEqual(['391.', 'and times 2?', '782.'])
-  })
-
-  it('1c. a run that answers with plain text (no chat tool) gets its answer posted in the thread', async () => {
-    const script = async (req: ModelRequest): Promise<ScriptResult> => {
-      if ((lastMsg(req).content ?? '').includes('and in French')) return reply('Je suis Meatless.')
-      return reply("I'm Meatless, an AI employee.")
-    }
-    const t = await make({ script })
-    const s = t.a.services
-    const requests = await requestsChannel(t)
-    const root = await post(t, requests, 'In one sentence: what are you?')
-    await quiet(t)
-    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
-    expect(thread.body.replies.map((m: any) => [m.data.author.type, m.data.text])).toEqual([
-      ['session', "I'm Meatless, an AI employee."],
-    ])
-    // The answering session is subscribed, so a follow-up comes back to it and is answered in the thread too.
-    await post(t, requests, 'and in French?', root.id)
-    await quiet(t)
-    const after = await t.req('GET', `/api/chat/threads/${root.id}`)
-    expect(after.body.replies.map((m: any) => m.data.text)).toEqual([
-      "I'm Meatless, an AI employee.",
-      'and in French?',
-      'Je suis Meatless.',
-    ])
-    expect(await s.sessions.children((await s.routerSessionFor())!)).toHaveLength(1)
-  })
-
-  it('1. a request in #requests is routed to the router, which forks a worker; the reply comes back to the worker', async () => {
+  it('1. the router context delegates: it starts a session that owns the thread, and keeps only a one-line decision', async () => {
     let t!: TestApp
     const script = async (req: ModelRequest): Promise<ScriptResult> => {
       const rootId = await rootByText(t, 'summary of the planning notes')
@@ -218,16 +149,23 @@ export function scenarioSuite(backend: Backend) {
           return reply(lastToolName(req) === 'chat.reply' && has(req, 'Q3 2026') ? 'Answered.' : 'Asked which quarter.')
         if ((lastMsg(req).content ?? '').includes('Q3 2026'))
           return callTools([{ name: 'chat.reply', args: { threadId: rootId, text: 'Here is the Q3 2026 summary: all good.' } }])
-        return callTools([
-          { name: 'subscriptions.subscribe', args: { subject: { system: 'mp', id: rootId }, primary: true } },
-          { name: 'chat.reply', args: { threadId: rootId, text: 'On it. Which quarter do you mean?' } },
-        ])
+        return callTools([{ name: 'chat.reply', args: { threadId: rootId, text: 'On it. Which quarter do you mean?' } }])
       }
-      if (lastMsg(req).role === 'tool') return reply('Handed to a worker.')
+      // The router context.
+      if (lastToolName(req) === 'sessions.commit') return reply('NO_REPLY')
+      if (lastToolName(req) === 'sessions.create')
+        return callTools([
+          {
+            name: 'sessions.commit',
+            args: {
+              summary: `thread ${rootId} (#requests, from Web user): planning notes summary → started @meatless#planning-summary`,
+            },
+          },
+        ])
       return callTools([
         {
-          name: 'sessions.fork',
-          args: { instruction: `WORKER: answer the request in thread ${rootId}`, title: 'Planning summary' },
+          name: 'sessions.create',
+          args: { title: 'Planning summary', instruction: `WORKER: answer the request in thread ${rootId}` },
         },
       ])
     }
@@ -237,30 +175,28 @@ export function scenarioSuite(backend: Backend) {
     await quiet(t)
 
     const s = t.a.services
-    const routerId = await requestSessionId(t)
-    expect((await s.sessions.require(routerId)).data.parent?.sessionId).toBe(await s.routerSessionFor())
+    const routerId = (await s.routerSessionFor())!
     const routerRuns = await s.sessions.runs({ sessionId: routerId })
-    expect(routerRuns).toHaveLength(1)
-    expect(routerRuns[0]!.data.state).toBe('completed')
-    expect(routerRuns[0]!.data.result?.output).toBe('Handed to a worker.')
+    expect(routerRuns.map((r) => [r.data.state, r.data.mode])).toEqual([['completed', 'ephemeral']])
     const event = await s.rawEvents.require(routerRuns[0]!.data.cause.eventId!)
     expect((event.data as any).routing.deliveries[0].reason).toBe('trigger')
+    // Rolled back with a summary: the router's committed history is its prompt, its instructions and one decision.
+    const routerHistory = await s.sessions.history(routerId)
+    expect(routerHistory.map((e) => e.kind)).toEqual(['system', 'system', 'summary'])
+    expect((routerHistory[2]!.content as any).text).toContain('→ started @meatless#planning-summary')
 
-    const forks = await s.sessions.children(routerId)
-    expect(forks).toHaveLength(1)
-    const worker = forks[0]!
-    let workerRuns = await s.sessions.runs({ sessionId: worker.id })
-    expect(workerRuns.map((r) => r.data.state)).toEqual(['completed'])
-    expect(workerRuns[0]!.data.cause).toMatchObject({ type: 'fork', parentRunId: routerRuns[0]!.id })
+    // The new session owns the thread: a fresh session (not a fork of the router), subscribed as primary.
+    const worker = (await s.sessions.query({ text: 'Planning summary' })).items.find((x) => x.data.title === 'Planning summary')!
+    expect(worker.data.parent).toBeUndefined()
+    const subs = await s.events.subscriptions.forSubject({ system: 'mp', id: root.id })
+    expect(subs.map((x) => [x.data.sessionId, x.data.primary])).toEqual([[worker.id, true]])
 
-    // The person answers in the thread: the subscription delivers it straight to the worker.
+    // The person answers in the thread: it goes straight to the worker, never through the router.
     await post(t, requests, 'Q3 2026, please', root.id)
     await quiet(t)
-    workerRuns = await s.sessions.runs({ sessionId: worker.id })
+    const workerRuns = await s.sessions.runs({ sessionId: worker.id })
     expect(workerRuns.map((r) => r.data.state)).toEqual(['completed', 'completed'])
-    expect(workerRuns[1]!.data.mode).toBe('continuing')
     const replyEvent = await s.rawEvents.require(workerRuns[1]!.data.cause.eventId!)
-    expect(replyEvent.data.type).toBe('message.replied')
     expect((replyEvent.data as any).routing.deliveries.map((d: any) => d.reason)).toEqual(['subscription'])
     expect(await s.sessions.runs({ sessionId: routerId })).toHaveLength(1)
 
@@ -270,18 +206,164 @@ export function scenarioSuite(backend: Backend) {
       'Q3 2026, please',
       'Here is the Q3 2026 summary: all good.',
     ])
-    expect(thread.body.replies[0].data.author.type).toBe('session')
-    expect(thread.body.sessions.map((x: any) => x.id)).toEqual([worker.id])
-
     // Lineage: the reply event led through the subscription to the worker's run.
     const lin = await t.req('GET', `/api/lineage/${replyEvent.id}`)
     expect(lin.status).toBe(200)
-    expect(lin.body.edges).toEqual(expect.arrayContaining([expect.objectContaining({ from: replyEvent.id, type: 'matched' })]))
     expect(lin.body.nodes.map((n: any) => n.type)).toEqual(expect.arrayContaining(['event', 'subscription', 'run', 'session']))
-    // And the worker's first run leads back to the #requests event and its trigger.
-    const up = await t.req('GET', `/api/lineage/${workerRuns[0]!.id}`)
-    expect(up.body.nodes.map((n: any) => n.type)).toEqual(expect.arrayContaining(['event', 'trigger', 'run', 'session']))
-    expect(up.body.edges).toEqual(expect.arrayContaining([{ from: routerRuns[0]!.id, to: worker.id, type: 'forked' }]))
+  })
+
+  it('1b. the router answers directly, never subscribes, and sees its decision when the follow-up comes', async () => {
+    let t!: TestApp
+    const seen: string[] = []
+    const script = async (req: ModelRequest): Promise<ScriptResult> => {
+      const rootId = await rootByText(t, 'What is 17 * 23')
+      if (lastToolName(req) === 'sessions.commit') return reply('NO_REPLY')
+      const followUp = has(req, 'and times 2')
+      if (lastToolName(req) === 'chat.reply')
+        return callTools([
+          {
+            name: 'sessions.commit',
+            args: {
+              summary: `thread ${rootId} (#requests, from Web user): ${followUp ? '17*23*2' : '17*23'} → answered directly`,
+            },
+          },
+        ])
+      if (followUp) {
+        // Its earlier decision is in its context, as a summary (the instructions' example line doesn't count).
+        seen.push(
+          req.messages
+            .filter(
+              (m) =>
+                m.role === 'user' &&
+                (m.content ?? '').startsWith('[summary') &&
+                (m.content ?? '').includes('→ answered directly'),
+            )
+            .length.toString(),
+        )
+        return callTools([{ name: 'chat.reply', args: { threadId: `mp:${rootId}`, text: '782.' } }])
+      }
+      return callTools([{ name: 'chat.reply', args: { threadId: rootId, text: '391.' } }])
+    }
+    t = await make({ script })
+    const s = t.a.services
+    const requests = await requestsChannel(t)
+    const root = await post(t, requests, 'What is 17 * 23?')
+    await quiet(t)
+    const routerId = (await s.routerSessionFor())!
+    expect(await s.events.subscriptions.forSession(routerId)).toEqual([])
+
+    await post(t, requests, 'and times 2?', root.id)
+    await quiet(t)
+    // The follow-up came back to the router through its trigger, and it saw its earlier decision.
+    expect(seen).toEqual(['1'])
+    const runs = await s.sessions.runs({ sessionId: routerId })
+    expect(runs.map((r) => [r.data.state, r.data.mode])).toEqual([
+      ['completed', 'ephemeral'],
+      ['completed', 'ephemeral'],
+    ])
+    const summaries = (await s.sessions.history(routerId)).filter((e) => e.kind === 'summary')
+    expect(summaries.map((e) => (e.content as any).text)).toEqual([
+      expect.stringContaining('17*23 → answered directly'),
+      expect.stringContaining('17*23*2 → answered directly'),
+    ])
+    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
+    expect(thread.body.replies.map((m: any) => m.data.text)).toEqual(['391.', 'and times 2?', '782.'])
+    expect(await s.events.subscriptions.forSession(routerId)).toEqual([])
+  })
+
+  it('1c. a plain-text answer from the router is posted in the thread, without subscribing it', async () => {
+    const script = async (): Promise<ScriptResult> => reply("I'm Meatless, an AI employee.")
+    const t = await make({ script })
+    const s = t.a.services
+    const root = await post(t, await requestsChannel(t), 'In one sentence: what are you?')
+    await quiet(t)
+    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
+    expect(thread.body.replies.map((m: any) => [m.data.author.type, m.data.text])).toEqual([
+      ['session', "I'm Meatless, an AI employee."],
+    ])
+    expect(await s.events.subscriptions.forSession((await s.routerSessionFor())!)).toEqual([])
+  })
+
+  it('1d. an existing decision: the router forwards new messages about the same work to the session that owns it', async () => {
+    let t!: TestApp
+    const script = async (req: ModelRequest): Promise<ScriptResult> => {
+      if (has(req, 'WORKER:')) return reply(has(req, 'any news') ? 'NO_REPLY: noted the question' : 'Looking into PAY-9.')
+      if (lastToolName(req) === 'sessions.commit') return reply('NO_REPLY')
+      const decided = req.messages.some(
+        (m) =>
+          m.role === 'user' &&
+          (m.content ?? '').startsWith('[summary') &&
+          (m.content ?? '').includes('→ started @meatless#pay-9-refunds'),
+      )
+      if (lastToolName(req) === 'sessions.create')
+        return callTools([
+          {
+            name: 'sessions.commit',
+            args: { summary: 'PAY-9 (#requests, from Web user): refunds broken → started @meatless#pay-9-refunds' },
+          },
+        ])
+      if (lastToolName(req) === 'sessions.message')
+        return callTools([
+          {
+            name: 'sessions.commit',
+            args: { summary: 'PAY-9 (#requests, from Web user): asked for news → forwarded to @meatless#pay-9-refunds' },
+          },
+        ])
+      if (decided)
+        return callTools([
+          { name: 'sessions.message', args: { to: '@meatless#pay-9-refunds', text: 'Web user asks: any news on PAY-9?' } },
+        ])
+      return callTools([
+        {
+          name: 'sessions.create',
+          args: { title: 'PAY-9 refunds', slug: 'pay-9-refunds', instruction: 'WORKER: fix PAY-9, refunds are broken' },
+        },
+      ])
+    }
+    t = await make({ script })
+    const s = t.a.services
+    const requests = await requestsChannel(t)
+    await post(t, requests, 'PAY-9: refunds are broken')
+    await quiet(t)
+    // A new top-level message about the same work, in another thread.
+    await post(t, requests, 'any news on PAY-9?')
+    await quiet(t)
+    const worker = (await s.sessions.bySlug((await s.directory.employees.byHandle('meatless'))!.id, 'pay-9-refunds'))!
+    const runs = await s.sessions.runs({ sessionId: worker.id })
+    expect(runs).toHaveLength(2)
+    const forwarded = await s.rawEvents.require(runs[1]!.data.cause.eventId!)
+    expect(forwarded.data.text).toContain('any news on PAY-9')
+    // Only one worker was started, and the router kept two one-line decisions.
+    expect(
+      (await s.sessions.query({ text: 'PAY-9 refunds' })).items.filter((x) => x.data.title === 'PAY-9 refunds'),
+    ).toHaveLength(1)
+    const summaries = (await s.sessions.history((await s.routerSessionFor())!)).filter((e) => e.kind === 'summary')
+    expect(summaries.map((e) => (e.content as any).text)).toEqual([
+      expect.stringContaining('→ started @meatless#pay-9-refunds'),
+      expect.stringContaining('→ forwarded to @meatless#pay-9-refunds'),
+    ])
+  })
+
+  it('1e. a router run cannot finish without recording its decision', async () => {
+    const raw = Object.assign(
+      async (req: ModelRequest): Promise<ScriptResult> => {
+        if (lastToolName(req) === 'sessions.commit') return reply('NO_REPLY')
+        if ((lastMsg(req).content ?? '').includes('record your decision'))
+          return callTools([{ name: 'sessions.commit', args: { summary: 'thread (#requests): hello → answered directly' } }])
+        return reply('Hello!')
+      },
+      { raw: true },
+    )
+    const t = await make({ script: raw })
+    const s = t.a.services
+    await post(t, await requestsChannel(t), 'hello')
+    await quiet(t)
+    const routerId = (await s.routerSessionFor())!
+    const [run] = await s.sessions.runs({ sessionId: routerId })
+    expect(run!.data.state).toBe('completed')
+    const hist = await s.sessions.runHistory(run!.id)
+    expect(hist.some((e) => e.kind === 'user' && (e.content as any).text.includes('record your decision'))).toBe(true)
+    expect((await s.sessions.history(routerId)).at(-1)!.kind).toBe('summary')
   })
 
   it('2. an MCP notification becomes an event, and a trigger forks the procedure context for it', async () => {
@@ -462,11 +544,11 @@ export function scenarioSuite(backend: Backend) {
     expect((wake!.content as any).text).toContain('done: gamma')
 
     const tree = await t.req('GET', `/api/sessions/${routerId}/tree`)
-    // The tree starts at the router context; the request's fork holds the loop.
-    expect(tree.body.children.map((c: any) => c.origin)).toEqual(['fork'])
-    const loop = tree.body.children[0].children
-    expect(loop.map((c: any) => c.origin)).toEqual(['loop', 'loop', 'loop'])
-    expect(loop[0].loop).toMatchObject({ of: 3 })
+    // The router context loops directly; its children start from its first entry, not its decision log.
+    expect(tree.body.children.map((c: any) => c.origin)).toEqual(['loop', 'loop', 'loop'])
+    expect(tree.body.children[0].loop).toMatchObject({ of: 3 })
+    const childHistory = await s.sessions.history(children[0]!.id)
+    expect(childHistory.some((e) => JSON.stringify(e.content).includes(ROUTER_MARK))).toBe(false)
   })
 
   it('4. the checklist gate keeps a run going until required items are checked with evidence', async () => {
