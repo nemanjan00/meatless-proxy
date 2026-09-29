@@ -70,6 +70,7 @@ module to it:
 | Module            | Section                                       |
 |-------------------|-----------------------------------------------|
 | identity          | [Identity](#identity)                         |
+| harness chat      | [Harness chat](#harness-chat)                 |
 | chat, tasks       | [MCP](#mcp)                                   |
 | contacts          | [Contacts](#contacts)                         |
 | projects, docs    | [Projects](#projects)                         |
@@ -178,9 +179,9 @@ context bloat.
   - **In company chat.** In the same channels, threads and DMs people use.
     People can read along and join in, and it follows the same interaction
     rules as talking to a person.
-  - **Directly.** Through the harness itself, without going through a chat
-    system, for lower latency. These conversations are stored in the database
-    and shown in the [web UI](#web-ui) like any other activity.
+  - **Directly.** In [harness chat](#harness-chat), the harness's own
+    channels and threads, without going through an outside chat system, for
+    lower latency.
   - An incoming message from another employee is an event like any other. It's
     delivered through [triggers](#triggers) or
     [subscriptions](#subscriptions), for example to the session that asked the
@@ -191,12 +192,65 @@ Open questions:
 - How is an employee's scope defined: by projects, teams, procedures, or links
   to all three?
 - When a request fits several employees' scopes, or none, who takes it?
-- When do employees chat in company chat and when directly? Is it chosen per
-  conversation, or should conversations that matter to people always be
-  visible in company chat?
+- When do employees chat in company chat and when in harness chat? Is it chosen
+  per conversation, or should conversations that matter to people always be
+  in company chat?
 - Which trailer format links a commit to its session and requester?
 - Can people tune the personality for themselves, e.g. "less chatty with me",
   through their contact preferences?
+
+### Harness chat
+
+The harness has its own chat, built like Slack, with **channels** and
+**threads**. Employees use it to talk to each other directly, and the harness
+uses its structure to route messages to the right contexts and sessions. It is
+stored in the database like everything else.
+
+#### Channels and threads as routing
+
+- **Channels** are where a kind of work goes, e.g. `#deploys`, `#billing`,
+  `#access-requests`. A channel can be assigned to a context through a
+  [trigger](#triggers): a new top-level message in `#access-requests` starts a
+  run in the access-request [procedure context](#procedure-contexts), or a fork
+  of it.
+- **Threads** are one piece of work. A thread is linked to the session handling
+  it, and that session is [subscribed](#subscriptions) to the thread. Replies
+  go straight to that session, without being routed again.
+- **Direct messages** between two employees, or between an employee and a
+  person, work the same way: they're a thread linked to a session.
+- Messages can mention contacts, projects, sessions and procedures by id, like
+  [links](#links-between-contacts-and-projects) in docs, and mentioning an
+  employee delivers the message to it.
+
+#### People can join
+
+Harness chat isn't just for machines. It can be reached from the
+[web UI](#web-ui), and people can join whenever they need to.
+
+- Anyone allowed to see a channel or thread can read it in the web UI, live,
+  and post in it.
+- A person's message in a thread is delivered to the subscribed session like any
+  other event, so they can correct, redirect or answer a question mid-task.
+- An employee can **pull a person in**: it mentions them in a thread when it
+  needs a decision, an approval or an answer only they have. The person gets
+  notified through their usual chat (via [MCP](#mcp)), with a link to the
+  thread in the web UI.
+- The [interaction rules](employee.md#2-how-it-interacts-with-people) apply in
+  harness chat just as in company chat, especially when people are reading.
+
+| Tool          | What it does                                              |
+|---------------|-----------------------------------------------------------|
+| post          | post in a channel, a thread, or a DM                      |
+| read          | read a channel or thread, or search messages              |
+| create channel | create a channel and optionally assign it to a context    |
+| invite        | pull a person or another employee into a thread           |
+
+Open questions:
+
+- Can threads be mirrored to company chat (e.g. a Slack thread that stays in
+  sync), so people can join from where they already are?
+- Who can create channels: only people, or employees too, as part of scripting
+  their own work?
 
 ### MCP
 
@@ -753,6 +807,15 @@ done, and what it costs, and where they can explore and edit what it knows.
 - **Session trees.** Forks and loops are shown as a tree. You can navigate from
   a session to its parent, its children, and linked sessions, and see at a
   glance which branches are running, waiting, done or failed.
+
+#### Chat
+
+- [Harness chat](#harness-chat) is available in the UI: channels, threads and
+  DMs, updating live.
+- People can read along and post, and they're notified when an employee pulls
+  them into a thread.
+- From a thread, you can jump to the session handling it, and from a session to
+  its threads.
 
 #### Usage
 
