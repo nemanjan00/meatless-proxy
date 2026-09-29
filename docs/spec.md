@@ -91,6 +91,60 @@ Open questions:
   manual file, or several of these merged?
 - Can people edit their own contact, for example to set preferences?
 
+### Projects
+
+The harness keeps a record of the company's projects. Each project has two
+parts:
+
+- **structured data**, which follows an extendable schema like
+  [contacts](#contacts) and lets code read the project directly
+- **documentation**, a set of interlinked markdown files that people and the
+  model can read
+
+Core fields:
+
+| Field         | Type                          | Notes                                  |
+|---------------|-------------------------------|----------------------------------------|
+| `id`          | string                        | stable, harness-assigned               |
+| `name`        | string                        |                                        |
+| `aliases`     | list of string, optional      | other names people use for it          |
+| `description` | string                        | one paragraph                          |
+| `status`      | string                        | e.g. active / maintenance / sunset     |
+| `owner`       | contact id                    | the person accountable for the project |
+| `members`     | list of {contact id, role}    | role on this project, e.g. `reviewer`  |
+| `links`       | list of {system, ref}         | repos, task boards, chat channels      |
+
+Extension works the same way as for contacts: a deployment can declare extra
+fields with a name, a type and a description, and the core fields can't be
+removed or redefined.
+
+#### Documentation
+
+- Every project has its own set of markdown documents, for example an overview,
+  runbooks, decisions and procedures.
+- Documents can link to each other, to documents in other projects, to
+  contacts, and to projects. These links can be followed by the model and by
+  code, not just by people reading a rendered page.
+- Links to contacts and projects use their ids, so they don't break when a name
+  changes.
+
+#### Behaviour
+
+- The model can look up projects by id, name, alias or any field. From a
+  project it can get the contacts linked to it, and it can find the projects
+  linked to a given contact (e.g. "what does Ana own?").
+- Following links in either direction is supported: which documents link to
+  this one, and which documents mention this person.
+
+Open questions:
+
+- How is the structured data stored: frontmatter in the project's main markdown
+  file, or a separate file next to the docs?
+- What is the link syntax for contacts and projects, e.g. `[[contact:ana]]` or
+  a normal markdown link with a special scheme?
+- Can projects nest (sub-projects or components), or is the ownership of
+  components expressed some other way?
+
 ## Unique features
 
 _None specified yet._
