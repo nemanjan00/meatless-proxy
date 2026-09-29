@@ -1524,6 +1524,10 @@ person follows a project's contributing guide.
     unrestricted and not logged, so an admin sets `project` or `none` per
     employee (or `DEFAULT_NETWORK=project` for the deployment) where that
     matters.
+    The employee page shows this as "Deployment default (…)" with what it
+    is here (a direct network with its warning, no network, or the project's
+    allowlist; `GET /api/me` says, in `deployment`), and an admin picks it to
+    clear the employee's own setting.
   - `project`: the project's allowlist.
   - `{ allow: [hosts] }`: the employee's own hosts. With a project allowlist,
     only what both allow (the narrower host and port of each pair).
@@ -2795,7 +2799,13 @@ All of these update live over the WebSocket.
   old key stops working), its **Projects** ([assigning
   projects](#assigning-projects)), the [guided setup](#guided-setup) of its
   integrations under a short "how integrations work", and its own MCP
-  servers.
+  servers. Its **Network** says what the code sandbox and environments can
+  reach; admins change it ([Docker orchestration](#docker-orchestration),
+  [direct network](#direct-network)). Unset is "Deployment default (…)",
+  naming what that is here, and choosing it clears the employee's own
+  setting. A direct network shows its warning; where
+  `DOCKER_DIRECT_NETWORK=false`, the control says direct means no network
+  here.
 - **New employee** (admins), in Settings → Employees and on every employee
   page: a short dialog, then straight to the new employee's page with its
   integrations as the next step. See [adding an employee](#multiple-employees).

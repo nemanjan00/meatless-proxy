@@ -40,6 +40,11 @@ read-only forms; only admins see the kill switch and the admin settings (employe
 triggers, limits, pricing, people and access with sign-in links, MCP servers). Settings → API tokens creates a token
 (shown once), lists and revokes yours. The mock (`VITE_MOCK=1`) is signed in as an admin.
 
+The employee's **Network** control (`src/components/network-setting.tsx`) reads the deployment's
+network defaults from `me.deployment` (`useDeploymentNetwork`): an unset setting shows as
+"Deployment default (…)" with what that is here, and choosing it saves `network: null`, which
+clears the field. Where direct networks are off, it says a direct setting means no network.
+
 `src/components/mcp-servers.tsx` is `<McpServers employeeId? />`: the MCP servers of an employee, or
 the global ones without `employeeId` (Settings → MCP servers mounts that one), for admins only. It
 shows each server's status, auth and tools, connects OAuth (the server's callback comes back with

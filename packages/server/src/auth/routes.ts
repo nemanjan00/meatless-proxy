@@ -173,6 +173,7 @@ export function authRoutes(s: Services, opts: AuthRoutesOptions): Hono {
       access: p.access,
       ...(p.email ? { email: p.email } : {}),
       via: p.via,
+      deployment: { defaultNetwork: cfg.DEFAULT_NETWORK, directNetwork: cfg.DOCKER_DIRECT_NETWORK },
     } satisfies Api.Me)
   })
 

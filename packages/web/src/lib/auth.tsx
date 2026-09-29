@@ -1,4 +1,4 @@
-import type { Access, Me } from '@mp/api'
+import type { Access, DeploymentNetwork, Me } from '@mp/api'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { useData } from '@/lib/api.tsx'
@@ -74,6 +74,14 @@ export function useAuth(): AuthState {
   const ctx = useContext(Ctx)
   if (!ctx) throw new Error('useAuth outside AuthProvider')
   return ctx
+}
+
+/**
+ * The deployment's network defaults from `GET /api/me`, or undefined before it loads (or outside an
+ * AuthProvider).
+ */
+export function useDeploymentNetwork(): DeploymentNetwork | undefined {
+  return useContext(Ctx)?.me?.deployment
 }
 
 /** Renders its children for a signed-in person, and sends everyone else to the login page (and back after). */

@@ -130,7 +130,13 @@ describe('sign-in links and sessions', () => {
     expect(JSON.stringify((await t.a.services.records.query('auth_session', {})).items)).not.toContain(cookies.mp_session)
 
     const me = await t.req('GET', '/api/me', undefined, cookieHeader(cookies))
-    expect(me.body).toEqual({ contactId: ana, name: 'Ana Example', access: 'member', via: 'session' })
+    expect(me.body).toEqual({
+      contactId: ana,
+      name: 'Ana Example',
+      access: 'member',
+      via: 'session',
+      deployment: { defaultNetwork: 'direct', directNetwork: true },
+    })
 
     // Once only.
     expect((await login(t, link.token)).res.headers.get('location')).toBe('/login?error=invalid_link')
@@ -138,6 +144,14 @@ describe('sign-in links and sessions', () => {
     const late = await createLoginLink(t.a.services, ana)
     clock.advance(15 * 60_000 + 1)
     expect((await login(t, late.token)).res.headers.get('location')).toBe('/login?error=invalid_link')
+  })
+
+  it("says what the deployment's network defaults are, for the employee network control", async () => {
+    const t = await make({ env: { DEFAULT_NETWORK: 'none', DOCKER_DIRECT_NETWORK: 'false' } })
+    const viewer = await person(t, 'Vera Example', 'viewer')
+    const me = await t.req('GET', '/api/me', undefined, await t.as(viewer))
+    expect(me.status).toBe(200)
+    expect(me.body).toMatchObject({ contactId: viewer, deployment: { defaultNetwork: 'none', directNetwork: false } })
   })
 
   it('goes back to a local page only', async () => {

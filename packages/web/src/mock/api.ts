@@ -1088,7 +1088,14 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         }),
       )
     },
-    me: () => delay({ contactId: me.id, name: me.name, access: me.access ?? 'admin', via: 'session' as const }),
+    me: () =>
+      delay({
+        contactId: me.id,
+        name: me.name,
+        access: me.access ?? 'admin',
+        via: 'session' as const,
+        deployment: { defaultNetwork: 'direct' as const, directNetwork: true },
+      }),
 
     authConfig: () => delay({ oidc: false }),
     logout: () => delay(undefined),

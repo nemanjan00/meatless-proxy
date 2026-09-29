@@ -86,7 +86,7 @@ export const employeeSchema: KindSchema = {
       name: 'network',
       type: 'json',
       description:
-        "Where this employee's environments and sandbox may connect: 'none', 'project' (the default: the project's egress allowlist, through the egress proxy), { allow: [hosts] } (its own list through the proxy; with a project, only hosts both allow; ['*'] allows any public host), or 'direct' (a real network with no proxy, no allowlist and no log, for trusted employees). ['*'] and 'direct' are an admin's explicit choice.",
+        "Where this employee's environments and sandbox may connect: 'none', 'project' (the project's egress allowlist, through the egress proxy), { allow: [hosts] } (its own list through the proxy; with a project, only hosts both allow; ['*'] allows any public host), or 'direct' (a real network with no proxy, no allowlist and no log, for trusted employees). Unset: the deployment's DEFAULT_NETWORK (direct unless set).",
     },
     {
       name: 'git',

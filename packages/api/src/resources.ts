@@ -730,6 +730,17 @@ export interface Me {
   email?: string
   /** How this request was authenticated: the web session cookie, or a bearer token. */
   via: 'session' | 'token'
+  /** The deployment's network defaults, for the employee network control. Absent from older servers. */
+  deployment?: DeploymentNetwork
+}
+
+/**
+ * What applies to an employee with no network setting of its own (`DEFAULT_NETWORK`), and whether direct
+ * networks are on (`DOCKER_DIRECT_NETWORK`; off, a direct setting means no network).
+ */
+export interface DeploymentNetwork {
+  defaultNetwork: 'direct' | 'project' | 'none'
+  directNetwork: boolean
 }
 
 /** `GET /api/auth/config` (public): what the login page offers. */

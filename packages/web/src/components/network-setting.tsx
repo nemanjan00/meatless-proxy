@@ -1,4 +1,4 @@
-import type { EmployeeData } from '@mp/api'
+import type { DeploymentNetwork, EmployeeData } from '@mp/api'
 import { CircleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -6,11 +6,17 @@ import { Button } from '@/components/ui/button.tsx'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { useApi } from '@/lib/api.tsx'
+import { useDeploymentNetwork } from '@/lib/auth.tsx'
 
-type Mode = 'project' | 'registries' | 'any' | 'own' | 'direct' | 'none'
+type Mode = 'default' | 'project' | 'registries' | 'any' | 'own' | 'direct' | 'none'
+
+type Network = EmployeeData['network']
 
 /** Package registries, for `pip install` and `npm install` in the code sandbox and environments. */
 export const REGISTRY_HOSTS = ['pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org'] as const
+
+/** What a deployment applies when `GET /api/me` hasn't said (the server's own defaults). */
+export const DEPLOYMENT_FALLBACK: DeploymentNetwork = { defaultNetwork: 'direct', directNetwork: true }
 
 const sameHosts = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && [...a].sort().every((h, i) => h === [...b].sort()[i])
@@ -19,10 +25,16 @@ const sameHosts = (a: readonly string[], b: readonly string[]) =>
 export const DIRECT_WARNING =
   'Unrestricted and not logged: it can reach your LAN, cloud metadata and any host. Only for employees you trust.'
 
-const modeOf = (n: EmployeeData['network']): Mode => {
+/** What a direct network means in a deployment that turns direct networks off. */
+export const DIRECT_OFF_NOTE =
+  'Direct networks are off in this deployment (DOCKER_DIRECT_NETWORK=false): a direct network means no network here.'
+
+const modeOf = (n: Network | null): Mode => {
+  if (n === undefined || n === null) return 'default'
   if (n === 'none') return 'none'
   if (n === 'direct') return 'direct'
-  if (n && typeof n === 'object') {
+  if (n === 'project') return 'project'
+  if (typeof n === 'object') {
     if (n.allow.length === 1 && n.allow[0] === '*') return 'any'
     if (sameHosts(n.allow, REGISTRY_HOSTS)) return 'registries'
     return 'own'
@@ -30,13 +42,36 @@ const modeOf = (n: EmployeeData['network']): Mode => {
   return 'project'
 }
 
+/** The setting that applies: the employee's own, else the deployment default. */
+const effectiveOf = (n: Network, d: DeploymentNetwork): NonNullable<Network> => n ?? d.defaultNetwork
+
+/** Whether the setting gives a real, direct network (a direct setting, with direct networks on). */
+const isDirect = (n: Network, d: DeploymentNetwork) => effectiveOf(n, d) === 'direct' && d.directNetwork
+
+/** Whether the setting is direct, in a deployment that turns direct networks off. */
+const isDirectOff = (n: Network, d: DeploymentNetwork) => effectiveOf(n, d) === 'direct' && !d.directNetwork
+
+/** What the deployment default is, in a few words. */
+function defaultPhrase(d: DeploymentNetwork): string {
+  switch (d.defaultNetwork) {
+    case 'none':
+      return 'no network'
+    case 'project':
+      return "the project's allowlist"
+    default:
+      return d.directNetwork ? 'direct network, no proxy' : 'no network: direct networks are off'
+  }
+}
+
 /** One line describing an employee's network setting. */
-export function describeNetwork(n: EmployeeData['network']): string {
+export function describeNetwork(n: Network, deployment: DeploymentNetwork = DEPLOYMENT_FALLBACK): string {
   switch (modeOf(n)) {
+    case 'default':
+      return `deployment default (${defaultPhrase(deployment)})`
     case 'none':
       return 'none'
     case 'direct':
-      return 'direct network (no proxy)'
+      return deployment.directNetwork ? 'direct network (no proxy)' : 'direct network (off here: no network)'
     case 'any':
       return 'any public host'
     case 'registries':
@@ -51,31 +86,59 @@ export function describeNetwork(n: EmployeeData['network']): string {
 }
 
 /** What the employee's code sandbox (code.run) and its environments (env.up) can reach with this setting. */
-export function networkEffect(n: EmployeeData['network']): { sandbox: string; environments: string } {
-  switch (modeOf(n)) {
+export function networkEffect(
+  n: Network,
+  deployment: DeploymentNetwork = DEPLOYMENT_FALLBACK,
+): { sandbox: string; environments: string } {
+  const applied = effectiveOf(n, deployment)
+  switch (modeOf(applied)) {
     case 'none':
       return { sandbox: 'no network', environments: 'no network' }
     case 'direct':
-      return { sandbox: 'direct network, unrestricted and not logged', environments: 'the same' }
+      return deployment.directNetwork
+        ? { sandbox: 'direct network, unrestricted and not logged', environments: 'the same' }
+        : { sandbox: 'no network (direct networks are off in this deployment)', environments: 'no network' }
     case 'project':
       return {
         sandbox: 'no network (code runs belong to no project), unless the deployment sets DEFAULT_EGRESS',
         environments: "the project's allowlist; no network without a project",
       }
     default: {
-      const what = describeNetwork(n)
+      const what = describeNetwork(applied, deployment)
       return { sandbox: what, environments: `${what}, narrowed to the project's allowlist when there is a project` }
     }
   }
 }
 
-const MODE_LABELS: Record<Mode, string> = {
+const modeLabels = (d: DeploymentNetwork): Record<Mode, string> => ({
+  default: `Deployment default (${defaultPhrase(d)})`,
   project: "Only the project's allowlist",
   registries: 'Package registries (PyPI, npm)',
   any: 'Any public host',
   own: 'These hosts…',
-  direct: 'Direct network (no proxy)',
+  direct: d.directNetwork ? 'Direct network (no proxy)' : 'Direct network (off here: no network)',
   none: 'No network',
+})
+
+/** The setting a mode stands for; `hosts` is the textarea's list, for `own`. */
+function networkOf(mode: Mode, hosts: string): Network {
+  switch (mode) {
+    case 'default':
+      return undefined
+    case 'any':
+      return { allow: ['*'] }
+    case 'registries':
+      return { allow: [...REGISTRY_HOSTS] }
+    case 'own':
+      return {
+        allow: hosts
+          .split(/[\s,]+/)
+          .map((h) => h.trim())
+          .filter(Boolean),
+      }
+    default:
+      return mode
+  }
 }
 
 /** The warning shown with a direct network, in the stylebook's warning colour. */
@@ -88,35 +151,64 @@ function DirectWarning() {
   )
 }
 
+/** What a direct setting means where direct networks are off. */
+function DirectOffNote() {
+  return (
+    <p className="text-micro text-fg-tertiary" data-testid="network-direct-off">
+      {DIRECT_OFF_NOTE}
+    </p>
+  )
+}
+
+/** The warning or note for a setting that is, or falls back to, a direct network. */
+function DirectNotice({ network, deployment }: { network: Network; deployment: DeploymentNetwork }) {
+  if (isDirect(network, deployment)) return <DirectWarning />
+  if (isDirectOff(network, deployment)) return <DirectOffNote />
+  return null
+}
+
 /**
  * The employee's network: what its code sandbox and environments can reach, through the logging egress
- * proxy or, as an admin's choice, a direct network. Admins change it; everyone sees what it means for the
- * sandbox and for environments.
+ * proxy or, as an admin's choice, a direct network. With no setting of its own, the deployment default
+ * applies (`deployment`, else what `GET /api/me` says). Admins change it, or clear it back to the default;
+ * everyone sees what it means for the sandbox and for environments.
  */
 export function NetworkSetting({
   employee,
   admin,
   onSaved,
+  deployment: given,
 }: {
   employee: { id: string; version: number; data: EmployeeData }
   admin: boolean
   onSaved: () => void
+  deployment?: DeploymentNetwork
 }) {
   const api = useApi()
+  const loaded = useDeploymentNetwork()
+  const deployment = given ?? loaded ?? DEPLOYMENT_FALLBACK
   const current = employee.data.network
   const [editing, setEditing] = useState(false)
   const [mode, setMode] = useState<Mode>(modeOf(current))
   const [hosts, setHosts] = useState(modeOf(current) === 'own' ? (current as { allow: string[] }).allow.join('\n') : '')
   const [busy, setBusy] = useState(false)
-  const effect = networkEffect(current)
+  const effect = networkEffect(current, deployment)
 
   if (!editing)
     return (
       <span className="flex flex-col gap-1" data-testid="network-setting">
         <span className="flex flex-wrap items-center gap-2">
-          <span>{describeNetwork(current)}</span>
+          <span>{describeNetwork(current, deployment)}</span>
           {admin && (
-            <Button size="xs" variant="ghost" className="text-fg-tertiary" onClick={() => setEditing(true)}>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-fg-tertiary"
+              onClick={() => {
+                setMode(modeOf(current))
+                setEditing(true)
+              }}
+            >
               Change
             </Button>
           )}
@@ -124,26 +216,17 @@ export function NetworkSetting({
         <span className="text-micro text-fg-tertiary" data-testid="network-effect">
           Code sandbox: {effect.sandbox}. Environments: {effect.environments}.
         </span>
-        {modeOf(current) === 'direct' && <DirectWarning />}
+        <DirectNotice network={current} deployment={deployment} />
       </span>
     )
 
+  const picked = networkOf(mode, hosts)
   const save = async () => {
-    const own = hosts
-      .split(/[\s,]+/)
-      .map((h) => h.trim())
-      .filter(Boolean)
-    const network =
-      mode === 'any'
-        ? { allow: ['*'] }
-        : mode === 'registries'
-          ? { allow: [...REGISTRY_HOSTS] }
-          : mode === 'own'
-            ? { allow: own }
-            : mode
+    // Deployment default clears the employee's own setting: the records API removes a field set to null.
+    const network = mode === 'default' ? null : picked
     setBusy(true)
     try {
-      await api.updateRecord<EmployeeData>('employee', employee.id, { network }, employee.version)
+      await api.updateRecord('employee', employee.id, { network }, employee.version)
       toast('Network setting saved', { description: 'New environments use it; the code sandbox restarts at its next run.' })
       setEditing(false)
       onSaved()
@@ -153,15 +236,8 @@ export function NetworkSetting({
       setBusy(false)
     }
   }
-  const preview = networkEffect(
-    mode === 'any'
-      ? { allow: ['*'] }
-      : mode === 'registries'
-        ? { allow: [...REGISTRY_HOSTS] }
-        : mode === 'own'
-          ? { allow: hosts.split(/[\s,]+/).filter(Boolean) }
-          : mode,
-  )
+  const preview = networkEffect(picked, deployment)
+  const labels = modeLabels(deployment)
   return (
     <div className="flex flex-col gap-2" data-testid="network-setting">
       <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
@@ -169,9 +245,9 @@ export function NetworkSetting({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
+          {(Object.keys(labels) as Mode[]).map((m) => (
             <SelectItem key={m} value={m}>
-              {MODE_LABELS[m]}
+              {labels[m]}
             </SelectItem>
           ))}
         </SelectContent>
@@ -189,12 +265,16 @@ export function NetworkSetting({
       <p className="text-micro text-fg-tertiary" data-testid="network-preview">
         Code sandbox: {preview.sandbox}. Environments: {preview.environments}.
       </p>
-      {mode === 'direct' ? (
+      {isDirect(picked, deployment) ? (
         <DirectWarning />
+      ) : isDirectOff(picked, deployment) ? (
+        <DirectOffNote />
       ) : (
-        <p className="text-micro text-fg-quaternary">
-          Everything goes through the logging egress proxy. IP and private addresses stay blocked unless listed exactly.
-        </p>
+        effectiveOf(picked, deployment) !== 'none' && (
+          <p className="text-micro text-fg-quaternary">
+            Everything goes through the logging egress proxy. IP and private addresses stay blocked unless listed exactly.
+          </p>
+        )
       )}
       <div className="flex gap-2">
         <Button size="xs" onClick={save} disabled={busy}>
