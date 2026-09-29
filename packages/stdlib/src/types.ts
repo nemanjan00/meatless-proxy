@@ -1,0 +1,101 @@
+/**
+ * The contract between the standard library and the composition root. The
+ * server builds `StdlibDeps` and calls `registerStdlib` and `registerPolicies`.
+ */
+import type { Clock, EventBus, Logger } from '@mp/core'
+import type { Checklists } from '@mp/checklists'
+import type { Chat } from '@mp/chat'
+import type { ContainerRuntime } from '@mp/containers'
+import type { Directory } from '@mp/directory'
+import type { Events } from '@mp/events'
+import type { FilesService } from '@mp/files'
+import type { GitCache, PushPolicy } from '@mp/git'
+import type { MemoryService } from '@mp/memory'
+import type { Docs, Records } from '@mp/records'
+import type { Sessions } from '@mp/sessions'
+import type { SkillsService } from '@mp/skills'
+import type { UsageService } from '@mp/usage'
+
+export interface StdlibDeps {
+  records: Records
+  docs: Docs
+  sessions: Sessions
+  events: Events
+  chat: Chat
+  directory: Directory
+  memory: MemoryService
+  skills: SkillsService
+  files: FilesService
+  checklists: Checklists
+  usage: UsageService
+  /** Optional: without them the git and env tools aren't registered. */
+  git?: GitCache
+  containers?: ContainerRuntime
+  /** Queues a run for execution (the server wires it to the runner). */
+  enqueueRun: (runId: string, opts?: { priority?: number }) => Promise<void>
+  /** Wakes a suspended run if its wait is satisfied. */
+  wakeRun: (runId: string) => Promise<boolean>
+  clock: Clock
+  logger: Logger
+  bus?: EventBus
+  config: StdlibConfig
+  /**
+   * Reads and writes files inside session worktrees (`git.read_file`,
+   * `git.write_file`, `git.list_files`). Default: the local filesystem
+   * (`nodeWorktreeFs`). Paths are checked to stay inside the worktree before
+   * this is called.
+   */
+  worktreeFs?: WorktreeFs
+}
+
+/** File access inside a worktree. `rel` is a normalized relative POSIX path (`''` is the root). */
+export interface WorktreeFs {
+  read(root: string, rel: string): Promise<string>
+  write(root: string, rel: string, content: string): Promise<void>
+  list(root: string, rel: string): Promise<{ name: string; type: 'file' | 'dir' }[]>
+}
+
+/**
+ * How an employee turns "real forks" into tasks in its task system, stored in
+ * `employee.taskSystem`. The task is created by calling a registered tool
+ * (usually an MCP tool such as `mcp.linear.create_issue`).
+ */
+export interface TaskSystemConfig {
+  /** The registered tool name, e.g. `mcp.linear.create_issue`. Or give `server` + `createTool`. */
+  tool?: string
+  server?: string
+  createTool?: string
+  /** Fixed arguments merged into every call, e.g. `{ teamId: 'T1' }`. */
+  args?: Record<string, unknown>
+  /** Argument names for the title and description. Default `title` and `description`. */
+  titleArg?: string
+  descriptionArg?: string
+  /** Argument name for the parent task id, when the loop names one (`parentTaskId`). */
+  parentArg?: string
+  /** Where the created task's id is in the tool output (dot path). Default: `id`, then `identifier`. */
+  idPath?: string
+  /** Subject system for subscribing to the task. Default: `server`, or the tool name's second segment. */
+  subjectSystem?: string
+}
+
+export interface StdlibConfig {
+  /** Where session worktrees are created: `<worktreesRoot>/<sessionId>/<repo key>`. */
+  worktreesRoot: string
+  /** Branches employees may push to, and never push to. */
+  pushPolicy: PushPolicy
+  /** Default limits used when none are configured. */
+  defaults?: { maxFanOut?: number; maxDepth?: number; maxConcurrentSessions?: number }
+}
+
+export interface PolicyConfig {
+  /** A run that committed code must update docs (or say why not). Default true. */
+  docsMaintenance?: boolean
+  /** A run can't complete while required checklist items are open. Default true. */
+  checklistGate?: boolean
+  /** Commit uncommitted worktree changes when a run ends. Default true. */
+  commitOnStop?: boolean
+  /** A run must update its session document before finishing. Default false. */
+  sessionDocument?: boolean
+  /** Messages between employees in a thread without a person, before deliveries pause. Default 20. */
+  maxAiStreak?: number
+}

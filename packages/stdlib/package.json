@@ -1,0 +1,34 @@
+{
+  "name": "@mp/stdlib",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The model's standard library of tools, the employee prompt, and the built-in policy hooks.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/queue": "0.0.0",
+    "@mp/git": "0.0.0",
+    "@mp/containers": "0.0.0",
+    "@mp/secrets": "0.0.0",
+    "@mp/records": "0.0.0",
+    "@mp/directory": "0.0.0",
+    "@mp/memory": "0.0.0",
+    "@mp/skills": "0.0.0",
+    "@mp/files": "0.0.0",
+    "@mp/events": "0.0.0",
+    "@mp/sessions": "0.0.0",
+    "@mp/checklists": "0.0.0",
+    "@mp/chat": "0.0.0",
+    "@mp/tools": "0.0.0",
+    "@mp/usage": "0.0.0",
+    "@mp/router": "0.0.0",
+    "@mp/runner": "0.0.0"
+  },
+  "devDependencies": {
+    "@mp/model": "0.0.0"
+  }
+}
