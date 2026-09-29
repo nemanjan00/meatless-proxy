@@ -119,6 +119,13 @@ export function registerSessionTools(kit: Kit): void {
    * it forks at the router's first entry (the employee prompt), and gets its context from the
    * instruction. The prompt prefix stays shared, so it's still cached.
    */
+  /**
+   * The toolset for work started from `parent`: from a router context, the employee's full toolset (the
+   * router's own is routing-only, without git, environments or files); otherwise the parent's.
+   */
+  const workToolset = async (parent: Session): Promise<string[] | undefined> =>
+    parent.data.meta?.role === 'router' && deps.toolsetFor ? deps.toolsetFor(parent.data.employeeId) : undefined
+
   const routerForkPoint = async (parent: Session): Promise<string | null> => {
     if (parent.data.meta?.role !== 'router') return null
     const [first] = await sessions.history(parent.id)
@@ -170,7 +177,12 @@ export function registerSessionTools(kit: Kit): void {
             entriesBefore: [{ kind: 'system', content: { text: prompt } }],
           })
           if (!tpl.data.toolset?.length)
-            s = await records.update<SessionData>('session', s.id, { toolset: caller.data.toolset }, { actor: kit.actor(ctx) })
+            s = await records.update<SessionData>(
+              'session',
+              s.id,
+              { toolset: (await workToolset(caller)) ?? caller.data.toolset },
+              { actor: kit.actor(ctx) },
+            )
           if (tpl.data.checklist?.length)
             await deps.checklists.fromTemplate(
               s.id,
@@ -183,7 +195,7 @@ export function registerSessionTools(kit: Kit): void {
             employeeId: ctx.employeeId,
             title: a.title,
             ...(str(a.slug) ? { slug: a.slug } : {}),
-            toolset: caller.data.toolset,
+            toolset: (await workToolset(caller)) ?? caller.data.toolset,
             ...(typeof a.document === 'string' ? { document: a.document } : {}),
             entries: [{ kind: 'system', content: { text: prompt } }],
             links,
@@ -232,9 +244,11 @@ export function registerSessionTools(kit: Kit): void {
           a.atEntry ??
           (await routerForkPoint(parent)) ??
           (parent.id === ctx.sessionId ? await kit.currentPoint(ctx) : parent.data.head)
+        const toolset = await workToolset(parent)
         const fork = await sessions.fork(parent.id, {
           atEntry: at,
           title: str(a.title) ?? `${parent.data.title}: ${line(instruction, 60)}`,
+          ...(toolset ? { toolset } : {}),
           actor: kit.actor(ctx),
         })
         await copyLinks(parent, fork, ctx)
@@ -322,8 +336,10 @@ export function registerSessionTools(kit: Kit): void {
         render: (item, i) => `${instruction}\n\nYour item (${i + 1} of ${n}):\n${itemText(item)}`,
         actor: kit.actor(ctx),
       })
+      const toolset = await workToolset(parent)
       const out: Json[] = []
       for (const [i, child] of children.entries()) {
+        if (toolset) await records.update<SessionData>('session', child.id, { toolset }, { actor: kit.actor(ctx) })
         await copyLinks(parent, child, ctx)
         await linkRequester(child, ctx)
         const task = tasks[i]

@@ -18,6 +18,12 @@ import type { SkillsService } from '@mp/skills'
 import type { UsageService } from '@mp/usage'
 
 export interface StdlibDeps {
+  /**
+   * The employee's full toolset (its allow and deny lists applied to every registered tool). Work a router
+   * context starts gets this instead of the router's routing-only toolset. Optional: without it, new
+   * sessions copy the caller's toolset.
+   */
+  toolsetFor?: (employeeId: string) => Promise<string[]>
   records: Records
   docs: Docs
   sessions: Sessions

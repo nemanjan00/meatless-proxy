@@ -1,4 +1,4 @@
-import { type ModelRequest, reply, type ScriptResult } from '@mp/model'
+import { callTools, type ModelRequest, reply, type ScriptResult } from '@mp/model'
 import { afterEach, describe, expect, it } from 'vitest'
 import { THREAD_CONTEXT_HEADER } from '../src/thread-context.ts'
 import { migrateEmployees, OLD_DEFAULT_PERSONALITIES } from '../src/bootstrap.ts'
@@ -143,5 +143,35 @@ describe('follow-ups in a thread that tagged an employee', () => {
     expect(plan).toContainEqual(
       expect.objectContaining({ sessionId: (await s.routerSessionFor())!, reason: 'thread_participant' }),
     )
+  })
+})
+
+describe('work the router starts', () => {
+  it("gets the employee's full toolset, not the router's routing-only one", async () => {
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        const called = (name: string) =>
+          req.messages.some((m) => m.tool_calls?.some((c) => c.function.name.replace(/__/g, '.') === name))
+        if (router && !called('sessions.create'))
+          return callTools([{ name: 'sessions.create', args: { title: 'Script help', instruction: 'Write the script.' } }])
+        if (router && !called('sessions.commit'))
+          return callTools([
+            { name: 'sessions.commit', args: { summary: 'thread (#general): script → started @meatless#script-help' } },
+          ])
+        return reply('NO_REPLY')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script })
+    const s = t.a.services
+    const general = (await s.chat.channelByName('general'))!.id
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless write me a script' })
+    await settle(t)
+    const router = await s.sessions.require((await s.routerSessionFor())!)
+    const work = (await s.records.query<any>('session', { where: { slug: 'script-help' } })).items[0]!
+    expect(router.data.toolset).not.toContain('fs.read')
+    expect(work.data.toolset).toContain('fs.read')
+    expect(work.data.toolset!.length).toBeGreaterThan(router.data.toolset!.length)
   })
 })

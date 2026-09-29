@@ -513,6 +513,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       describer,
       git,
       ...(containers ? { containers } : {}),
+      // Work a router context starts gets the employee's full toolset, not the router's routing-only one.
+      toolsetFor: async (employeeId: string) => tools.allowed(await toolListsFor(employeeId)).map((t) => t.name),
       ...(sandbox ? { sandbox } : {}),
       sshKeyFor: async (employeeId: string) => (await sshPrivateKey({ secrets }, employeeId)) ?? undefined,
       defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
