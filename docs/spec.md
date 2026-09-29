@@ -1329,6 +1329,42 @@ and commits to itself only what it needs to remember.
 - **Traceability.** Every run records the event that started it, so the web UI
   can show a chain from event to context to child sessions.
 
+#### The router context
+
+Every employee has one **router context**: the session that new work for the
+employee goes to (its triggers, `@employee` tags, and the fallback). It
+behaves like a dispatcher with a notebook. Its committed history is a log of
+routing **decisions**, one line each, and nothing else.
+
+For every event, a router run:
+
+1. **Checks its decisions.** Is there already a decision for this subject
+   (the issue, MR or thread), e.g. "PAY-123 → @meatless#pay-123-refund"?
+2. **Existing decision:** it forwards the event to that session with
+   `sessions.message`. If the session is gone or done, it decides again.
+3. **No decision yet:** it looks around as much as it needs (directory,
+   procedures, docs), then either:
+   - answers directly, if the request is trivial, or
+   - starts a **new session** for the work, with the context that work needs:
+     a fork of the router context carrying an instruction, a
+     [procedure](#procedures) run, or a session from a template. The new
+     session subscribes to the subject, so follow-ups reach it directly
+     without the router.
+4. **Rolls back with a summary and commits it, for next time.** The run is
+   ephemeral, so its exploration is dropped. It commits only a one-line
+   decision summary on top of the router's head (`sessions.commit` with a
+   summary), e.g. `PAY-123 (Linear, from Ana): refund of a double charge →
+   @meatless#pay-123-refund (ses_…)`. The next run starts with it in context.
+
+A [policy hook](#policy-hooks) makes sure no router run ends without
+recording its decision. When the log of decisions grows long, the router
+[rewinds](#context-management-rewind-not-compaction) old decisions for
+finished work into one summary.
+
+Routing inside the router context stays the agent's judgment. Deterministic
+routing (subscriptions, session tags) still goes first, so events for a
+subject with a subscribed session never reach the router at all.
+
 #### Subscriptions
 
 Triggers route *new* things, like a new task, to the context assigned to them.
