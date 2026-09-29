@@ -1,0 +1,24 @@
+{
+  "name": "@mp/evals",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Eval suite: scenarios run through the whole app against a real model, with checks on outcomes, not wording.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "eval": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@mp/chat": "0.0.0",
+    "@mp/checklists": "0.0.0",
+    "@mp/core": "0.0.0",
+    "@mp/directory": "0.0.0",
+    "@mp/git": "0.0.0",
+    "@mp/model": "0.0.0",
+    "@mp/server": "0.0.0",
+    "@mp/sessions": "0.0.0",
+    "@mp/usage": "0.0.0"
+  }
+}

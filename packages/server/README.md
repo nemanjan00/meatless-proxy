@@ -220,6 +220,68 @@ setting and the default web contact. Every step is idempotent (`npm run seed`).
   `SECRETS_KEY` and the model provider in `.env`, and `DOCKER_GID` to the group of
   `/var/run/docker.sock` so the non-root app user can use it.
 
+### Import and export
+
+The knowledge base can be exported as a folder of markdown with YAML
+frontmatter, for backups or to keep in git, and imported back; contacts and
+projects can also come from CSV (`src/transfer/`, docs/spec.md#import-and-export).
+
+```sh
+npm run export -- --out ./knowledge [--force]
+npm run import -- --dir ./knowledge --dry-run
+npm run import -- --contacts people.csv --projects projects.csv [--dry-run] [--strict] [--verbose]
+```
+
+The folder:
+
+| Path | Record | Body |
+|------|--------|------|
+| `contacts/<slug>.md` | contact (people and AI employees' contacts) | `bio` |
+| `employees/<slug>.md` | employee, without `routerSessionId`, SSH key fields or anything credential-like | `instructions` |
+| `projects/<slug>.md` | project, with `members: [{contact, role, data?}]` (the owner is the `owner` role) | `description` |
+| `projects/<slug>/docs/<path>.md` | the project's docs (`path`, or the slugified title) | `body` |
+| `procedures/<slug>.md` | procedure, without `contextSessionId` (rebuilt on first use) | `body` |
+| `skills/<company or project slug>/<name>.md` | skill | `body` |
+| `memories/<id>.md` | memory | `content` |
+| `index.json` | `{ format, version, records: [{kind, id, path}], links }`: every record with its file, and the links no file shows (memory `about` links and others) | |
+
+Frontmatter is one `key: value` per field, `id` first then sorted; lists,
+objects and strings that need quoting are JSON (which is YAML). Output is
+deterministic: same data, same bytes, and no timestamps other than record
+fields. Ids are kept, so `[[kind:id]]` links in text still resolve. Writing
+into a folder replaces only the entries above, and refuses a non-empty folder
+that isn't a previous export unless `--force`.
+
+Import:
+
+- **Matching**: by id (folder only), then by email, then by handle, then by an
+  exact unique name for contacts; by name or alias for projects, by key for
+  employees and skills, by owner and path for docs, by summary and scope for
+  memories. A record that matches is updated with the fields the source has
+  (other fields are kept); CSV handles replace the handle of the same system.
+  New records keep the source's id when it's free, otherwise get a new one, and
+  every reference and `[[kind:id]]` link in the import is rewritten to match.
+- **CSV** with a header row, any case or spacing, `,`, `;` or tab separated,
+  quoted fields, BOM and CRLF are fine. Contacts: `name, email, role, team,
+  manager email, slack handle, permissions`. Projects: `name, description,
+  owner email, members` (`email:role;email:role`, role defaults to `member`).
+  Managers, owners and members may be contacts from the same import.
+- **Memberships** are added, never removed; an `owner` replaces the project's
+  previous owner.
+- **Dry run**: `--dry-run` prints the plan (create, update or unchanged per
+  record, with a `+ field` / `~ field: old -> new` summary, counts per kind,
+  warnings and errors) and changes nothing.
+- **Errors** are reported per row or file (`contacts.csv:5: name is required`),
+  and those rows are skipped; the rest is imported. `--strict` refuses to apply
+  a plan with errors and stops at the first failure.
+- **Idempotent**: importing the same source again plans every record as
+  unchanged and writes nothing.
+
+The same functions are exported for the HTTP API: `exportTree(services)` →
+`Map<path, content>`, `exportKnowledge(services, dir)`, `readTree(dir)`,
+`planImport(services, { tree?, contactsCsv?, projectsCsv? })` → `ImportPlan`,
+`applyImport(services, plan, { strict?, actor? })`, and `formatPlan(plan)`.
+
 ## Tests
 
 `npx vitest run --project node packages/server`:
@@ -236,6 +298,9 @@ setting and the default web contact. Every step is idempotent (`npm run seed`).
 - `alerts.test.ts`: failed runs (once, tags, no run started), `ALERTS_ENABLED`, paused runs, dependencies that keep
   failing, and the run worker reporting a provider outage.
 - `session-memory.test.ts`: recalled memories in a request fork, before the event; visibility; the limit of 5.
+- `transfer.test.ts`: export and import: round trip into a fresh app gives the identical tree (memory, and
+  Postgres when `DATABASE_URL` is set), idempotence, dry run changes nothing, doc links onto existing records with
+  other ids, messy CSV rows, matching by email, handle and name, owner replacement, strict mode.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.
 

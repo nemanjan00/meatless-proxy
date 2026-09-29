@@ -6,3 +6,13 @@ export { createMcpToken, contactForToken, hashToken } from './tokens.ts'
 export { notificationToEvent, stableHash } from './mcp-in.ts'
 export { recoverQueues, routeEvent, startWorkers } from './workers.ts'
 export { GLOBAL_PAUSE_REASON } from './control.ts'
+export {
+  applyImport,
+  exportKnowledge,
+  exportTree,
+  formatPlan,
+  planImport,
+  readTree,
+  type ImportPlan,
+  type ImportSource,
+} from './transfer/index.ts'

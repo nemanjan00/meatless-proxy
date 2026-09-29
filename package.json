@@ -24,7 +24,10 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "token": "tsx packages/server/src/token-cli.ts",
-    "check:links": "tsx scripts/check-links.ts"
+    "check:links": "tsx scripts/check-links.ts",
+    "eval": "tsx packages/evals/src/cli.ts",
+    "import": "tsx packages/server/src/import-cli.ts",
+    "export": "tsx packages/server/src/export-cli.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
