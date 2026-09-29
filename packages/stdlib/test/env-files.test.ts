@@ -1,3 +1,4 @@
+import type { Json } from '@mp/core'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +26,19 @@ describe('the employee’s files in its environments', () => {
     expect((await stat(own)).isDirectory()).toBe(true)
     expect(up.files).toBe('/files')
     expect(up.note).toMatch(/\/files in an environment is your filesystem root \(\/files\/a\.zip is \/a\.zip for fs\.\*/)
+  })
+
+  it('env.exec says when its environment predates the /files mount', async () => {
+    const root = await filesDir()
+    const t = await stack({ filesDir: root })
+    await t.out('env.up', { image: 'node:22' })
+    t.containers.on('ls', { exitCode: 0, stdout: 'ok' })
+    expect((await t.out('env.exec', { cmd: ['ls'] })).filesNote).toBeUndefined()
+    // An environment from before the mount existed: its meta has no `files`.
+    const meta = (await t.sessions.require(t.session.id)).data.meta!
+    const { files: _files, ...older } = meta.env as Record<string, Json>
+    await t.deps.sessions.update(t.session.id, { meta: { ...meta, env: older } })
+    expect((await t.out('env.exec', { cmd: ['ls'] })).filesNote).toMatch(/env\.down, then env\.up/)
   })
 
   it('keeps the checkout mounts and adds /files after them', async () => {

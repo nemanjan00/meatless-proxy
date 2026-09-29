@@ -324,6 +324,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           image: image ?? 'build',
           ...(profile ? { profile } : {}),
           ...(desktop ? { desktop: true } : {}),
+          ...(ownFiles ? { files: true } : {}),
           ...(w
             ? {
                 checkouts: [
@@ -413,6 +414,12 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           stderr: stderr.text,
           ...(longest ? { note: cutNote(longest) } : {}),
           ...(started ? { started } : {}),
+          // Started before environments mounted the employee's files: say so, or /files looks missing.
+          ...(kit.deps.config.filesDir && !env.files
+            ? {
+                filesNote: `This environment was started before ${FILES_MOUNT} (your filesystem) was mounted in environments: env.down, then env.up, to get it.`,
+              }
+            : {}),
         },
         ...(r.exitCode !== 0 ? { isError: true } : {}),
       }

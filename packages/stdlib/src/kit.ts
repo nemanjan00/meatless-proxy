@@ -53,6 +53,8 @@ export interface EnvMeta {
   profile?: string
   /** Whether it has a desktop. */
   desktop?: boolean
+  /** Whether the employee's files are mounted at /files (environments started before that aren't). */
+  files?: boolean
   /** Its checkouts: `/workspace` and `/repos/<name>`. */
   checkouts?: { key: string; path: string }[]
   /** Its service containers' names. */
