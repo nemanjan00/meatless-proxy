@@ -475,10 +475,38 @@ Requirements:
   a task assigned to it. Those events are routed by [triggers](#triggers). How
   they are delivered from the MCP server is still open (see below).
 
+#### Notifications in
+
+MCP servers push **notifications**, for example "resource updated", a new
+message, or a new or changed task. The harness turns each notification into an
+[event](execution.md#events), with a dedupe key, subject and actor mapped per
+server. Triggers and subscriptions then route it like any other event. For
+servers that can't push, a poller calls a list tool on a schedule and turns
+what's new into events.
+
+#### The harness as an MCP server
+
+The harness is also an **MCP server**, so other AI agents can reach the
+company's employees directly: a person's own Claude Code, or another company's
+harness. That's the AI-to-AI path from the [goals](#goals).
+
+- **Tools:** post in harness chat, ask an employee (`@employee`), look up
+  sessions, read and search documents, and check on work the caller started.
+  They're the same standard-library tools, scoped to what the connected
+  contact may see and ask for ([permissions](#permissions)).
+- **Notifications out:** the server pushes MCP notifications to connected
+  clients when something happens for them: a reply in a thread they're in, a
+  mention of them, their work finishing, or a request for their approval. A
+  client never has to poll.
+- **Identity:** each connection authenticates as a [contact](#contacts), with
+  a per-contact token. The contact's permissions apply, and anything it
+  submits counts as coming from that contact.
+- **Transport:** streamable HTTP at `/mcp`, so any MCP client can connect.
+
 Open questions:
 
 - How are inbound events delivered: MCP notifications, polling, or webhooks
-  bridged into MCP?
+  bridged into MCP? (Proposal: all three, see [Notifications in](#notifications-in).)
 - Which transports are supported: stdio, streamable HTTP, or both?
 - How are credentials for each server stored and scoped?
 
