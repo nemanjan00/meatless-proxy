@@ -109,8 +109,10 @@ export const INTEGRATION_DOCS: Record<string, IntegrationDoc> = {
       },
       webhooks: {
         text: [
-          'Nobody registers GitLab webhooks by hand: the harness adds one to every repository of the projects the employee is on, with a secret it generates, and repairs them when they drift. It needs `PUBLIC_URL`, and Maintainer rights through the provisioning token (`GITLAB_HOOKS_TOKEN`) or the employee’s own token.',
+          'Nobody registers GitLab webhooks by hand: the harness adds one to every repository of the projects the employee is on, with a secret it generates, and repairs them when they drift. It needs `PUBLIC_URL`.',
+          'Registering a webhook needs Maintainer, but the employee’s own account should stay Developer so it can’t push to protected branches. So give the harness a separate provisioning token: in GitLab, create a group access token (or a project access token per project) with the Maintainer role and the api scope, and paste it below. It is used only to register and repair webhooks; the employee’s tools never see it.',
         ],
+        fields: ['GITLAB_HOOKS_TOKEN'],
         action: { name: 'register-webhooks', label: 'Register webhooks now' },
       },
       routing: {

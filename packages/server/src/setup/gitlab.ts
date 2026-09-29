@@ -150,6 +150,11 @@ export const gitlabSetup: IntegrationSetupModule = {
   secrets: [
     { name: 'GITLAB_TOKEN', label: 'Personal access token (api scope)', placeholder: 'glpat-…' },
     { name: 'GITLAB_BASE_URL', label: 'Instance URL (self-hosted only)', placeholder: GITLAB_DEFAULT_URL },
+    {
+      name: 'GITLAB_HOOKS_TOKEN',
+      label: 'Webhook provisioning token (Maintainer, api scope; used only to register webhooks)',
+      placeholder: 'glpat-…',
+    },
   ],
 
   async check(ctx) {
@@ -322,7 +327,11 @@ export const gitlabSetup: IntegrationSetupModule = {
             const level = accessOf(p)
             const warnings: string[] = []
             if (level >= ACCESS.maintainer)
-              warnings.push(`${roleName(level)}: it could merge or push to protected branches. Developer is recommended.`)
+              warnings.push(
+                ctx.values.GITLAB_HOOKS_TOKEN
+                  ? `${roleName(level)}: it could merge or push to protected branches. Set it to Developer: webhooks use the provisioning token.`
+                  : `${roleName(level)}: it could merge or push to protected branches. Add a webhook provisioning token, then set this account to Developer.`,
+              )
             let protectedDefault: boolean | null = null
             if (p.default_branch && i < MAX_CHECKED_PROJECTS) {
               const b = await api(ctx, token, `/projects/${p.id}/protected_branches?per_page=100`).catch(() => null)
@@ -408,7 +417,9 @@ export const gitlabSetup: IntegrationSetupModule = {
           'webhooks',
           'Webhooks',
           'warning',
-          `${failed.length} webhook${failed.length === 1 ? '' : 's'} couldn’t be registered: ${failed[0]!.error ?? 'unknown error'}`,
+          /Maintainer/.test(failed[0]!.error ?? '')
+            ? `${failed.length} webhook${failed.length === 1 ? '' : 's'} couldn’t be registered: registering a webhook needs Maintainer. Add a webhook provisioning token below (a group or project access token with the Maintainer role and the api scope), and keep this account at Developer so it can’t push to protected branches.`
+            : `${failed.length} webhook${failed.length === 1 ? '' : 's'} couldn’t be registered: ${failed[0]!.error ?? 'unknown error'}`,
           hookData,
         ),
       )
@@ -458,6 +469,34 @@ export const gitlabSetup: IntegrationSetupModule = {
         throw new ValidationError('The instance URL must be a URL, like https://git.example.com')
       }
       if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new ValidationError('The instance URL must be http(s)')
+    }
+    if (given.GITLAB_HOOKS_TOKEN !== undefined) {
+      const hooks = given.GITLAB_HOOKS_TOKEN
+      let h: { user: GitlabUser } | { status: number }
+      try {
+        h = await currentUser(ctx, hooks)
+      } catch (err) {
+        return { message: redact(ctx, `Saved, but GitLab couldn't be reached to check it: ${errorMessage(err)}`) }
+      }
+      if ('status' in h)
+        throw new ValidationError(
+          h.status === 401
+            ? 'GitLab rejected the provisioning token (401). It was not saved.'
+            : `GitLab answered /user with HTTP ${h.status}. The provisioning token was not saved.`,
+        )
+      const hs = await tokenSelf(ctx, hooks).catch(() => null)
+      if (hs?.scopes && !hs.scopes.includes('api'))
+        throw new ValidationError(
+          `The provisioning token needs the api scope (it has ${hs.scopes.join(', ') || 'none'}). It was not saved.`,
+        )
+      if (given.GITLAB_TOKEN === undefined)
+        return {
+          message: `Provisioning token saved (@${h.user.username}). Webhooks are registered with it; set the employee's own account to Developer.`,
+          after: async () => {
+            ctx.deps.provisioning()?.schedule(ctx.employee.id)
+            return undefined
+          },
+        }
     }
     const token = ctx.values.GITLAB_TOKEN
     if (!token) return { message: 'Instance URL saved.' }

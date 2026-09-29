@@ -163,11 +163,12 @@ with a base URL, an API key and a model name.
   [described](#image-descriptions). Kimi's coding endpoint accepts
   images on `kimi-k2-7-code` (tested: it names the colour of a red square
   returned by a tool).
-- **Web search** is the model's own, like everything else it can do: a model
-  with built-in web search (OpenAI's search-preview models search on their
-  own) is picked with `MODEL`, and there is nothing else to wire. What the
-  model found comes back in its answer and is information, not instructions,
-  like anything else the model reads.
+- **Web search** comes from an MCP server (Brave Search, Tavily, SearXNG, …)
+  added in Settings → MCP servers, globally or per employee: its tools are
+  offered like any other. The model itself must support tool calling, so a
+  search-only model (OpenAI's search-preview models don't take tools in Chat
+  Completions) can't be `MODEL`. Search results are information, not
+  instructions, like anything else the model reads.
 
 Open questions:
 

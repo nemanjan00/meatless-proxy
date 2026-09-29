@@ -472,6 +472,16 @@ function setupSuite(backend: Backend) {
       expect(r.body.error.message).toMatch(/already in use on another account/)
     })
 
+    it('takes a separate webhook provisioning token (api scope), so the account can stay Developer', async () => {
+      await setSecrets('gitlab', { GITLAB_TOKEN: 'glpat-good' })
+      expect((await setSecrets('gitlab', { GITLAB_HOOKS_TOKEN: 'glpat-readonly' })).status).toBe(422)
+      const ok = await setSecrets('gitlab', { GITLAB_HOOKS_TOKEN: 'glpat-other' })
+      expect(ok.status).toBe(200)
+      expect(ok.body.message).toMatch(/Provisioning token saved/)
+      const stored = await t.a.services.secrets.resolve(['GITLAB_HOOKS_TOKEN'], { employeeId: emp })
+      expect(stored.GITLAB_HOOKS_TOKEN).toBe('glpat-other')
+    })
+
     it('warns about Maintainer access, an unprotected default branch and an expiring token', async () => {
       fake.world.gitlab.projects.push({
         id: 43,
@@ -495,7 +505,8 @@ function setupSuite(backend: Backend) {
       const byPath = Object.fromEntries(projects.data.projects.map((p: any) => [p.path, p]))
       expect(byPath['acme/billing']).toMatchObject({ role: 'Developer', protected: true, warnings: [] })
       expect(byPath['acme/infra'].role).toBe('Maintainer')
-      expect(byPath['acme/infra'].warnings[0]).toMatch(/Developer is recommended/)
+      // Without a provisioning token it says to add one, then drop the account to Developer.
+      expect(byPath['acme/infra'].warnings[0]).toMatch(/provisioning token, then set this account to Developer/)
       expect(byPath['acme/web']).toMatchObject({ protected: false })
       expect(byPath['acme/web'].warnings[0]).toMatch(/trunk isn’t protected/)
       const token = stepOf(gl, 'token')

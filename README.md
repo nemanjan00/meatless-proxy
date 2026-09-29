@@ -268,9 +268,11 @@ says "no pricing configured". See
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
-in `.env`. Web search is the model's own: pick a model that has it (e.g. one of
-OpenAI's search-preview models, which search on their own) and it just works —
-there is nothing to configure.
+in `.env`. The model must support tool calling: employees work through tools.
+For web search, add a search MCP server (Brave Search, Tavily, SearXNG, …) in
+Settings → MCP servers; its tools show up for employees like any other.
+Search-only models such as OpenAI's search-preview ones don't take tools in
+Chat Completions, so they can't run an employee.
 
 ## Development
 
