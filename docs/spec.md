@@ -112,7 +112,14 @@ the standard inside the harness. A provider is anything that speaks it, set
 with a base URL, an API key and a model name.
 
 - **First provider: Kimi** (Moonshot AI), through its OpenAI-compatible
-  endpoint.
+  endpoint. For development and testing, that's the Kimi coding plan endpoint
+  `https://api.kimi.com/coding/v1` with model `kimi-k2-7-code` (K2.7). The
+  same key also lists `kimi-for-coding`, `kimi-for-coding-highspeed`, `k3` and
+  `k3-256k`.
+- **Reasoning.** Kimi models reason before answering. The reasoning comes back
+  in `reasoning_content`, and it counts towards `completion_tokens`
+  (`completion_tokens_details.reasoning_tokens`), so `max_tokens` has to leave
+  room for it.
 - **Swappable.** Changing or adding a provider is configuration. Different
   sessions, templates or procedures can use different models.
 - **Usage.** Token counts are read from each response's `usage` field (prompt,
@@ -124,10 +131,12 @@ with a base URL, an API key and a model name.
 
 Open questions:
 
-- Which Kimi model(s) to start with?
-- How exactly does Kimi cache prompts (automatic prefix caching or explicit
-  context caching), and how is that reported in `usage`? This needs checking
-  against their docs.
+- Which Kimi model(s) for production?
+- Kimi reports cache hits in `usage.prompt_tokens_details.cached_tokens`. In a
+  test, a repeated identical prompt was served fully from cache without any
+  explicit caching request, which suggests automatic prefix caching. How long
+  cached prefixes live, and whether partial prefixes are reused, still needs
+  checking against their docs.
 - Rate limits, retries and fallback to another provider when one is down.
 
 ### Identity
