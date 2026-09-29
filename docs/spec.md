@@ -16,6 +16,46 @@ systems and tasks.
    needed context up front, ask everything in one go, and resolve as much as
    possible without extra hops.
 
+## Principles
+
+### Database first
+
+All harness state lives in a **database**, and the database is the source of
+truth. That includes contacts, projects, procedures, links, docs, memories,
+sessions and their history, runs, triggers, subscriptions, events and usage.
+There are no loose files or per-process state that only one process knows
+about.
+
+- Every module in the [standard library](#a-self-scripting-engine) is a set of
+  tables with a schema, and all modules are extendable in the same way.
+- Links are rows, so links in both directions and many-to-many queries come
+  for free.
+- Sessions are rows too. Forking, looping, resuming, subscribing and committing
+  are database operations, so a session can be picked up by any worker and
+  survives restarts.
+- The web UI, the model's tools and outside integrations all read and write the
+  same database.
+- Code is the exception: git repositories stay in git, with the
+  [local cache](#git-repositories). The database stores the links to them.
+
+### No single operator
+
+Most harnesses have one operator: one person at a terminal who gives the
+instructions, reads the output and approves every step. meatless-proxy has no
+single operator in the loop. Instead, it **talks to the whole company**:
+
+- Anyone can reach it through the chat and task systems it's connected to, and
+  it reaches out to anyone, according to [contacts](#contacts) and ownership.
+- Instructions come from many people at once. Each piece of work is tied to the
+  contacts who asked for it, own it, or need to approve it, through
+  [links](#links-between-contacts-and-projects).
+- Approvals go to the person the procedure or ownership says should give them,
+  not to whoever started the harness.
+- Work is started by [triggers](#triggers) and
+  [subscriptions](#subscriptions), not by one person typing a prompt, and it
+  keeps running while nobody is watching. The [web UI](#web-ui) is where people
+  look in on it. It is not a control seat that someone has to occupy.
+
 ## A self-scripting engine
 
 The harness is a **self-scripting engine**. The model doesn't just answer
@@ -173,8 +213,9 @@ removed or redefined.
 
 Open questions:
 
-- How is the structured data stored: frontmatter in the project's main markdown
-  file, or a separate file next to the docs?
+- Structured data and docs are both stored in the database
+  ([database first](#database-first)). Should docs also be exportable to or
+  synced with markdown files in git?
 - What is the link syntax for contacts and projects, e.g. `[[contact:ana]]` or
   a normal markdown link with a special scheme?
 - Can projects nest (sub-projects or components), or is the ownership of
@@ -638,7 +679,8 @@ Open questions:
   [confidentiality rules](employee.md#4-boundaries)?
 - Can people act on sessions from the UI (stop, fork, resume, reply), or is it
   view-only apart from docs and data?
-- Where is edit history stored: git, the harness database, or both?
+- Edit history is stored in the database ([database first](#database-first)).
+  How long is it kept?
 
 ## Unique features
 
