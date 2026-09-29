@@ -680,6 +680,8 @@ The model has tools for working with sessions:
 | wait           | block until the given children (one, some or all) finish, and return their results |
 | commit         | keep the current run: add it to the session's history          |
 | rewind         | jump back to an earlier point and append a summary of what happened since |
+| offload        | replace a message in history with a pointer to a docs chapter, writing the chapter first if needed |
+| restore        | put an offloaded message back into the active history       |
 
 #### Runs: ephemeral or committed
 
@@ -719,6 +721,17 @@ away. Sessions don't do that by default. Instead, a session **rewinds**:
   cached prefix stays valid ([model calls](#model-calls)).
 - **Committing a summary.** A run can commit itself as a summary instead of its
   full history. This is the same mechanism, applied at the end of a run.
+- **Replace a message with a pointer.** A session can also decide that a single
+  message in its history shouldn't take up space: for example a long doc it
+  read, a big tool output, or a design discussion that is now written down. It
+  removes the message from its active history and puts a **pointer** in its
+  place, to a chapter in a docs file (e.g. "see *Retry policy* in the billing
+  project's `architecture` doc"). It first writes or updates that chapter if
+  the content isn't documented yet. The original message stays in the database,
+  and the session can follow the pointer or restore the message whenever it
+  needs the detail again. Editing a message invalidates the cached prefix from
+  that point on, so it's best done on older, larger messages, or together with
+  a rewind.
 - **Real compaction only when required**, meaning when even the rewound
   context would be too large. It is then done explicitly and recorded, and the
   full history is still kept in the database.
