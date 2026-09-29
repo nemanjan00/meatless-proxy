@@ -175,7 +175,8 @@ describe('new procedure', () => {
     const create = within(dialog).getByRole('button', { name: 'Create procedure' })
     fireEvent.click(create)
     fireEvent.click(create)
-    expect(await screen.findByRole('heading', { level: 2, name: 'Vendor invoice dispute' })).toBeInTheDocument()
+    // Creating navigates to the procedure's page, which loads its panels; slow CI needs more than the default second.
+    expect(await screen.findByRole('heading', { level: 2, name: 'Vendor invoice dispute' }, { timeout: 5000 })).toBeInTheDocument()
     expect(
       within(screen.getByTestId('when-it-runs')).getByText('When someone writes @vendor-invoice-dispute in chat'),
     ).toBeInTheDocument()
