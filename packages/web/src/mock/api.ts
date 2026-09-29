@@ -53,6 +53,7 @@ import { createMockProceduresApi } from './procedures.ts'
 import { createMockKnowledgeApi } from './knowledge.ts'
 import { createMockIdentityApi } from './identity.ts'
 import { createMockLimitsApi } from './limits.ts'
+import { createMockEnvironmentsApi } from './environments.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
 import { mockListExtras, mockQuerySessions } from './session-list.ts'
@@ -1268,6 +1269,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Limits and pricing (./limits.ts).
     ...createMockLimitsApi({ db, iso, delay, write, get, all }),
+
+    // Environments: live metrics, logs, processes, the desktop viewer (./environments.ts).
+    ...createMockEnvironmentsApi({ db, delay, get, all, emit }),
 
     // Integration users the harness couldn't link to a contact by itself (./identity.ts).
     ...createMockIdentityApi({ delay }),

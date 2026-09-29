@@ -221,6 +221,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       ? dockerRuntime({
           ...(config.DOCKER_SOCKET ? { socketPath: config.DOCKER_SOCKET } : {}),
           namePrefix: config.DOCKER_NAME_PREFIX,
+          desktopImage: config.DESKTOP_IMAGE,
           ...selfContainer(config),
           logger,
           clock,
@@ -606,6 +607,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         directNetwork: config.DOCKER_DIRECT_NETWORK,
         ...(config.ENV_PROFILES?.length ? { envProfiles: config.ENV_PROFILES } : {}),
         ...(config.ENV_DEFAULT_PROFILE ? { envDefaultProfile: config.ENV_DEFAULT_PROFILE } : {}),
+        // Environments get the employee's own files at /files, when they are on disk here.
+        ...(o.fileStorage ? {} : { filesDir: config.FILES_DIR }),
       },
     }
     const names = stdlib.registerStdlib(tools, deps)

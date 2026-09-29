@@ -62,6 +62,18 @@ export interface StackOptions {
   /** Saved image descriptions, made by this model (e.g. a scripted one). Default: none. */
   describeModel?: ModelClient
   describeMode?: ImageDescribeMode
+  /** Where employee files are on disk (config.filesDir): env.up mounts them at /files. Default: none. */
+  filesDir?: string
+}
+
+/** Where a session's checkout is on disk (git.checkout no longer says: it isn't a path for the model). */
+export async function checkoutPath(
+  t: { sessions: { require(id: string): Promise<{ data: { meta?: Record<string, unknown> } }> } },
+  sessionId: string,
+  index = 0,
+): Promise<string> {
+  const s = await t.sessions.require(sessionId)
+  return ((s.data.meta?.worktrees ?? []) as { path: string }[])[index]!.path
 }
 
 export async function stack(opts: StackOptions = {}) {
@@ -148,6 +160,7 @@ export async function stack(opts: StackOptions = {}) {
       worktreesRoot: '/wt',
       pushPolicy: { allow: ['mp/**'], protected: ['main', 'master', 'release/**'] },
       ...(opts.defaults ? { defaults: opts.defaults } : {}),
+      ...(opts.filesDir ? { filesDir: opts.filesDir } : {}),
     },
     worktreeFs,
   }

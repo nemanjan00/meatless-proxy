@@ -68,7 +68,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
-| `env.*` | up (with `expose` ports for live previews), exec, logs, preview, down |
+| `env.*` | up (with `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
 | `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
 | `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
 
@@ -186,7 +186,17 @@ Notes on behaviour:
   (`meta.env.expose`). `env.preview { port? }` returns the harness UI link to
   the session's Preview tab (`previewLink(sessionId, port)`,
   `/sessions/<id>?tab=preview&port=<port>`), never a token: the UI mints tokens
-  for whoever signed in opens it.
+  for whoever signed in opens it. `desktop: true` asks the runtime for a desktop
+  (`EnvSpec.desktop`, refused when `features().desktop` is off) and returns
+  `desktop: { url: desktopLink(sessionId), display: ':99', note }`;
+  `env.screenshot { path? }` saves the screen to `/screenshots/<env>-<time>.png`
+  (or `path`) in the employee's files for `image.view`. With `config.filesDir`
+  (the server's `FILES_DIR`), every environment mounts the employee's own files
+  at `/files` (`FILES_MOUNT`). The session meta records what the Environments
+  page shows (`image`, `profile`, `desktop`, `checkouts`, `services`), and the
+  bus hears `env.changed` (up, down) and `env.exec.started` / `env.exec.finished`.
+  `env.exec` keeps the head and tail of long output (`headAndTail`, 3000
+  characters each for stdout) and then says to redirect it to a file (`cutNote`).
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
   escapes with `nodeWorktreeFs`).
 - **Policies.** The docs policy looks at the run's own entries (after

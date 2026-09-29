@@ -428,7 +428,10 @@ describe('files, mounted from the volume', () => {
     await t.storage.write(t.other, '/notes/n.md', text('n'))
     await t.files.share(t.other, '/reports', t.meC, 'read')
     await t.files.share(t.other, '/notes', t.meC, 'write')
+    // A share whose path was deleted on disk since (dangling): not mounted.
+    await t.storage.write(t.other, '/gone/g.md', text('g'))
     await t.files.share(t.other, '/gone', t.meC, 'read')
+    await t.storage.delete(t.other, '/gone', { recursive: true })
     expect(await t.sandbox.mode()).toBe('mount')
     await t.run('1')
     const spec = t.rt.envs()[0]!.spec

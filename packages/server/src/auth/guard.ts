@@ -196,6 +196,10 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/sessions/:id/fork', need: 'member', check: readableSession() },
   // Live previews: a token for yourself, to watch a session's environment (src/previews).
   { method: 'POST', path: '/api/previews/token', need: 'member' },
+  // Environments (src/environments): stopping one is for admins and the session's requester, checked by the handler;
+  // a desktop's viewer is for members (control: admins and the requester, checked by the handler too).
+  { method: 'POST', path: '/api/environments/:id/stop', need: 'member' },
+  { method: 'POST', path: '/api/environments/:id/desktop', need: 'member' },
   { method: 'POST', path: '/api/runs/:id/pause', need: 'member', check: all(readableRun, ownRun) },
   { method: 'POST', path: '/api/runs/:id/resume', need: 'member', check: all(readableRun, ownRun) },
   { method: 'POST', path: '/api/runs/:id/cancel', need: 'member', check: all(readableRun, ownRun) },

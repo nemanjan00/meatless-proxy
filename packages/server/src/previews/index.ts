@@ -1,10 +1,13 @@
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, Server } from 'node:http'
-import type { PreviewToken, SessionPreview } from '@mp/api'
-import { NotFoundError, UnavailableError, errorMessage, type Json } from '@mp/core'
+import type { DesktopToken, PreviewToken, SessionPreview } from '@mp/api'
+import { DESKTOP_PORTS } from '@mp/containers'
+import { DeniedError, NotFoundError, UnavailableError, errorMessage, type Json } from '@mp/core'
 import type { Session } from '@mp/sessions'
 import { Hono } from 'hono'
-import { principalOf } from '../auth/guard.ts'
+import { principalOf, viewerOf } from '../auth/guard.ts'
+import { ChatVisibility } from '../auth/visibility.ts'
+import { mayControlEnv } from '../environments/access.ts'
 import { BadRequestError, jsonBody, requireString } from '../http/util.ts'
 import type { Services } from '../services.ts'
 import { previewMode, previewOrigin, refusePreviewOrigins, splitHost, type PreviewMode } from './origins.ts'
@@ -12,6 +15,7 @@ import { PREVIEW_AUTH_PATH, createPreviewProxy } from './proxy.ts'
 import { PreviewSigner } from './tokens.ts'
 
 export { PREVIEW_AUTH_PATH, PREVIEW_COOKIE, allowedSetCookie, frameAncestors, previewRequestCookies } from './proxy.ts'
+export * from './desktop.ts'
 export * from './origins.ts'
 export * from './tokens.ts'
 
@@ -99,6 +103,35 @@ export function createPreviews(s: Services, opts: PreviewsOptions): Previews {
 
   // ── Routes on the harness ────────────────────────────────────────────────
   const routes = new Hono()
+  const visibility = new ChatVisibility(s)
+
+  /** The session running an environment, when the viewer may read it (else 404, like the session itself). */
+  const readableEnv = async (viewer: ReturnType<typeof principalOf>, envId: string) => {
+    if (!enabled) throw new UnavailableError(`live previews are off: ${reasonOff}`)
+    const info = await runtime!.getEnv(envId)
+    if (!info) throw new NotFoundError('environment', envId)
+    const sessionId = info.labels['mp.session']
+    const session = sessionId ? await s.sessions.get(sessionId) : null
+    const env = session ? envOf(session) : null
+    if (!session || env?.id !== envId || !(await visibility.canReadSession(viewerOf(viewer), session)))
+      throw new NotFoundError('environment', envId)
+    return { info, session, env }
+  }
+
+  const mint = (
+    c: { req: { header(n: string): string | undefined; url: string } },
+    scope: Parameters<PreviewSigner['token']>[0],
+  ) => {
+    const { token, expiresAt } = signer.token(scope)
+    const host = c.req.header('host') ?? new URL(c.req.url).host
+    const origin = previewOrigin(config, { envId: scope.envId, port: scope.port }, host, boundPort ?? config.PREVIEW_PORT)
+    return {
+      token,
+      expiresAt: new Date(expiresAt).toISOString(),
+      origin,
+      url: `${origin}${PREVIEW_AUTH_PATH}?token=${encodeURIComponent(token)}`,
+    }
+  }
 
   routes.get('/api/sessions/:id/preview', async (c) => {
     const session = await s.sessions.require(c.req.param('id'))
@@ -122,27 +155,36 @@ export function createPreviews(s: Services, opts: PreviewsOptions): Previews {
     const envId = requireString(body.envId, 'envId')
     const port = Number(body.port)
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new BadRequestError('port must be a port number')
-    if (!enabled) throw new UnavailableError(`live previews are off: ${reasonOff}`)
-    // The environment must exist, belong to a session, and that session must still run it with this port.
-    const info = await runtime!.getEnv(envId)
-    if (!info) throw new NotFoundError('environment', envId)
-    const sessionId = info.labels['mp.session']
-    const session = sessionId ? await s.sessions.get(sessionId) : null
-    const env = session ? envOf(session) : null
-    if (!session || env?.id !== envId) throw new NotFoundError('environment', envId)
+    // The environment must exist, belong to a session the viewer may read, and that session must
+    // still run it with this port.
+    const { env } = await readableEnv(me, envId)
     if (!exposedOf(env).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
-    const { token, expiresAt } = signer.token({ envId, port, contactId: me.contactId })
-    const host = c.req.header('host') ?? new URL(c.req.url).host
-    const origin = previewOrigin(config, { envId, port }, host, boundPort ?? config.PREVIEW_PORT)
+    const t = mint(c, { envId, port, contactId: me.contactId })
     log.info('preview token issued', { envId, port, contactId: me.contactId })
+    return c.json({ envId, port, ...t } satisfies PreviewToken)
+  })
+
+  // A desktop viewer: view-only for whoever may read the session, control for admins and the
+  // session's requester. Each is its own port (the view-only VNC server refuses input).
+  routes.post('/api/environments/:id/desktop', async (c) => {
+    const me = principalOf(c)
+    const body = await jsonBody<{ control?: unknown; thumbnail?: unknown }>(c)
+    const envId = c.req.param('id')
+    const { info, session } = await readableEnv(me, envId)
+    if (!info.desktop) throw new NotFoundError('desktop', envId)
+    const control = body.control === true && !body.thumbnail
+    if (control && !(await mayControlEnv(s, me, session)))
+      throw new DeniedError("only admins and the person the session's work is for can take control of its desktop")
+    const port = control ? DESKTOP_PORTS.control : DESKTOP_PORTS.view
+    const t = mint(c, { envId, port, contactId: me.contactId, desktop: true })
+    log.info('desktop token issued', { envId, control, contactId: me.contactId })
     return c.json({
       envId,
       port,
-      token,
-      origin,
-      url: `${origin}${PREVIEW_AUTH_PATH}?token=${encodeURIComponent(token)}`,
-      expiresAt: new Date(expiresAt).toISOString(),
-    } satisfies PreviewToken)
+      control,
+      ...t,
+      url: `${t.url}${body.thumbnail === true ? '&thumbnail=1' : ''}`,
+    } satisfies DesktopToken)
   })
 
   // ── The commit an environment runs ───────────────────────────────────────
@@ -204,6 +246,7 @@ export function createPreviews(s: Services, opts: PreviewsOptions): Previews {
         harnessOrigin,
         secure,
         trustProxy: config.TRUST_PROXY,
+        desktopViewPort: DESKTOP_PORTS.view,
       })
       server = p.server
       proxyClose = p.close

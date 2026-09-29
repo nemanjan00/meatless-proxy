@@ -23,6 +23,14 @@ The containers port (L1): isolated project environments and commands run in them
   `MAX_EXPOSED_PORTS` = 16).
 - `previewTarget?(envId, port)` (optional on `ContainerRuntime`): `PreviewTarget` `{ host, port }`, where the harness
   process connects to reach an exposed port. `NotFoundError` when the environment is gone or doesn't expose the port.
+- `EnvSpec.desktop?: { width?, height? }`: a virtual desktop next to the main container (display `DESKTOP_DISPLAY`
+  = `:99`, `DISPLAY` set for the main container), with a VNC server on localhost only and WebSocket bridges on
+  `DESKTOP_PORTS` (`control` 6080, `view` 6081: its VNC server refuses input), reached like exposed ports through
+  `previewTarget`. `invalidDesktop(desktop, expose)` checks sizes (320x240 to 3840x2160) and clashes with `expose`.
+  `EnvInfo.desktop` says whether an environment has one, `features().desktop` whether the runtime can.
+- `screenshot?(envId)`: a PNG of the desktop (`NotFoundError` without one). `stats?(envId)`: `EnvStats` with one
+  `ContainerStats` per working container (main, services, desktop): CPU %, memory and its limit, network rx/tx, pids,
+  start time; null where unknown. `processes?(envId)`: `ContainerProcesses[]`, each container's top processes.
 - `egressLog?(envId)` (optional on `ContainerRuntime`): the proxy's log, `EgressLogEntry[]` (`{ at, method, host, port,
   allowed, reason? }`).
 - Allowlist helpers: `checkEgress(allow, host, port)` (the decision, before DNS), `intersectEgress(a, b)` (what both lists
@@ -54,6 +62,8 @@ The containers port (L1): isolated project environments and commands run in them
   handler `cat` echoes and anything else waits for stdin to close. `spawns` and `running()` show what ran. Each environment
   has an in-memory filesystem (`env.files`) for `copyIn`/`copyOut`, with `writeFile`, `readFile` and `removeFile` for tests
   acting as a process would (modification times always increase). The `features` option sets `features()`.
+  Desktops: `screenshot` returns `FAKE_PNG` (or what `setScreenshot(envId, png | Error)` set), `stats` made-up numbers
+  per container (`setStats(envId, name, partial)` overrides), `processes` one row per container.
 
 ## Tests
 

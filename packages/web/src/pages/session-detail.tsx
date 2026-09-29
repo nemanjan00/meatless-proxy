@@ -19,6 +19,14 @@ import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EntryTreeView } from '@/components/entry-tree.tsx'
+import { DesktopViewer } from '@/components/desktop-viewer.tsx'
+import {
+  EnvironmentCard,
+  EnvironmentSheet,
+  StopEnvironmentDialog,
+  useEnvironmentsLive,
+  useNow,
+} from '@/components/environment.tsx'
 import { PreviewPanel } from '@/components/preview-panel.tsx'
 import { RecentRuns } from '@/components/recent-runs.tsx'
 import { Timeline } from '@/components/history.tsx'
@@ -184,10 +192,21 @@ export function SessionDetailPage() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const preview = useLoad((a) => a.sessionPreview(id), [id])
-  const hasPreview = (preview.data?.ports.length ?? 0) > 0
+  // The session's environment (metrics, desktop), live on the session's channel.
+  const envs = useLoad((a) => a.environments({ sessionId: id }), [id])
+  useEnvironmentsLive(envs, `session:${id}`)
+  const env = envs.data?.items[0] ?? null
+  const now = useNow(1000)
+  const [envSheet, setEnvSheet] = useState(false)
+  const [stopEnv, setStopEnv] = useState(false)
+  const hasPorts = (preview.data?.ports.length ?? 0) > 0
+  const hasDesktop = env?.desktop === true && env.status === 'running'
+  const hasPreview = hasPorts || hasDesktop
   const asked = (TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'history') as Tab
-  // The Preview tab exists only while the session's environment exposes ports.
-  const tab: Tab = asked === 'preview' && preview.data && !hasPreview ? 'history' : asked
+  // The Preview tab exists only while the session's environment exposes ports or has a desktop.
+  const tab: Tab = asked === 'preview' && preview.data && envs.data && !hasPreview ? 'history' : asked
+  // Which the Preview tab shows: the desktop (`?desktop=1`, or when there are no ports) or the app.
+  const showDesktop = hasDesktop && (params.get('desktop') === '1' || !hasPorts)
   const previewPort = Number(params.get('port')) || undefined
   const [highlight, setHighlight] = useState<string | null>(null)
   const detail = useLoad((a) => a.getSession(id), [id])
@@ -263,10 +282,11 @@ export function SessionDetailPage() {
           tree.reload()
           // A run may have started or torn down the environment.
           preview.reload()
+          envs.reload()
           break
       }
     },
-    [history, entryTree, detail, runs, tree, preview],
+    [history, entryTree, detail, runs, tree, preview, envs],
   )
   useLive([`session:${id}`], onLive)
 
@@ -438,7 +458,33 @@ export function SessionDetailPage() {
                 )}
               </TabsContent>
               <TabsContent value="preview" className="pt-3">
-                {preview.data && hasPreview ? (
+                {hasDesktop && hasPorts && (
+                  <fieldset className="mb-2 flex w-fit items-center gap-0.5 rounded-md border p-0.5" aria-label="Show">
+                    {[
+                      { key: 'desktop', label: 'Desktop', on: showDesktop },
+                      { key: 'app', label: 'App', on: !showDesktop },
+                    ].map((o) => (
+                      <Button
+                        key={o.key}
+                        size="sm"
+                        variant={o.on ? 'secondary' : 'ghost'}
+                        className={cn('h-6 px-2 text-micro', !o.on && 'text-fg-tertiary')}
+                        aria-pressed={o.on}
+                        onClick={() => {
+                          const next = new URLSearchParams(params)
+                          if (o.key === 'desktop') next.set('desktop', '1')
+                          else next.delete('desktop')
+                          setParams(next, { replace: true })
+                        }}
+                      >
+                        {o.label}
+                      </Button>
+                    ))}
+                  </fieldset>
+                )}
+                {showDesktop && env ? (
+                  <DesktopViewer env={env} />
+                ) : preview.data && hasPorts ? (
                   <PreviewPanel
                     preview={preview.data}
                     {...(previewPort ? { initialPort: previewPort } : {})}
@@ -615,6 +661,24 @@ export function SessionDetailPage() {
               <Prop label="Updated">{timeAgo(d.session.updatedAt)} ago</Prop>
             </div>
 
+            {env && (
+              <>
+                <SectionTitle className="mt-5 mb-2">Environment</SectionTitle>
+                <EnvironmentCard
+                  env={env}
+                  now={now}
+                  onLogs={() => setEnvSheet(true)}
+                  onDesktop={() => {
+                    const next = new URLSearchParams(params)
+                    next.set('tab', 'preview')
+                    next.set('desktop', '1')
+                    setParams(next, { replace: true })
+                  }}
+                  onStop={() => setStopEnv(true)}
+                />
+              </>
+            )}
+
             <SectionTitle className="mt-5 mb-1">Links</SectionTitle>
             {d.links.length === 0 ? (
               <p className="text-fg-quaternary">No links.</p>
@@ -676,6 +740,15 @@ export function SessionDetailPage() {
             </div>
           </aside>
         }
+      />
+      <EnvironmentSheet env={env} open={envSheet && !!env} onOpenChange={setEnvSheet} now={now} />
+      <StopEnvironmentDialog
+        env={stopEnv ? env : null}
+        onOpenChange={setStopEnv}
+        onStopped={() => {
+          envs.reload()
+          preview.reload()
+        }}
       />
     </Page>
   )

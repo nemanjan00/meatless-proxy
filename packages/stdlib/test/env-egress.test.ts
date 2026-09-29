@@ -2,7 +2,7 @@ import { generateSshKeypair } from '@mp/git'
 import { describe, expect, it } from 'vitest'
 import { MAX_ENV_NAME, envNameFor } from '../src/tools/env.ts'
 import { PROXY_NOTE } from '../src/index.ts'
-import { REPO, stack } from './helpers.ts'
+import { checkoutPath, REPO, stack } from './helpers.ts'
 
 describe('environment names', () => {
   it('are <employee>-<session>, sanitised', () => {
@@ -98,7 +98,8 @@ describe('git tools with the employee SSH key', () => {
       asked.push(id)
       return kp.privateKeyOpenssh
     }
-    const w = await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const w = { path: await checkoutPath(t, t.session.id) }
     await t.out('git.write_file', { path: 'a.txt', content: 'a' })
     await t.out('git.commit', { message: 'a' })
     await t.out('git.push', {})

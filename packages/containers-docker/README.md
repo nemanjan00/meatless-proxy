@@ -4,13 +4,14 @@ Docker adapter (L2) for `@mp/containers`, using dockerode.
 
 ## API
 
-`dockerRuntime({ docker?, socketPath?, logger?, clock?, namePrefix = 'mp-', labels?, capDrop?, pidsLimit?, maxOutputBytes?, proxyImage?, selfContainer? })`
+`dockerRuntime({ docker?, socketPath?, logger?, clock?, namePrefix = 'mp-', labels?, capDrop?, pidsLimit?, maxOutputBytes?, proxyImage?, selfContainer?, desktopImage? })`
 returns a `ContainerRuntime`. Also exported: `mapError`, `demuxBuffer`, `NotImplementedError`, the `mp.*` label names
 (`LABEL_DEPLOYMENT`, ...), `DEFAULT_NAME_PREFIX`, `DIRECT_ROLE`, `ICC_OPTION`, and the
 `DockerLike` interface (the slice of dockerode used), `parseEgressLog`, and the egress proxy: `createEgressProxy`,
 `EGRESS_PROXY_SOURCE`, `egressProxyDecision`, `EGRESS_PROXY_PORT` (3128), `DEFAULT_PROXY_IMAGE` (`node:26-alpine`),
 `PROXY_URL`, and the preview forwarder: `createPreviewForwarder`, `PREVIEW_FORWARDER_SOURCE`, `PREVIEW_READY_MARKER`,
-`LABEL_EXPOSE`, `PREVIEW_SUFFIX`.
+`LABEL_EXPOSE`, `PREVIEW_SUFFIX`, and desktops: `DEFAULT_DESKTOP_IMAGE`, `DESKTOP_SUFFIX`, `LABEL_DESKTOP`,
+`DESKTOP_READY_MARKER`.
 
 **Deployments.** `namePrefix` (the server's `DOCKER_NAME_PREFIX`) starts every container, network and build image name,
 and every container, network and volume carries `mp.deployment=<prefix>` (with `labels` and `mp.managed=true`).
@@ -67,7 +68,18 @@ Per environment `<name>`:
   the forwarder's address on the preview network. With `selfContainer` (the harness's own container, when it runs in
   Docker) that container is first connected to the preview network (once; already connected is fine) and disconnected
   on destroy. No service may be called `preview` then.
-- destroy: removes every container labelled `mp.env=<name>` and this deployment (with anonymous volumes), the proxy, and
+- with `desktop`: the main container gets `DISPLAY=:99` and the label `mp.desktop=true`, and a **desktop sidecar**
+  `<prefix><name>-desktop` (`desktopImage`, default `ghcr.io/nemanjan00/meatless-proxy-desktop:latest`, built from
+  `docker/desktop`) runs in the main container's network namespace (`NetworkMode: container:<main>`), as uid 1000,
+  read-only root with a `/tmp` tmpfs, 768 MiB: Xvfb `:99`, x11vnc on 127.0.0.1:5900 and 5901 (`-viewonly`), and
+  websockify on 6080 and 6081. Programs in the main container reach the display through its abstract X socket (shared
+  with the network namespace), so any image works. The forwarder carries 6080 and 6081 like exposed ports.
+  `screenshot` runs `mp-desktop-shot` (scrot, base64) in the sidecar. No service may be called `desktop` then.
+- metrics: `stats` takes one sample per working container (`container.stats({ stream: false, 'one-shot': true })`)
+  and works out CPU from the previous sample it saw (Docker's own `precpu_stats` when it has them); memory leaves out
+  the page cache, like `docker stats`. `processes` asks `container.top` (the host's `ps -eo pid,user,pcpu,pmem,etime,args`),
+  busiest first, at most 25 per container.
+- destroy: removes every container labelled `mp.env=<name>` (the desktop first) and this deployment (with anonymous volumes), the proxy, and
   the environment's networks (not a shared direct network). Idempotent, and also cleans up half-created environments. A
   failed `createEnv` cleans up after itself.
 
@@ -122,3 +134,8 @@ services still are.
 ## Replacing it
 
 Write another `ContainerRuntime` adapter (Podman, Kubernetes, ...) and switch the composition root.
+
+`test/desktop-docker.test.ts` covers desktops, metrics and processes on the mock; `test/desktop-real-docker.test.ts`
+(opt-in, `MP_DOCKER_TEST=1`) builds `docker/desktop` and checks, against a real daemon, that the display works from
+the main container, that the VNC servers listen on localhost only, that both bridges answer with the VNC greeting
+through the forwarder, that a screenshot is a PNG of the screen's size, metrics, and that nothing is left behind.

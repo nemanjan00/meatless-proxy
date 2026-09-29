@@ -162,6 +162,8 @@ export const configSchema = z.object({
   SANDBOX_ENABLED: bool(true),
   /** The sandbox image (docker/sandbox/Dockerfile). */
   SANDBOX_IMAGE: optStr.transform((v) => v ?? 'ghcr.io/nemanjan00/meatless-proxy-sandbox:latest'),
+  /** The desktop sidecar of `env.up { desktop: true }` (docker/desktop/Dockerfile): Xvfb, x11vnc and websockify. */
+  DESKTOP_IMAGE: optStr.transform((v) => v ?? 'ghcr.io/nemanjan00/meatless-proxy-desktop:latest'),
   /**
    * Hosts environments and code.run sandboxes may reach through the egress proxy when neither the employee's
    * network setting nor the session's project names any, comma-separated (e.g. `pypi.org,files.pythonhosted.org`).

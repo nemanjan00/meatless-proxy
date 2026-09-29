@@ -102,6 +102,8 @@ const channel = z.string().min(1).describe('Channel id, e.g. C0123ABCD (a DM id 
 const ts = z.string().min(1).describe('Message timestamp id, e.g. 1712345678.123456')
 const limit = (max: number, def: number) =>
   z.number().int().min(1).max(max).optional().describe(`How many to return (default ${def}, max ${max})`)
+/** list_channels: the most pages of conversations.list one call reads to find the app's channels. */
+const LIST_PAGES = 10
 const cursor = z.string().optional().describe('next_cursor from the previous page')
 const emoji = z.string().min(1).describe('Emoji name without colons, e.g. eyes or white_check_mark')
 
@@ -261,15 +263,24 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
     },
     READ,
     async (a) => {
-      const r = await client.call('conversations.list', {
-        types: 'public_channel,private_channel',
-        exclude_archived: true,
-        limit: a.limit ?? 200,
-        cursor: a.cursor,
-      })
       const memberOnly = a.member_only ?? true
-      const channels = ((r.channels as Obj[]) ?? []).filter((c) => !memberOnly || c.is_member === true).map(compactChannel)
-      return { channels, next_cursor: nextCursor(r) }
+      const want = a.limit ?? 200
+      const channels: ReturnType<typeof compactChannel>[] = []
+      // Filtering to the app's channels can leave a page empty with more to come, which reads as "in no
+      // channels": keep reading pages (up to LIST_PAGES) until some match or the list ends.
+      let next: string | null | undefined = a.cursor
+      for (let page = 0; page < LIST_PAGES; page++) {
+        const r = await client.call('conversations.list', {
+          types: 'public_channel,private_channel',
+          exclude_archived: true,
+          limit: want,
+          cursor: next ?? undefined,
+        })
+        for (const c of (r.channels as Obj[]) ?? []) if (!memberOnly || c.is_member === true) channels.push(compactChannel(c))
+        next = nextCursor(r)
+        if (!next || channels.length >= want) break
+      }
+      return { channels, next_cursor: next }
     },
   )
   tool(

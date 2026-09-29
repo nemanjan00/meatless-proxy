@@ -2,8 +2,12 @@ import { ConflictError, NotFoundError, ValidationError, newId, systemClock, type
 import {
   ExecAbortedError,
   TIMEOUT_EXIT_CODE,
+  DESKTOP_PORTS,
+  type ContainerProcesses,
   type ContainerRuntime,
+  type ContainerStats,
   type EnvInfo,
+  type EnvStats,
   type EnvSpec,
   type ExecOptions,
   type ExecResult,
@@ -12,6 +16,7 @@ import {
   type Process,
   type RuntimeFeatures,
   type SpawnOptions,
+  invalidDesktop,
   invalidEntryPath,
   invalidExpose,
   invalidNetworkSpec,
@@ -156,7 +161,20 @@ export interface FakeRuntime extends ContainerRuntime {
   readFile(envId: string, path: string): string | null
   /** Removes a file or a directory tree from an environment's filesystem. */
   removeFile(envId: string, path: string): void
+  screenshot(envId: string): Promise<Uint8Array>
+  stats(envId: string): Promise<EnvStats>
+  processes(envId: string): Promise<ContainerProcesses[]>
+  /** What `screenshot` returns for an environment (default: a 1x1 PNG). */
+  setScreenshot(envId: string, png: Uint8Array | Error): void
+  /** Overrides metrics of one container (`main`, a service, `desktop`) in the next `stats` samples. */
+  setStats(envId: string, name: string, stats: Partial<Omit<ContainerStats, 'name' | 'role'>>): void
 }
+
+/** A valid 1x1 PNG, what a fake desktop's screenshot shows. */
+export const FAKE_PNG = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='),
+  (c) => c.charCodeAt(0),
+)
 
 const matches = (m: FakeMatcher, cmd: string[]) =>
   typeof m === 'function' ? m(cmd) : typeof m === 'string' ? cmd.join(' ').includes(m) : m.test(cmd.join(' '))
@@ -172,6 +190,8 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
   const previewTargets = new Map<string, PreviewTarget>()
   const spawnRules: { match: FakeMatcher; handler: FakeSpawnHandler }[] = []
   const spawns: FakeSpawnCall[] = []
+  const screenshots = new Map<string, Uint8Array | Error>()
+  const statOverrides = new Map<string, Partial<ContainerStats>>()
   let live_ = 0
   let lastMtime = 0
   /** Distinct, increasing modification times, even when the clock stands still. */
@@ -209,6 +229,8 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       }
       const badExpose = invalidExpose(spec.expose)
       if (badExpose.length) throw new ValidationError('invalid expose list', badExpose)
+      const badDesktop = invalidDesktop(spec.desktop, spec.expose)
+      if (badDesktop.length) throw new ValidationError('invalid desktop', badDesktop)
       const badMounts = invalidVolumeMounts(spec.volumeMounts)
       if (badMounts.length) throw new ValidationError('invalid volume mounts', badMounts)
       if (spec.volumeMounts?.some((m) => m.subpath) && !(opts.features?.volumeSubpath ?? true))
@@ -221,6 +243,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         status: 'running',
         labels: { ...spec.labels, 'mp.env': spec.name, 'mp.managed': 'true' },
         createdAt: clock.iso(),
+        ...(spec.desktop ? { desktop: true } : {}),
       }
       const files = new Map<string, FakeFile>()
       for (const p of ['/', ...(spec.volumes ?? []), ...Object.keys(spec.tmpfs ?? {})]) mkdirs(files, p, 0)
@@ -302,12 +325,14 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
 
     async destroyEnv(envId) {
       envs.delete(envId)
+      screenshots.delete(envId)
+      for (const k of [...statOverrides.keys()]) if (k.startsWith(`${envId}:`)) statOverrides.delete(k)
       for (const k of [...previewTargets.keys()]) if (k.startsWith(`${envId}:`)) previewTargets.delete(k)
     },
 
     async previewTarget(envId, port) {
       const env = live(envId)
-      if (!(env.spec.expose ?? []).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
+      if (!exposedPorts(env.spec).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
       const set = previewTargets.get(`${envId}:${port}`)
       if (set) return { ...set }
       return opts.previewTarget ? opts.previewTarget(env, port) : { host: '127.0.0.1', port }
@@ -315,7 +340,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
 
     servePreview(envId, port, target) {
       const env = live(envId)
-      if (!(env.spec.expose ?? []).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
+      if (!exposedPorts(env.spec).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
       previewTargets.set(`${envId}:${port}`, { ...target })
     },
 
@@ -412,7 +437,72 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
     running: () => live_,
 
     async features() {
-      return { volumeSubpath: true, ...opts.features }
+      return { volumeSubpath: true, desktop: true, ...opts.features }
+    },
+
+    async screenshot(envId) {
+      const env = live(envId)
+      if (!env.spec.desktop) throw new NotFoundError('desktop', envId)
+      const shot = screenshots.get(envId) ?? FAKE_PNG
+      if (shot instanceof Error) throw shot
+      return new Uint8Array(shot)
+    },
+
+    setScreenshot(envId, png) {
+      live(envId)
+      screenshots.set(envId, png)
+    },
+
+    async stats(envId) {
+      const env = live(envId)
+      const names: [string, ContainerStats['role']][] = [
+        ['main', 'main'],
+        ...(env.spec.services ?? []).map((s): [string, ContainerStats['role']] => [s.name, 'service']),
+        ...(env.spec.desktop ? [['desktop', 'desktop'] as [string, ContainerStats['role']]] : []),
+      ]
+      const running = env.info.status === 'running'
+      return {
+        envId,
+        at: clock.iso(),
+        containers: names.map(([name, role]) => ({
+          name,
+          role,
+          state: running ? 'running' : 'exited',
+          cpuPercent: running ? 1.5 : null,
+          memoryBytes: running ? 64 * 1024 * 1024 : null,
+          memoryLimitBytes: env.spec.limits?.memoryMb ? env.spec.limits.memoryMb * 1024 * 1024 : null,
+          netRxBytes: running ? 1024 : null,
+          netTxBytes: running ? 512 : null,
+          pids: running ? 3 : null,
+          startedAt: env.info.createdAt,
+          ...statOverrides.get(`${envId}:${name}`),
+        })),
+      }
+    },
+
+    setStats(envId, name, stats) {
+      live(envId)
+      const key = `${envId}:${name}`
+      statOverrides.set(key, { ...statOverrides.get(key), ...stats })
+    },
+
+    async processes(envId) {
+      const env = live(envId)
+      const titles = ['PID', 'USER', '%CPU', '%MEM', 'ELAPSED', 'COMMAND']
+      return [
+        {
+          name: 'main',
+          role: 'main',
+          titles,
+          processes: [['1', 'root', '0.0', '0.1', '01:00', env.spec.command?.join(' ') ?? 'sleep infinity']],
+        },
+        ...(env.spec.services ?? []).map((s) => ({
+          name: s.name,
+          role: 'service' as const,
+          titles,
+          processes: [['1', 'root', '0.0', '0.1', '01:00', s.image]],
+        })),
+      ]
     },
 
     async copyIn(envId, dir, entries) {
@@ -539,6 +629,9 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
   }
   return runtime
 }
+
+/** The ports `previewTarget` reaches: the exposed ones, and the desktop's. */
+const exposedPorts = (spec: EnvSpec) => [...(spec.expose ?? []), ...(spec.desktop ? Object.values(DESKTOP_PORTS) : [])]
 
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/'
 

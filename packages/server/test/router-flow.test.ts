@@ -368,7 +368,9 @@ describe('work sessions started before a change', () => {
     expect(system).toContain('Cheerful and thorough.')
     expect(system).toContain(stored.match(/Session started: [^\n]*/)![0])
     expect(req.tools?.map((x) => x.function.name)).toContain('git__edit_file')
-    expect(req.messages.some((m) => String(m.content).includes('Now available: git.edit_file'))).toBe(true)
+    expect(req.messages.some((m) => String(m.content).includes('in addition to the tools you already had: git.edit_file'))).toBe(
+      true,
+    )
     // The stored history keeps what it was.
     expect((await s.sessions.history(work.id))[0]!.content).toEqual({ text: stored })
   })

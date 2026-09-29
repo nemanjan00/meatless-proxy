@@ -134,6 +134,12 @@ export interface StdlibConfig {
    */
   envDefaultProfile?: string
   /**
+   * Where the employee files are on disk, one directory per employee (`<filesDir>/<employeeId>`, the
+   * files volume's `FILES_DIR`). env.up mounts the employee's own at /files. Optional: without it (files
+   * kept elsewhere) environments have no /files.
+   */
+  filesDir?: string
+  /**
    * Fork limits used when neither the usage service's defaults nor a limit record sets them. The
    * server passes its defaults to `@mp/usage` instead. `maxConcurrentSessions` is enforced by the runner.
    */

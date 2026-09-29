@@ -1,0 +1,7 @@
+#!/bin/sh
+# A PNG screenshot of the whole display, printed as base64 on one line.
+set -eu
+dir="$(mktemp -d /tmp/mp-shot.XXXXXX)"
+trap 'rm -rf "$dir"' EXIT
+scrot -o -z "$dir/shot.png"
+base64 -w 0 "$dir/shot.png"

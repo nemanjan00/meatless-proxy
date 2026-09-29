@@ -74,7 +74,7 @@ describe('volume mounts', () => {
     expect(invalidEntryPath('a/./b')).toMatch(/bad path/)
     expect(invalidEntryPath('a/b/')).toBeNull()
     const rt = fakeRuntime({ features: { volumeSubpath: false } })
-    expect(await rt.features()).toEqual({ volumeSubpath: false })
+    expect(await rt.features()).toMatchObject({ volumeSubpath: false })
     await expect(
       rt.createEnv({ name: 'k', image: 'x', volumeMounts: [{ volume: 'mp-files', subpath: 'e', containerPath: '/w' }] }),
     ).rejects.toThrow(/subpaths are not supported/)

@@ -20,6 +20,8 @@ export interface VolumeMount {
 export interface RuntimeFeatures {
   /** `VolumeMount.subpath` works (Docker Engine 26+). */
   volumeSubpath: boolean
+  /** `EnvSpec.desktop` works. Optional: runtimes that don't say have none. */
+  desktop?: boolean
 }
 
 export interface EnvSpec {
@@ -76,7 +78,73 @@ export interface EnvSpec {
    * published on the host: the harness reaches them through `previewTarget`.
    */
   expose?: number[]
+  /**
+   * A virtual desktop next to the main container: a display (`DESKTOP_DISPLAY`) that programs in the
+   * main container draw on (`DISPLAY` is set for them), a VNC server on it that listens on localhost
+   * only, and WebSocket bridges to it on `DESKTOP_PORTS` (control and view-only), reached like exposed
+   * ports through `previewTarget`. `screenshot` captures it. Needs `features().desktop`.
+   */
+  desktop?: DesktopSpec
   labels?: Record<string, string>
+}
+
+export interface DesktopSpec {
+  /** Screen size. Default `DEFAULT_DESKTOP_SIZE`. */
+  width?: number
+  height?: number
+}
+
+/** The display desktops run on, as `DISPLAY`. */
+export const DESKTOP_DISPLAY = ':99'
+/** The desktop's VNC-over-WebSocket ports: full control, and view-only (the VNC server itself refuses input). */
+export const DESKTOP_PORTS = { control: 6080, view: 6081 } as const
+export const DEFAULT_DESKTOP_SIZE = { width: 1440, height: 900 } as const
+
+/** Problems with a desktop spec: sizes between 320x240 and 3840x2160, and no clash with exposed ports. */
+export function invalidDesktop(desktop: unknown, expose: number[] = []): string[] {
+  if (desktop === undefined) return []
+  if (!desktop || typeof desktop !== 'object' || Array.isArray(desktop)) return ['desktop must be an object']
+  const d = desktop as DesktopSpec
+  const issues: string[] = []
+  const check = (v: unknown, name: string, min: number, max: number) => {
+    if (v !== undefined && !(Number.isInteger(v) && (v as number) >= min && (v as number) <= max))
+      issues.push(`desktop.${name} must be an integer from ${min} to ${max}`)
+  }
+  check(d.width, 'width', 320, 3840)
+  check(d.height, 'height', 240, 2160)
+  for (const p of Object.values(DESKTOP_PORTS)) if (expose.includes(p)) issues.push(`port ${p} is taken by the desktop`)
+  return issues
+}
+
+/** Live metrics of one container of an environment. Values the runtime can't tell are null. */
+export interface ContainerStats {
+  /** `main`, a service's name, or `desktop`. */
+  name: string
+  role: 'main' | 'service' | 'desktop'
+  /** `running`, `exited`, … */
+  state: string
+  /** Percent of one CPU since the previous sample (200 = two busy CPUs); null on the first sample. */
+  cpuPercent: number | null
+  memoryBytes: number | null
+  memoryLimitBytes: number | null
+  netRxBytes: number | null
+  netTxBytes: number | null
+  pids: number | null
+  startedAt: string | null
+}
+
+export interface EnvStats {
+  envId: string
+  at: string
+  containers: ContainerStats[]
+}
+
+/** What runs in one container of an environment. */
+export interface ContainerProcesses {
+  name: string
+  role: ContainerStats['role']
+  titles: string[]
+  processes: string[][]
 }
 
 /** Where the harness process connects to reach an exposed port of an environment. */
@@ -125,6 +193,8 @@ export interface EnvInfo {
   status: 'running' | 'stopped' | 'missing'
   labels: Record<string, string>
   createdAt: string
+  /** Whether it was created with a desktop. */
+  desktop?: boolean
 }
 
 export interface ExecOptions {
@@ -197,7 +267,8 @@ export interface ContainerRuntime {
   egressLog?(envId: string): Promise<EgressLogEntry[]>
   /**
    * Where the harness connects to reach `port` of the environment's main container, for live
-   * previews. Throws `NotFoundError` when the environment is gone or doesn't expose the port.
+   * previews (its `expose` ports, and `DESKTOP_PORTS` with a desktop). Throws `NotFoundError` when
+   * the environment is gone or doesn't expose the port.
    * Optional: runtimes without it have no previews.
    */
   previewTarget?(envId: string, port: number): Promise<PreviewTarget>
@@ -220,6 +291,15 @@ export interface ContainerRuntime {
   copyOut?(envId: string, path: string): Promise<FileEntry[]>
   /** What this runtime supports. Optional: without it, nothing beyond the basics. */
   features?(): Promise<RuntimeFeatures>
+  /**
+   * A PNG of the environment's desktop. `NotFoundError` when the environment is gone or has no
+   * desktop. Optional: runtimes without desktops don't have it.
+   */
+  screenshot?(envId: string): Promise<Uint8Array>
+  /** Live metrics of each of the environment's containers (main, services, desktop). Optional. */
+  stats?(envId: string): Promise<EnvStats>
+  /** What runs in each of the environment's containers, busiest first. Optional. */
+  processes?(envId: string): Promise<ContainerProcesses[]>
   /** Removes the environment's containers, network and volumes. Idempotent. */
   destroyEnv(envId: string): Promise<void>
 }

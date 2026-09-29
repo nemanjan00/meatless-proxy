@@ -1,0 +1,66 @@
+#!/bin/sh
+# Starts the display, the VNC servers and the WebSocket bridges, prints a ready line, and exits when
+# any of them does (so the container's state shows it).
+set -eu
+
+DISPLAY="${DISPLAY:-:99}"
+SIZE="${DESKTOP_SIZE:-1440x900}"
+BACKGROUND="${DESKTOP_BACKGROUND:-#1c1c1f}"
+export DISPLAY
+
+case "$SIZE" in
+  *[!0-9x]* | x* | *x | *x*x*) echo "mp-desktop: DESKTOP_SIZE must be <width>x<height>, got $SIZE" >&2; exit 2 ;;
+esac
+
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+
+Xvfb "$DISPLAY" -screen 0 "${SIZE}x24" -nolisten tcp -dpi 96 >/tmp/xvfb.log 2>&1 &
+XVFB=$!
+
+tries=0
+until xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 100 ] || ! kill -0 "$XVFB" 2>/dev/null; then
+    echo "mp-desktop: the display did not start" >&2
+    cat /tmp/xvfb.log >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+xsetroot -solid "$BACKGROUND" || true
+
+# Localhost only, no password: nothing but the bridges below can reach them.
+x11vnc -display "$DISPLAY" -rfbport 5900 -localhost -forever -shared -nopw -quiet -noxdamage -nowf \
+  >/tmp/x11vnc.log 2>&1 &
+VNC=$!
+x11vnc -display "$DISPLAY" -rfbport 5901 -localhost -forever -shared -nopw -quiet -noxdamage -nowf -viewonly \
+  >/tmp/x11vnc-view.log 2>&1 &
+VIEW=$!
+
+websockify 0.0.0.0:6080 127.0.0.1:5900 >/tmp/websockify.log 2>&1 &
+WS=$!
+websockify 0.0.0.0:6081 127.0.0.1:5901 >/tmp/websockify-view.log 2>&1 &
+WSV=$!
+
+# Ready once every port answers.
+tries=0
+until nc -z 127.0.0.1 5900 && nc -z 127.0.0.1 5901 && nc -z 127.0.0.1 6080 && nc -z 127.0.0.1 6081; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 150 ]; then
+    echo "mp-desktop: the VNC servers or bridges did not start" >&2
+    tail -n 20 /tmp/x11vnc.log /tmp/x11vnc-view.log /tmp/websockify.log /tmp/websockify-view.log >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+echo "mp desktop ready on $DISPLAY ($SIZE)" >&2
+
+trap 'kill "$XVFB" "$VNC" "$VIEW" "$WS" "$WSV" 2>/dev/null; exit 0' TERM INT
+while kill -0 "$XVFB" 2>/dev/null && kill -0 "$VNC" 2>/dev/null && kill -0 "$VIEW" 2>/dev/null \
+  && kill -0 "$WS" 2>/dev/null && kill -0 "$WSV" 2>/dev/null; do
+  sleep 2
+done
+echo "mp-desktop: a desktop process exited" >&2
+tail -n 20 /tmp/xvfb.log /tmp/x11vnc.log /tmp/x11vnc-view.log /tmp/websockify.log /tmp/websockify-view.log >&2 || true
+exit 1

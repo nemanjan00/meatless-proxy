@@ -322,7 +322,10 @@ describe.each(storages)('files service on %s storage', (_name, makeStorage) => {
     })
 
     it('ignores dangling grants in listings, and reports them', async () => {
+      await fs.write(a, '/gone/first.md', 'here')
       await fs.share(a, '/gone', bC, 'read')
+      // Gone behind the service's back (a sandbox deleted it on disk): the grant stays, dangling.
+      await fs.storage.delete(a, '/gone', { recursive: true })
       const [grant] = await fs.sharedWith(bC)
       expect(await fs.isDangling(grant!)).toBe(true)
       expect(await fs.list(b)).toEqual([])
@@ -335,6 +338,8 @@ describe.each(storages)('files service on %s storage', (_name, makeStorage) => {
 
     it('validates shares', async () => {
       await expect(fs.share(a, '/shared/x', bC)).rejects.toThrow(ValidationError)
+      // Nothing there: refused, rather than a share of an empty folder that looks like it worked.
+      await expect(fs.share(a, '/not/here', bC)).rejects.toThrow(/not in your filesystem/)
       await expect(fs.share(a, '/notes', aC)).rejects.toThrow(/yourself/)
       await expect(fs.share(a, '/notes', bC, 'admin' as any)).rejects.toThrow(ValidationError)
       await expect(fs.share(a, '../x', bC)).rejects.toThrow(ValidationError)

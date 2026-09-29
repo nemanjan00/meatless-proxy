@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { nodeWorktreeFs, safeRelPath } from '../src/index.ts'
-import { REPO, stack } from './helpers.ts'
+import { checkoutPath, REPO, stack } from './helpers.ts'
 
 describe('git tools', () => {
   it('checkout creates a worktree on the session branch and records it', async () => {
@@ -11,13 +11,16 @@ describe('git tools', () => {
     const o = await t.out('git.checkout', { projectId: t.project.id })
     expect(o).toMatchObject({
       key: 'github.com/acme/billing',
-      path: `/wt/${t.session.id}/github.com/acme/billing`,
       branch: `mp/billing-bot/${t.session.data.slug}`,
+      where: expect.stringContaining('not in your filesystem'),
     })
-    expect(t.git.worktree(o.path)).toMatchObject({ url: REPO, branch: o.branch })
+    // The harness's own disk path isn't the model's business: it took it for one of its files.
+    expect(o.path).toBeUndefined()
+    const path = `/wt/${t.session.id}/github.com/acme/billing`
+    expect(t.git.worktree(path)).toMatchObject({ url: REPO, branch: o.branch })
     const s = await t.sessions.require(t.session.id)
     expect(s.data.meta?.worktrees).toEqual([
-      expect.objectContaining({ key: o.key, projectId: t.project.id, path: o.path, branch: o.branch, baseSha: o.head }),
+      expect.objectContaining({ key: o.key, projectId: t.project.id, path, branch: o.branch, baseSha: o.head }),
     ])
     expect(await t.records.links({ from: { kind: 'session', id: t.session.id }, role: 'works_on' })).toHaveLength(1)
     // Idempotent.
@@ -144,7 +147,8 @@ describe('env tools', () => {
   it('up mounts the checkout, exec runs commands, logs, down', async () => {
     const t = await stack()
     expect((await t.call('env.up', {})).isError).toBe(true) // no image and no checkout
-    const w = await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const w = { path: await checkoutPath(t, t.session.id) }
     const up = await t.out('env.up', { env: { NODE_ENV: 'test' } })
     // No Dockerfile in the checkout and no profile named: the default profile.
     expect(up).toMatchObject({ status: 'running', workspace: '/workspace', profile: 'default', image: 'nemanjan00/dev:default' })
@@ -289,5 +293,20 @@ describe('AGENTS.md', () => {
     const o = await t.out('git.checkout', { projectId: t.project.id })
     expect(o.instructions.files[0].truncated).toBe(true)
     expect(o.instructions.files[0].content).toContain('truncated')
+  })
+})
+
+describe('checkout access failures', () => {
+  it('explain a refused SSH key, and what to do instead', async () => {
+    const { accessFailure } = await import('../src/tools/git.ts')
+    const err = new Error(
+      'git fetch failed: git@gitlab.example.com: Permission denied (publickey).\nfatal: Could not read from remote repository.',
+    )
+    const why = accessFailure(err, 'git@gitlab.example.com:acme/app.git', true)!
+    expect(why).toContain("don't have access to git@gitlab.example.com:acme/app.git")
+    expect(why).toContain('not a member')
+    expect(why).toContain('mcp.gitlab.get_file')
+    expect(accessFailure(err, 'x', false)).toContain('no SSH key')
+    expect(accessFailure(new Error('disk full'), 'x', true)).toBeUndefined()
   })
 })

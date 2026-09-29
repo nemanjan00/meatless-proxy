@@ -498,7 +498,7 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.share',
-      description: `Share a file or directory of your filesystem with a person (contact id) or another employee (name or id), read-only (default) or read-write. They see it under /shared/<your employee id>/…. ${SANDBOX_PATHS_NOTE}`,
+      description: `Share a file or directory of your filesystem with a person (contact id) or another employee (name or id), read-only (default) or read-write. They see it under /shared/<your employee id>/…. Only paths in your filesystem (what fs.list shows) can be shared: a git checkout isn't in it, so copy files from a checkout or environment into your filesystem first (/files in an environment is your filesystem root). ${SANDBOX_PATHS_NOTE}`,
       effect: 'idempotent',
       params: {
         properties: {
@@ -524,9 +524,11 @@ export function registerKnowledgeTools(kit: Kit): void {
         return ok({ unshared: a.path, with: contactId })
       }
       const s = await files.share(ctx.employeeId, a.path, contactId, a.permission ?? 'read', { actor: kit.actor(ctx) })
+      const contact = await deps.directory.contacts.get(contactId)
       return ok({
         shared: s.data.path,
         with: contactId,
+        ...(contact ? { withName: contact.data.name } : {}),
         permission: s.data.permission,
         as: `/shared/${ctx.employeeId}${s.data.path}`,
       })

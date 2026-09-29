@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import type { Json } from '@mp/core'
-import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
+import { DESKTOP_DISPLAY, egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import type { Session } from '@mp/sessions'
 import type { ToolContext, ToolHandler } from '@mp/tools'
 import { DEFAULT_ENV_PROFILES, describeProfiles, envProfile } from '../env-profiles.ts'
@@ -18,6 +20,11 @@ function repoMountsOf(worktrees: { key: string; path: string }[]): { key: string
     return { key: w.key, path: w.path, containerPath: `/repos/${name}` }
   })
 }
+
+/** Where the employee's own files are in an environment (when the deployment keeps them on disk). */
+export const FILES_MOUNT = '/files'
+const FILES_NOTE =
+  '/files in an environment is your filesystem root (/files/a.zip is /a.zip for fs.* and chat attachments): copy a build output there to attach it or fs.share it.'
 
 /** Told with every environment: what it holds, and what it doesn't. */
 const ENV_NOTE =
@@ -64,12 +71,42 @@ const exposedOf = (env: object | null): number[] => {
 export const previewLink = (sessionId: string, port: number) =>
   `/sessions/${encodeURIComponent(sessionId)}?tab=preview&port=${port}`
 
+/**
+ * The harness UI link to a session's live desktop: its Preview tab with the desktop open. Like
+ * `previewLink`, it carries no token: the UI mints a single-use one, scoped to the viewer, on open.
+ */
+export const desktopLink = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}?tab=preview&desktop=1`
+
+/** What env.up tells about a desktop. */
+const desktopOf = (sessionId: string) => ({
+  url: desktopLink(sessionId),
+  display: DESKTOP_DISPLAY,
+  note: `A virtual screen: programs you start with env.exec draw on it (DISPLAY=${DESKTOP_DISPLAY} is set), e.g. a headed browser. People watch it live at url (share it as [Desktop](url)). env.screenshot saves what it shows to your files, for image.view.`,
+})
+
+/** Where a screenshot of a session's desktop is saved in the employee's files. */
+const screenshotPath = (envName: string, at: string) => `/screenshots/${envName}-${at.replace(/[:.]/g, '-')}.png`
+
 /** What a network decision gave, to tell whether the setting changed since an environment started. */
 const networkKey = (net: NetworkDecision) => (net.direct ? 'direct' : [...net.allow].sort().join(','))
 
 /** Keeps the end of long output, which is usually where the error is. */
 const tail = (text: string, max = 8000) =>
   text.length <= max ? text : `[… ${text.length - max} earlier characters truncated]\n${text.slice(-max)}`
+
+/**
+ * Keeps the start and the end of long command output (where the command's own header and its error
+ * usually are), with a marker in the middle saying how much was left out.
+ */
+export function headAndTail(text: string, keep = 3000): { text: string; cut: boolean } {
+  if (text.length <= keep * 2) return { text, cut: false }
+  const left = text.length - keep * 2
+  return { text: `${text.slice(0, keep)}\n[… ${left} characters left out …]\n${text.slice(-keep)}`, cut: true }
+}
+
+/** What env.exec says when it cut output. */
+export const cutNote = (length: number) =>
+  `output over ${length} characters: redirect it to a file (e.g. > /files/out.txt, or in /workspace) and read ranges with fs.read / git.read_file`
 
 export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
   /**
@@ -134,6 +171,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             items: { type: 'number' },
             description: 'Ports your app serves, e.g. [5173] for a dev server, shown to people as live previews (env.preview).',
           },
+          desktop: {
+            type: 'boolean',
+            description:
+              'Also start a virtual screen (1440x900) that GUI programs and headed browsers draw on (DISPLAY=:99 is set for env.exec). People watch it live; env.screenshot lets you see it.',
+          },
         },
       },
     },
@@ -157,6 +199,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
                   'your network setting changed since this environment started: it keeps the network it started with. env.down, then env.up, to use the new one',
                 ]
               : []),
+            ...(a.desktop === true && !current.desktop
+              ? ['the environment is already running without a desktop: env.down, then env.up with desktop: true']
+              : []),
           ]
           return ok({
             envId: info.id,
@@ -165,6 +210,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             existing: true,
             ...(current.network ? { network: current.network } : {}),
             ...(exposed.length ? { previews: exposed.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
+            ...(current.desktop ? { desktop: desktopOf(session.id) } : {}),
             ...(notes.length ? { note: notes.join('; ') } : {}),
           })
         }
@@ -172,6 +218,10 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const badExpose = invalidExpose(a.expose)
       if (badExpose.length) return fail('expose must be a list of distinct ports (1-65535)', { issues: badExpose })
       const expose = (a.expose as number[] | undefined) ?? []
+      if (a.desktop !== undefined && typeof a.desktop !== 'boolean') return fail('desktop must be true or false')
+      const desktop = a.desktop === true
+      if (desktop && (!runtime.screenshot || !(await runtime.features?.())?.desktop))
+        return fail('this deployment has no desktops: its container runtime cannot run one')
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
       if (!str(a.image) && !str(a.profile) && !w)
         return fail('give an image or a profile, or check out a repository first (git.checkout)')
@@ -240,15 +290,25 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       // Every checkout of the session is there too, at /repos/<name>: one environment works across them.
       const repoMounts = repoMountsOf(worktreesOf(session))
       const otherMounts = repoMounts.map((m) => ({ hostPath: m.path, containerPath: m.containerPath }))
+      // The employee's own files, at /files: builds can leave their results there for fs.* and chat.
+      const filesRoot = kit.deps.config.filesDir
+      const ownFiles = filesRoot && /^[A-Za-z0-9_-]+$/.test(ctx.employeeId) ? resolve(filesRoot, ctx.employeeId) : null
+      if (ownFiles) await mkdir(ownFiles, { recursive: true })
+      const mounts = [
+        ...(w ? [{ hostPath: w.path, containerPath: '/workspace' }, ...otherMounts] : []),
+        ...(ownFiles ? [{ hostPath: ownFiles, containerPath: FILES_MOUNT }] : []),
+      ]
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
         ...(image ? { image } : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
-        ...(w ? { mounts: [{ hostPath: w.path, containerPath: '/workspace' }, ...otherMounts], workdir: '/workspace' } : {}),
+        ...(mounts.length ? { mounts } : {}),
+        ...(w ? { workdir: '/workspace' } : {}),
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
         ...(egress ? { egress } : {}),
         ...(direct ? { direct: { network: directNetworkName(emp.key ?? emp.data.name) } } : {}),
         ...(expose.length ? { expose } : {}),
+        ...(desktop ? { desktop: {} } : {}),
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
@@ -261,8 +321,21 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           network,
           networkKey: networkKey(net),
           ...(projectId ? { projectId } : {}),
+          image: image ?? 'build',
+          ...(profile ? { profile } : {}),
+          ...(desktop ? { desktop: true } : {}),
+          ...(w
+            ? {
+                checkouts: [
+                  { key: w.key, path: '/workspace' },
+                  ...repoMounts.map((m) => ({ key: m.key, path: m.containerPath })),
+                ],
+              }
+            : {}),
+          ...(a.services ? { services: (a.services as { name: unknown }[]).map((x) => String(x.name)) } : {}),
         },
       }))
+      kit.deps.bus?.publish('env.changed', { sessionId: session.id, envId: info.id, op: 'up' })
       return ok({
         envId: info.id,
         name: info.name,
@@ -273,7 +346,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(repoMounts.length ? { repos: Object.fromEntries(repoMounts.map((m) => [m.containerPath, m.key])) } : {}),
         network,
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
-        note: ENV_NOTE,
+        ...(desktop ? { desktop: desktopOf(session.id) } : {}),
+        ...(ownFiles ? { files: FILES_MOUNT } : {}),
+        note: ownFiles ? `${ENV_NOTE} ${FILES_NOTE}` : ENV_NOTE,
       })
     }),
   )
@@ -282,7 +357,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment, in /workspace. Without one it starts the default environment first (your checkout, in the project\'s profile, its Dockerfile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
+        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile, its Dockerfile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
       effect: 'non_idempotent',
       params: {
         properties: {
@@ -313,18 +388,30 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const cmd = (a.cmd as unknown[]).map(String)
       if (!cmd.length) return fail('cmd is empty')
       const timeoutMs = Math.min(Math.max(1, a.timeoutSeconds ?? 300), 3600) * 1000
-      const r = await runtime.exec(envId, cmd, {
-        timeoutMs,
-        signal: ctx.signal,
-        ...(str(a.workdir) ? { workdir: a.workdir } : {}),
-      })
+      // What runs where, for the Environments page: started, and finished whatever the outcome.
+      const execution = { sessionId: session.id, envId, runId: ctx.runId, callId: ctx.callId, cmd }
+      kit.deps.bus?.publish('env.exec.started', { ...execution, startedAt: ctx.clock.iso() })
+      let r: Awaited<ReturnType<typeof runtime.exec>>
+      try {
+        r = await runtime.exec(envId, cmd, {
+          timeoutMs,
+          signal: ctx.signal,
+          ...(str(a.workdir) ? { workdir: a.workdir } : {}),
+        })
+      } finally {
+        kit.deps.bus?.publish('env.exec.finished', execution)
+      }
+      const stdout = headAndTail(r.stdout, 3000)
+      const stderr = headAndTail(r.stderr, 1500)
+      const longest = Math.max(stdout.cut ? r.stdout.length : 0, stderr.cut ? r.stderr.length : 0)
       return {
         output: {
           exitCode: r.exitCode,
           ...(r.timedOut ? { timedOut: true } : {}),
           durationMs: r.durationMs,
-          stdout: tail(r.stdout),
-          stderr: tail(r.stderr, 4000),
+          stdout: stdout.text,
+          stderr: stderr.text,
+          ...(longest ? { note: cutNote(longest) } : {}),
           ...(started ? { started } : {}),
         },
         ...(r.exitCode !== 0 ? { isError: true } : {}),
@@ -378,6 +465,50 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
 
   kit.tool(
     {
+      name: 'env.screenshot',
+      description:
+        "See the desktop of this session's environment (env.up with desktop: true): saves a PNG of the whole screen to your files and returns its path. Look at it with image.view { path }.",
+      effect: 'non_idempotent',
+      params: {
+        properties: {
+          path: {
+            type: 'string',
+            description:
+              'Where to save it in your files, e.g. /screenshots/login.png. Default: /screenshots/<environment>-<time>.png.',
+          },
+        },
+      },
+    },
+    async (a, ctx) => {
+      const session = await kit.ownSession(undefined, ctx)
+      const env = envOf(session)
+      if (!env) return fail('this session has no environment: call env.up with desktop: true first')
+      if (!env.desktop) return fail('the environment has no desktop: env.down, then env.up with desktop: true')
+      if (!runtime.screenshot) return fail('this deployment has no desktops')
+      const path = str(a.path) ?? screenshotPath(env.name, ctx.clock.iso())
+      if (!/\.png$/i.test(path)) return fail('path must end in .png')
+      const output = await kit.once('env.screenshot', ctx, async () => {
+        const png = Buffer.from(await runtime.screenshot!(env.id))
+        const file = await kit.deps.files.write(ctx.employeeId, path, png.toString('base64'), {
+          encoding: 'base64',
+          mime: 'image/png',
+          actor: kit.actor(ctx),
+        })
+        const size: Record<string, Json> = png.length >= 24 ? { width: png.readUInt32BE(16), height: png.readUInt32BE(20) } : {}
+        return {
+          path: file.path,
+          bytes: png.length,
+          ...size,
+          envId: env.id,
+          note: `Look at it with image.view { path: "${file.path}" }.`,
+        }
+      })
+      return ok(output)
+    },
+  )
+
+  kit.tool(
+    {
       name: 'env.down',
       description: "Tear down this session's environment (containers, network, volumes).",
       effect: 'idempotent',
@@ -391,6 +522,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         delete m.env
         return m
       })
+      kit.deps.bus?.publish('env.changed', { sessionId: session.id, envId: env.id, op: 'down' })
       return ok({ down: true, envId: env.id } as Json)
     },
   )

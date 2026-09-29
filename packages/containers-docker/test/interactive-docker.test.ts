@@ -84,14 +84,14 @@ describe('hardened environments', () => {
     await expect(rt.createEnv({ ...sandboxSpec, tmpfs: { tmp: {} } })).rejects.toThrow(/bad container path/)
     docker.apiVersion = '1.44'
     const old = dockerRuntime({ docker })
-    expect(await old.features!()).toEqual({ volumeSubpath: false })
+    expect(await old.features!()).toEqual({ volumeSubpath: false, desktop: true })
     await expect(old.createEnv(sandboxSpec)).rejects.toThrow(/Docker Engine 26/)
     expect(docker.callsTo('createContainer')).toEqual([])
   })
 
   it('reports features once per runtime, and compares API versions numerically', async () => {
     const { docker, rt } = await setup()
-    expect(await rt.features!()).toEqual({ volumeSubpath: true })
+    expect(await rt.features!()).toEqual({ volumeSubpath: true, desktop: true })
     await rt.features!()
     expect(docker.callsTo('version')).toHaveLength(1)
     expect(apiAtLeast('1.45', '1.45')).toBe(true)

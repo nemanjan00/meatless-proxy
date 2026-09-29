@@ -23,6 +23,7 @@ import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, identityRoutes, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
+import { EnvironmentMonitor, EnvironmentViews, environmentRoutes } from './environments/index.ts'
 import { procedureRoutes } from './procedures/index.ts'
 import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
 import { projectRoutes } from './projects/index.ts'
@@ -58,6 +59,8 @@ export interface App {
   mcp: HarnessMcpServer
   /** Live previews: tokens, the preview listener, and the harness's refusal of preview origins. */
   previews: Previews
+  /** What runs in each environment, and its metrics while someone watches (src/environments). */
+  environments: EnvironmentMonitor
   /** GitLab webhook self-provisioning (src/integrations/provisioning.ts), null when GitLab is disabled. It starts with the workers. */
   hookProvisioning: HookProvisioning | null
   /** Guided integration setup (src/setup): cached checks and webhook activity. */
@@ -106,6 +109,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   const mcp = new HarnessMcpServer(services)
   let boundPort: number | null = null
   const previews = createPreviews(services, { harnessPort: () => boundPort })
+  // The Environments page: what runs where, metrics while someone watches (src/environments).
+  const environments = new EnvironmentMonitor(services, live)
 
   const app = new Hono()
   app.onError((err, c) => sendError(c, err, log))
@@ -144,6 +149,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))
   app.route('/', previews.routes)
+  app.route('/', environmentRoutes(services, new EnvironmentViews(services, auth.visibility, environments)))
   app.route(
     '/',
     integrationStatusRoutes(services, () => hookProvisioning),
@@ -172,6 +178,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     activity,
     mcp,
     previews,
+    environments,
     hookProvisioning,
     setup,
     async start(opts = {}) {
@@ -181,6 +188,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
         if (recovered.events || recovered.runs || recovered.timers) log.info('queues rebuilt from the database', recovered)
         hookProvisioning?.start()
       }
+      environments.start()
       if (opts.http === false) return { port: null }
       const port = opts.port ?? config.PORT
       const started = await new Promise<ServerType>((resolve, reject) => {
@@ -200,6 +208,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
       stopping ??= (async () => {
         log.info('shutting down')
         live.close()
+        environments.close()
         metrics.close()
         await mcp.close()
         tracker.close()

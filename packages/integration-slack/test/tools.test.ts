@@ -195,6 +195,10 @@ describe('slack MCP tools', () => {
     const rest = await call('list_channels', { member_only: false, limit: 2, cursor: all.value.next_cursor })
     expect((rest.value.channels as { id: string }[]).map((c) => c.id)).toEqual(['G1'])
     expect(rest.value.next_cursor).toBeNull()
+    // A page with none of the app's channels (C2) isn't returned empty: the next page is read too.
+    const first = await call('list_channels', { member_only: false, limit: 1 })
+    const skipped = await call('list_channels', { limit: 1, cursor: first.value.next_cursor })
+    expect((skipped.value.channels as { id: string }[]).map((c) => c.id)).toEqual(['G1'])
   })
 
   it("update_message edits the app's own message and refuses others'", async () => {

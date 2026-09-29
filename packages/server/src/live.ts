@@ -121,6 +121,8 @@ export const LIVE_TOPICS = [
   'event.routed',
   'control.changed',
   'preview.commit',
+  'env.stats',
+  'env.changed',
   INBOX_READ_TOPIC,
 ] as const
 
@@ -131,7 +133,7 @@ export interface LiveHubOptions {
   maxBuffered?: number
 }
 
-const CHANNEL_RE = /^(now|events|(session|run|chat|records|person):[A-Za-z0-9_.:-]+)$/
+const CHANNEL_RE = /^(now|events|environments|(session|run|chat|records|person):[A-Za-z0-9_.:-]+)$/
 /** A new chat message or run state older than this isn't news (a reaction republishes an old message). */
 const FRESH_MS = 2 * 60_000
 /** Inbox item ids remembered per socket. */
@@ -190,6 +192,13 @@ export class LiveHub {
 
   get size() {
     return this.clients.size
+  }
+
+  /** Every channel some socket is subscribed to (e.g. to sample metrics only while someone watches). */
+  channelsInUse(): Set<string> {
+    const out = new Set<string>()
+    for (const c of this.clients) for (const ch of c.channels) out.add(ch)
+    return out
   }
 
   /**

@@ -432,7 +432,7 @@ describe('sessions started before their tools and prompt changed', () => {
     expect((await h.sessions.require(s.id)).data.toolset).toEqual(['math.add', 'slack.get_file'])
     expect(h.model.calls[0]!.tools?.map((t) => t.function.name)).toEqual(['math__add', 'slack__get_file'])
     const note = h.model.calls[0]!.messages.find((m) => m.role === 'system' && String(m.content).includes('tools changed'))
-    expect(String(note?.content)).toContain('Now available: slack.get_file')
+    expect(String(note?.content)).toContain('in addition to the tools you already had: slack.get_file')
     expect(String(note?.content)).toContain('No longer available: old.tool')
 
     // Up to date: no second note.

@@ -43,6 +43,20 @@ export interface ContainerLike {
   putArchive(file: Buffer | NodeJS.ReadableStream, opts: { path: string }): Promise<unknown>
   /** A tar archive of `opts.path`. */
   getArchive(opts: { path: string }): Promise<NodeJS.ReadableStream>
+  /** One sample of the container's resource use (`stream: false`). Optional in fakes. */
+  stats?(opts: Record<string, any>): Promise<ContainerStatsLike>
+  /** The container's processes, from the host's `ps` (`ps_args`). Optional in fakes. */
+  top?(opts?: Record<string, any>): Promise<{ Titles?: string[]; Processes?: string[][] }>
+}
+
+/** The fields of Docker's container stats this adapter reads. */
+export interface ContainerStatsLike {
+  read?: string
+  cpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number; online_cpus?: number }
+  precpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number }
+  memory_stats?: { usage?: number; limit?: number; stats?: Record<string, number> }
+  networks?: Record<string, { rx_bytes?: number; tx_bytes?: number }>
+  pids_stats?: { current?: number }
 }
 
 export interface ExecLike {
@@ -54,7 +68,7 @@ export interface ContainerInspectLike {
   Id: string
   Name: string
   Created: string
-  State: { Running: boolean; Status?: string }
+  State: { Running: boolean; Status?: string; StartedAt?: string }
   Config: { Labels: Record<string, string> | null }
   NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> }
 }

@@ -1,4 +1,5 @@
 import type { ChatActivityDone, ChatActivityItem } from './chat-activity.ts'
+import type { EnvironmentExec, EnvironmentStats } from './environments.ts'
 import type { ApiActor, ApiEntry, ApiEvent, Checklist, InboxItem, Json, Message, Run, RunState, TokenUsage } from './resources.ts'
 
 /**
@@ -15,10 +16,12 @@ import type { ApiActor, ApiEntry, ApiEvent, Checklist, InboxItem, Json, Message,
  * - `records:<kind>`: record changes of one kind
  * - `events`: newly ingested events
  * - `person:<contactId>`: your new inbox items and read marks (only you may subscribe to yours)
+ * - `environments`: every environment's live metrics and changes (`env.stats`, `env.changed`), filtered by who may read its session
  */
 export type LiveChannel =
   | 'now'
   | 'events'
+  | 'environments'
   | `session:${string}`
   | `run:${string}`
   | `chat:${string}`
@@ -29,6 +32,7 @@ export type LiveChannel =
 export const channels = {
   now: 'now' as const,
   events: 'events' as const,
+  environments: 'environments' as const,
   session: (id: string) => `session:${id}` as const,
   run: (id: string) => `run:${id}` as const,
   chat: (channelId: string) => `chat:${channelId}` as const,
@@ -76,6 +80,13 @@ export interface LiveTopics {
   'event.ingested': { event: ApiEvent }
   /** The commit a session's environment runs changed (a live preview should reload). */
   'preview.commit': { sessionId: string; envId: string; sha: string; subject?: string; repo?: string }
+  /**
+   * An environment's metrics (about every 5 s while someone watches the `environments` channel or its
+   * session's), and the `env.exec` running in it. Also sent on `session:<sessionId>`.
+   */
+  'env.stats': { sessionId: string; envId: string; stats: EnvironmentStats; exec: EnvironmentExec | null }
+  /** An environment started, stopped or was removed: reload the list. Also sent on `session:<sessionId>`. */
+  'env.changed': { sessionId?: string; envId: string; op: 'up' | 'down' }
   /** The global pause flag changed. */
   'control.changed': { paused: boolean }
   /** Something just became an inbox item for this person (the shape of `GET /api/inbox`). */
@@ -132,6 +143,9 @@ export function channelsFor<T extends LiveTopic>(topic: T, payload: LiveTopics[T
       return [channels.events]
     case 'control.changed':
       return [channels.now]
+    case 'env.stats':
+    case 'env.changed':
+      return sessionId ? [channels.environments, channels.session(sessionId)] : [channels.environments]
     case 'inbox.item':
     case 'inbox.read':
       return [channels.person((p as LiveTopics['inbox.read']).contactId)]

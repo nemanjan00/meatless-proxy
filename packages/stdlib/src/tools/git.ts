@@ -44,6 +44,30 @@ export async function authorFor(deps: Pick<StdlibDeps, 'directory'>, employeeId:
   }
 }
 
+/**
+ * Where a checkout can be reached, returned by git.checkout in place of its path on the harness's disk:
+ * models took that path for one of their files (fs.share, attachments) and it isn't.
+ */
+export const CHECKOUT_NOTE =
+  'Work on it with git.* (by this repository) and in an environment (env.up/env.exec) at /workspace, or /repos/<name> for every checkout of the session. It is not in your filesystem (fs.*, attachments, fs.share): to share or attach a file from it, copy it into your filesystem first (in an environment, /files is your filesystem root).'
+
+/** Git's words for "this key may not read that repository". */
+const ACCESS_DENIED =
+  /permission denied \(publickey|could not read from remote repository|access denied|repository not found|not found or you don't have permission|authentication failed/i
+
+/** A clone or fetch that failed for lack of access, explained, with what to do instead. */
+export function accessFailure(err: unknown, url: string, hasKey: boolean): string | undefined {
+  const text = err instanceof Error ? err.message : String(err)
+  if (!ACCESS_DENIED.test(text)) return undefined
+  return [
+    `You don't have access to ${url}.`,
+    hasKey
+      ? "Your SSH key isn't accepted there: your account on the git host is likely not a member of this project."
+      : 'You have no SSH key set up for git.',
+    "Ask an admin to add your git host account to the project (the harness can't grant it). Meanwhile, if you have the git host's tools (e.g. mcp.gitlab.get_file, mcp.gitlab.list_tree), read the files through them, or ask a colleague who has access to do the part that needs the checkout.",
+  ].join(' ')
+}
+
 /** git.read_file: the most lines one call returns. */
 const READ_MAX_LINES = 2000
 
@@ -119,12 +143,18 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       if (!repo) return fail(`project ${project.data.name} has no repository #${index}`)
       const key = mirrorKey(repo.url)
       const existing = worktreesOf(session).find((w) => w.key === key)
-      if (existing) return ok({ ...(existing as unknown as Record<string, Json>), existing: true })
+      if (existing) return ok({ key, branch: existing.branch, head: existing.baseSha, existing: true, where: CHECKOUT_NOTE })
       const emp = await kit.employee(ctx.employeeId)
       const branch = branchFor(emp, session.data.slug)
       const path = join(deps.config.worktreesRoot, session.id, key)
       const auth = await gitAuthFor(deps, ctx.employeeId)
-      await git.fetch(repo.url, auth)
+      try {
+        await git.fetch(repo.url, auth)
+      } catch (err) {
+        const why = accessFailure(err, repo.url, !!auth)
+        if (why) return fail(why, { project: project.data.name })
+        throw err
+      }
       // Without a ref, the remote's own default branch (origin/HEAD), not a guessed `main`.
       const ref = a.ref ?? repo.defaultBranch
       const info = await git.createWorktree(repo.url, {
@@ -158,9 +188,9 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       if (root) await rememberInstructions(session.id, key, [root.file, ...(root.includes ?? [])])
       return ok({
         key,
-        path: w.path,
         branch: w.branch,
         head: info.head,
+        where: CHECKOUT_NOTE,
         ...(repo.path ? { subdir: repo.path } : {}),
         ...(root ? { instructions: { note: INSTRUCTIONS_NOTE, files: [view(root)] } } : {}),
       })

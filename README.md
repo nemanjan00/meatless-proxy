@@ -80,7 +80,12 @@ from Settings → People and access.
 Live previews of what employees are building are served on their own origin:
 port 3001 by default (`PREVIEW_HOST_PORT`), or `<env>-<port>.<PREVIEW_DOMAIN>`
 with a wildcard DNS name and certificate for production. See
-[packages/server/README.md](packages/server/README.md).
+[packages/server/README.md](packages/server/README.md). An environment can
+also have a **desktop** (`env.up { desktop: true }`): a virtual screen for
+headed browsers and GUI apps that people watch live in the browser (noVNC, on
+the preview origin) and the employee sees through `env.screenshot`. The
+**Environments** page lists everything that runs, with live CPU, memory and
+network per container, what command runs in it, logs, and a Stop button.
 The app container manages project environments as sibling containers through
 the host's Docker socket, so run it on a host dedicated to it. On first start the harness creates a default
 AI employee, **Meatless**, with its router session, and the channels
@@ -186,6 +191,7 @@ its working directory, so a chart it saves is a file it can share.
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
+| `DESKTOP_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-desktop:latest` | the desktop sidecar of `env.up { desktop: true }` (`docker/desktop/Dockerfile`: Xvfb, x11vnc and websockify; build your own with `docker build -t mp-desktop docker/desktop`) |
 | `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
 | `ENV_PROFILES` | [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) profiles | the toolkits `env.up` offers by name, as JSON `[{ "name", "image", "description" }]`; a project can pick one as its default (`envProfile`) |
 | `ENV_DEFAULT_PROFILE` | `default` | the profile `env.up` uses when the call, the project and the checkout (no Dockerfile) don't decide |

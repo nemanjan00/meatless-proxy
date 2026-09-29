@@ -14,6 +14,7 @@ const page = <M extends Record<K, ComponentType<any>>, K extends keyof M>(load: 
 
 const ChatPage = page(() => import('@/pages/chat.tsx'), 'ChatPage')
 const EmployeePage = page(() => import('@/pages/employee.tsx'), 'EmployeePage')
+const EnvironmentsPage = page(() => import('@/pages/environments.tsx'), 'EnvironmentsPage')
 const EventsPage = page(() => import('@/pages/events.tsx'), 'EventsPage')
 const FilesPage = page(() => import('@/pages/files.tsx'), 'FilesPage')
 const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
@@ -63,6 +64,7 @@ export function AppRoutes() {
         <Route path="now" element={<NowPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="sessions/:id" element={<SessionDetailPage />} />
+        <Route path="environments" element={<EnvironmentsPage />} />
         <Route path="lineage/:id" element={<LineagePage />} />
         <Route path="triggers" element={<TriggersPage />} />
         <Route path="events" element={<EventsPage />} />

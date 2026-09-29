@@ -5,6 +5,7 @@ import {
   ChartBar,
   Check,
   ChevronsUpDown,
+  Container,
   FileText,
   FolderKanban,
   IdCard,
@@ -275,6 +276,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
             { to: '/inbox', label: 'Inbox', icon: <Inbox />, badge: unread },
             { to: '/now', label: 'Now', icon: <Activity /> },
             { to: '/sessions', label: 'Sessions', icon: <Workflow /> },
+            { to: '/environments', label: 'Environments', icon: <Container /> },
             { to: '/chat', label: 'Chat', icon: <MessagesSquare /> },
           ]}
         />

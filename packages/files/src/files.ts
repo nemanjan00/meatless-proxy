@@ -409,6 +409,9 @@ export function createFiles({ records, storage = memoryStorage(), bus, contactOf
       if (isWithin(SHARED_DIR, path)) throw new ValidationError(`only your own files can be shared, not ${SHARED_DIR}`)
       if (!withContactId) throw new ValidationError('withContactId is required')
       if ((await resolveContact(owner)) === withContactId) throw new ValidationError("can't share with yourself")
+      // A share of nothing would look like it worked and show the other side an empty folder.
+      if (path !== '/' && !(await storage.stat(owner, path)))
+        throw new NotFoundError('file', `${path}: not in your filesystem (fs.list shows what is)`)
       const data: ShareData = { ownerEmployeeId: owner, path, withContactId, permission: perm }
       const key = shareKey(owner, path, withContactId)
       const o = opts.actor ? { actor: opts.actor } : {}

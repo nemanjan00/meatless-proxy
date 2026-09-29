@@ -43,6 +43,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'env.exec',
   'env.logs',
   'env.preview',
+  'env.screenshot',
   'env.up',
   'fs.delete',
   'fs.list',

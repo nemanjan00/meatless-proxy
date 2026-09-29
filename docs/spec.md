@@ -1340,6 +1340,14 @@ and can run it.
 - Each session works on its **own branch**, e.g. `mp/<employee>/<session-slug>`,
   because git allows a branch to be checked out in only one worktree. A fork
   gets a new worktree at the same commit, on its own branch.
+- `git.checkout` doesn't tell the model where the worktree is on the
+  harness's disk: it says where the checkout can be reached (the `git.*`
+  tools, and `/workspace` and `/repos/<name>` in an environment) and that it
+  is not in the employee's files. Models took the disk path for one of their
+  files and shared or attached it. A clone refused for lack of access
+  (`Permission denied (publickey)` and the like) is explained: not a member
+  of the project, or no SSH key, with what to do instead (ask an admin; read
+  through the git host's tools).
 - Worktrees are removed with `git worktree remove` when the session ends, and
   `git worktree prune` cleans up after crashes. Fetching into the mirror is
   shared by every worktree of that remote.
@@ -1397,6 +1405,13 @@ person follows a project's contributing guide.
   container is kept running for `env.exec`. The checkout is at `/workspace`
   and every checkout of the session at `/repos/<name>`; git runs through the
   `git.*` tools, since the checkout's `.git` points outside the container.
+- **The employee's files at `/files`.** When the files are on disk here (the
+  default `FILES_DIR` storage), every environment mounts the employee's own
+  directory, `<FILES_DIR>/<employeeId>`, at `/files`, read-write: `/files` is
+  the root of its [filesystem](#employee-filesystem), so `/files/a.zip` is
+  `/a.zip` for `fs.*` and chat attachments. A build output copied there can be
+  attached or shared at once, instead of being passed through `env.exec`'s
+  output. Files shared with the employee (`/shared`) are not mounted.
 - Resource limits (CPU, memory, time) apply per environment.
 - **Names and labels.** Every container, network and volume is named
   `mp-<employee>-<session>-…` and labelled with the employee and session, so
@@ -1483,7 +1498,10 @@ page). It's for trusted employees only.
   started with.
 - Output from builds, tests and running services (logs, exit codes, artifacts)
   is captured and available to the model and in the task's
-  [audit trail](employee.md#4-boundaries).
+  [audit trail](employee.md#4-boundaries). Long `env.exec` output keeps its
+  start and its end (3000 characters of each for stdout) with a marker between,
+  and the result then says to redirect it to a file (`> /files/out.txt`, or in
+  `/workspace`) and read ranges with `fs.read` or `git.read_file`.
 
 #### Live previews
 
@@ -1503,9 +1521,10 @@ being built.
     no cookies with the harness.
   - **Access by preview token:** the UI asks the API for a short-lived token
     (about 5 minutes), signed and scoped to one environment, one port and one
-    viewer. The preview origin exchanges it for its own cookie, scoped to that
+    viewer, who must be able to read the environment's session. The preview origin exchanges it for its own cookie, scoped to that
     preview only. The harness session cookie never reaches a preview origin.
-  - The preview origin serves nothing but the proxied app. The harness API,
+  - The preview origin serves nothing but the proxied app, and the
+    [desktop viewer](#desktops) under its reserved `/__mp_preview/` prefix. The harness API,
     WebSocket and MCP server refuse requests from preview origins (checked by
     `Origin` and `Host`), and CORS never allows them.
   - The UI frames previews with `sandbox="allow-scripts allow-forms
@@ -1518,6 +1537,60 @@ being built.
 - An employee can link a preview in chat, and people can open it full-screen.
 - Previews live as long as their environment. Nothing is exposed on the
   host's own ports apart from the preview listener.
+
+#### Desktops
+
+Some work needs a screen: a headed browser, a GUI app, a test that clicks
+through a page. `env.up { desktop: true }` gives the environment a virtual
+desktop that people watch live in the web UI and the model looks at through
+screenshots.
+
+- **What runs.** A desktop **sidecar** (`DESKTOP_IMAGE`, built from
+  `docker/desktop`: Alpine with Xvfb, x11vnc and websockify) joins the main
+  container's network namespace (Docker's `container:` network mode):
+  - `Xvfb :99` at 1440x900x24, without a TCP listener. Programs in the main
+    container reach it through its abstract X socket, which lives in the shared
+    network namespace; `DISPLAY=:99` is set for them. Any image works, since
+    nothing is installed into the main container.
+  - Two x11vnc servers on the display, both on **localhost only** and without a
+    password: 5900 for control and 5901 with `-viewonly`, where the VNC server
+    itself ignores keyboard and mouse input.
+  - websockify bridges, 6080 → 5900 and 6081 → 5901: the only way in. They are
+    reached like exposed ports, through the preview forwarder and the preview
+    origin, never from the host.
+  - The sidecar runs as uid 1000 with a read-only root filesystem, a `/tmp`
+    tmpfs, the usual dropped capabilities and no new privileges, and is removed
+    with the environment (before the main container, whose network it shares).
+  - The nemanjan00/dev base image already has Xvfb but not x11vnc or websockify,
+    so the sidecar is used for every image; it would also work with them added.
+- **env.up** says so: `desktop: { url, display, note }`, where `url` is the
+  session's Preview tab with the desktop open (`/sessions/<id>?tab=preview&desktop=1`).
+  Like preview links it carries no token: the UI mints one for whoever opens it.
+- **env.screenshot** saves a PNG of the whole screen to the employee's files
+  (`/screenshots/<env>-<time>.png`, or a `path`) and returns its path and size,
+  so the model can `image.view` it: that's its eyes on the desktop.
+- **The viewer** is noVNC (`@novnc/novnc`, MPL-2.0), served by the preview
+  listener itself and never from the harness's origin:
+  - `POST /api/environments/:id/desktop { control?, thumbnail? }` mints a
+    single-use, 5-minute preview token for the viewer, one environment and one
+    port (6080 or 6081), marked as a desktop's.
+  - The preview origin exchanges it for a cookie of its own, `mp_desktop`
+    (12 hours, sliding like the preview cookie), whose `Path` is that desktop's
+    page, `/__mp_preview/desktop/<env>/<port>/`: each desktop and each mode has
+    its own, so several desktops can be open at once, even on one preview
+    origin. A desktop's cookie never opens the port as an app, and an app's
+    cookie never opens a desktop.
+  - The page loads the viewer script and noVNC from `/__mp_preview/`
+    (`script-src 'self'`, WebSockets to its own host only), and connects to
+    `…/websockify` under its page, which the listener tunnels to the bridge,
+    with the harness's cookies stripped.
+  - **View-only by default.** Anyone who may read the session gets the view
+    port. Admins and the session's requester may take control (the UI has a
+    toggle), which mints a token for the control port. The difference is
+    enforced by the VNC server (`-viewonly`) and by the port the token is
+    scoped to; the viewer also sets noVNC's `viewOnly`.
+  - No VNC password is ever stored: the VNC servers only listen on localhost,
+    and the signed, scoped preview cookie is what lets someone reach them.
 
 Open questions:
 
@@ -1796,6 +1869,10 @@ repository.
 | fs.write      | write a file (binary files, e.g. a PNG, as base64 with `encoding: 'base64'`) |
 | fs.move / fs.delete | move or delete a file                             |
 | fs.share      | share a file or directory with an employee or person   |
+
+`fs.share` refuses a path that isn't in the employee's files (it would show
+the other side an empty folder while looking like it worked), and its result
+names who it was shared with.
 
 **One path convention.** Every tool that takes an employee-file path (`fs.*`,
 `chat.post`/`chat.reply` attachments, `image.view`, `fs.share`, and the MCP
@@ -2466,6 +2543,31 @@ It is built with shadcn/ui and styled after Linear. See the
 - **Session trees.** Forks and loops are shown as a tree. You can navigate from
   a session to its parent, its children, and linked sessions, and see at a
   glance which branches are running, waiting, done or failed.
+- **Environments** (`/environments`): what the employees are running right now.
+  - Every environment, with its session (a link), employee, profile or image,
+    checkouts, network (none, proxy and its hosts, or direct), exposed ports,
+    whether it has a desktop, when it started and its uptime, and its status.
+    Environments no session points at any more are shown to admins only.
+  - **What runs in it:** the `env.exec` in progress, with its elapsed time,
+    and, on demand in the details drawer, the top processes of each container
+    (`docker top`).
+  - **Live metrics** per container (main, services and the desktop): CPU,
+    memory used and its limit, network in and out, processes, uptime. The
+    server samples them (Docker's stats, one sample per container) about every
+    5 s, only while someone watches the `environments` channel or a session's,
+    and pushes them as `env.stats`, filtered like the session itself.
+    `env.changed` tells when one starts or goes away.
+  - **Desktops** show a live, view-only thumbnail that opens the full viewer.
+  - Actions: logs (a drawer, refreshing), open the preview, open the desktop,
+    and **Stop**, for admins and the session's requester. Stopping tears the
+    environment down like `env.down`, and the session gets a note in its
+    history ("… stopped this session's environment"): at once when it's idle,
+    or as an inbox item its working run reads at its next step.
+  - Filters: employee, and "with desktop". The API is `GET /api/environments`
+    (`employeeId`, `sessionId`, `desktop`), with the sessions' visibility rule:
+    environments of private (DM) sessions are hidden from everyone who may not
+    read those sessions. The session page has the same facts in an Environment
+    card, and its Preview tab shows the desktop.
 
 #### Notifications
 

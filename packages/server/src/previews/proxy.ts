@@ -15,6 +15,18 @@ import { errorMessage, isMpError, type Logger } from '@mp/core'
 import type { ContactData, Directory } from '@mp/directory'
 import type { StoredRecord } from '@mp/store'
 import { accessOf, atLeast } from '../auth/access.ts'
+import {
+  DESKTOP_COOKIE,
+  DESKTOP_SOCKET,
+  NOVNC_PREFIX,
+  VIEWER_SCRIPT_PATH,
+  desktopPage,
+  desktopPageCsp,
+  desktopPath,
+  novncFile,
+  parseDesktopPath,
+  viewerScript,
+} from './desktop.ts'
 import { parsePreviewHost, previewLabel, type PreviewMode } from './origins.ts'
 import type { PreviewGrant, PreviewScope, PreviewSigner } from './tokens.ts'
 
@@ -55,6 +67,8 @@ export interface PreviewProxyDeps {
   secure: (req: IncomingMessage) => boolean
   /** Trust `x-forwarded-*` from a reverse proxy. */
   trustProxy: boolean
+  /** The desktop port that is view-only (its viewer page doesn't send input either). */
+  desktopViewPort?: number
 }
 
 type Resolved =
@@ -154,7 +168,9 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     const cookie = parseCookies(req.headers.cookie).find((c) => c.name === PREVIEW_COOKIE)
     if (!cookie) return { ok: false, status: 401, message: 'open this preview from the harness UI' }
     const r = deps.signer.checkCookie(decodeURIComponent(cookie.value))
-    if (!r.ok) return { ok: false, status: 401, message: 'this preview link has expired: open it again from the harness UI' }
+    // A desktop's grant opens its viewer only, never the port as an app.
+    if (!r.ok || r.grant.desktop)
+      return { ok: false, status: 401, message: 'this preview link has expired: open it again from the harness UI' }
     if (!hostMatches(req, r.grant)) return { ok: false, status: 403, message: 'this preview cookie is for another preview' }
     if (!(await viewerMayPreview(r.grant.contactId))) return { ok: false, status: 403, message: 'you may not open previews' }
     const t = await target(r.grant)
@@ -162,12 +178,31 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     return { ok: true, grant: r.grant, target: t, refresh: deps.signer.dueForRefresh(r.grant) }
   }
 
+  /**
+   * The grant behind a desktop page's (or its socket's) cookie: a desktop grant for exactly this
+   * environment and port. Its cookie's `Path` is the desktop's page, so each desktop has its own.
+   */
+  const resolveDesktop = async (req: IncomingMessage, envId: string, port: number): Promise<Resolved> => {
+    const grants = parseCookies(req.headers.cookie)
+      .filter((c) => c.name === DESKTOP_COOKIE)
+      .map((c) => deps.signer.checkCookie(decodeURIComponent(c.value)))
+    const r = grants.find((g) => g.ok && g.grant.desktop && g.grant.envId === envId && g.grant.port === port)
+    if (!r?.ok) return { ok: false, status: 401, message: 'open this desktop from the harness UI' }
+    if (!hostMatches(req, r.grant)) return { ok: false, status: 403, message: 'this desktop cookie is for another preview' }
+    if (!(await viewerMayPreview(r.grant.contactId))) return { ok: false, status: 403, message: 'you may not open desktops' }
+    const t = await target(r.grant)
+    if ('status' in t) return { ok: false, ...t }
+    return { ok: true, grant: r.grant, target: t, refresh: false }
+  }
+
   const cookieHeader = (req: IncomingMessage, scope: PreviewScope) => {
     const secure = deps.secure(req)
     const maxAge = Math.floor(deps.signer.cookieTtlMs / 1000)
     return [
-      `${PREVIEW_COOKIE}=${encodeURIComponent(deps.signer.cookie(scope))}`,
-      'Path=/',
+      scope.desktop
+        ? `${DESKTOP_COOKIE}=${encodeURIComponent(deps.signer.cookie(scope))}`
+        : `${PREVIEW_COOKIE}=${encodeURIComponent(deps.signer.cookie(scope))}`,
+      scope.desktop ? `Path=${desktopPath(scope.envId, scope.port)}` : 'Path=/',
       'HttpOnly',
       `Max-Age=${maxAge}`,
       // SameSite=None lets the harness UI's frame send it; browsers only accept that with Secure.
@@ -199,8 +234,62 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     const t = await target(r.grant)
     if ('status' in t) return page(req, res, t.status, t.message)
     if (!deps.signer.redeemToken(token).ok) return page(req, res, 401, 'this preview link was already used')
-    res.writeHead(302, { ...baseHeaders(req), location: '/', 'set-cookie': cookieHeader(req, r.grant) })
+    const location = r.grant.desktop
+      ? `${desktopPath(r.grant.envId, r.grant.port)}${url.searchParams.get('thumbnail') === '1' ? '?thumbnail=1' : ''}`
+      : '/'
+    res.writeHead(302, { ...baseHeaders(req), location, 'set-cookie': cookieHeader(req, r.grant) })
     res.end()
+  }
+
+  /** The viewer script, noVNC's modules, and each desktop's viewer page. */
+  async function desktopAsset(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+    if (url.pathname === VIEWER_SCRIPT_PATH || url.pathname.startsWith(NOVNC_PREFIX)) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        page(req, res, 405, 'method not allowed')
+        return true
+      }
+      const file =
+        url.pathname === VIEWER_SCRIPT_PATH
+          ? { body: Buffer.from(viewerScript()), type: 'text/javascript; charset=utf-8' }
+          : await novncFile(url.pathname.slice(NOVNC_PREFIX.length))
+      if (!file) {
+        page(req, res, 404, 'not found')
+        return true
+      }
+      // Public code, the same for every desktop.
+      res.writeHead(200, { ...baseHeaders(req), 'content-type': file.type, 'cache-control': 'public, max-age=3600' })
+      res.end(req.method === 'HEAD' ? undefined : file.body)
+      return true
+    }
+    const d = parseDesktopPath(url.pathname)
+    if (!d) return false
+    if (d.rest !== '' || (req.method !== 'GET' && req.method !== 'HEAD')) {
+      page(
+        req,
+        res,
+        d.rest === DESKTOP_SOCKET ? 426 : 404,
+        d.rest === DESKTOP_SOCKET ? 'a WebSocket is needed here' : 'not found',
+      )
+      return true
+    }
+    const r = await resolveDesktop(req, d.envId, d.port)
+    if (!r.ok) {
+      page(req, res, r.status, r.message)
+      return true
+    }
+    res.writeHead(200, {
+      ...baseHeaders(req),
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy': desktopPageCsp(hostOf(req), frameAncestors(deps.harnessOrigin(hostOf(req)))),
+    })
+    res.end(
+      desktopPage({
+        viewOnly: d.port === deps.desktopViewPort,
+        thumbnail: url.searchParams.get('thumbnail') === '1',
+        title: 'Desktop',
+      }),
+    )
+    return true
   }
 
   /** Headers for the upstream request: harness credentials out, `Host` and same-origin headers rewritten. */
@@ -304,6 +393,7 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
       if (req.method !== 'GET' && req.method !== 'HEAD') return page(req, res, 405, 'method not allowed')
       return exchange(req, res, url)
     }
+    if (await desktopAsset(req, res, url)) return
     if (url.pathname.startsWith(RESERVED_PREFIX)) return page(req, res, 404, 'not found')
     return proxy(req, res)
   }
@@ -318,7 +408,8 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     tunnels.add(socket)
     socket.on('close', () => tunnels.delete(socket))
     const url = new URL(req.url ?? '/', 'http://preview.invalid')
-    if (url.pathname.startsWith(RESERVED_PREFIX)) return refuseUpgrade(socket, 404)
+    const desk = parseDesktopPath(url.pathname)
+    if (url.pathname.startsWith(RESERVED_PREFIX) && desk?.rest !== DESKTOP_SOCKET) return refuseUpgrade(socket, 404)
     // Only the preview's own pages may open its sockets (the cookie is SameSite=None).
     const origin = req.headers.origin
     if (origin) {
@@ -330,8 +421,10 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
       }
       if (o !== hostOf(req).toLowerCase()) return refuseUpgrade(socket, 403)
     }
-    const r = await resolve(req)
+    const r = desk ? await resolveDesktop(req, desk.envId, desk.port) : await resolve(req)
     if (!r.ok) return refuseUpgrade(socket, r.status)
+    // A desktop's socket is the bridge's own, at its root.
+    const path = desk ? '/' : (req.url ?? '/')
     const upstream: Socket = connect({ host: r.target.host, port: r.target.port })
     tunnels.add(upstream)
     upstream.on('close', () => tunnels.delete(upstream))
@@ -346,7 +439,7 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     socket.on('close', () => upstream.destroy())
     upstream.on('connect', () => {
       const headers = upstreamHeaders(req, r.grant.port, true)
-      const lines = [`${req.method ?? 'GET'} ${req.url ?? '/'} HTTP/1.1`]
+      const lines = [`${req.method ?? 'GET'} ${path} HTTP/1.1`]
       for (const [k, v] of Object.entries(headers)) for (const one of Array.isArray(v) ? v : [v]) lines.push(`${k}: ${one}`)
       upstream.write(`${lines.join('\r\n')}\r\n\r\n`)
       if (head.length) upstream.write(head)

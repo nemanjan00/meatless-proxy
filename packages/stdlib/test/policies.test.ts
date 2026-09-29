@@ -8,7 +8,7 @@ import {
   registerRouterPolicies,
   registerUsagePolicies,
 } from '../src/index.ts'
-import { type Stack, stack } from './helpers.ts'
+import { checkoutPath, type Stack, stack } from './helpers.ts'
 
 const finish = async (t: Stack, output?: string, status: 'completed' | 'failed' = 'completed') =>
   t.hooks.decide(beforeFinish, {
@@ -106,7 +106,8 @@ describe('commit on stop', () => {
   it('commits uncommitted worktree changes after the run with trailers', async () => {
     const t = await stack()
     registerPolicies(t.hooks, t.deps)
-    const w = await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const w = { path: await checkoutPath(t, t.session.id) }
     await t.out('git.write_file', { path: 'src/wip.ts', content: 'wip' })
     const run = await t.sessions.requireRun(t.run.id)
     await t.hooks.decide(afterRun, { run, session: t.session, result: { status: 'completed' } })

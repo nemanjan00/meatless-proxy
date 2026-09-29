@@ -25,6 +25,11 @@ export interface PreviewScope {
   port: number
   /** The viewer's contact id. */
   contactId: string
+  /**
+   * A desktop viewer (the noVNC page on the preview origin, at `desktopPath`) rather than the app on
+   * the port. Its cookie is scoped to that path, and it opens nothing else.
+   */
+  desktop?: boolean
 }
 
 export interface PreviewGrant extends PreviewScope {
@@ -55,10 +60,19 @@ interface Wire {
   i: number
   x: number
   n?: string
+  d?: 1
 }
 
 function sign(key: Buffer, g: PreviewGrant): string {
-  const wire: Wire = { e: g.envId, p: g.port, c: g.contactId, i: g.issuedAt, x: g.expiresAt, ...(g.nonce ? { n: g.nonce } : {}) }
+  const wire: Wire = {
+    e: g.envId,
+    p: g.port,
+    c: g.contactId,
+    i: g.issuedAt,
+    x: g.expiresAt,
+    ...(g.nonce ? { n: g.nonce } : {}),
+    ...(g.desktop ? { d: 1 as const } : {}),
+  }
   const body = b64(JSON.stringify(wire))
   return `${body}.${b64(createHmac('sha256', key).update(body).digest())}`
 }
@@ -88,7 +102,15 @@ function open(key: Buffer, value: string, now: number): VerifyResult {
   if (now >= w.x) return { ok: false, reason: 'expired' }
   return {
     ok: true,
-    grant: { envId: w.e, port: w.p, contactId: w.c, issuedAt: w.i, expiresAt: w.x, ...(w.n ? { nonce: w.n } : {}) },
+    grant: {
+      envId: w.e,
+      port: w.p,
+      contactId: w.c,
+      issuedAt: w.i,
+      expiresAt: w.x,
+      ...(w.n ? { nonce: w.n } : {}),
+      ...(w.d === 1 ? { desktop: true } : {}),
+    },
   }
 }
 
@@ -153,6 +175,7 @@ export class PreviewSigner {
       contactId: scope.contactId,
       issuedAt: now,
       expiresAt: now + this.cookieTtlMs,
+      ...(scope.desktop ? { desktop: true } : {}),
     })
   }
 

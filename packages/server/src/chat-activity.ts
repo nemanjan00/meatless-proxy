@@ -76,6 +76,7 @@ export function describeStep(tool: string): string {
     'env.logs': 'reading logs',
     'env.down': 'stopping an environment',
     'env.preview': 'opening a preview',
+    'env.screenshot': 'looking at the desktop',
     'sessions.create': 'starting a session',
     'sessions.fork': 'starting a session',
     'sessions.loop': 'starting sessions',

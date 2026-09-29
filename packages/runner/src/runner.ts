@@ -297,7 +297,7 @@ export function createRunner(opts: RunnerOptions): Runner {
       const lines = ['[tools changed since earlier in this conversation]']
       if (added.length)
         lines.push(
-          `Now available: ${added.join(', ')}. Anything said earlier about these tools not existing is out of date; use them.`,
+          `Now available, in addition to the tools you already had: ${added.join(', ')}. Anything said earlier about these tools not existing is out of date; use them.`,
         )
       if (removed.length) lines.push(`No longer available: ${removed.join(', ')}.`)
       await sessions.append(run.id, { kind: 'system', content: { text: lines.join('\n') }, meta: { toolsetChanged: true } })

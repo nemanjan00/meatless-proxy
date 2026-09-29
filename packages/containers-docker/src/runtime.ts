@@ -4,17 +4,24 @@ import { isAbsolute } from 'node:path'
 import { Writable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 import {
+  DEFAULT_DESKTOP_SIZE,
+  DESKTOP_DISPLAY,
+  DESKTOP_PORTS,
   ExecAbortedError,
   TIMEOUT_EXIT_CODE,
+  invalidDesktop,
   invalidEgressEntries,
   invalidEntryPath,
   invalidExpose,
   invalidNetworkSpec,
   invalidVolumeMounts,
+  type ContainerProcesses,
   type ContainerRuntime,
+  type ContainerStats,
   type EgressLogEntry,
   type EnvInfo,
   type EnvSpec,
+  type EnvStats,
   type ExecOptions,
   type ExecResult,
   type FileEntry,
@@ -36,7 +43,13 @@ import {
   type Logger,
 } from '@mp/core'
 import Docker from 'dockerode'
-import type { ContainerInspectLike, ContainerSummaryLike, DockerLike, NetworkInspectLike } from './docker-like.ts'
+import type {
+  ContainerInspectLike,
+  ContainerStatsLike,
+  ContainerSummaryLike,
+  DockerLike,
+  NetworkInspectLike,
+} from './docker-like.ts'
 import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
 import { PREVIEW_FORWARDER_SOURCE, PREVIEW_READY_MARKER } from './preview-forwarder.ts'
 import { packTar, unpackTar } from './tar.ts'
@@ -70,9 +83,20 @@ export interface DockerRuntimeOptions {
    * forwarder's address on the bridge directly.
    */
   selfContainer?: string
+  /** Image of the desktop sidecar (`EnvSpec.desktop`): docker/desktop in this repository. Default `DEFAULT_DESKTOP_IMAGE`. */
+  desktopImage?: string
 }
 
 export const DEFAULT_PROXY_IMAGE = 'node:26-alpine'
+export const DEFAULT_DESKTOP_IMAGE = 'ghcr.io/nemanjan00/meatless-proxy-desktop:latest'
+/** The desktop sidecar's name suffix and `mp.role`. */
+export const DESKTOP_SUFFIX = 'desktop'
+/** On the main container: `true` when the environment has a desktop. */
+export const LABEL_DESKTOP = 'mp.desktop'
+/** What the desktop sidecar writes (to stderr) once its display, VNC servers and bridges are up. */
+export const DESKTOP_READY_MARKER = 'mp desktop ready'
+/** The desktop sidecar's user: not root, like the image's own. */
+const DESKTOP_USER = '1000:1000'
 /** The proxy's network alias on the environment's network, and its URL there. */
 export const PROXY_ALIAS = 'proxy'
 /** What the proxy writes (to stderr) once it's listening. */
@@ -140,6 +164,9 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const pidsLimit = opts.pidsLimit ?? 4096
   const maxOutput = opts.maxOutputBytes ?? 10 * 1024 * 1024
   const proxyImage = opts.proxyImage ?? DEFAULT_PROXY_IMAGE
+  const desktopImage = opts.desktopImage ?? DEFAULT_DESKTOP_IMAGE
+  /** The previous CPU sample of each container, for `stats` (Docker's one-shot samples have no previous one). */
+  const cpuSamples = new Map<string, { total: number; system: number }>()
   const self = opts.selfContainer
   /**
    * The harness container's own mounts, read once: a path in it (a worktree under DATA_DIR) is not
@@ -205,6 +232,9 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const previewName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
   const previewNetworkName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
   const directNetworkName = (network: string) => `${prefix}${network}`
+  const desktopName = (name: string) => `${prefix}${name}-${DESKTOP_SUFFIX}`
+  /** The ports the preview forwarder carries: the exposed ones, and the desktop's. */
+  const forwardedPorts = (spec: EnvSpec) => [...(spec.expose ?? []), ...(spec.desktop ? Object.values(DESKTOP_PORTS) : [])]
 
   const hardening = {
     Privileged: false,
@@ -351,7 +381,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Cmd: ['node', '-e', PREVIEW_FORWARDER_SOURCE],
       Env: envList({
         TARGET: 'main',
-        FORWARDS: JSON.stringify((spec.expose ?? []).map((port) => ({ listen: port, port }))),
+        FORWARDS: JSON.stringify(forwardedPorts(spec).map((port) => ({ listen: port, port }))),
       }),
       User: '65534:65534',
       Labels: { ...labels, [LABEL_ROLE]: PREVIEW_SUFFIX },
@@ -366,6 +396,33 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     await docker.getNetwork(previewNet).connect({ Container: name })
     await c.start()
     await waitForProxy(name, PREVIEW_READY_MARKER, 'preview forwarder')
+  }
+
+  /**
+   * The desktop sidecar: Xvfb, x11vnc (localhost only) and websockify, in the main container's network
+   * namespace. Programs in the main container reach the display through its abstract X socket (shared
+   * with the namespace), and the preview forwarder reaches the bridges at `main`.
+   */
+  async function createDesktop(spec: EnvSpec, labels: Record<string, string>): Promise<void> {
+    const name = desktopName(spec.name)
+    const size = `${spec.desktop!.width ?? DEFAULT_DESKTOP_SIZE.width}x${spec.desktop!.height ?? DEFAULT_DESKTOP_SIZE.height}`
+    const c = await docker.createContainer({
+      name,
+      Image: desktopImage,
+      Env: envList({ DISPLAY: DESKTOP_DISPLAY, DESKTOP_SIZE: size }),
+      User: DESKTOP_USER,
+      Labels: { ...labels, [LABEL_ROLE]: DESKTOP_SUFFIX },
+      HostConfig: {
+        ...hardening,
+        NetworkMode: `container:${mainName(spec.name)}`,
+        ReadonlyRootfs: true,
+        Tmpfs: { '/tmp': 'rw,nosuid,nodev,size=256m,mode=1777' },
+        Memory: 768 * 1024 * 1024,
+        MemorySwap: 768 * 1024 * 1024,
+      },
+    })
+    await c.start()
+    await waitForProxy(name, DESKTOP_READY_MARKER, 'desktop')
   }
 
   /** Refuses a network that isn't a direct network this runtime made, or has lost its settings. */
@@ -422,7 +479,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   async function create(spec: EnvSpec, labels: Record<string, string>): Promise<void> {
     const image = await ensureImage(spec)
     for (const svc of spec.services ?? []) await pullIfMissing(svc.image)
-    if (spec.egress || spec.expose?.length) await pullIfMissing(proxyImage)
+    if (spec.egress || spec.expose?.length || spec.desktop) await pullIfMissing(proxyImage)
+    if (spec.desktop) await pullIfMissing(desktopImage)
     const net = networkName(spec.name)
     await docker.createNetwork({
       Name: net,
@@ -458,8 +516,13 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       ...(spec.command ? { Cmd: spec.command } : { Entrypoint: ['sleep'], Cmd: ['infinity'] }),
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
       ...(spec.user ? { User: spec.user } : {}),
-      Env: envList({ ...spec.env, ...viaProxy }),
-      Labels: { ...labels, [LABEL_ROLE]: 'main', ...(spec.expose?.length ? { [LABEL_EXPOSE]: spec.expose.join(',') } : {}) },
+      Env: envList({ ...(spec.desktop ? { DISPLAY: DESKTOP_DISPLAY } : {}), ...spec.env, ...viaProxy }),
+      Labels: {
+        ...labels,
+        [LABEL_ROLE]: 'main',
+        ...(forwardedPorts(spec).length ? { [LABEL_EXPOSE]: forwardedPorts(spec).join(',') } : {}),
+        ...(spec.desktop ? { [LABEL_DESKTOP]: 'true' } : {}),
+      },
       HostConfig: {
         ...hardening,
         NetworkMode: net,
@@ -496,7 +559,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     })
     if (direct) await docker.getNetwork(direct).connect({ Container: mainName(spec.name) })
     await main.start()
-    if (spec.expose?.length) await createForwarder(spec, net, labels)
+    if (spec.desktop) await createDesktop(spec, labels)
+    if (forwardedPorts(spec).length) await createForwarder(spec, net, labels)
   }
 
   async function removeAll(name: string): Promise<void> {
@@ -509,10 +573,16 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     } catch (e) {
       throw mapError(e, `environment ${name}`)
     }
-    const ids = new Set(containers.filter((c) => owns(c.Labels)).map((c) => c.Id))
-    // The main container and the proxy are also removed by name, in case a listing missed them, but
+    // The desktop first: it lives in the main container's network namespace.
+    const ids = new Set(
+      containers
+        .filter((c) => owns(c.Labels))
+        .sort((a, b) => Number(b.Labels[LABEL_ROLE] === DESKTOP_SUFFIX) - Number(a.Labels[LABEL_ROLE] === DESKTOP_SUFFIX))
+        .map((c) => c.Id),
+    )
+    // The main container and the sidecars are also removed by name, in case a listing missed them, but
     // only when they are this deployment's.
-    for (const n of [mainName(name), proxyName(name), previewName(name)]) {
+    for (const n of [desktopName(name), mainName(name), proxyName(name), previewName(name)]) {
       try {
         if (owns((await docker.getContainer(n).inspect()).Config.Labels)) ids.add(n)
       } catch (e) {
@@ -541,6 +611,52 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       } catch (e) {
         if (statusOf(e) !== 404) throw mapError(e, `network ${net}`)
       }
+    }
+  }
+
+  /**
+   * The containers of an environment that do its work, main first: the main container, its services
+   * and the desktop (not the proxy and preview sidecars). `NotFoundError` when it's gone.
+   */
+  async function envContainers(envId: string): Promise<ContainerSummaryLike[]> {
+    const name = envName(envId)
+    let list: ContainerSummaryLike[]
+    try {
+      list = await docker.listContainers({ all: true, filters: { label: [`${LABEL_MANAGED}=true`, `${LABEL_ENV}=${name}`] } })
+    } catch (e) {
+      throw mapError(e, `environment ${envId}`)
+    }
+    const order = (c: ContainerSummaryLike) => ({ main: 0, service: 1, [DESKTOP_SUFFIX]: 2 })[c.Labels[LABEL_ROLE] ?? ''] ?? 9
+    const mine = list.filter((c) => owns(c.Labels) && order(c) < 9).sort((a, b) => order(a) - order(b))
+    if (!mine.some((c) => c.Labels[LABEL_ROLE] === 'main')) throw new NotFoundError('environment', envId)
+    return mine
+  }
+
+  /** Docker's stats sample as metrics, with the CPU share since this container's previous sample. */
+  function statsOf(id: string, raw: ContainerStatsLike): Omit<ContainerStats, 'name' | 'role' | 'state' | 'startedAt'> {
+    const total = raw.cpu_stats?.cpu_usage?.total_usage
+    const system = raw.cpu_stats?.system_cpu_usage
+    const cpus = raw.cpu_stats?.online_cpus || 1
+    let prev: { total: number; system: number } | undefined = cpuSamples.get(id)
+    const pre = raw.precpu_stats
+    if (pre?.cpu_usage?.total_usage && pre.system_cpu_usage)
+      prev = { total: pre.cpu_usage.total_usage, system: pre.system_cpu_usage }
+    let cpuPercent: number | null = null
+    if (total !== undefined && system !== undefined) {
+      if (prev && system > prev.system) cpuPercent = Math.max(0, ((total - prev.total) / (system - prev.system)) * cpus * 100)
+      cpuSamples.set(id, { total, system })
+    }
+    const mem = raw.memory_stats
+    // Page cache doesn't count, as `docker stats` shows it.
+    const cache = mem?.stats?.inactive_file ?? mem?.stats?.total_inactive_file ?? mem?.stats?.cache ?? 0
+    const nets = Object.values(raw.networks ?? {})
+    return {
+      cpuPercent: cpuPercent === null ? null : Math.round(cpuPercent * 10) / 10,
+      memoryBytes: mem?.usage !== undefined ? Math.max(0, mem.usage - cache) : null,
+      memoryLimitBytes: mem?.limit ?? null,
+      netRxBytes: nets.length ? nets.reduce((n, x) => n + (x.rx_bytes ?? 0), 0) : null,
+      netTxBytes: nets.length ? nets.reduce((n, x) => n + (x.tx_bytes ?? 0), 0) : null,
+      pids: raw.pids_stats?.current ?? null,
     }
   }
 
@@ -867,9 +983,87 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       return unpackTar(await readAll(stream))
     },
 
+    async screenshot(envId) {
+      const info = await runtime.getEnv(envId)
+      if (!info) throw new NotFoundError('environment', envId)
+      if (!info.desktop) throw new NotFoundError('desktop', envId)
+      const r = await runtime.exec(desktopName(envName(envId)), ['mp-desktop-shot'], { timeoutMs: 30_000 })
+      if (r.exitCode !== 0)
+        throw new UnavailableError(`the desktop of ${envId} could not take a screenshot: ${r.stderr.slice(-300)}`)
+      const png = Buffer.from(r.stdout.trim(), 'base64')
+      if (png.length < 8 || png.readUInt32BE(0) !== 0x89504e47) throw new UnavailableError(`the desktop of ${envId} gave no PNG`)
+      return new Uint8Array(png)
+    },
+
+    async stats(envId): Promise<EnvStats> {
+      const at = new Date(clock.now()).toISOString()
+      const out: ContainerStats[] = []
+      for (const c of await envContainers(envId)) {
+        const role = c.Labels[LABEL_ROLE]
+        const base = {
+          name: role === 'service' ? (c.Labels[LABEL_SERVICE] ?? 'service') : role === DESKTOP_SUFFIX ? 'desktop' : 'main',
+          role: (role === 'service' || role === DESKTOP_SUFFIX ? role : 'main') as ContainerStats['role'],
+          state: c.State,
+          startedAt: new Date(c.Created * 1000).toISOString(),
+        }
+        const empty = {
+          cpuPercent: null,
+          memoryBytes: null,
+          memoryLimitBytes: null,
+          netRxBytes: null,
+          netTxBytes: null,
+          pids: null,
+        }
+        const container = docker.getContainer(c.Id)
+        if (c.State !== 'running' || !container.stats) {
+          out.push({ ...base, ...empty })
+          continue
+        }
+        try {
+          const raw = await container.stats({ stream: false, 'one-shot': true })
+          out.push({ ...base, ...statsOf(c.Id, raw) })
+        } catch (e) {
+          log.debug('container stats failed', { container: c.Id, err: errorMessage(e) })
+          out.push({ ...base, ...empty })
+        }
+      }
+      // Forget containers that are gone.
+      if (cpuSamples.size > 1000) cpuSamples.clear()
+      return { envId, at, containers: out }
+    },
+
+    async processes(envId): Promise<ContainerProcesses[]> {
+      const out: ContainerProcesses[] = []
+      for (const c of await envContainers(envId)) {
+        const role = c.Labels[LABEL_ROLE]
+        const name = role === 'service' ? (c.Labels[LABEL_SERVICE] ?? 'service') : role === DESKTOP_SUFFIX ? 'desktop' : 'main'
+        const r: ContainerProcesses = {
+          name,
+          role: (role === 'service' || role === DESKTOP_SUFFIX ? role : 'main') as ContainerProcesses['role'],
+          titles: [],
+          processes: [],
+        }
+        const container = docker.getContainer(c.Id)
+        if (c.State === 'running' && container.top) {
+          try {
+            const top = await container.top({ ps_args: '-eo pid,user,pcpu,pmem,etime,args' })
+            r.titles = top.Titles ?? []
+            const cpu = r.titles.findIndex((t) => /cpu/i.test(t))
+            r.processes = [...(top.Processes ?? [])]
+              .sort((a, b) => (cpu < 0 ? 0 : Number(b[cpu] ?? 0) - Number(a[cpu] ?? 0)))
+              .slice(0, 25)
+          } catch (e) {
+            log.debug('container top failed', { container: c.Id, err: errorMessage(e) })
+          }
+        }
+        out.push(r)
+      }
+      return out
+    },
+
     async features(): Promise<RuntimeFeatures> {
       features ??= docker.version().then(
-        (v) => ({ volumeSubpath: apiAtLeast(v.ApiVersion, VOLUME_SUBPATH_API) }),
+        (v) => ({ volumeSubpath: apiAtLeast(v.ApiVersion, VOLUME_SUBPATH_API), desktop: true }),
         (e) => {
           features = null
           throw mapError(e, 'docker version')
@@ -900,8 +1094,10 @@ function validate(spec: EnvSpec) {
     if (spec.egress && svc.name === PROXY_ALIAS) issues.push(`service name ${PROXY_ALIAS} is taken by the egress proxy`)
     if (spec.expose?.length && svc.name === PREVIEW_SUFFIX)
       issues.push(`service name ${PREVIEW_SUFFIX} is taken by the preview forwarder`)
+    if (spec.desktop && svc.name === DESKTOP_SUFFIX) issues.push(`service name ${DESKTOP_SUFFIX} is taken by the desktop`)
   }
   issues.push(...invalidExpose(spec.expose))
+  issues.push(...invalidDesktop(spec.desktop, spec.expose))
   issues.push(...invalidVolumeMounts(spec.volumeMounts))
   for (const p of [...(spec.volumes ?? []), ...Object.keys(spec.tmpfs ?? {})])
     if (!isAbsolute(p) || p.includes(':') || p.includes(',')) issues.push(`bad container path: ${p}`)
@@ -969,6 +1165,7 @@ function infoFromInspect(c: ContainerInspectLike): EnvInfo {
     status: c.State.Running ? 'running' : 'stopped',
     labels,
     createdAt: new Date(c.Created).toISOString(),
+    ...(labels[LABEL_DESKTOP] === 'true' ? { desktop: true } : {}),
   }
 }
 
@@ -980,6 +1177,7 @@ function infoFromSummary(c: ContainerSummaryLike): EnvInfo {
     status: c.State === 'running' ? 'running' : 'stopped',
     labels: c.Labels,
     createdAt: new Date(c.Created * 1000).toISOString(),
+    ...(c.Labels[LABEL_DESKTOP] === 'true' ? { desktop: true } : {}),
   }
 }
 

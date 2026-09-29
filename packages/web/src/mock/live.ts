@@ -15,6 +15,7 @@ import {
   type SessionData,
 } from '@mp/api'
 import { advancePreviewCommit, CHN, CON, EMP, type MockDb, RUN, SES, mockId } from './data.ts'
+import { tickMockEnvironments } from './environments.ts'
 
 /** An in-memory `LiveSource`: `emit` delivers to subscribers on the channels the server would use. */
 export interface MockLive extends LiveSource {
@@ -353,6 +354,8 @@ export function startSimulation(db: MockDb, live: MockLive, opts: SimulationOpti
     ticks++
     for (const sim of sims.values()) tickRun(sim)
     if (ticks % every === 0) backgroundEvents[bg++ % backgroundEvents.length]!()
+    // Environment metrics, about every 5 s like the server's poller.
+    if (ticks % Math.max(1, Math.round(5000 / tickMs)) === 0) tickMockEnvironments(db, live.emit)
   }, tickMs)
   return () => clearInterval(timer)
 }

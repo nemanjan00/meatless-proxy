@@ -42,6 +42,7 @@ first by a small built-in loader; variables already set win.
 | `FILES_VOLUME` | none | The named Docker volume mounted at `FILES_DIR` (`mp-files`). With it, `code.run` sandboxes mount each employee's directory of it (Docker Engine 26+) instead of copying files |
 | `SANDBOX_ENABLED` | `true` | `code.run`/`code.reset` (needs `DOCKER_ENABLED`) |
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | The sandbox image (`docker/sandbox/Dockerfile`) |
+| `DESKTOP_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-desktop:latest` | The desktop sidecar of `env.up { desktop: true }` (`docker/desktop/Dockerfile`) |
 | `DEFAULT_EGRESS` | none | Hosts environments and sandboxes may reach through the egress proxy when neither the employee's `network` setting nor the session's project names any, comma-separated. Checked at start. Default: no network |
 | `SANDBOX_USER` | `1000:1000` | The sandbox user, the same as the app's so both can write the files volume |
 | `SANDBOX_CPUS` / `SANDBOX_MEMORY_MB` / `SANDBOX_PIDS` | `1` / `1024` / `256` | Limits per employee's sandbox container |
@@ -174,6 +175,12 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   integration users and their contacts (admins; see [Identity from integrations](#identity-from-integrations)).
 - `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
 - `GET /api/sessions/:id/preview` and `POST /api/previews/token` are `@mp/api` routes, served by `src/previews` (see [Live previews](#live-previews)).
+- `GET /api/environments`, `POST /api/environments/:id/stop`, `GET /api/environments/:id/logs` and `…/processes`
+  (`@mp/api` `ENVIRONMENT_ROUTES`), served by `src/environments`: every environment the viewer may see (the sessions'
+  visibility rule; ones no session points at are for admins), joined with its session, plus stopping (admins and the
+  session's requester; the session gets a note). `EnvironmentMonitor` follows `env.exec` and, while someone watches the
+  `environments` channel or a session's, samples metrics every 5 s and publishes `env.stats`.
+  `POST /api/environments/:id/desktop` is in `src/previews` (see [Desktops](#desktops)).
 
 Errors are `{ error: { code, message, details? } }`: not found 404, validation
 422 (issues in `details.issues`), malformed request 400, conflict 409 (the
@@ -357,6 +364,32 @@ just wrote or installed.
   `HOST=127.0.0.1`, because a process listening on all interfaces is reachable
   from containers at their bridge's gateway address.
 
+### Desktops
+
+`src/previews/desktop.ts` (docs/spec.md "Desktops"). An environment started with
+`env.up { desktop: true }` runs Xvfb, x11vnc (localhost only) and websockify in a
+sidecar (`DESKTOP_IMAGE`); the viewer is noVNC (`@novnc/novnc`, MPL-2.0), served
+by the preview listener, so the VNC connection never touches the harness origin.
+
+- `POST /api/environments/:id/desktop { control?, thumbnail? }` (members who may
+  read the session): a single-use, 5-minute token for port 6081 (view-only: its
+  VNC server runs `-viewonly`) or, for admins and the session's requester with
+  `control: true`, port 6080. A thumbnail is always a view. The token is marked
+  as a desktop's.
+- The preview origin exchanges it for `mp_desktop`, a cookie whose `Path` is the
+  desktop's page, `/__mp_preview/desktop/<env>/<port>/`, and redirects there
+  (`?thumbnail=1` kept). Several desktops (and view and control) can be open at
+  once; a desktop cookie never opens the app on a port, and the app cookie never
+  opens a desktop.
+- The page (`default-src 'none'`, `script-src 'self'`, WebSockets to its own host
+  only, `frame-ancestors` the harness) loads `/__mp_preview/desktop.js` and noVNC's
+  modules from `/__mp_preview/novnc/` (only `core/` and `vendor/`), and connects
+  to `…/websockify` under its page. The listener checks the `Origin`, the cookie
+  (for that environment and port, the host in domain mode, and the viewer's
+  access) and tunnels to the bridge at `/`, without the harness's cookies.
+- `POST /api/previews/token` now also needs the viewer to be able to read the
+  environment's session (private sessions' previews are for their DM's members).
+
 ## Metrics
 
 `GET /metrics`, Prometheus text format (written by hand, no dependency), for
@@ -384,7 +417,7 @@ The `@mp/api` live protocol: `subscribe` / `unsubscribe` / `ping`, answered by
 `link.changed`, `entry.appended`, `run.state`, `session.head`, `model.delta`,
 `tool.called`, `tool.result`, `usage.recorded`, `checklist.changed`,
 `chat.message`, `chat.activity`, `chat.activity.done`, `event.ingested`, `event.routed`, `control.changed`,
-`inbox.read`) are mapped
+`preview.commit`, `env.stats`, `env.changed`, `inbox.read`) are mapped
 to the API payloads and fanned out with `channelsFor`. Messages are forwarded in
 order; a socket that stops draining (buffer over 1 MiB and 500 queued messages)
 is closed with 1013.
