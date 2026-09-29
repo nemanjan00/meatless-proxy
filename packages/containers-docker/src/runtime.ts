@@ -53,6 +53,10 @@ export interface DockerRuntimeOptions {
 export const DEFAULT_PROXY_IMAGE = 'node:26-alpine'
 /** The proxy's network alias on the environment's network, and its URL there. */
 export const PROXY_ALIAS = 'proxy'
+/** What the proxy writes (to stderr) once it's listening. */
+export const PROXY_READY_MARKER = 'egress proxy listening on'
+const PROXY_READY_TIMEOUT_MS = 20_000
+const PROXY_READY_POLL_MS = 100
 export const PROXY_URL = `http://${PROXY_ALIAS}:${EGRESS_PROXY_PORT}`
 
 export const DEFAULT_CAP_DROP = ['NET_RAW', 'MKNOD', 'AUDIT_WRITE', 'SYS_CHROOT', 'SETFCAP']
@@ -198,6 +202,25 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     })
     await docker.getNetwork(egressNet).connect({ Container: name })
     await c.start()
+    await waitForProxy(name)
+  }
+
+  /**
+   * Waits until the proxy logs that it's listening, so the environment's first request
+   * doesn't race the proxy's start-up. Fails if the proxy exits or doesn't come up in time.
+   */
+  async function waitForProxy(name: string): Promise<void> {
+    const deadline = clock.now() + PROXY_READY_TIMEOUT_MS
+    for (;;) {
+      const container = docker.getContainer(name)
+      const res = await container.logs({ stdout: true, stderr: true, follow: false })
+      const text = demuxBuffer(Buffer.isBuffer(res) ? res : await readAll(res))
+      if (text.includes(PROXY_READY_MARKER)) return
+      const state = (await container.inspect()).State
+      if (state && state.Running === false) throw new UnavailableError(`egress proxy ${name} exited: ${text.slice(-500)}`)
+      if (clock.now() > deadline) throw new UnavailableError(`egress proxy ${name} didn't start listening in time`)
+      await new Promise((r) => setTimeout(r, PROXY_READY_POLL_MS))
+    }
   }
 
   async function create(spec: EnvSpec, labels: Record<string, string>): Promise<void> {

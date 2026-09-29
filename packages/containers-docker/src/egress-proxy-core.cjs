@@ -7,6 +7,7 @@
  * the tests check that both agree.
  */
 const http = require('node:http')
+const https = require('node:https')
 const net = require('node:net')
 const dns = require('node:dns')
 
@@ -160,13 +161,17 @@ function createEgressProxy(opts) {
     } catch {
       url = null
     }
-    if (url?.protocol !== 'http:') {
+    // Absolute http:// requests, and absolute https:// ones (some clients, e.g. busybox wget,
+    // send those instead of CONNECT): the proxy then speaks TLS to the destination itself,
+    // verifying its certificate against the requested hostname.
+    if (url?.protocol !== 'http:' && url?.protocol !== 'https:') {
       log(req.method, '', 0, false, 'not a proxy request')
       res.writeHead(400, { 'content-type': 'text/plain' })
-      return res.end('only absolute http:// requests and CONNECT are proxied\n')
+      return res.end('only absolute http:// or https:// requests and CONNECT are proxied\n')
     }
+    const secure = url.protocol === 'https:'
     const host = normHost(url.hostname)
-    const port = url.port ? Number(url.port) : 80
+    const port = url.port ? Number(url.port) : secure ? 443 : 80
     const d = await check(host, port)
     log(req.method, host, port, d.allowed, d.reason)
     if (!d.allowed) {
@@ -176,15 +181,13 @@ function createEgressProxy(opts) {
     const headers = {}
     for (const [k, v] of Object.entries(req.headers)) if (!HOP_HEADERS.has(k)) headers[k] = v
     headers.host = url.host
-    const upstream = http.request(
-      { host: d.address, port, method: req.method, path: `${url.pathname}${url.search}`, headers, setHost: false },
-      (up) => {
-        const out = {}
-        for (const [k, v] of Object.entries(up.headers)) if (!HOP_HEADERS.has(k)) out[k] = v
-        res.writeHead(up.statusCode || 502, out)
-        up.pipe(res)
-      },
-    )
+    const target = { host: d.address, port, method: req.method, path: `${url.pathname}${url.search}`, headers, setHost: false }
+    const upstream = (secure ? https : http).request(secure ? { ...target, servername: host } : target, (up) => {
+      const out = {}
+      for (const [k, v] of Object.entries(up.headers)) if (!HOP_HEADERS.has(k)) out[k] = v
+      res.writeHead(up.statusCode || 502, out)
+      up.pipe(res)
+    })
     upstream.on('error', () => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' })
       res.end('upstream error\n')

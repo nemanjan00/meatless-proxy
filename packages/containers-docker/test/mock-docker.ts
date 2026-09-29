@@ -134,7 +134,11 @@ export class MockDocker implements DockerLike {
       id: idOrName,
       async start() {
         self.record('container.start', idOrName)
-        must().running = true
+        const c = must()
+        c.running = true
+        // Like the real sidecar, the egress proxy says so on stderr once it's listening.
+        if ((c.opts.Cmd ?? []).includes('-e') && String(c.opts.Cmd?.at(-1) ?? '').includes('createEgressProxy'))
+          c.logs = Buffer.concat([c.logs, frame('stderr', 'egress proxy listening on 3128\n')])
         return {}
       },
       async inspect(): Promise<ContainerInspectLike> {
