@@ -25,6 +25,8 @@ so the browser bundle stays free of Node code.
 - Activity: `GET /api/now`, `GET /api/inbox`
 - Events: `GET|POST /api/events`, `GET /api/events/:id`, `GET /api/triggers`, `GET /api/subscriptions`
 - Chat: `GET|POST /api/chat/channels`, `GET|POST /api/chat/channels/:id/messages`, `POST /api/chat/channels/:id/members`, `GET /api/chat/threads/:id`
+- Everyday chat: `PATCH|DELETE /api/chat/messages/:id` (author only, 403 otherwise), `POST|DELETE /api/chat/messages/:id/reactions` (`{ emoji }` / `?emoji=`), `POST /api/chat/read` (`{ scope, messageId? }`), `GET /api/chat/unread`, `POST /api/chat/dms` (`{ members }`, you're added), `GET /api/chat/search?text=&channelId=&author=&tagged=&threadId=`
+- `GET /api/me`: the contact the web UI acts as
 - Usage: `GET /api/usage/totals|breakdown|series`
 - Files: `GET /api/files/:employeeId`, `GET|PUT /api/files/:employeeId/content`
 - Secrets: `GET|PUT|DELETE /api/secrets` (names and scopes only; values are write-only)

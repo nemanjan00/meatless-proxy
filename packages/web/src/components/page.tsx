@@ -26,7 +26,7 @@ export function Page({
         <h1 className="min-w-0 truncate font-medium text-foreground">{title}</h1>
         <div className="ml-auto flex items-center gap-1.5">{actions}</div>
       </header>
-      {filters && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-4">{filters}</div>}
+      {filters && <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">{filters}</div>}
       <div className={cn('min-h-0 flex-1 overflow-auto', className)}>{children}</div>
     </div>
   )

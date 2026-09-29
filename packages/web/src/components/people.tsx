@@ -5,9 +5,15 @@ import { cn } from '@/lib/utils.ts'
 
 const HUES = ['#5e6ad2', '#4ea7fc', '#27a644', '#f0bf00', '#fc7840', '#00b8cc', '#eb5757']
 
+/** A stable colour per name. `Meatless`, `@meatless` and `@meatless#router` share one, so an employee and its sessions match. */
 function hueFor(name: string) {
+  const key = name
+    .replace(/^@/, '')
+    .split('#')[0]!
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
   let h = 0
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0
   return HUES[h % HUES.length]!
 }
 

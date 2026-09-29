@@ -22,7 +22,7 @@ import {
   mapChecklist,
   mapEvent,
   mapSubscription,
-  routingOf,
+  isUnmatched,
   toJson,
   usageFilter,
 } from './views.ts'
@@ -264,6 +264,18 @@ export function apiRoutes(deps: ApiDeps): Hono {
       if (!msg) continue
       threads.push({ channelId: msg.data.channelId, threadId: msg.id, title: msg.data.text.slice(0, 80) })
     }
+    // Threads the session posted in without subscribing (e.g. a router's ephemeral runs replying).
+    const posted = await s.records.query<DomainMessage['data']>('message', {
+      where: { 'author.kind': 'session', 'author.id': session.id },
+      orderBy: { field: 'createdAt', dir: 'desc' },
+      limit: 50,
+    })
+    for (const m of posted.items) {
+      const rootId = m.data.threadId ?? m.id
+      if (threads.some((t) => t.threadId === rootId)) continue
+      const root = rootId === m.id ? m : await s.chat.getMessage(rootId)
+      if (root) threads.push({ channelId: root.data.channelId, threadId: root.id, title: root.data.text.slice(0, 80) })
+    }
     return c.json({
       session: session as Api.Session,
       employee,
@@ -356,7 +368,20 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const subs = sessionId
       ? await s.events.subscriptions.forSession(sessionId)
       : (await s.records.query<any>('subscription', { orderBy: { field: 'createdAt', dir: 'desc' }, limit: 500 })).items
-    return c.json(subs.map(mapSubscription) satisfies Api.Subscription[])
+    const out = subs.map(mapSubscription)
+    // Chat threads have no title of their own: use the start of the thread's first message.
+    const titles = new Map<string, string>()
+    for (const sub of out) {
+      const ref = sub.data.subject.ref
+      if (sub.data.subject.system !== 'mp' || !ref.startsWith('msg_') || sub.data.subject.title || titles.has(ref)) continue
+      const msg = await s.chat.getMessage(ref)
+      if (msg) titles.set(ref, msg.data.text.replace(/\s+/g, ' ').slice(0, 80))
+    }
+    for (const sub of out) {
+      const title = titles.get(sub.data.subject.ref)
+      if (title && !sub.data.subject.title) sub.data.subject = { ...sub.data.subject, title }
+    }
+    return c.json(out satisfies Api.Subscription[])
   })
 
   app.post('/api/sessions/:id/fork', async (c) => {
@@ -575,10 +600,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const offset = intParam(q.offset, 'offset', 0)
     if (q.routed === 'unmatched') {
       const all = await s.records.query<MpEvent['data']>('event', { where, orderBy: { field: 'receivedAt', dir: 'desc' } })
-      const unmatched = (all.items as MpEvent[]).filter((e) => {
-        const r = routingOf(e)
-        return !r || r.deliveries.every((d) => d.reason === 'fallback')
-      })
+      const unmatched = (all.items as MpEvent[]).filter(isUnmatched)
       return c.json({ items: unmatched.slice(offset, offset + limit).map(mapEvent), total: unmatched.length })
     }
     const page = await s.records.query<MpEvent['data']>('event', {
@@ -655,6 +677,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
           id: e.id,
           type: e.data.type,
           ...(e.data.subject ? { subject: { system: e.data.subject.system, ref: e.data.subject.id } } : {}),
+          ...(typeof e.data.text === 'string' && e.data.text ? { text: e.data.text.slice(0, 200) } : {}),
           receivedAt: e.data.receivedAt,
         })),
       })
@@ -686,17 +709,54 @@ export function apiRoutes(deps: ApiDeps): Hono {
     throw new BadRequestError('member type must be employee, session or person')
   }
 
+  /**
+   * A DM with an employee is a request to it: new top-level messages go to its router,
+   * like #requests. Adds that trigger once per employee member (idempotent).
+   */
+  const routeDmToEmployees = async <C extends { id: string }>(ch: C, by: Awaited<ReturnType<typeof actor>>): Promise<C> => {
+    let out = ch
+    const members = await s.chat.members(ch.id)
+    for (const m of members.filter((x) => x.kind === 'employee' || x.kind === 'contact')) {
+      const e = m.kind === 'employee' ? await s.directory.employees.get(m.id) : await s.directory.employees.byContact(m.id)
+      if (!e) continue
+      const existing = (await s.events.triggers.list({ employeeId: e.id })).find(
+        (t) => t.data.match.where?.['payload.channelId'] === ch.id,
+      )
+      if (existing) continue
+      await s.events.triggers.create(
+        {
+          name: `DM: ${e.data.name}`,
+          employeeId: e.id,
+          match: { source: 'chat', type: 'message.posted', where: { 'payload.channelId': ch.id } },
+          target: { type: 'router' },
+        },
+        by,
+      )
+      const routerId = await s.routerSessionFor(e.id)
+      if (routerId) out = (await s.chat.updateChannel(ch.id, { contextSessionId: routerId }, by)) as unknown as C
+    }
+    return out
+  }
+
   app.post('/api/chat/channels', async (c) => {
-    const body = await jsonBody<{ name?: unknown; topic?: unknown; members?: unknown }>(c)
+    const body = await jsonBody<{ name?: unknown; topic?: unknown; members?: unknown; dm?: unknown }>(c)
     const name = requireString(body.name, 'name')
     if (body.members !== undefined && !Array.isArray(body.members)) throw new BadRequestError('members must be a list')
     const contactId = await currentContact(s, c)
-    const ch = await s.chat.createChannel({
+    const members = ((body.members as { type?: unknown; id?: unknown }[] | undefined) ?? []).map(memberRef)
+    // A DM also has the person who opened it as a member.
+    if (body.dm === true && !members.some((m) => m.kind === 'contact' && m.id === contactId))
+      members.push({ kind: 'contact', id: contactId })
+    let ch = await s.chat.createChannel({
       name,
       ...(typeof body.topic === 'string' ? { topic: body.topic } : {}),
       createdBy: { kind: 'contact', id: contactId },
-      members: ((body.members as { type?: unknown; id?: unknown }[] | undefined) ?? []).map(memberRef),
+      members,
     })
+    if (body.dm === true) {
+      ch = (await s.records.update('channel', ch.id, { dm: true })) as typeof ch
+      ch = await routeDmToEmployees(ch, await actor(c))
+    }
     return c.json(await views().channel(ch), 201)
   })
 
@@ -718,8 +778,15 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const [root, ...replies] = await Promise.all(msgs.map((m) => v.message(m)))
     const subs = await s.events.subscriptions.forSubject({ system: 'mp', id: msgs[0]!.id })
     const sessions: Api.ChatThread['sessions'] = []
-    for (const sub of subs) {
-      const x = await v.session(sub.data.sessionId)
+    // Subscribed sessions first, then sessions that posted in the thread.
+    const ids = [
+      ...new Set([
+        ...subs.map((sub) => sub.data.sessionId),
+        ...msgs.flatMap((m) => (m.data.author.kind === 'session' ? [m.data.author.id] : [])),
+      ]),
+    ]
+    for (const id of ids) {
+      const x = await v.session(id)
       if (x)
         sessions.push({ id: x.id, slug: x.data.slug, title: x.data.title, employee: await v.employeeSummary(x.data.employeeId) })
     }
@@ -739,6 +806,111 @@ export function apiRoutes(deps: ApiDeps): Hono {
       text,
     })
     return c.json(await views().message(msg), 201)
+  })
+
+  const messageOr404 = async (id: string) => {
+    const m = await s.chat.getMessage(id)
+    if (!m) throw new NotFoundError('message', id)
+    return m
+  }
+  const me = async (c: Context) => ({ kind: 'contact', id: await currentContact(s, c) })
+
+  app.patch('/api/chat/messages/:id', async (c) => {
+    const body = await jsonBody<{ text?: unknown }>(c)
+    const text = requireString(body.text, 'text')
+    await messageOr404(c.req.param('id'))
+    return c.json(await views().message(await s.chat.edit(c.req.param('id'), text, await me(c))))
+  })
+
+  app.delete('/api/chat/messages/:id', async (c) => {
+    await messageOr404(c.req.param('id'))
+    return c.json(await views().message(await s.chat.delete(c.req.param('id'), await me(c))))
+  })
+
+  const emojiOf = (v: unknown) => {
+    const emoji = requireString(v, 'emoji').trim()
+    if (!emoji || emoji.length > 32) throw new BadRequestError('emoji must be 1 to 32 characters')
+    return emoji
+  }
+
+  app.post('/api/chat/messages/:id/reactions', async (c) => {
+    const body = await jsonBody<{ emoji?: unknown }>(c)
+    await messageOr404(c.req.param('id'))
+    return c.json(await views().message(await s.chat.react(c.req.param('id'), emojiOf(body.emoji), await me(c))))
+  })
+
+  app.delete('/api/chat/messages/:id/reactions', async (c) => {
+    let emoji: unknown = c.req.query('emoji')
+    if (emoji === undefined && c.req.header('content-type')?.includes('json'))
+      emoji = (await jsonBody<{ emoji?: unknown }>(c)).emoji
+    await messageOr404(c.req.param('id'))
+    return c.json(await views().message(await s.chat.unreact(c.req.param('id'), emojiOf(emoji), await me(c))))
+  })
+
+  app.post('/api/chat/read', async (c) => {
+    const body = await jsonBody<{ scope?: unknown; messageId?: unknown }>(c)
+    const scope = requireString(body.scope, 'scope')
+    if (body.messageId !== undefined && typeof body.messageId !== 'string')
+      throw new BadRequestError('messageId must be a string')
+    await s.chat.markRead(await me(c), scope, typeof body.messageId === 'string' ? { messageId: body.messageId } : {})
+    return c.body(null, 204)
+  })
+
+  app.get('/api/chat/unread', async (c) => {
+    const reader = await me(c)
+    return c.json((await s.chat.unread(reader, { taggedIds: [reader.id] })) satisfies Api.ChannelUnread[])
+  })
+
+  app.post('/api/chat/dms', async (c) => {
+    const body = await jsonBody<{ members?: unknown }>(c)
+    if (!Array.isArray(body.members) || !body.members.length) throw new BadRequestError('members must be a non-empty list')
+    const refs = (body.members as { kind?: unknown; type?: unknown; id?: unknown }[]).map((m) => {
+      const kind = m.kind ?? m.type
+      return memberRef({ type: kind === 'contact' ? 'person' : kind, id: m.id })
+    })
+    const self = await me(c)
+    const before = await s.store.records.count('channel')
+    let ch = await s.chat.openDm([self, ...refs], self)
+    ch = await routeDmToEmployees(ch, await actor(c))
+    const created = (await s.store.records.count('channel')) > before
+    return c.json(await views().channel(ch), created ? 201 : 200)
+  })
+
+  app.get('/api/chat/search', async (c) => {
+    const q = c.req.query()
+    let author: { kind: string; id: string } | undefined
+    if (q.author) {
+      const [kind, id] = q.author.includes(':')
+        ? q.author.split(':', 2)
+        : [q.author.startsWith('ses_') ? 'session' : 'contact', q.author]
+      author = { kind: kind!, id: id! }
+    }
+    const found = await s.chat.search(q.text ?? '', {
+      ...(q.channelId ? { channelId: q.channelId } : {}),
+      ...(author ? { author } : {}),
+      ...(q.tagged ? { tagged: q.tagged } : {}),
+      ...(q.threadId ? { threadId: q.threadId } : {}),
+      limit: intParam(q.limit, 'limit', 50, 200, 1),
+    })
+    const v = views()
+    const channels = new Map<string, { id: string; name: string; dm: boolean }>()
+    const out: Api.ChatSearchResult[] = []
+    for (const m of found) {
+      let ch = channels.get(m.data.channelId)
+      if (!ch) {
+        const rec = await s.chat.getChannel(m.data.channelId)
+        ch = { id: m.data.channelId, name: rec?.data.name ?? m.data.channelId, dm: rec?.data.dm === true }
+        channels.set(ch.id, ch)
+      }
+      out.push({ message: await v.message(m, { summary: false }), channel: ch, threadId: m.data.threadId ?? m.id })
+    }
+    return c.json(out)
+  })
+
+  app.get('/api/me', async (c) => {
+    const id = await currentContact(s, c)
+    const contact = await s.directory.contacts.get(id)
+    return c.json({ contactId: id, name: contact?.data.name ?? id } satisfies Api.Me)
   })
 
   app.post('/api/chat/channels/:id/members', async (c) => {

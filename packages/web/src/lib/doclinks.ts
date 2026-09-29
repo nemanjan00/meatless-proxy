@@ -1,8 +1,8 @@
 /**
  * Documents and chat messages link to records by id: `[[contact:con_01J…]]`
- * or `[[project:pro_01J…|Payments]]`. For rendering, links become markdown
+ * or `[[project:pro_01J…|Label]]`. For rendering, links become markdown
  * links to the record's page, labelled with the given label or a resolved
- * title; tags (`@billing-bot#pay-123-refund`, `@ana`) become styled spans.
+ * title; tags (`@employee#session-slug`, `@person`) become styled spans.
  */
 const LINK_RE = /\[\[([a-z][a-z0-9_-]*):([a-z][a-z0-9]*_[0-9A-Za-z]+)(?:\|([^\]]*))?\]\]/g
 
@@ -64,4 +64,32 @@ export const TAG_RE = /(^|[\s(])(@[a-z][a-z0-9-]*(?:#[a-z0-9][a-z0-9-]*)?)/g
 /** Wraps tags in inline code with a marker so the renderer can style them. */
 export function markTags(text: string): string {
   return text.replace(TAG_RE, (_all, pre: string, tag: string) => `${pre}[${tag}](tag:${encodeURIComponent(tag)})`)
+}
+
+/** Markdown with `[[kind:id]]` links → one line of plain text, links as their label or resolved name. */
+export function plainDoc(markdown: string, resolve?: (kind: string, id: string) => string | undefined): string {
+  return markdown
+    .replace(LINK_RE, (_all, kind: string, id: string, label?: string) => label || resolve?.(kind, id) || kind)
+    .replace(/[#*_`>]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * How a link reads from the other end, where the role names the relation from its source:
+ * a fork's `forked_from` is the parent's `fork`. Roles that name a person's part
+ * (`owner`, `member`, …) read the same from both ends.
+ */
+const INVERSE_ROLES: Record<string, string> = {
+  forked_from: 'fork',
+  created_by: 'created',
+  requested_by: 'requested',
+  mentions: 'mentioned in',
+}
+
+/** A link's role as seen from `selfId`: as stored for outgoing links, inverted for incoming ones. */
+export function linkRole(link: { from: { id: string }; role: string }, selfId: string): string {
+  const incoming = link.from.id !== selfId
+  const role = incoming ? (INVERSE_ROLES[link.role] ?? link.role) : link.role
+  return role.replace(/_/g, ' ')
 }

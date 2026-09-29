@@ -1,6 +1,6 @@
 import type { ApiLinkedRecord } from '@mp/api'
 import { useNavigate } from 'react-router'
-import { hrefFor } from '@/lib/doclinks.ts'
+import { hrefFor, linkRole } from '@/lib/doclinks.ts'
 
 const KIND_COLOR: Record<string, string> = {
   contact: 'var(--blue)',
@@ -36,7 +36,7 @@ export function radialLayout(links: ApiLinkedRecord[], centerId: string, radius:
       id: l.record.id,
       kind: l.record.kind,
       label: titleOf(l.record),
-      role: l.link.role.replace(/_/g, ' '),
+      role: linkRole(l.link, centerId),
       x: Math.cos(a) * radius,
       y: Math.sin(a) * radius,
       outgoing: l.link.from.id === centerId,

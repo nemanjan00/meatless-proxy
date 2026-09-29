@@ -312,6 +312,20 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     const r = latestRun(sessionId)
     return r && LIVE_RUN_STATES.includes(r.data.state) ? r.data.state : undefined
   }
+  /** The mock person's read markers, by channel or thread id. */
+  const reads = new Map<string, string>()
+  const react = (id: string, emoji: string, on: boolean) => {
+    const m = get<MessageData>('message', id)
+    if (!m) return fail(notFound('message'))
+    const reactions = { ...(m.data.reactions ?? {}) }
+    const who = (reactions[emoji] ?? []).filter((r) => r.id !== me.id)
+    if (on) who.push({ kind: 'contact', id: me.id })
+    if (who.length) reactions[emoji] = who
+    else delete reactions[emoji]
+    const next = write<MessageData>('message', id, { ...m.data, reactions }) as Message
+    emit('chat.message', { channelId: m.data.channelId, message: next })
+    return delay(next)
+  }
   const employeeSlug = (id: string) =>
     (get<EmployeeData>('employee', id)?.data.name ?? id)
       .toLowerCase()
@@ -321,6 +335,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
   const usageMatch =
     (f: UsageFilter = {}) =>
     (u: UsageData) =>
+      (!f.runId || u.runId === f.runId) &&
       (!f.employeeId || u.employeeId === f.employeeId) &&
       (!f.sessionId || u.sessionId === f.sessionId) &&
       (!f.rootSessionId || u.rootSessionId === f.rootSessionId) &&
@@ -892,6 +907,101 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       const label = member.label ?? (find(member.id)?.data as { name?: string } | undefined)?.name ?? member.id
       return delay(write<ChannelData>('channel', channelId, { ...c.data, members: [...c.data.members, { ...member, label }] }))
     },
+
+    editMessage: (id, text) => {
+      const m = get<MessageData>('message', id)
+      if (!m) return fail(notFound('message'))
+      if (m.data.author.id !== me.id) return fail(new ApiRequestError(403, 'denied', 'only the author can edit a message'))
+      const next = write<MessageData>('message', id, { ...m.data, text, editedAt: iso() }) as Message
+      emit('chat.message', { channelId: m.data.channelId, message: next })
+      return delay(next)
+    },
+    deleteMessage: (id) => {
+      const m = get<MessageData>('message', id)
+      if (!m) return fail(notFound('message'))
+      if (m.data.author.id !== me.id) return fail(new ApiRequestError(403, 'denied', 'only the author can delete a message'))
+      const next = write<MessageData>('message', id, { ...m.data, text: '', deleted: true, tags: [] }) as Message
+      emit('chat.message', { channelId: m.data.channelId, message: next })
+      return delay(next)
+    },
+    addReaction: (id, emoji) => react(id, emoji, true),
+    removeReaction: (id, emoji) => react(id, emoji, false),
+    markRead: (scope) => {
+      reads.set(scope, iso())
+      return delay(undefined)
+    },
+    unread: () =>
+      delay(
+        all<ChannelData>('channel')
+          .filter((c) => !c.data.archived)
+          .map((c) => {
+            const since = reads.get(c.id) ?? ''
+            const mine = all<MessageData>('message').filter(
+              (m) => m.data.channelId === c.id && m.data.author.id !== me.id && !m.data.deleted && m.createdAt > since,
+            )
+            return {
+              channelId: c.id,
+              unread: mine.length,
+              mentions: mine.filter((m) => m.data.tags.some((t) => t.id === me.id)).length,
+              lastReadAt: reads.get(c.id) ?? null,
+            }
+          }),
+      ),
+    openDm: (members) => {
+      const ids = [...new Set([me.id, ...members.map((m) => m.id)])].sort()
+      const existing = all<ChannelData>('channel').find(
+        (c) => c.data.dm && [...new Set(c.data.members.map((m) => m.id))].sort().join(',') === ids.join(','),
+      )
+      if (existing) return delay(existing)
+      const id = mockId('chn', ++db.seq)
+      const label = (mid: string) => (find(mid)?.data as { name?: string } | undefined)?.name ?? mid
+      return delay(
+        write<ChannelData>('channel', id, {
+          name: `dm-${id.slice(-6).toLowerCase()}`,
+          dm: true,
+          archived: false,
+          createdBy: { type: 'contact', id: me.id },
+          members: [
+            { type: 'person', id: me.id, label: me.name },
+            ...members.map((m) => ({
+              type: (m.kind === 'employee'
+                ? 'employee'
+                : m.kind === 'session'
+                  ? 'session'
+                  : 'person') as ChannelData['members'][number]['type'],
+              id: m.id,
+              label: label(m.id),
+            })),
+          ],
+        }),
+      )
+    },
+    searchChat: (q) => {
+      const text = (q.text ?? '').toLowerCase()
+      const hits = all<MessageData>('message')
+        .filter(
+          (m) =>
+            !m.data.deleted &&
+            (!text || m.data.text.toLowerCase().includes(text)) &&
+            (!q.channelId || m.data.channelId === q.channelId) &&
+            (!q.threadId || m.id === q.threadId || m.data.threadId === q.threadId) &&
+            (!q.author || q.author.endsWith(m.data.author.id)) &&
+            (!q.tagged || m.data.tags.some((t) => t.id === q.tagged)),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, q.limit ?? 50)
+      return delay(
+        hits.map((m) => {
+          const c = get<ChannelData>('channel', m.data.channelId)
+          return {
+            message: m as Message,
+            channel: { id: m.data.channelId, name: c?.data.name ?? m.data.channelId, dm: c?.data.dm === true },
+            threadId: m.data.threadId ?? m.id,
+          }
+        }),
+      )
+    },
+    me: () => delay({ contactId: me.id, name: me.name }),
 
     usageTotals: (f) => delay(totalsFor(usageMatch(f))),
     usageBreakdown: (groupBy, f) => {

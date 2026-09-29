@@ -24,7 +24,7 @@ const SECTIONS = [
   { key: 'control', label: 'Kill switch', icon: Power },
 ] as const
 
-/** `mcp.linear.*` style patterns → does the tool match? The deny list wins. */
+/** `mcp.tasks.*` style patterns (`**` too) → does the tool match? The deny list wins. */
 export function toolAllowed(tool: string, allow: string[], deny: string[]): boolean {
   const match = (p: string) => new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(tool)
   return allow.some(match) && !deny.some(match)
@@ -32,7 +32,7 @@ export function toolAllowed(tool: string, allow: string[], deny: string[]): bool
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[160px_1fr] items-start gap-4 py-2">
+    <div className="grid items-start gap-1 py-2 sm:grid-cols-[160px_1fr] sm:gap-4">
       <label htmlFor={id} className="pt-1.5">
         <span className="block text-fg-secondary">{label}</span>
         {hint && <span className="block text-micro text-fg-quaternary">{hint}</span>}
@@ -42,21 +42,31 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
   )
 }
 
+/** The employee's tool lists, from either shape (`toolAllow`/`toolDeny` or `tools`). */
+export function toolLists(d: EmployeeData): { allow: string[]; deny: string[]; flat: boolean } {
+  const flat = Array.isArray(d.toolAllow) || Array.isArray(d.toolDeny) || !d.tools
+  return flat
+    ? { allow: d.toolAllow ?? [], deny: d.toolDeny ?? [], flat }
+    : { allow: d.tools.allow ?? [], deny: d.tools.deny ?? [], flat }
+}
+
 function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeData>; onSaved(): void }) {
   const api = useApi()
   const d = employee.data
+  const lists = toolLists(d)
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [scope, setScope] = useState(d.scope ?? '')
   const [model, setModel] = useState(d.model ?? '')
-  const [allow, setAllow] = useState(d.tools.allow.join('\n'))
-  const [deny, setDeny] = useState(d.tools.deny.join('\n'))
-  const [probe, setProbe] = useState('mcp.linear.create_issue')
+  const [allow, setAllow] = useState(lists.allow.join('\n'))
+  const [deny, setDeny] = useState(lists.deny.join('\n'))
+  const [probe, setProbe] = useState('')
   useEffect(() => {
     setPersonality(d.personality ?? '')
     setScope(d.scope ?? '')
     setModel(d.model ?? '')
-    setAllow(d.tools.allow.join('\n'))
-    setDeny(d.tools.deny.join('\n'))
+    const l = toolLists(d)
+    setAllow(l.allow.join('\n'))
+    setDeny(l.deny.join('\n'))
   }, [d])
   const lines = (s: string) =>
     s
@@ -67,15 +77,22 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     await api.updateRecord<EmployeeData>(
       'employee',
       employee.id,
-      { personality, scope, model, tools: { allow: lines(allow), deny: lines(deny) } },
+      {
+        personality,
+        scope,
+        model,
+        ...(lists.flat
+          ? { toolAllow: lines(allow), toolDeny: lines(deny) }
+          : { tools: { allow: lines(allow), deny: lines(deny) } }),
+      },
       employee.version,
     )
     toast(`${d.name} saved`, { description: 'Tool changes apply to new sessions; running sessions keep their tool set.' })
     onSaved()
   }
-  const allowed = toolAllowed(probe, lines(allow), lines(deny))
+  const allowed = probe.trim() ? toolAllowed(probe.trim(), lines(allow), lines(deny)) : null
   return (
-    <div className="max-w-[720px]" data-testid="employee-editor">
+    <div className="min-w-0 max-w-[720px] flex-1" data-testid="employee-editor">
       <div className="mb-4 flex items-center gap-3">
         <EmployeeAvatar name={d.name} className="size-8" />
         <div>
@@ -90,7 +107,13 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
         <Textarea id="emp-scope" value={scope} onChange={(e) => setScope(e.target.value)} rows={2} />
       </Field>
       <Field id="emp-model" label="Model">
-        <Input id="emp-model" value={model} onChange={(e) => setModel(e.target.value)} className="font-mono text-micro" />
+        <Input
+          id="emp-model"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="The deployment default"
+          className="font-mono text-micro"
+        />
       </Field>
       <Field id="emp-allow" label="Allow list" hint="Names or patterns, one per line">
         <Textarea
@@ -117,10 +140,13 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
             onChange={(e) => setProbe(e.target.value)}
             className="font-mono text-micro"
             aria-label="Tool name"
+            placeholder="A tool name, e.g. fs.read"
           />
-          <span className={cn('shrink-0 text-micro', allowed ? 'text-[var(--green)]' : 'text-[var(--red)]')}>
-            {allowed ? 'allowed' : 'not allowed'}
-          </span>
+          {allowed !== null && (
+            <span className={cn('shrink-0 text-micro', allowed ? 'text-[var(--green)]' : 'text-[var(--red)]')}>
+              {allowed ? 'allowed' : 'not allowed'}
+            </span>
+          )}
         </span>
       </Field>
       <div className="flex justify-end pt-2">
@@ -138,8 +164,8 @@ function Employees() {
   const current = employees.find((e) => e.id === sel) ?? employees[0]
   if (!current) return <LoadingRows />
   return (
-    <div className="flex gap-6">
-      <div className="flex w-48 shrink-0 flex-col">
+    <div className="flex flex-col gap-6 md:flex-row">
+      <div className="flex shrink-0 flex-col md:w-48">
         {employees.map((e) => (
           <button
             key={e.id}
@@ -267,6 +293,12 @@ function Secrets() {
   )
 }
 
+/** `source · type` of a trigger, from the API shape or the stored `match`. */
+function triggerMatch(d: TriggerData): string {
+  const m = (d as { match?: { source?: string; type?: string } }).match
+  return `${d.source ?? m?.source ?? '*'} · ${d.type ?? m?.type ?? '*'}`
+}
+
 function Triggers() {
   const api = useApi()
   const list = useLoad((a) => a.listRecords<TriggerData>('trigger', { orderBy: 'name', dir: 'asc' }), [])
@@ -277,10 +309,8 @@ function Triggers() {
       {list.data.items.map((t) => (
         <div key={t.id} className="flex h-11 items-center gap-3 border-b px-3 last:border-0">
           <Zap className={cn('size-3.5', t.data.enabled ? 'text-[var(--yellow)]' : 'text-fg-quaternary')} />
-          <span className="text-fg-secondary">{t.data.name}</span>
-          <span className="font-mono text-micro text-fg-quaternary">
-            {t.data.source} · {t.data.type}
-          </span>
+          <span className="min-w-0 truncate text-fg-secondary">{t.data.name}</span>
+          <span className="hidden truncate font-mono text-micro text-fg-quaternary sm:inline">{triggerMatch(t.data)}</span>
           <span className="ml-auto text-micro text-fg-tertiary">{name(t.data.employeeId)}</span>
           <Switch
             checked={t.data.enabled}
@@ -355,8 +385,11 @@ function Control() {
 export function SettingsPage() {
   const { section = 'employees' } = useParams()
   return (
-    <Page title="Settings" icon={<Settings />} className="flex">
-      <nav className="w-52 shrink-0 border-r p-2" aria-label="Settings">
+    <Page title="Settings" icon={<Settings />} className="flex flex-col md:flex-row">
+      <nav
+        className="flex shrink-0 flex-wrap gap-0.5 border-b p-2 md:block md:w-52 md:border-r md:border-b-0"
+        aria-label="Settings"
+      >
         {SECTIONS.map((s) => (
           <NavLink
             key={s.key}
@@ -371,7 +404,7 @@ export function SettingsPage() {
           </NavLink>
         ))}
       </nav>
-      <div className="min-w-0 flex-1 overflow-auto px-8 py-6">
+      <div className="min-w-0 flex-1 overflow-auto px-4 py-6 md:px-8">
         <h2 className="mb-5 text-title2 font-semibold">{SECTIONS.find((s) => s.key === section)?.label}</h2>
         {section === 'employees' && <Employees />}
         {section === 'secrets' && <Secrets />}

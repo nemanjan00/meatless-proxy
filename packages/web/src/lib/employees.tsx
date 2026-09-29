@@ -12,6 +12,8 @@ interface EmployeesState {
   currentId: string | null
   setCurrentId(id: string | null): void
   name(id: string): string
+  /** The employee's chat handle (its record key), e.g. `meatless` for `@meatless`. */
+  handle(employee: { id: string; name: string }): string
   reload(): void
 }
 
@@ -44,6 +46,7 @@ export function EmployeesProvider({ children }: { children: ReactNode }) {
         }
       },
       name: (id) => employees.find((e) => e.id === id)?.data.name ?? id,
+      handle: (emp) => employees.find((e) => e.id === emp.id)?.key ?? employeeHandle(emp.name),
       reload,
     }
   }, [data, currentId, reload])
@@ -56,7 +59,7 @@ export function useEmployees(): EmployeesState {
   return ctx
 }
 
-/** `@billing-bot` for "Billing Bot". */
+/** A handle derived from a name, for when the record's key isn't known: `research-bot` for "Research Bot". */
 export function employeeHandle(name: string): string {
   return name
     .toLowerCase()

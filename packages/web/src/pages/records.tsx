@@ -1,5 +1,17 @@
 import type { ApiKindSchema, ApiRecord, ApiRevision } from '@mp/api'
-import { BookOpen, Brain, ChevronRight, FolderKanban, History, Plus, Search, Sparkles, Undo2, Users } from 'lucide-react'
+import {
+  BookOpen,
+  Brain,
+  ChevronRight,
+  FileText,
+  FolderKanban,
+  History,
+  Plus,
+  Search,
+  Sparkles,
+  Undo2,
+  Users,
+} from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -7,15 +19,16 @@ import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { LinksGraph } from '@/components/links-graph.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
+import { SplitView } from '@/components/split-view.tsx'
 import { PersonAvatar } from '@/components/people.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog.tsx'
 import { Input } from '@/components/ui/input.tsx'
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable.tsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.tsx'
 import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
-import { hrefFor } from '@/lib/doclinks.ts'
+import { hrefFor, linkRole, plainDoc } from '@/lib/doclinks.ts'
+import { useNames } from '@/lib/names.ts'
 import { formatDateTime, timeAgo } from '@/lib/format.ts'
 import { DOCUMENT_FIELDS, changedFields, formFields, fromFormValues, recordTitle } from '@/lib/schema-form.ts'
 
@@ -25,10 +38,15 @@ const ICONS: Record<string, ReactNode> = {
   procedure: <BookOpen />,
   skill: <Sparkles />,
   memory: <Brain />,
+  doc: <FileText />,
 }
 
-/** The line under a record's title in lists. */
-export function recordSubtitle(kind: string, data: Record<string, unknown>): string {
+/** The line under a record's title in lists. `resolve` names `[[kind:id]]` links in text. */
+export function recordSubtitle(
+  kind: string,
+  data: Record<string, unknown>,
+  resolve?: (kind: string, id: string) => string | undefined,
+): string {
   const pick = (...keys: string[]) => keys.map((k) => data[k]).find((v) => typeof v === 'string' && v) as string | undefined
   switch (kind) {
     case 'contact':
@@ -36,26 +54,33 @@ export function recordSubtitle(kind: string, data: Record<string, unknown>): str
     case 'procedure':
       return pick('applies') ?? ''
     case 'memory':
-      return pick('content') ?? ''
+      return plainDoc(pick('content') ?? '', resolve)
+    case 'doc':
+      return pick('path') ?? ''
     default:
-      return pick('description', 'applies', 'role') ?? ''
+      return plainDoc(pick('description', 'applies', 'role') ?? '', resolve)
   }
 }
 
+/** A skill's scope: `company`, or `project` (as a string or `{ type }`). */
+function scopeType(scope: unknown): string | undefined {
+  if (typeof scope === 'string') return scope === 'company' ? 'company' : 'project'
+  if (scope && typeof scope === 'object' && typeof (scope as { type?: unknown }).type === 'string')
+    return (scope as { type: string }).type
+  return undefined
+}
+
 function badgeFor(kind: string, data: Record<string, unknown>): string | undefined {
-  const v =
-    kind === 'memory'
-      ? data.kind
-      : kind === 'skill'
-        ? data.scope === 'company'
-          ? 'company'
-          : 'project'
-        : kind === 'contact'
-          ? data.ai
-            ? 'AI'
-            : undefined
-          : data.status
-  return typeof v === 'string' ? v : undefined
+  switch (kind) {
+    case 'memory':
+      return typeof data.kind === 'string' ? data.kind : undefined
+    case 'skill':
+      return scopeType(data.scope)
+    case 'contact':
+      return data.ai === true || data.kind === 'ai' ? 'AI' : data.status === 'left' ? 'left' : undefined
+    default:
+      return typeof data.status === 'string' ? data.status : undefined
+  }
 }
 
 function useSchema(kind: string) {
@@ -147,6 +172,8 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
     [kind, text, schema?.titleField],
   )
   useLiveReload([`records:${kind}`], list.reload)
+  const texts = (list.data?.items ?? []).map((r) => String(r.data.content ?? r.data.description ?? ''))
+  const names = useNames(texts)
   return (
     <Page
       title={title}
@@ -206,7 +233,9 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
                   <span className="text-fg-tertiary [&_svg]:size-4">{ICONS[kind]}</span>
                 )}
                 <span className="shrink-0 truncate text-fg-secondary group-hover:text-foreground">{t}</span>
-                <span className="min-w-0 flex-1 truncate text-fg-tertiary">{recordSubtitle(kind, r.data)}</span>
+                <span className="min-w-0 flex-1 truncate text-fg-tertiary">
+                  {recordSubtitle(kind, r.data, (_k, rid) => names.get(rid))}
+                </span>
                 {badge && <span className="shrink-0 rounded-sm border px-1 text-tiny text-fg-tertiary">{badge}</span>}
                 <span className="w-8 shrink-0 text-right text-micro text-fg-quaternary">{timeAgo(r.updatedAt)}</span>
               </Link>
@@ -223,6 +252,12 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
 
 function Revisions({ revisions, onRevert }: { revisions: ApiRevision[]; onRevert(r: ApiRevision): void }) {
   const list = [...revisions].reverse()
+  const actors = useNames(
+    [],
+    revisions.filter((r) => r.actor.type !== 'system').map((r) => ({ kind: r.actor.type, id: r.actor.id })),
+  )
+  const who = (a: ApiRevision['actor']) =>
+    a.type === 'system' ? `the harness (${a.id})` : (actors.get(a.id) ?? `${a.type} ${a.id}`)
   return (
     <div className="flex flex-col" data-testid="revisions">
       {list.map((r, i) => {
@@ -236,7 +271,14 @@ function Revisions({ revisions, onRevert }: { revisions: ApiRevision[]; onRevert
               {r.op === 'create' ? 'Created' : r.op === 'delete' ? 'Deleted' : `Changed ${changed.join(', ') || 'nothing'}`}
               <span className="text-fg-quaternary">
                 {' '}
-                by {r.actor.type} <span className="font-mono text-micro">{r.actor.id}</span>
+                by{' '}
+                {r.actor.type === 'system' ? (
+                  who(r.actor)
+                ) : (
+                  <Link to={hrefFor(r.actor.type, r.actor.id)} className="hover:text-fg-secondary">
+                    {who(r.actor)}
+                  </Link>
+                )}
               </span>
             </span>
             <span className="shrink-0 text-micro text-fg-quaternary">{formatDateTime(r.at)}</span>
@@ -263,12 +305,31 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
   const links = useLoad((a) => a.recordLinks(kind, id), [kind, id])
   const backlinks = useLoad((a) => a.recordBacklinks(kind, id), [kind, id])
   const revisions = useLoad((a) => a.recordRevisions(kind, id), [kind, id, rec.data?.version])
+  // Docs owned by this record (a project's overview, runbooks, …).
+  const docs = useLoad(
+    (a) =>
+      kind === 'doc'
+        ? Promise.resolve(null)
+        : a
+            .listRecords<{ title: string; path?: string; body: string }>('doc', {
+              where: { 'owner.id': id },
+              orderBy: 'path',
+              dir: 'asc',
+            })
+            .catch(() => null),
+    [kind, id],
+  )
   useLiveReload([`records:${kind}`], rec.reload)
+  // Names for `[[kind:id]]` links: linked records first, then any other record the texts mention.
+  const mentioned = useNames([
+    ...Object.values(rec.data?.data ?? {}).filter((v): v is string => typeof v === 'string'),
+    ...(docs.data?.items ?? []).map((doc) => doc.data.body),
+  ])
   const names = useMemo(() => {
-    const m = new Map<string, string>()
+    const m = new Map<string, string>(mentioned)
     for (const l of links.data ?? []) m.set(l.record.id, recordTitle(undefined, l.record.data, l.record.id))
     return m
-  }, [links.data])
+  }, [links.data, mentioned])
 
   if (rec.error && !rec.data)
     return (
@@ -298,13 +359,15 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
     rec.setData(next)
     toast(`Reverted to v${rev.version}`)
   }
-  const back = props.basePath ?? '/'
+  const owner = kind === 'doc' ? (r.data.owner as { kind?: string; id?: string } | undefined) : undefined
+  const back = props.basePath ?? (owner?.kind && owner.id ? hrefFor(owner.kind, owner.id) : '/')
+  const backLabel = props.title ?? (owner?.kind ? `${owner.kind.charAt(0).toUpperCase()}${owner.kind.slice(1)}` : kind)
   return (
     <Page
       title={
         <span className="flex items-center gap-1.5">
           <Link to={back} className="text-fg-tertiary hover:text-foreground">
-            {props.title ?? kind}
+            {backLabel}
           </Link>
           <ChevronRight className="size-3.5 text-fg-quaternary" />
           <span className="truncate">{title}</span>
@@ -313,72 +376,93 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
       icon={ICONS[kind]}
       className="overflow-hidden"
     >
-      <ResizablePanelGroup orientation="horizontal" className="h-full">
-        <ResizablePanel minSize={420}>
-          <div className="h-full overflow-auto">
-            <div className="mx-auto max-w-[720px] px-6 pt-8 pb-16">
-              <div className="mb-1 font-mono text-micro text-fg-quaternary">{r.id}</div>
-              <h2 className="mb-2 text-title3 font-semibold">{title}</h2>
-              {recordSubtitle(kind, r.data) && kind !== 'memory' && (
-                <p className="mb-6 text-regular text-fg-tertiary">{recordSubtitle(kind, r.data)}</p>
-              )}
-              {docField ? (
-                <DocumentEditor
-                  value={String(r.data[docField.name] ?? '')}
-                  title={title}
-                  onSave={saveDoc}
-                  resolve={(_k, rid) => names.get(rid)}
-                  className="mb-8"
-                />
-              ) : (
-                <div className="mb-8" />
-              )}
-              <Tabs defaultValue="links">
-                <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b pb-0">
-                  <TabsTrigger value="links" className="flex-none px-0">
-                    Links <span className="text-fg-quaternary">{links.data?.length ?? 0}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="backlinks" className="flex-none px-0">
-                    Mentioned in <span className="text-fg-quaternary">{backlinks.data?.length ?? 0}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="history" className="flex-none px-0">
-                    History <span className="text-fg-quaternary">{revisions.data?.length ?? 0}</span>
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="links" className="pt-3">
-                  {links.data && links.data.length > 0 ? (
-                    <div className="rounded-xl border bg-level-1">
-                      <LinksGraph center={{ id: r.id, kind, label: title }} links={links.data} />
-                    </div>
-                  ) : (
-                    <EmptyState text="Not linked to anything yet." />
-                  )}
-                </TabsContent>
-                <TabsContent value="backlinks" className="pt-3">
-                  {(backlinks.data ?? []).length === 0 ? (
-                    <EmptyState text="No document mentions this yet." />
-                  ) : (
-                    backlinks.data!.map((b) => (
-                      <Link
-                        key={b.id}
-                        to={hrefFor(b.kind, b.id)}
-                        className="flex h-9 items-center gap-2 border-b text-fg-secondary last:border-0 hover:text-foreground"
-                      >
-                        <span className="w-20 shrink-0 text-micro text-fg-tertiary">{b.kind}</span>
-                        <span className="truncate">{recordTitle(undefined, b.data, b.id)}</span>
-                      </Link>
-                    ))
-                  )}
-                </TabsContent>
-                <TabsContent value="history" className="pt-3">
-                  {revisions.data ? <Revisions revisions={revisions.data} onRevert={revert} /> : <LoadingRows rows={3} />}
-                </TabsContent>
-              </Tabs>
-            </div>
+      <SplitView
+        sideSize={320}
+        sideMin={260}
+        sideMax={460}
+        main={
+          <div className="mx-auto max-w-[720px] px-6 pt-8 pb-16">
+            <div className="mb-1 font-mono text-micro text-fg-quaternary">{r.id}</div>
+            <h2 className="mb-2 text-title3 font-semibold">{title}</h2>
+            {recordSubtitle(kind, r.data) && kind !== 'memory' && (
+              <p className="mb-6 text-regular text-fg-tertiary">{recordSubtitle(kind, r.data)}</p>
+            )}
+            {docField ? (
+              <DocumentEditor
+                value={String(r.data[docField.name] ?? '')}
+                title={title}
+                onSave={saveDoc}
+                resolve={(_k, rid) => names.get(rid)}
+                className="mb-8"
+              />
+            ) : (
+              <div className="mb-8" />
+            )}
+            {docs.data && docs.data.items.length > 0 && (
+              <section className="mb-8" data-testid="record-docs">
+                <SectionTitle className="mb-1">Docs</SectionTitle>
+                {docs.data.items.map((doc) => (
+                  <Link
+                    key={doc.id}
+                    to={hrefFor('doc', doc.id)}
+                    className="group flex h-9 min-w-0 items-center gap-2 border-b last:border-0"
+                  >
+                    <FileText className="size-4 shrink-0 text-fg-tertiary" />
+                    <span className="shrink-0 truncate text-fg-secondary group-hover:text-foreground">{doc.data.title}</span>
+                    <span className="min-w-0 flex-1 truncate text-fg-quaternary">
+                      {plainDoc(doc.data.body.replace(/^#.*$/m, ''), (_k, rid) => names.get(rid)).slice(0, 160)}
+                    </span>
+                    {doc.data.path && (
+                      <span className="hidden shrink-0 font-mono text-micro text-fg-quaternary sm:inline">{doc.data.path}</span>
+                    )}
+                  </Link>
+                ))}
+              </section>
+            )}
+            <Tabs defaultValue="links">
+              <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b pb-0">
+                <TabsTrigger value="links" className="flex-none px-0">
+                  Links <span className="text-fg-quaternary">{links.data?.length ?? 0}</span>
+                </TabsTrigger>
+                <TabsTrigger value="backlinks" className="flex-none px-0">
+                  Mentioned in <span className="text-fg-quaternary">{backlinks.data?.length ?? 0}</span>
+                </TabsTrigger>
+                <TabsTrigger value="history" className="flex-none px-0">
+                  History <span className="text-fg-quaternary">{revisions.data?.length ?? 0}</span>
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="links" className="pt-3">
+                {links.data && links.data.length > 0 ? (
+                  <div className="rounded-xl border bg-level-1">
+                    <LinksGraph center={{ id: r.id, kind, label: title }} links={links.data} />
+                  </div>
+                ) : (
+                  <EmptyState text="Not linked to anything yet." />
+                )}
+              </TabsContent>
+              <TabsContent value="backlinks" className="pt-3">
+                {(backlinks.data ?? []).length === 0 ? (
+                  <EmptyState text="No document mentions this yet." />
+                ) : (
+                  backlinks.data!.map((b) => (
+                    <Link
+                      key={b.id}
+                      to={hrefFor(b.kind, b.id)}
+                      className="flex h-9 items-center gap-2 border-b text-fg-secondary last:border-0 hover:text-foreground"
+                    >
+                      <span className="w-20 shrink-0 text-micro text-fg-tertiary">{b.kind}</span>
+                      <span className="truncate">{recordTitle(undefined, b.data, b.id)}</span>
+                    </Link>
+                  ))
+                )}
+              </TabsContent>
+              <TabsContent value="history" className="pt-3">
+                {revisions.data ? <Revisions revisions={revisions.data} onRevert={revert} /> : <LoadingRows rows={3} />}
+              </TabsContent>
+            </Tabs>
           </div>
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel defaultSize={320} minSize={260} maxSize={460}>
+        }
+        side={
           <aside className="h-full overflow-auto bg-level-1 px-4 py-4" data-testid="properties">
             <RecordPropertiesForm schema={schema} record={r} onSaved={(n) => rec.setData(n)} />
             <SectionTitle className="mt-6 mb-1">Linked</SectionTitle>
@@ -396,7 +480,7 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
                     <span className="size-1.5 shrink-0 rounded-full bg-[var(--indigo)]" />
                   )}
                   <span className="min-w-0 truncate text-fg-secondary">{name}</span>
-                  <span className="ml-auto shrink-0 text-micro text-fg-quaternary">{l.link.role.replace(/_/g, ' ')}</span>
+                  <span className="ml-auto shrink-0 text-micro text-fg-quaternary">{linkRole(l.link, id)}</span>
                 </Link>
               )
             })}
@@ -404,8 +488,8 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
               v{r.version} · updated {timeAgo(r.updatedAt)} ago
             </div>
           </aside>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        }
+      />
     </Page>
   )
 }

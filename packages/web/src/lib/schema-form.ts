@@ -30,7 +30,9 @@ export type FormValues = Record<string, FormValue>
 export const DOCUMENT_FIELDS = new Set(['document', 'body', 'content'])
 
 export function labelFor(name: string): string {
-  const spaced = name
+  // `ownerId` → Owner, `projectIds` → Projects, `contextSessionId` → Context session.
+  const base = name.replace(/(.)Ids$/, '$1s').replace(/(.)Id$/, '$1')
+  const spaced = base
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
     .trim()

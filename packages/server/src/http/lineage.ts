@@ -6,6 +6,19 @@ import type { Services } from '../services.ts'
 import { routingOf } from './views.ts'
 
 const MAX_NODES = 400
+
+/** An event's label: the start of its text (without a `#channel: ` prefix), else its type and subject. */
+function eventLabel(e: MpEvent): string {
+  const text =
+    typeof e.data.text === 'string'
+      ? e.data.text
+          .replace(/^#[\w-]+:\s*/, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+      : ''
+  if (text) return text.length > 80 ? `${text.slice(0, 79)}…` : text
+  return e.data.subject ? `${e.data.type} ${e.data.subject.id}` : e.data.type
+}
 const MAX_DEPTH = 6
 
 /**
@@ -37,7 +50,7 @@ export async function lineage(s: Services, id: string): Promise<LineageGraph> {
     nodes.set(e.id, {
       id: e.id,
       type: 'event',
-      label: e.data.subject ? `${e.data.type} ${e.data.subject.id}` : e.data.type,
+      label: eventLabel(e),
       detail: `${e.data.source} · ${e.data.type}`,
       at: e.data.receivedAt,
     })
@@ -156,6 +169,9 @@ export async function lineage(s: Services, id: string): Promise<LineageGraph> {
     }
     if (withRuns) {
       const runs = await s.sessions.runs({ sessionId: session.id })
+      // A session started by another session's run (not a fork of it): follow that run upstream.
+      const started = parent ? undefined : runs.find((r) => r.data.cause.parentRunId)
+      if (started) await upstreamRun(started, depth + 1)
       for (const r of runs.filter((x) => x.data.cause.eventId).slice(-10)) {
         if (full()) break
         addRun(r)

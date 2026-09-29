@@ -8,7 +8,8 @@ import { Page, SectionTitle } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
-import { timeAgo } from '@/lib/format.ts'
+import { pluralize, timeAgo } from '@/lib/format.ts'
+import { eventTitle, routingOutcome } from '@/lib/routing.ts'
 import { cn } from '@/lib/utils.ts'
 
 export interface TriggerMap {
@@ -106,7 +107,9 @@ export function TriggersPage() {
   )
   const connectors = map.connectors.map((c) => ({ ...c, to: c.to, hot: hot.has(c.from) && hot.has(c.to) }))
   const lines = useConnectors(box, connectors, data.data)
-  const unmatched = data.data?.[2].items ?? []
+  // Only events that went to a fallback router; events delivered to nobody are counted separately, quietly.
+  const unmatched = (data.data?.[2].items ?? []).filter((e) => routingOutcome(e) === 'unmatched')
+  const nowhere = (data.data?.[1].items ?? []).filter((e) => routingOutcome(e) === 'nowhere').length
   const unrouted = data.data?.[3].items ?? []
   const subs: Subscription[] = data.data?.[4] ?? []
   const titles = new Map((data.data?.[5].items ?? []).map((r) => [r.session.id, r.session.data.title]))
@@ -119,13 +122,36 @@ export function TriggersPage() {
         <LoadingRows />
       ) : (
         <div className="flex min-h-full flex-col lg:flex-row">
-          <div className="min-w-0 flex-1 border-r">
-            <div className="grid grid-cols-3 gap-3 px-6 pt-5 text-micro font-medium text-fg-tertiary">
+          <div className="min-w-0 flex-1 lg:border-r">
+            <div className="flex flex-col gap-2 px-4 pt-4 md:hidden" data-testid="trigger-list">
+              {stats.map((s) => (
+                <Card
+                  key={s.trigger.id}
+                  anchor={`list:${s.trigger.id}`}
+                  active={selected === s.trigger.id}
+                  onClick={() => setSelected(selected === s.trigger.id ? null : s.trigger.id)}
+                  className={cn(!s.trigger.data.enabled && 'opacity-60')}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Zap className="size-3.5 shrink-0 text-[var(--yellow)]" />
+                    <span className="min-w-0 truncate font-medium text-foreground">{s.trigger.data.name}</span>
+                    <span className="ml-auto rounded-sm bg-level-3 px-1 text-tiny tabular-nums text-fg-secondary">{s.fires}</span>
+                  </div>
+                  <div className="truncate pl-5 font-mono text-micro text-fg-tertiary">
+                    {s.trigger.data.source} · {s.trigger.data.type}
+                  </div>
+                  <div className="truncate pl-5 text-micro text-fg-quaternary">
+                    → {s.context?.title ?? 'no context'} · {s.employee.name}
+                  </div>
+                </Card>
+              ))}
+            </div>
+            <div className="hidden grid-cols-3 gap-3 px-6 pt-5 text-micro font-medium text-fg-tertiary md:grid">
               <span>Source · event type</span>
               <span>Trigger · fires</span>
               <span>Context · employee</span>
             </div>
-            <div ref={box} className="relative" data-testid="trigger-map">
+            <div ref={box} className="relative max-md:hidden" data-testid="trigger-map">
               <ConnectorLayer {...lines} />
               <div className="relative grid grid-cols-3 items-center gap-x-16 px-6 py-4">
                 <div className="flex flex-col gap-2">
@@ -182,12 +208,15 @@ export function TriggersPage() {
                 </div>
               </div>
             </div>
-            <div className="border-t px-6 py-4">
+            <div className="mt-4 border-t px-4 py-4 md:mt-0 md:px-6">
               <SectionTitle className="mb-2">Subscriptions · events that skip routing</SectionTitle>
+              {subs.length === 0 && <p className="text-fg-tertiary">No session is subscribed to anything.</p>}
               {subs.map((s) => (
                 <div key={s.id} className="flex h-8 items-center gap-2 text-mini">
                   <Link2 className="size-3.5 text-fg-tertiary" />
-                  <span className="w-20 shrink-0 font-mono text-micro text-fg-tertiary">{s.data.subject.system}</span>
+                  <span className="w-16 shrink-0 font-mono text-micro text-fg-tertiary">
+                    {s.data.subject.system === 'mp' ? 'thread' : s.data.subject.system}
+                  </span>
                   <span className="min-w-0 truncate text-fg-secondary">{s.data.subject.title ?? s.data.subject.ref}</span>
                   <span className="text-fg-quaternary">→</span>
                   <Link to={`/sessions/${s.data.sessionId}`} className="min-w-0 truncate text-fg-tertiary hover:text-foreground">
@@ -218,7 +247,10 @@ export function TriggersPage() {
                     className="flex h-8 items-center gap-2 rounded-md px-1 hover:bg-secondary"
                   >
                     <Radio className="size-3.5 text-fg-tertiary" />
-                    <span className="min-w-0 truncate text-fg-secondary">{e.subject?.title ?? e.subject?.ref ?? e.type}</span>
+                    <span className="min-w-0 truncate text-fg-secondary">{e.subject?.title ?? e.text ?? e.type}</span>
+                    {e.subject && !e.subject.title && !e.text && (
+                      <span className="shrink-0 font-mono text-tiny text-fg-quaternary">{e.subject.system}</span>
+                    )}
                     <span className="ml-auto shrink-0 text-micro text-fg-quaternary">{timeAgo(e.receivedAt)}</span>
                   </Link>
                 ))}
@@ -227,8 +259,8 @@ export function TriggersPage() {
               <p className="mb-4 text-fg-tertiary">Select a trigger to see its recent events.</p>
             )}
             <SectionTitle className="mt-6 mb-2">
-              <span className="flex items-center gap-1.5 text-[var(--orange)]">
-                <AlertTriangle className="size-3.5" /> Unmatched · went to a router
+              <span className={cn('flex items-center gap-1.5', unmatched.length > 0 && 'text-[var(--orange)]')}>
+                {unmatched.length > 0 && <AlertTriangle className="size-3.5" />} Unmatched · went to a router
               </span>
             </SectionTitle>
             <div data-testid="unmatched">
@@ -244,12 +276,19 @@ export function TriggersPage() {
                     <span className="text-fg-tertiary">{e.data.type}</span>
                     <span className="ml-auto text-fg-quaternary">{timeAgo(e.data.receivedAt)}</span>
                   </span>
-                  <span className="truncate text-mini text-fg-secondary">
-                    {e.data.subject?.title ?? e.data.subject?.ref ?? '—'}
-                  </span>
+                  <span className="truncate text-mini text-fg-secondary">{eventTitle(e) ?? e.data.subject?.ref ?? '—'}</span>
                 </Link>
               ))}
             </div>
+            {nowhere > 0 && (
+              <Link
+                to="/events"
+                className="mt-2 block text-micro text-fg-quaternary hover:text-fg-tertiary"
+                data-testid="not-delivered"
+              >
+                {pluralize(nowhere, 'event')} delivered to nobody, such as sessions’ own replies
+              </Link>
+            )}
             {unrouted.length > 0 && (
               <>
                 <SectionTitle className="mt-6 mb-2">Waiting to be routed</SectionTitle>

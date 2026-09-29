@@ -80,8 +80,8 @@ describe('pages against the mock API', () => {
 
   it('Triggers shows the map and unmatched events', async () => {
     renderAt('/triggers')
-    await screen.findByTestId('trigger-map')
-    expect(screen.getByText('New PAY task')).toBeInTheDocument()
+    const map = await screen.findByTestId('trigger-map')
+    expect(within(map).getByText('New PAY task')).toBeInTheDocument()
     expect(within(screen.getByTestId('unmatched')).getAllByRole('link').length).toBeGreaterThanOrEqual(2)
   })
 

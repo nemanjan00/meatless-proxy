@@ -16,14 +16,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:deps": "tsx scripts/check-deps.ts",
     "check:secrets": "tsx scripts/check-secrets.ts",
-    "check": "npm run check:deps && npm run check:secrets && npm run lint && npm run typecheck && npm test",
+    "check": "npm run check:deps && npm run check:secrets && npm run check:links && npm run lint && npm run typecheck && npm test",
     "dev": "tsx watch packages/server/src/main.ts",
     "start": "tsx packages/server/src/main.ts",
     "migrate": "tsx packages/server/src/migrate.ts",
     "seed": "tsx packages/server/src/seed-cli.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "token": "tsx packages/server/src/token-cli.ts"
+    "token": "tsx packages/server/src/token-cli.ts",
+    "check:links": "tsx scripts/check-links.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",

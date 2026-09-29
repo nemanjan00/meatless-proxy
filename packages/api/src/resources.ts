@@ -180,6 +180,9 @@ export interface EmployeeData extends Record<string, unknown> {
   personality?: string
   /** Tool allow and deny lists (names or patterns like `mcp.linear.*`). The deny list wins. */
   tools: { allow: string[]; deny: string[] }
+  /** The same lists as stored by the server's directory (`tools` is the older shape). */
+  toolAllow?: string[]
+  toolDeny?: string[]
   model?: string
   /** The employee's router session, for input nothing else claims. */
   routerSessionId?: string
@@ -189,12 +192,14 @@ export interface EmployeeData extends Record<string, unknown> {
 /** Kind `contact`. */
 export interface ContactData extends Record<string, unknown> {
   name: string
+  /** `ai` for AI employees' contact records. */
+  kind?: 'person' | 'ai'
   handles?: { system: string; id: string }[]
   role?: string
   team?: string
   manager?: string
   permissions?: string
-  /** True for AI employees' contact records. */
+  /** True for AI employees' contact records (older shape of `kind: 'ai'`). */
   ai?: boolean
   email?: string
 }
@@ -476,8 +481,16 @@ export interface EventData extends Record<string, unknown> {
   receivedAt: string
   /** False until the router handled it. */
   routed: boolean
-  /** The rules that matched. Empty after routing means nothing matched and it went to a router session. */
+  /**
+   * The rules that matched. Empty after routing means nothing matched: it went to a
+   * router session (`deliveries` > 0) or nowhere at all (`deliveries` = 0).
+   */
   matched?: RoutingRule[]
+  /**
+   * Number of sessions it was delivered to, once routed. 0 means it went nowhere,
+   * e.g. a session's own message, which the router never delivers back to it.
+   */
+  deliveries?: number
 }
 export type ApiEvent = ApiRecord<EventData>
 
@@ -527,7 +540,13 @@ export interface TriggerStats {
   fires: number
   lastFiredAt: string | null
   /** The latest events it matched, newest first. */
-  recentEvents: { id: string; type: string; subject?: EventSubject; receivedAt: string }[]
+  recentEvents: {
+    id: string
+    type: string
+    subject?: EventSubject
+    receivedAt: string /** The event's text, shortened. */
+    text?: string
+  }[]
 }
 
 /** Kind `subscription`: delivers events about one thing straight to a session. */
@@ -637,6 +656,12 @@ export interface MessageData extends Record<string, unknown> {
   lastReplyAt?: string
   /** The session handling the thread, if any. */
   sessionId?: string
+  /** When the author last edited it. */
+  editedAt?: string
+  /** Deleted by its author: the text is empty and a placeholder stays in the thread. */
+  deleted?: boolean
+  /** Emoji → who reacted with it (`contact`, `session` or `employee` refs). */
+  reactions?: Record<string, ApiRef[]>
 }
 export type Message = ApiRecord<MessageData>
 
@@ -645,6 +670,30 @@ export interface ChannelSummary {
   channel: Channel
   lastMessageAt: string | null
   messages: number
+}
+
+/** `GET /api/chat/unread`: unread state of one channel for the current person. */
+export interface ChannelUnread {
+  channelId: string
+  /** Messages (top-level and replies) by others since the read marker. */
+  unread: number
+  /** Of those, messages that tag you. */
+  mentions: number
+  lastReadAt: string | null
+}
+
+/** One hit of `GET /api/chat/search`. */
+export interface ChatSearchResult {
+  message: Message
+  channel: { id: string; name: string; dm: boolean }
+  /** The thread it's in (its root's id; the message's own id for a top-level message). */
+  threadId: string
+}
+
+/** `GET /api/me`: who the web UI acts as. */
+export interface Me {
+  contactId: string
+  name: string
 }
 
 /** `GET /api/chat/threads/:id`. */
@@ -709,6 +758,8 @@ export type UsageGroupBy =
 
 /** Filters shared by the usage endpoints. All optional. */
 export interface UsageFilter {
+  /** One run's model calls. */
+  runId?: string
   employeeId?: string
   sessionId?: string
   rootSessionId?: string

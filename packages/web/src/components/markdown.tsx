@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils.ts'
 
 /**
  * Renders a markdown document: `[[kind:id|label]]` links become in-app links,
- * and chat tags (`@billing-bot#slug`) are highlighted.
+ * and chat tags (`@employee#session-slug`) are highlighted.
  */
 export function Markdown({
   text,

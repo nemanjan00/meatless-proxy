@@ -20,7 +20,7 @@ import {
   Workflow,
   Zap,
 } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import { CommandMenu } from '@/components/command-menu.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
@@ -281,7 +281,9 @@ export function AppShell() {
     <SidebarProvider>
       <AppSidebar onSearch={() => setOpen(true)} />
       <SidebarInset className="min-w-0">
-        <Outlet />
+        <Suspense fallback={<div className="h-11 border-b" aria-busy="true" />}>
+          <Outlet />
+        </Suspense>
       </SidebarInset>
       <CommandMenu open={open} onOpenChange={setOpen} onToggleTheme={toggle} />
     </SidebarProvider>

@@ -4,7 +4,7 @@ import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, t
 import { useNavigate } from 'react-router'
 import { StatusIcon } from '@/components/status-icon.tsx'
 import { Button } from '@/components/ui/button.tsx'
-import { employeeHandle } from '@/lib/employees.tsx'
+import { useEmployees } from '@/lib/employees.tsx'
 import { formatTokens } from '@/lib/format.ts'
 import { sessionStatusKey } from '@/lib/status.ts'
 import { type TreeInput, layoutTree } from '@/lib/tree-layout.ts'
@@ -14,6 +14,8 @@ const NODE_W = 216
 const NODE_H = 66
 const GAP_X = 20
 const GAP_Y = 44
+/** Space kept around the tree when it's fitted to the view. */
+const FIT_PADDING = 32
 
 export function toTreeInput(n: SessionTreeNode): TreeInput<SessionTreeNode> {
   return { id: n.id, data: n, children: n.children.map(toTreeInput) }
@@ -56,6 +58,7 @@ export function SessionTreeGraph({
   height?: number
 }) {
   const navigate = useNavigate()
+  const { handle } = useEmployees()
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const layout = useMemo(
     () => layoutTree(toTreeInput(root), { nodeWidth: NODE_W, nodeHeight: NODE_H, gapX: GAP_X, gapY: GAP_Y, collapsed }),
@@ -70,14 +73,26 @@ export function SessionTreeGraph({
     if (!el) return
     const w = el.clientWidth || 800
     const h = el.clientHeight || height
-    // Fit, but never below a readable zoom; wide trees are panned instead, centred on the current session.
-    const k = Math.min(1, Math.max(0.85, Math.min((w - 48) / layout.width, (h - 48) / layout.height)))
-    const root = layout.nodes.find((n) => n.id === currentId) ?? layout.nodes[0]!
-    const x = layout.width * k <= w - 48 ? (w - layout.width * k) / 2 : w / 2 - (root.x + NODE_W / 2) * k
-    setView({ k, x, y: 32 })
-  }, [layout, height, currentId])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fitView once per tree shape
-  useEffect(() => fitView(), [root.id, collapsed.size])
+    // Fit the whole tree with padding (never above 100 %), centred horizontally, from the top.
+    const pad = FIT_PADDING
+    const k = Math.min(1, Math.max(0.2, Math.min((w - 2 * pad) / layout.width, (h - 2 * pad - 24) / layout.height)))
+    setView({ k, x: (w - layout.width * k) / 2, y: pad })
+  }, [layout, height])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fit once per tree shape
+  useEffect(() => fitView(), [root.id, collapsed.size, layout.nodes.length])
+  // The box can mount before it has a size (e.g. in a tab being shown): fit again once it has one.
+  const fitted = useRef(false)
+  useEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (fitted.current || !el.clientWidth) return
+      fitted.current = true
+      fitView()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fitView])
 
   const zoomAt = (factor: number, cx: number, cy: number) =>
     setView((v) => {
@@ -169,7 +184,7 @@ export function SessionTreeGraph({
                       <span className="min-w-0 truncate text-mini font-medium text-foreground">{d.title}</span>
                     </span>
                     <span className="truncate font-mono text-tiny text-fg-tertiary">
-                      @{employeeHandle(d.employee.name)}#{d.slug}
+                      @{handle(d.employee)}#{d.slug}
                     </span>
                     <span className="flex items-center gap-2 text-tiny text-fg-quaternary">
                       <span className="tabular-nums">{formatTokens(d.tokens)} tok</span>

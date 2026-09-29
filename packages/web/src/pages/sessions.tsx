@@ -9,7 +9,7 @@ import { StatusIcon } from '@/components/status-icon.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
-import { employeeHandle, useEmployees } from '@/lib/employees.tsx'
+import { useEmployees } from '@/lib/employees.tsx'
 import { formatTokens, timeAgo } from '@/lib/format.ts'
 import { STATUS, STATUS_ORDER, type StatusKey, sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
@@ -53,6 +53,7 @@ export function SessionRow({ row, indent = 0 }: { row: SessionListItem; indent?:
   const s = row.session.data
   const status = sessionStatusKey(s.status, row.runState)
   const loop = s.meta?.loop as { index: number; of: number } | undefined
+  const { handle } = useEmployees()
   return (
     <Link
       to={`/sessions/${row.session.id}`}
@@ -63,7 +64,7 @@ export function SessionRow({ row, indent = 0 }: { row: SessionListItem; indent?:
       <StatusIcon status={status} />
       <span className="min-w-0 truncate text-fg-secondary group-hover:text-foreground">{s.title}</span>
       <span className="hidden shrink-0 font-mono text-micro text-fg-quaternary md:inline">
-        @{employeeHandle(row.employee.name)}#{s.slug}
+        @{handle(row.employee)}#{s.slug}
       </span>
       {loop && (
         <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border px-1 text-tiny text-fg-tertiary">

@@ -19,8 +19,10 @@ import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EntryTreeView } from '@/components/entry-tree.tsx'
+import { RecentRuns } from '@/components/recent-runs.tsx'
 import { Timeline } from '@/components/history.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
+import { SplitView } from '@/components/split-view.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { SessionTreeGraph, TreeOutline, treeStats } from '@/components/session-tree.tsx'
 import { StatusIcon, StatusLabel } from '@/components/status-icon.tsx'
@@ -29,14 +31,24 @@ import { Button } from '@/components/ui/button.tsx'
 import { Checkbox } from '@/components/ui/checkbox.tsx'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible.tsx'
 import { Progress } from '@/components/ui/progress.tsx'
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable.tsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { useApi, useLive, useLoad } from '@/lib/api.tsx'
-import { hrefFor } from '@/lib/doclinks.ts'
-import { employeeHandle } from '@/lib/employees.tsx'
-import { duration, formatCost, formatDateTime, formatTokens, shortId, timeAgo } from '@/lib/format.ts'
+import { hrefFor, linkRole } from '@/lib/doclinks.ts'
+import { useEmployees } from '@/lib/employees.tsx'
+import {
+  duration,
+  formatCostOf,
+  pluralize,
+  formatDateTime,
+  formatTokens,
+  NO_PRICING,
+  shortId,
+  timeAgo,
+  unpriced,
+} from '@/lib/format.ts'
+import { fillRows, intervalFor } from '@/lib/usage-series.ts'
 import { sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -110,7 +122,7 @@ function RunsView({ runs, sessionId }: { runs: Run[]; sessionId: string }) {
             {r.data.result?.error && <span className="text-[var(--red)]"> · {r.data.result.error}</span>}
             {r.data.commit && <span className="text-fg-quaternary"> · committed</span>}
           </span>
-          <span className="shrink-0 text-micro tabular-nums text-fg-tertiary">{r.data.steps} steps</span>
+          <span className="shrink-0 text-micro tabular-nums text-fg-tertiary">{pluralize(r.data.steps, 'step')}</span>
           <span className="w-16 shrink-0 text-right text-micro text-fg-quaternary">
             {duration(r.data.startedAt, r.data.endedAt)}
           </span>
@@ -179,15 +191,19 @@ export function SessionDetailPage() {
   const entryTree = useLoad((a) => a.sessionEntryTree(id), [id])
   const runs = useLoad((a) => a.sessionRuns(id), [id])
   const subs = useLoad((a) => a.subscriptions({ sessionId: id }), [id])
+  const createdAt = detail.data?.session.createdAt
+  // Hours for a young session, days for an older one.
+  const usageInterval = intervalFor(createdAt ? (Date.now() - Date.parse(createdAt)) / 3_600_000 : 0)
   const usage = useLoad(
     (a) =>
       Promise.all([
         a.usageBreakdown('model', { sessionId: id }),
         a.usageBreakdown('tool', { sessionId: id }),
-        a.usageBreakdown('day', { sessionId: id }),
+        a.usageBreakdown(usageInterval, { sessionId: id }),
       ]),
-    [id],
+    [id, usageInterval],
   )
+  const { handle } = useEmployees()
   const [streaming, setStreaming] = useState<{ content: string; reasoning: string } | null>(null)
 
   const onLive = useCallback(
@@ -302,6 +318,8 @@ export function SessionDetailPage() {
   const live = activeRun && !TERMINAL_RUN_STATES.includes(activeRun.data.state)
   const stats = tree.data ? treeStats(tree.data) : null
   const done = d.checklist?.data.items.filter((i) => i.checked).length ?? 0
+  // A checklist with no items is no checklist.
+  const checklist = d.checklist?.data.items.length ? d.checklist : null
 
   return (
     <Page
@@ -344,154 +362,169 @@ export function SessionDetailPage() {
         </>
       }
     >
-      <ResizablePanelGroup orientation="horizontal" className="h-full">
-        <ResizablePanel minSize={420}>
-          <div className="h-full overflow-auto">
-            <div className={cn('mx-auto px-6 pt-8 pb-16', tab === 'tree' ? 'max-w-[1120px]' : 'max-w-[720px]')}>
-              <div className="mb-1 flex items-center gap-2 text-micro text-fg-tertiary">
-                <StatusIcon status={status} />
-                <span className="font-mono">
-                  @{employeeHandle(d.employee.name)}#{s.slug}
-                </span>
-                {s.parent && (
-                  <>
-                    · forked from
-                    <Link to={`/sessions/${s.parent.sessionId}`} className="hover:text-foreground">
-                      {shortId(s.parent.sessionId)}
-                    </Link>
-                  </>
-                )}
-              </div>
-              <h2 className="mb-5 text-title3 font-semibold text-foreground">{s.title}</h2>
-              <DocumentEditor
-                value={s.document}
-                title={s.title}
-                onSave={saveDoc}
-                resolve={(_k, rid) => names.get(rid)}
-                className="mb-8"
-              />
-              <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-                <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b pb-0">
-                  {TABS.map((t) => (
-                    <TabsTrigger key={t} value={t} className="flex-none px-0 capitalize">
-                      {t}
-                      {t === 'checklist' && d.checklist && (
-                        <span className="text-fg-quaternary tabular-nums">
-                          {done}/{d.checklist.data.items.length}
-                        </span>
-                      )}
-                      {t === 'runs' && runs.data && <span className="text-fg-quaternary tabular-nums">{runs.data.length}</span>}
-                      {t === 'threads' && d.threads.length > 0 && (
-                        <span className="text-fg-quaternary tabular-nums">{d.threads.length}</span>
-                      )}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                <TabsContent value="history" className="pt-3">
-                  {history.data ? (
-                    <>
-                      <Timeline
-                        entries={history.data}
-                        runStart={activeRun?.data.base ?? null}
-                        runLabel={activeRun ? `${activeRun.data.mode} run · ${activeRun.data.state} · not committed yet` : null}
-                        streaming={live ? streaming : null}
-                        onShowBranch={showBranch}
-                      />
-                      <Composer sessionId={id} onSent={history.reload} />
-                    </>
-                  ) : (
-                    <LoadingRows />
-                  )}
-                </TabsContent>
-                <TabsContent value="branches" className="pt-3">
-                  <p className="mb-3 text-micro text-fg-tertiary">
-                    The entry tree: the committed path on the left, run branches, rewound branches and offloaded entries to the
-                    right. Nothing is ever deleted.
-                  </p>
-                  {entryTree.data ? <EntryTreeView tree={entryTree.data} highlight={highlight} /> : <LoadingRows />}
-                </TabsContent>
-                <TabsContent value="tree" className="pt-3">
-                  {stats && (
-                    <p className="mb-3 text-micro text-fg-tertiary">
-                      {stats.sessions} sessions · {stats.live} live · {formatTokens(stats.tokens)} tokens in this tree
-                    </p>
-                  )}
-                  {tree.data ? <SessionTreeGraph root={tree.data} currentId={id} height={400} /> : <LoadingRows />}
-                </TabsContent>
-                <TabsContent value="runs" className="pt-3">
-                  {runs.data ? <RunsView runs={runs.data} sessionId={id} /> : <LoadingRows />}
-                </TabsContent>
-                <TabsContent value="checklist" className="pt-3">
-                  <ChecklistView checklist={d.checklist} />
-                </TabsContent>
-                <TabsContent value="threads" className="pt-3">
-                  {d.threads.length === 0 ? (
-                    <EmptyState
-                      text="No chat threads are linked to this session."
-                      action={
-                        <Link to="/chat" className="text-[#828fff] hover:underline">
-                          Open chat
-                        </Link>
-                      }
-                    />
-                  ) : (
-                    d.threads.map((t) => (
-                      <Link
-                        key={t.threadId}
-                        to={`/chat/${t.channelId}/${t.threadId}`}
-                        className="flex h-9 items-center gap-2 border-b text-fg-secondary last:border-0 hover:text-foreground"
-                      >
-                        <MessagesSquare className="size-4 text-fg-tertiary" />
-                        <span className="truncate">{t.title}</span>
-                      </Link>
-                    ))
-                  )}
-                </TabsContent>
-                <TabsContent value="usage" className="pt-3">
-                  {usage.data ? (
-                    <div className="flex flex-col gap-6">
-                      <div className="grid grid-cols-4 gap-3">
-                        {[
-                          ['Tokens', formatTokens(d.tokens.total)],
-                          ['Cached', `${Math.round((d.tokens.cached / Math.max(1, d.tokens.input)) * 100)}%`],
-                          ['Model calls', String(d.tokens.calls)],
-                          ['Cost', formatCost(d.tokens.cost)],
-                        ].map(([k, v]) => (
-                          <div key={k} className="rounded-lg border bg-level-1 px-3 py-2">
-                            <div className="text-micro text-fg-tertiary">{k}</div>
-                            <div className="text-title1 font-semibold tabular-nums">{v}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div>
-                        <SectionTitle className="mb-2">By day</SectionTitle>
-                        <UsageBars rows={usage.data[2].rows} height={140} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-6">
-                        {[usage.data[0], usage.data[1]].map((b) => (
-                          <div key={b.groupBy}>
-                            <SectionTitle className="mb-1 capitalize">By {b.groupBy}</SectionTitle>
-                            {b.rows.map((r) => (
-                              <div key={r.key} className="flex h-7 items-center gap-2 text-mini">
-                                <span className="min-w-0 flex-1 truncate font-mono text-micro text-fg-secondary">{r.label}</span>
-                                <span className="tabular-nums text-fg-tertiary">{formatTokens(r.total)}</span>
-                                <span className="w-14 text-right tabular-nums text-fg-quaternary">{formatCost(r.cost)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <LoadingRows />
-                  )}
-                </TabsContent>
-              </Tabs>
+      <SplitView
+        sideSize={300}
+        sideMin={240}
+        sideMax={420}
+        main={
+          <div className={cn('mx-auto px-6 pt-8 pb-16', tab === 'tree' ? 'max-w-[1120px]' : 'max-w-[720px]')}>
+            <div className="mb-1 flex items-center gap-2 text-micro text-fg-tertiary">
+              <StatusIcon status={status} />
+              <span className="font-mono">
+                @{handle(d.employee)}#{s.slug}
+              </span>
+              {s.parent && (
+                <>
+                  · forked from
+                  <Link to={`/sessions/${s.parent.sessionId}`} className="hover:text-foreground">
+                    {shortId(s.parent.sessionId)}
+                  </Link>
+                </>
+              )}
             </div>
+            <h2 className="mb-5 text-title3 font-semibold text-foreground">{s.title}</h2>
+            <DocumentEditor
+              value={s.document}
+              title={s.title}
+              onSave={saveDoc}
+              resolve={(_k, rid) => names.get(rid)}
+              className="mb-8"
+            />
+            <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+              <TabsList variant="line" className="h-8 w-full justify-start gap-3 overflow-x-auto overflow-y-hidden border-b pb-0">
+                {TABS.map((t) => (
+                  <TabsTrigger key={t} value={t} className="flex-none px-0 capitalize">
+                    {t}
+                    {t === 'checklist' && checklist && (
+                      <span className="text-fg-quaternary tabular-nums">
+                        {done}/{checklist.data.items.length}
+                      </span>
+                    )}
+                    {t === 'runs' && runs.data && <span className="text-fg-quaternary tabular-nums">{runs.data.length}</span>}
+                    {t === 'threads' && d.threads.length > 0 && (
+                      <span className="text-fg-quaternary tabular-nums">{d.threads.length}</span>
+                    )}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              <TabsContent value="history" className="pt-3">
+                {history.data ? (
+                  <>
+                    <Timeline
+                      entries={history.data}
+                      runStart={activeRun?.data.base ?? null}
+                      runLabel={activeRun ? `${activeRun.data.mode} run · ${activeRun.data.state} · not committed yet` : null}
+                      streaming={live ? streaming : null}
+                      onShowBranch={showBranch}
+                    />
+                    {runs.data && <RecentRuns runs={runs.data} />}
+                    <Composer sessionId={id} onSent={history.reload} />
+                  </>
+                ) : (
+                  <LoadingRows />
+                )}
+              </TabsContent>
+              <TabsContent value="branches" className="pt-3">
+                <p className="mb-3 text-micro text-fg-tertiary">
+                  The entry tree: the committed path on the left, run branches, rewound branches and offloaded entries to the
+                  right. Nothing is ever deleted.
+                </p>
+                {entryTree.data ? <EntryTreeView tree={entryTree.data} highlight={highlight} /> : <LoadingRows />}
+              </TabsContent>
+              <TabsContent value="tree" className="pt-3">
+                {stats && (
+                  <p className="mb-3 text-micro text-fg-tertiary">
+                    {pluralize(stats.sessions, 'session')} · {stats.live} live · {formatTokens(stats.tokens)} tokens in this tree
+                  </p>
+                )}
+                {tree.data ? <SessionTreeGraph root={tree.data} currentId={id} height={400} /> : <LoadingRows />}
+              </TabsContent>
+              <TabsContent value="runs" className="pt-3">
+                {runs.data ? <RunsView runs={runs.data} sessionId={id} /> : <LoadingRows />}
+              </TabsContent>
+              <TabsContent value="checklist" className="pt-3">
+                <ChecklistView checklist={checklist} />
+              </TabsContent>
+              <TabsContent value="threads" className="pt-3">
+                {d.threads.length === 0 ? (
+                  <EmptyState
+                    text="No chat threads are linked to this session."
+                    action={
+                      <Link to="/chat" className="text-[#828fff] hover:underline">
+                        Open chat
+                      </Link>
+                    }
+                  />
+                ) : (
+                  d.threads.map((t) => (
+                    <Link
+                      key={t.threadId}
+                      to={`/chat/${t.channelId}/${t.threadId}`}
+                      className="flex h-9 items-center gap-2 border-b text-fg-secondary last:border-0 hover:text-foreground"
+                    >
+                      <MessagesSquare className="size-4 text-fg-tertiary" />
+                      <span className="truncate">{t.title}</span>
+                    </Link>
+                  ))
+                )}
+              </TabsContent>
+              <TabsContent value="usage" className="pt-3">
+                {usage.data ? (
+                  <div className="flex flex-col gap-6">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {[
+                        ['Tokens', formatTokens(d.tokens.total)],
+                        ['Cached', `${Math.round((d.tokens.cached / Math.max(1, d.tokens.input)) * 100)}%`],
+                        ['Model calls', String(d.tokens.calls)],
+                        ['Cost', unpriced(d.tokens) ? '—' : formatCostOf(d.tokens)],
+                      ].map(([k, v]) => (
+                        <div key={k} className="rounded-lg border bg-level-1 px-3 py-2">
+                          <div className="text-micro text-fg-tertiary">{k}</div>
+                          <div className="text-title1 font-semibold tabular-nums">{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <SectionTitle className="mb-2">By {usageInterval}</SectionTitle>
+                      <UsageBars
+                        rows={fillRows(
+                          usage.data[2].rows,
+                          usageInterval,
+                          Math.max(Date.parse(d.session.createdAt), Date.now() - 14 * 86_400_000),
+                          Date.now(),
+                        )}
+                        interval={usageInterval}
+                        height={140}
+                      />
+                    </div>
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      {[usage.data[0], usage.data[1]].map((b) => (
+                        <div key={b.groupBy}>
+                          <SectionTitle className="mb-1 capitalize">By {b.groupBy}</SectionTitle>
+                          {b.rows.map((r) => (
+                            <div key={r.key} className="flex h-7 items-center gap-2 text-mini">
+                              <span className="min-w-0 flex-1 truncate font-mono text-micro text-fg-secondary">{r.label}</span>
+                              <span className="tabular-nums text-fg-tertiary">{formatTokens(r.total)}</span>
+                              <span
+                                className="w-14 text-right tabular-nums text-fg-quaternary"
+                                title={unpriced(r) ? NO_PRICING : undefined}
+                              >
+                                {formatCostOf(r)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <LoadingRows />
+                )}
+              </TabsContent>
+            </Tabs>
           </div>
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel defaultSize={300} minSize={240} maxSize={420}>
+        }
+        side={
           <aside className="h-full overflow-auto bg-level-1 px-4 py-4" data-testid="properties">
             <SectionTitle className="mb-2">Properties</SectionTitle>
             <div className="flex flex-col">
@@ -511,7 +544,7 @@ export function SessionDetailPage() {
                 <Prop label="Run">
                   <span className="inline-flex items-center gap-1.5">
                     <StatusIcon status={activeRun.data.state} className="size-3.5" />
-                    {activeRun.data.mode} · {activeRun.data.steps} steps
+                    {activeRun.data.mode} · {pluralize(activeRun.data.steps, 'step')}
                   </span>
                 </Prop>
               )}
@@ -519,7 +552,8 @@ export function SessionDetailPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="tabular-nums">
-                      {formatTokens(d.tokens.total)} · {formatCost(d.tokens.cost)}
+                      {formatTokens(d.tokens.total)}
+                      {unpriced(d.tokens) ? '' : ` · ${formatCostOf(d.tokens)}`}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent className="font-mono text-micro">
@@ -528,12 +562,12 @@ export function SessionDetailPage() {
                   </TooltipContent>
                 </Tooltip>
               </Prop>
-              {d.checklist && (
+              {checklist && (
                 <Prop label="Checklist">
                   <button type="button" onClick={() => setTab('checklist')} className="inline-flex w-full items-center gap-2">
-                    <Progress value={(done / Math.max(1, d.checklist.data.items.length)) * 100} className="h-1" />
+                    <Progress value={(done / Math.max(1, checklist.data.items.length)) * 100} className="h-1" />
                     <span className="tabular-nums">
-                      {done}/{d.checklist.data.items.length}
+                      {done}/{checklist.data.items.length}
                     </span>
                   </button>
                 </Prop>
@@ -571,7 +605,7 @@ export function SessionDetailPage() {
                       <span className="size-1.5 rounded-full bg-[var(--indigo)]" />
                     )}
                     <span className="min-w-0 truncate text-fg-secondary">{name}</span>
-                    <span className="ml-auto shrink-0 text-micro text-fg-quaternary">{l.link.role.replace(/_/g, ' ')}</span>
+                    <span className="ml-auto shrink-0 text-micro text-fg-quaternary">{linkRole(l.link, id)}</span>
                   </Link>
                 )
               })
@@ -586,7 +620,11 @@ export function SessionDetailPage() {
                   <span
                     className={cn('size-1.5 rounded-full', sub.data.active ? 'bg-[var(--green)]' : 'bg-[var(--fg-quaternary)]')}
                   />
-                  <span className="min-w-0 truncate text-fg-secondary">{sub.data.subject.title ?? sub.data.subject.ref}</span>
+                  <span className="min-w-0 truncate text-fg-secondary">
+                    {sub.data.subject.title ??
+                      d.threads.find((t) => t.threadId === sub.data.subject.ref)?.title ??
+                      sub.data.subject.ref}
+                  </span>
                   <span className="ml-auto shrink-0 font-mono text-tiny text-fg-quaternary">{sub.data.subject.system}</span>
                   {sub.data.primary && <span className="shrink-0 text-tiny text-fg-tertiary">primary</span>}
                 </div>
@@ -608,8 +646,8 @@ export function SessionDetailPage() {
               <span className="font-mono">{d.session.id}</span>
             </div>
           </aside>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        }
+      />
     </Page>
   )
 }

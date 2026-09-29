@@ -46,6 +46,16 @@ export function routingOf(e: MpEvent): StoredRouting | undefined {
   return r && typeof r === 'object' ? (r as StoredRouting) : undefined
 }
 
+/**
+ * Routed, but only a fallback router got it: nothing matched. An event with
+ * no deliveries at all (e.g. a session's own message, which the router skips)
+ * went nowhere and isn't unmatched.
+ */
+export function isUnmatched(e: MpEvent): boolean {
+  const r = routingOf(e)
+  return !!r && r.deliveries.length > 0 && r.deliveries.every((d) => d.reason === 'fallback')
+}
+
 export function mapEvent(e: MpEvent): Api.ApiEvent {
   const d = e.data
   const routing = routingOf(e)
@@ -63,6 +73,7 @@ export function mapEvent(e: MpEvent): Api.ApiEvent {
     receivedAt: d.receivedAt,
     routed: d.routed,
     ...(matched ? { matched } : {}),
+    ...(routing ? { deliveries: routing.deliveries.length } : {}),
   }
   return { ...e, data }
 }
@@ -122,6 +133,7 @@ export function apiActor(a: { kind?: string; type?: string; id: string }): Api.A
 export function usageFilter(q: Record<string, string | undefined>): DomainUsageFilter {
   const f: DomainUsageFilter = {}
   const keys = [
+    'runId',
     'employeeId',
     'sessionId',
     'rootSessionId',
@@ -237,6 +249,9 @@ export class Views {
       tags: this.mapTags(d.tags ?? []),
       mentions: d.mentions ?? [],
       createdAt: d.createdAt,
+      ...(d.editedAt ? { editedAt: d.editedAt } : {}),
+      ...(d.deleted ? { deleted: true } : {}),
+      ...(d.reactions && Object.keys(d.reactions).length ? { reactions: d.reactions } : {}),
     }
     if (!d.threadId && opts.summary !== false) {
       const replies = await this.s.records.query<DomainMessage['data']>('message', {

@@ -132,9 +132,9 @@ CI runs all of these on every push, with Postgres and Redis.
 
 ## Screenshots
 
-| Now | Session tree |
-|-----|--------------|
-| ![Now](packages/web/docs/screenshots/now-dark.png) | ![Session tree](packages/web/docs/screenshots/session-tree-dark.png) |
+| Session | Session tree |
+|---------|--------------|
+| ![Session](packages/web/docs/screenshots/session-detail-dark.png) | ![Session tree](packages/web/docs/screenshots/session-tree-dark.png) |
 | **Lineage** | **Chat** |
 | ![Lineage](packages/web/docs/screenshots/lineage-dark.png) | ![Chat](packages/web/docs/screenshots/chat-dark.png) |
 

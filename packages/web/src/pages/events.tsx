@@ -6,7 +6,8 @@ import { type DataColumn, DataTable } from '@/components/data-table.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { Page } from '@/components/page.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
-import { formatDateTime, timeAgo } from '@/lib/format.ts'
+import { formatDateTime, shortId, timeAgo } from '@/lib/format.ts'
+import { eventTitle, routingOutcome } from '@/lib/routing.ts'
 import { cn } from '@/lib/utils.ts'
 
 const ROUTED = [
@@ -39,38 +40,56 @@ export function EventsPage() {
         header: 'Source',
         value: (e) => e.data.source,
         cell: (e) => <span className="font-mono text-micro">{e.data.source}</span>,
-        className: 'w-32',
+        className: 'w-28 max-sm:hidden',
       },
-      { id: 'type', header: 'Type', value: (e) => e.data.type, className: 'w-36' },
+      { id: 'type', header: 'Type', value: (e) => e.data.type, className: 'w-36 max-md:hidden' },
       {
         id: 'subject',
         header: 'Subject',
-        value: (e) => e.data.subject?.title ?? e.data.subject?.ref ?? '',
-        cell: (e) => (
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-fg-secondary">{e.data.subject?.title ?? e.data.subject?.ref ?? '—'}</span>
-            {e.data.subject?.title && (
-              <span className="shrink-0 font-mono text-micro text-fg-quaternary">{e.data.subject.ref}</span>
-            )}
-          </span>
-        ),
+        value: (e) => eventTitle(e) ?? e.data.subject?.ref ?? '',
+        cell: (e) => {
+          const title = eventTitle(e)
+          return (
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-fg-secondary">{title ?? e.data.subject?.ref ?? '—'}</span>
+              {title && e.data.subject && (
+                <span className="hidden shrink-0 font-mono text-micro text-fg-quaternary lg:inline">
+                  {e.data.subject.system}:{shortId(e.data.subject.ref)}
+                </span>
+              )}
+            </span>
+          )
+        },
+        // A zero max width lets the cell shrink, so long texts truncate instead of widening the table.
+        className: 'max-w-0 w-full',
       },
       {
         id: 'routing',
         header: 'Routing',
-        value: (e) => (e.data.routed ? (e.data.matched ?? []).join(',') || 'none' : 'pending'),
+        value: (e) => routingOutcome(e),
         cell: (e) => {
-          const unmatched = e.data.routed && (!e.data.matched?.length || e.data.matched.every((m) => m === 'fallback'))
+          const outcome = routingOutcome(e)
+          const unmatched = outcome === 'unmatched'
           return (
             <span
-              className={cn('inline-flex items-center gap-1 text-micro', unmatched ? 'text-[var(--orange)]' : 'text-fg-tertiary')}
+              className={cn(
+                'inline-flex items-center gap-1 text-micro',
+                unmatched ? 'text-[var(--orange)]' : outcome === 'nowhere' ? 'text-fg-quaternary' : 'text-fg-tertiary',
+              )}
+              title={outcome === 'nowhere' ? 'Delivered to nobody (e.g. a session’s own message)' : undefined}
             >
               {unmatched && <AlertTriangle className="size-3" />}
-              {!e.data.routed ? 'waiting' : unmatched ? 'unmatched → router' : e.data.matched!.join(', ').replace(/_/g, ' ')}
+              {outcome === 'pending'
+                ? 'waiting'
+                : outcome === 'unmatched'
+                  ? 'unmatched → router'
+                  : outcome === 'nowhere'
+                    ? 'not delivered'
+                    : (e.data.matched ?? []).join(', ').replace(/_/g, ' ')}
             </span>
           )
         },
-        className: 'w-44',
+        className: 'w-36 sm:w-44',
       },
       {
         id: 'received',

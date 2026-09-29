@@ -142,6 +142,35 @@ describe('createApiClient', () => {
     expect(calls[7]!.body).toEqual({ reason: 'looks stuck' })
   })
 
+  it('builds the everyday chat requests', async () => {
+    const { fetch, calls } = fakeFetch()
+    const api = createApiClient({ baseUrl: '', fetch })
+    await api.editMessage('msg_1', 'fixed')
+    await api.deleteMessage('msg_1')
+    await api.addReaction('msg_1', '✅')
+    await api.removeReaction('msg_1', '✅')
+    await api.markRead('chn_1')
+    await api.unread()
+    await api.openDm([{ kind: 'employee', id: 'emp_1' }])
+    await api.searchChat({ text: 'refund', channelId: 'chn_1' })
+    await api.me()
+    expect(calls.map((c) => `${c.method} ${decodeURIComponent(c.url)}`)).toEqual([
+      'PATCH /api/chat/messages/msg_1',
+      'DELETE /api/chat/messages/msg_1',
+      'POST /api/chat/messages/msg_1/reactions',
+      'DELETE /api/chat/messages/msg_1/reactions?emoji=✅',
+      'POST /api/chat/read',
+      'GET /api/chat/unread',
+      'POST /api/chat/dms',
+      'GET /api/chat/search?text=refund&channelId=chn_1',
+      'GET /api/me',
+    ])
+    expect(calls[0]!.body).toEqual({ text: 'fixed' })
+    expect(calls[2]!.body).toEqual({ emoji: '✅' })
+    expect(calls[4]!.body).toEqual({ scope: 'chn_1' })
+    expect(calls[6]!.body).toEqual({ members: [{ kind: 'employee', id: 'emp_1' }] })
+  })
+
   it('has one client method per route', () => {
     const { fetch } = fakeFetch()
     const api = createApiClient({ baseUrl: '', fetch }) as unknown as Record<string, unknown>

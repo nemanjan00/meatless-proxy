@@ -26,6 +26,7 @@ jobs:
       - run: npm ci
       - run: npm run check:deps
       - run: npm run check:secrets
+      - run: npm run check:links
       - run: npm run lint
       - run: npm run typecheck
       - name: Web UI typecheck and build

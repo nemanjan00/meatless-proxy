@@ -456,34 +456,49 @@ export function createMockDb(opts: { now?: number } = {}): MockDb {
     email: 'support-bot@example.com',
   })
 
-  put<EmployeeData>('employee', EMP.billing, {
-    name: 'Billing Bot',
-    contactId: CON.billingBot,
-    scope: 'Payments and invoicing: refunds, billing bugs, invoice questions.',
-    personality: 'Dry humour, tidy commit messages, signs off with "— BB" in long messages. Never jokes during incidents.',
-    model: 'kimi-k2-7-code',
-    tools: {
-      allow: ['sessions.*', 'chat.*', 'docs.*', 'memory.*', 'mcp.linear.*', 'mcp.stripe.list_*', 'billing.*'],
-      deny: ['mcp.stripe.refund', 'containers.exec'],
+  put<EmployeeData>(
+    'employee',
+    EMP.billing,
+    {
+      name: 'Billing Bot',
+      contactId: CON.billingBot,
+      scope: 'Payments and invoicing: refunds, billing bugs, invoice questions.',
+      personality: 'Dry humour, tidy commit messages, signs off with "— BB" in long messages. Never jokes during incidents.',
+      model: 'kimi-k2-7-code',
+      tools: {
+        allow: ['sessions.*', 'chat.*', 'docs.*', 'memory.*', 'mcp.linear.*', 'mcp.stripe.list_*', 'billing.*'],
+        deny: ['mcp.stripe.refund', 'containers.exec'],
+      },
+      routerSessionId: SES.billingRouter,
     },
-    routerSessionId: SES.billingRouter,
-  })
-  put<EmployeeData>('employee', EMP.infra, {
-    name: 'Infra Bot',
-    contactId: CON.infraBot,
-    scope: 'Platform: deploys, environments, incidents on staging.',
-    personality: 'Terse. Uses checklists for everything.',
-    model: 'k3',
-    tools: { allow: ['sessions.*', 'chat.*', 'containers.*', 'git.*', 'mcp.linear.*'], deny: ['git.push_protected'] },
-  })
-  put<EmployeeData>('employee', EMP.support, {
-    name: 'Support Bot',
-    contactId: CON.supportBot,
-    scope: 'Customer support tickets and the support portal.',
-    personality: 'Warm and patient.',
-    model: 'kimi-for-coding-highspeed',
-    tools: { allow: ['sessions.*', 'chat.*', 'mcp.zendesk.*', 'docs.read'], deny: [] },
-  })
+    { key: 'billing-bot' },
+  )
+  put<EmployeeData>(
+    'employee',
+    EMP.infra,
+    {
+      name: 'Infra Bot',
+      contactId: CON.infraBot,
+      scope: 'Platform: deploys, environments, incidents on staging.',
+      personality: 'Terse. Uses checklists for everything.',
+      model: 'k3',
+      tools: { allow: ['sessions.*', 'chat.*', 'containers.*', 'git.*', 'mcp.linear.*'], deny: ['git.push_protected'] },
+    },
+    { key: 'infra-bot' },
+  )
+  put<EmployeeData>(
+    'employee',
+    EMP.support,
+    {
+      name: 'Support Bot',
+      contactId: CON.supportBot,
+      scope: 'Customer support tickets and the support portal.',
+      personality: 'Warm and patient.',
+      model: 'kimi-for-coding-highspeed',
+      tools: { allow: ['sessions.*', 'chat.*', 'mcp.zendesk.*', 'docs.read'], deny: [] },
+    },
+    { key: 'support-bot' },
+  )
 
   put<ProjectData>(
     'project',

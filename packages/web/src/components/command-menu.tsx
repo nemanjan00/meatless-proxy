@@ -1,5 +1,5 @@
-import type { SessionListItem } from '@mp/api'
-import { CirclePause, CirclePlay, Moon, Search } from 'lucide-react'
+import type { ChatSearchResult, SessionListItem } from '@mp/api'
+import { CirclePause, CirclePlay, MessageSquare, Moon, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -35,6 +35,7 @@ export function CommandMenu({
   const { employees, setCurrentId } = useEmployees()
   const [query, setQuery] = useState('')
   const [sessions, setSessions] = useState<SessionListItem[]>([])
+  const [messages, setMessages] = useState<ChatSearchResult[]>([])
 
   useEffect(() => {
     let first: string | null = null
@@ -76,6 +77,26 @@ export function CommandMenu({
     }
   }, [api, open, query])
 
+  // Chat messages, from two characters on (debounced).
+  useEffect(() => {
+    const q = query.trim()
+    if (!open || q.length < 2) {
+      setMessages([])
+      return
+    }
+    let live = true
+    const t = setTimeout(() => {
+      api.searchChat({ text: q, limit: 6 }).then(
+        (r) => live && setMessages(r),
+        () => {},
+      )
+    }, 180)
+    return () => {
+      live = false
+      clearTimeout(t)
+    }
+  }, [api, open, query])
+
   const go = (to: string) => {
     onOpenChange(false)
     navigate(to)
@@ -96,6 +117,27 @@ export function CommandMenu({
                 <StatusIcon status={sessionStatusKey(s.session.data.status, s.runState)} tooltip={false} />
                 <span className="truncate">{s.session.data.title}</span>
                 <span className="ml-auto truncate text-micro text-fg-tertiary">{s.employee.name}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {messages.length > 0 && (
+          <CommandGroup heading="Messages">
+            {messages.map((r) => (
+              <CommandItem
+                key={r.message.id}
+                value={`message ${query} ${r.message.data.text} ${r.message.id}`}
+                onSelect={() =>
+                  go(
+                    `/chat/${r.channel.id}${r.threadId !== r.message.id ? `/${r.threadId}` : ''}?m=${encodeURIComponent(r.message.id)}`,
+                  )
+                }
+              >
+                <MessageSquare className="text-fg-tertiary" />
+                <span className="min-w-0 truncate">{r.message.data.text.replace(/\s+/g, ' ')}</span>
+                <span className="ml-auto max-w-[35%] shrink-0 truncate text-micro text-fg-tertiary">
+                  {r.channel.dm ? r.message.data.author.name : `#${r.channel.name}`}
+                </span>
               </CommandItem>
             ))}
           </CommandGroup>

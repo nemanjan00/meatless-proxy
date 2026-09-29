@@ -8,7 +8,8 @@ import { Page, SectionTitle } from '@/components/page.tsx'
 import { BreakdownBars, UsageArea } from '@/components/usage-charts.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
-import { formatCost, formatNumber, formatTokens } from '@/lib/format.ts'
+import { formatCostOf, formatNumber, formatTokens, NO_PRICING, unpriced } from '@/lib/format.ts'
+import { fillSeries } from '@/lib/usage-series.ts'
 import { cn } from '@/lib/utils.ts'
 
 const RANGES = [
@@ -115,11 +116,20 @@ export function UsagePage() {
         align: 'right',
         className: 'w-24',
       },
-      { id: 'cost', header: 'Cost', value: (r) => r.cost, cell: (r) => formatCost(r.cost), align: 'right', className: 'w-20' },
+      {
+        id: 'cost',
+        header: 'Cost',
+        value: (r) => r.cost,
+        cell: (r) => <span title={unpriced(r) ? NO_PRICING : undefined}>{formatCostOf(r)}</span>,
+        align: 'right',
+        className: 'w-20',
+      },
     ],
     [group],
   )
-  const [totals, series, byEmployee, byModel, breakdown] = data.data ?? []
+  const [totals, rawSeries, byEmployee, byModel, breakdown] = data.data ?? []
+  // Every bucket of the range, empty ones as 0 (the API only returns buckets with usage).
+  const series = useMemo(() => (rawSeries ? fillSeries(rawSeries, Date.parse(since), Date.now()) : undefined), [rawSeries, since])
   return (
     <Page
       title="Usage"
@@ -150,7 +160,7 @@ export function UsagePage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="usage-totals">
             {[
               ['Tokens', formatTokens(totals.total), `${formatTokens(totals.input)} in · ${formatTokens(totals.output)} out`],
-              ['Cost', formatCost(totals.cost), `${range.label}`],
+              unpriced(totals) ? ['Cost', '—', NO_PRICING] : ['Cost', formatCostOf(totals), `${range.label}`],
               [
                 'Model calls',
                 formatNumber(totals.calls),

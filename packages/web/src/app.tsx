@@ -1,3 +1,4 @@
+import { type ComponentType, lazy } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { AppShell } from '@/components/app-shell.tsx'
 import { Toaster } from '@/components/ui/sonner.tsx'
@@ -5,18 +6,24 @@ import { TooltipProvider } from '@/components/ui/tooltip.tsx'
 import { type DataLayer, DataProvider } from '@/lib/api.tsx'
 import { EmployeesProvider } from '@/lib/employees.tsx'
 import { ThemeProvider } from '@/lib/theme.tsx'
-import { ChatPage } from '@/pages/chat.tsx'
-import { EventsPage } from '@/pages/events.tsx'
-import { FilesPage } from '@/pages/files.tsx'
-import { InboxPage } from '@/pages/inbox.tsx'
-import { LineagePage } from '@/pages/lineage.tsx'
-import { NowPage } from '@/pages/now.tsx'
-import { RecordDetailPage, RecordListPage } from '@/pages/records.tsx'
-import { SessionDetailPage } from '@/pages/session-detail.tsx'
-import { SessionsPage } from '@/pages/sessions.tsx'
-import { SettingsPage } from '@/pages/settings.tsx'
-import { TriggersPage } from '@/pages/triggers.tsx'
-import { UsagePage } from '@/pages/usage.tsx'
+
+/** Pages load on demand, one chunk per route (see vite.config.ts for the vendor chunks). */
+const page = <M extends Record<K, ComponentType<any>>, K extends keyof M>(load: () => Promise<M>, name: K) =>
+  lazy(() => load().then((m) => ({ default: m[name] })))
+
+const ChatPage = page(() => import('@/pages/chat.tsx'), 'ChatPage')
+const EventsPage = page(() => import('@/pages/events.tsx'), 'EventsPage')
+const FilesPage = page(() => import('@/pages/files.tsx'), 'FilesPage')
+const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
+const LineagePage = page(() => import('@/pages/lineage.tsx'), 'LineagePage')
+const NowPage = page(() => import('@/pages/now.tsx'), 'NowPage')
+const RecordDetailPage = page(() => import('@/pages/records.tsx'), 'RecordDetailPage')
+const RecordListPage = page(() => import('@/pages/records.tsx'), 'RecordListPage')
+const SessionDetailPage = page(() => import('@/pages/session-detail.tsx'), 'SessionDetailPage')
+const SessionsPage = page(() => import('@/pages/sessions.tsx'), 'SessionsPage')
+const SettingsPage = page(() => import('@/pages/settings.tsx'), 'SettingsPage')
+const TriggersPage = page(() => import('@/pages/triggers.tsx'), 'TriggersPage')
+const UsagePage = page(() => import('@/pages/usage.tsx'), 'UsagePage')
 
 /** Knowledge pages: one generic list and detail per record kind. */
 export const KNOWLEDGE = [

@@ -14,6 +14,19 @@ export function formatCost(usd: number): string {
   return `$${Math.round(usd).toLocaleString('en-US')}`
 }
 
+/** Shown instead of `$0` when model calls were made but no pricing is configured. */
+export const NO_PRICING = 'no pricing configured'
+
+/** Whether a cost of 0 means "not priced" rather than "free": there were calls, and none had a price. */
+export function unpriced(t: { cost: number; calls: number }): boolean {
+  return t.cost === 0 && t.calls > 0
+}
+
+/** `formatCost`, or `—` when the calls weren't priced (see `unpriced`). */
+export function formatCostOf(t: { cost: number; calls: number }): string {
+  return unpriced(t) ? '—' : formatCost(t.cost)
+}
+
 export function formatNumber(n: number): string {
   return n.toLocaleString('en-US')
 }

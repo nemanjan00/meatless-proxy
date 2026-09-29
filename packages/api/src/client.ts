@@ -1,6 +1,7 @@
 import { ApiRequestError, codeForStatus, type ApiErrorBody } from './errors.ts'
 import type {
   ApiEntry,
+  ApiRef,
   ApiEvent,
   ApiKindSchema,
   ApiLink,
@@ -10,7 +11,9 @@ import type {
   ChannelData,
   ChannelSummary,
   ChatMember,
+  ChatSearchResult,
   ChatThread,
+  ChannelUnread,
   ControlState,
   EntryTree,
   EventDetail,
@@ -20,6 +23,7 @@ import type {
   InboxItem,
   Json,
   LineageGraph,
+  Me,
   Message,
   NowSnapshot,
   Page,
@@ -91,6 +95,15 @@ export const ROUTES = {
   getThread: ['GET', '/api/chat/threads/:id'],
   postMessage: ['POST', '/api/chat/channels/:id/messages'],
   addMember: ['POST', '/api/chat/channels/:id/members'],
+  editMessage: ['PATCH', '/api/chat/messages/:id'],
+  deleteMessage: ['DELETE', '/api/chat/messages/:id'],
+  addReaction: ['POST', '/api/chat/messages/:id/reactions'],
+  removeReaction: ['DELETE', '/api/chat/messages/:id/reactions'],
+  markRead: ['POST', '/api/chat/read'],
+  unread: ['GET', '/api/chat/unread'],
+  openDm: ['POST', '/api/chat/dms'],
+  searchChat: ['GET', '/api/chat/search'],
+  me: ['GET', '/api/me'],
 
   usageTotals: ['GET', '/api/usage/totals'],
   usageBreakdown: ['GET', '/api/usage/breakdown'],
@@ -148,11 +161,24 @@ export interface SessionListQuery {
 export interface EventListQuery {
   source?: string
   type?: string
-  /** `true`: routed; `false`: not routed yet; `unmatched`: routed but no rule matched (went to a router session). */
+  /**
+   * `true`: routed; `false`: not routed yet; `unmatched`: routed, no rule matched and it went to a
+   * fallback router session (events delivered to nobody are not included).
+   */
   routed?: 'true' | 'false' | 'unmatched'
   subject?: string
   limit?: number
   offset?: number
+}
+
+export interface ChatSearchQuery {
+  text?: string
+  channelId?: string
+  /** `contact:con_…`, `session:ses_…`, or a bare id. */
+  author?: string
+  tagged?: string
+  threadId?: string
+  limit?: number
 }
 
 export interface IngestEventBody {
@@ -298,8 +324,11 @@ export interface ApiClient {
 
   /** `GET /api/chat/channels` → channels (incl. DMs), with activity. */
   channels(): Promise<ChannelSummary[]>
-  /** `POST /api/chat/channels` body `{ name, topic?, members? }` → the channel. */
-  createChannel(body: { name: string; topic?: string; members?: ChatMember[] }): Promise<ApiRecord<ChannelData>>
+  /**
+   * `POST /api/chat/channels` body `{ name, topic?, members?, dm? }` → the channel. With `dm: true` it's a
+   * direct message: the current person is added as a member too.
+   */
+  createChannel(body: { name: string; topic?: string; members?: ChatMember[]; dm?: boolean }): Promise<ApiRecord<ChannelData>>
   /** `GET /api/chat/channels/:id/messages?before=&limit=` → top-level messages, oldest first. */
   channelMessages(channelId: string, query?: { before?: string; limit?: number }): Promise<Message[]>
   /** `GET /api/chat/threads/:id` (id = root message id) → the root, its replies and the sessions on it. */
@@ -312,10 +341,31 @@ export interface ApiClient {
   postMessage(channelId: string, body: { text: string; threadId?: string }): Promise<Message>
   /** `POST /api/chat/channels/:id/members` body `ChatMember` → the channel. */
   addMember(channelId: string, member: Omit<ChatMember, 'label'> & { label?: string }): Promise<ApiRecord<ChannelData>>
+  /** `PATCH /api/chat/messages/:id` body `{ text }` → the message. Only its author may edit it (403 otherwise). */
+  editMessage(messageId: string, text: string): Promise<Message>
+  /** `DELETE /api/chat/messages/:id` → the message, now a placeholder (empty text, `deleted`). Author only (403). */
+  deleteMessage(messageId: string): Promise<Message>
+  /** `POST /api/chat/messages/:id/reactions` body `{ emoji }` → the message (idempotent). */
+  addReaction(messageId: string, emoji: string): Promise<Message>
+  /** `DELETE /api/chat/messages/:id/reactions?emoji=` → the message (idempotent). */
+  removeReaction(messageId: string, emoji: string): Promise<Message>
+  /** `POST /api/chat/read` body `{ scope, messageId? }` → 204. `scope` is a channel id or a thread's root id. */
+  markRead(scope: string, messageId?: string): Promise<void>
+  /** `GET /api/chat/unread` → unread and mention counts per channel for the current person. */
+  unread(): Promise<ChannelUnread[]>
+  /** `POST /api/chat/dms` body `{ members: [{ kind, id }] }` → the DM with exactly these members and you (created if new). */
+  openDm(members: ApiRef[]): Promise<ApiRecord<ChannelData>>
+  /**
+   * `GET /api/chat/search?text=&channelId=&author=&tagged=&threadId=&limit=` → matching messages, newest first,
+   * with their channel and thread. `author` is `kind:id` or an id; `tagged` an employee, session or contact id.
+   */
+  searchChat(query: ChatSearchQuery): Promise<ChatSearchResult[]>
+  /** `GET /api/me` → the contact the web UI acts as. */
+  me(): Promise<Me>
 
   // ── Usage ────────────────────────────────────────────────────────────────
 
-  /** `GET /api/usage/totals?employeeId=&sessionId=&rootSessionId=&projectId=&requesterId=&templateId=&model=&since=&until=`. */
+  /** `GET /api/usage/totals?runId=&employeeId=&sessionId=&rootSessionId=&projectId=&requesterId=&templateId=&model=&since=&until=`. */
   usageTotals(filter?: UsageFilter): Promise<TokenTotals>
   /** `GET /api/usage/breakdown?groupBy=&since=&…filters` → rows per group. */
   usageBreakdown(groupBy: UsageGroupBy, filter?: UsageFilter): Promise<UsageBreakdown>
@@ -464,6 +514,15 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     thread: (id) => call('getThread', { id }),
     postMessage: (id, body) => call('postMessage', { id }, undefined, body),
     addMember: (id, member) => call('addMember', { id }, undefined, member),
+    editMessage: (id, text) => call('editMessage', { id }, undefined, { text }),
+    deleteMessage: (id) => call('deleteMessage', { id }),
+    addReaction: (id, emoji) => call('addReaction', { id }, undefined, { emoji }),
+    removeReaction: (id, emoji) => call('removeReaction', { id }, { emoji }),
+    markRead: (scope, messageId) => call('markRead', undefined, undefined, { scope, ...(messageId ? { messageId } : {}) }),
+    unread: () => call('unread'),
+    openDm: (members) => call('openDm', undefined, undefined, { members }),
+    searchChat: (q) => call('searchChat', undefined, { ...q }),
+    me: () => call('me'),
 
     usageTotals: (f) => call('usageTotals', undefined, usageQuery(f)),
     usageBreakdown: (groupBy, f) => call('usageBreakdown', undefined, { groupBy, ...usageQuery(f) }),

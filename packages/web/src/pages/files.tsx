@@ -142,12 +142,15 @@ export function FilesPage() {
     setParams(n, { replace: true })
   }
   return (
-    <Page title="Files" icon={<FileText />} className="flex overflow-hidden">
+    <Page title="Files" icon={<FileText />} className="flex flex-col overflow-auto md:flex-row md:overflow-hidden">
       {!employeeId ? (
         <LoadingRows />
       ) : (
         <>
-          <nav className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r bg-level-1 p-2" aria-label="Files">
+          <nav
+            className="flex shrink-0 flex-col gap-2 overflow-auto border-b bg-level-1 p-2 max-md:max-h-72 md:w-64 md:border-r md:border-b-0"
+            aria-label="Files"
+          >
             <div className="flex flex-wrap gap-1">
               {employees.map((e) => (
                 <button

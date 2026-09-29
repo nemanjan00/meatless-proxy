@@ -380,6 +380,113 @@ describe('chat', () => {
   })
 })
 
+describe('everyday chat', () => {
+  let otherId: string
+  let channelId: string
+  const asOther = () => ({ 'x-mp-contact': otherId })
+
+  beforeAll(async () => {
+    const other = await t.req('POST', '/api/records/contact', {
+      data: { name: 'Robin Tester', kind: 'person', handles: [{ system: 'mp', id: 'robin' }] },
+    })
+    otherId = other.body.id
+    channelId = (await t.req('POST', '/api/chat/channels', { name: 'everyday' })).body.id
+  })
+
+  it('tells the UI who it is', async () => {
+    const me = await t.req('GET', '/api/me')
+    expect(me.status).toBe(200)
+    expect(me.body).toMatchObject({ name: 'Web user' })
+    expect(me.body.contactId).toMatch(/^con_/)
+  })
+
+  it('edits and deletes own messages only', async () => {
+    const m = await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'frist' })
+    const edited = await t.req('PATCH', `/api/chat/messages/${m.body.id}`, { text: 'first' })
+    expect(edited.status).toBe(200)
+    expect(edited.body.data).toMatchObject({ text: 'first' })
+    expect(edited.body.data.editedAt).toBeTruthy()
+    expect((await t.req('PATCH', `/api/chat/messages/${m.body.id}`, { text: 'mine now' }, asOther())).status).toBe(403)
+    expect((await t.req('DELETE', `/api/chat/messages/${m.body.id}`, undefined, asOther())).status).toBe(403)
+    expect((await t.req('PATCH', `/api/chat/messages/${m.body.id}`, {})).status).toBe(400)
+    expect((await t.req('PATCH', '/api/chat/messages/msg_00000000000000000000000000', { text: 'x' })).status).toBe(404)
+    const deleted = await t.req('DELETE', `/api/chat/messages/${m.body.id}`)
+    expect(deleted.status).toBe(200)
+    expect(deleted.body.data).toMatchObject({ text: '', deleted: true })
+    const msgs = await t.req('GET', `/api/chat/channels/${channelId}/messages`)
+    expect(msgs.body.find((x: any) => x.id === m.body.id).data.deleted).toBe(true)
+  })
+
+  it('adds and removes reactions, idempotently', async () => {
+    const m = await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'ship it?' })
+    const a = await t.req('POST', `/api/chat/messages/${m.body.id}/reactions`, { emoji: '✅' })
+    expect(a.status).toBe(200)
+    await t.req('POST', `/api/chat/messages/${m.body.id}/reactions`, { emoji: '✅' })
+    const b = await t.req('POST', `/api/chat/messages/${m.body.id}/reactions`, { emoji: '✅' }, asOther())
+    expect(b.body.data.reactions['✅']).toHaveLength(2)
+    expect((await t.req('POST', `/api/chat/messages/${m.body.id}/reactions`, {})).status).toBe(400)
+    const c = await t.req('DELETE', `/api/chat/messages/${m.body.id}/reactions?emoji=${encodeURIComponent('✅')}`)
+    expect(c.body.data.reactions['✅']).toEqual([{ kind: 'contact', id: otherId }])
+    const d = await t.req(
+      'DELETE',
+      `/api/chat/messages/${m.body.id}/reactions?emoji=${encodeURIComponent('✅')}`,
+      undefined,
+      asOther(),
+    )
+    expect(d.body.data.reactions).toBeUndefined()
+  })
+
+  it('counts unread messages and mentions, and marks them read', async () => {
+    await t.req('POST', '/api/chat/read', { scope: channelId })
+    // Messages in the same millisecond as the marker count as read.
+    await new Promise((r) => setTimeout(r, 5))
+    await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'hello' }, asOther())
+    await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'ping @web' }, asOther())
+    const unread = await t.req('GET', '/api/chat/unread')
+    expect(unread.status).toBe(200)
+    expect(unread.body.find((u: any) => u.channelId === channelId)).toMatchObject({ unread: 2, mentions: 1 })
+    expect((await t.req('POST', '/api/chat/read', { scope: channelId })).status).toBe(204)
+    const after = await t.req('GET', '/api/chat/unread')
+    expect(after.body.find((u: any) => u.channelId === channelId)).toMatchObject({ unread: 0, mentions: 0 })
+    expect((await t.req('POST', '/api/chat/read', {})).status).toBe(400)
+  })
+
+  it('opens one DM per member set and routes it to the employee', async () => {
+    const a = await t.req('POST', '/api/chat/dms', { members: [{ kind: 'employee', id: employeeId }] })
+    expect(a.status).toBe(201)
+    expect(a.body.data.dm).toBe(true)
+    expect(a.body.data.members.map((m: any) => m.type).sort()).toEqual(['employee', 'person'])
+    const again = await t.req('POST', '/api/chat/dms', { members: [{ kind: 'employee', id: employeeId }] })
+    expect(again.status).toBe(200)
+    expect(again.body.id).toBe(a.body.id)
+    const triggers = await t.req('GET', '/api/triggers')
+    expect(triggers.body.filter((x: any) => x.trigger.data.filters?.['payload.channelId'] === a.body.id)).toHaveLength(1)
+    const withPerson = await t.req('POST', '/api/chat/dms', { members: [{ kind: 'contact', id: otherId }] })
+    expect(withPerson.status).toBe(201)
+    expect(withPerson.body.id).not.toBe(a.body.id)
+    expect((await t.req('POST', '/api/chat/dms', { members: [] })).status).toBe(400)
+  })
+
+  it('searches by text, author and thread, with channel and thread', async () => {
+    const root = await t.req('POST', `/api/chat/channels/${channelId}/messages`, { text: 'the quarterly invoice run' })
+    const reply = await t.req(
+      'POST',
+      `/api/chat/channels/${channelId}/messages`,
+      { text: 'invoice run is done', threadId: root.body.id },
+      asOther(),
+    )
+    const hits = await t.req('GET', '/api/chat/search?text=invoice')
+    expect(hits.status).toBe(200)
+    expect(hits.body.map((h: any) => h.message.id)).toEqual([reply.body.id, root.body.id])
+    expect(hits.body[0]).toMatchObject({ channel: { id: channelId, name: 'everyday', dm: false }, threadId: root.body.id })
+    expect(hits.body[1].threadId).toBe(root.body.id)
+    const byAuthor = await t.req('GET', `/api/chat/search?text=invoice&author=contact:${otherId}`)
+    expect(byAuthor.body.map((h: any) => h.message.id)).toEqual([reply.body.id])
+    const inThread = await t.req('GET', `/api/chat/search?threadId=${root.body.id}`)
+    expect(inThread.body).toHaveLength(2)
+  })
+})
+
 describe('usage', () => {
   it('totals, breakdowns and series', async () => {
     const totals = await t.req('GET', '/api/usage/totals')
