@@ -9,6 +9,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import Docker from 'dockerode'
+import { runtimeContract } from '@mp/containers/contract'
 import { afterAll, describe, expect, it } from 'vitest'
 import { dockerRuntime } from '../src/index.ts'
 
@@ -17,6 +18,9 @@ const IMAGE = 'alpine:3'
 /** Has curl, which behaves like real tooling (npm, git) behind a proxy: CONNECT for HTTPS. */
 const CURL_IMAGE = 'curlimages/curl:latest'
 const PREFIX = `mp-itest-${randomBytes(3).toString('hex')}-`
+
+// spawn, copyIn, copyOut and features, as every runtime must implement them.
+if (ENABLED) runtimeContract('docker', () => dockerRuntime({ namePrefix: PREFIX }), { image: IMAGE, timeoutMs: 120_000 })
 
 describe.skipIf(!ENABLED)('docker runtime against a real daemon', () => {
   const docker = new Docker()

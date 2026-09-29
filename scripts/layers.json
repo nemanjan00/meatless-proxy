@@ -36,7 +36,8 @@
     "@mp/evals": 7,
     "@mp/integration-slack": 2,
     "@mp/integration-linear": 2,
-    "@mp/integration-gitlab": 2
+    "@mp/integration-gitlab": 2,
+    "@mp/sandbox": 3
   },
   "domainOrder": [
     "@mp/records",
@@ -49,7 +50,8 @@
     "@mp/checklists",
     "@mp/chat",
     "@mp/tools",
-    "@mp/usage"
+    "@mp/usage",
+    "@mp/sandbox"
   ],
   "adapterLayer": 2,
   "adapterConsumers": ["@mp/server"],

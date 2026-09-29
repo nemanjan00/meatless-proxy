@@ -24,6 +24,13 @@ export const SettingNames = {
   control: 'control',
   webContact: 'web.contact',
   bootstrap: 'bootstrap',
+  /** The company timezone, an IANA name (`time.now` uses it). Default `DEFAULT_SETTINGS.timezone`. */
+  timezone: 'timezone',
+} as const
+
+/** Values used while a setting has never been set. */
+export const DEFAULT_SETTINGS = {
+  timezone: 'UTC',
 } as const
 
 export interface Settings {

@@ -12,7 +12,8 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
 
 - `registerStdlib(registry, deps: StdlibDeps): string[]` registers the tools
   and returns their names. `git.*` needs `deps.git`, `env.*` needs
-  `deps.containers`.
+  `deps.containers`, `code.*` needs `deps.sandbox` (`@mp/sandbox`).
+  `deps.defaultTimezone()` gives `time.now` the company timezone (default UTC).
 - `employeePrompt({ employee, contact, projects?, procedures?, skills?, memories?, now })`:
   the system prompt (identity, personality, the employee rules, how to use the
   stdlib, skill names and descriptions). Only `now` varies.
@@ -47,6 +48,8 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
 | `env.*` | up (with `expose` ports for live previews), exec, logs, preview, down |
+| `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
+| `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
 
 Notes on behaviour:
 
@@ -61,7 +64,22 @@ Notes on behaviour:
   the first result. A crash between the effect and that record can repeat the
   effect once; that's accepted for harness-internal state. `sessions.loop`
   (which may create tasks in an outside task system), `sessions.save_template`,
-  `triggers.create` and `env.exec` are `non_idempotent`.
+  `triggers.create`, `env.exec` and `code.run` are `non_idempotent`
+  (`code.reset` is `idempotent`, `time.now` is `read`).
+- **Network.** `env.up` takes its egress allowlist from `networkFor({ network,
+  projectAllow, fallback })`: the employee's `network` setting (`none`,
+  `project` by default, or `{ allow }`, intersected with a project's list),
+  the project's list, else `config.defaultEgress`. `env.up { egress }` can
+  only narrow it. The result's `network` is `{ via: 'proxy', allow, note }`
+  or `{ via: 'none', reason }` saying why and what to ask an admin for.
+- **Time.** The prompt says that every message carries when it arrived (the
+  router stamps event headers) and to call `time.now` for the time now; the
+  prompt itself holds no clock time beyond the session's start, so its cached
+  prefix never changes. `time.now` and `code.*` are in router toolsets too.
+- **Code.** `code.run` is `sandbox.run` for the calling session, with the
+  session as the actor of file changes; a cell's error (or a timeout) is a
+  tool error with the output. A session that ends (`done`, `abandoned`) loses
+  its kernels (a `record.changed` subscription).
 - **Forks** start "at the current point": the run's tip without the assistant
   message that asked for the fork. Runs are started with
   `cause: { type: 'fork' | 'loop', parentRunId }` and queued with

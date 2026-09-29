@@ -2,9 +2,9 @@
 export const REVIEWER_ONLY_TOOLS = ['checklist.record_review'] as const
 
 /**
- * Every stdlib tool except the reviewer-only ones, sorted. Includes the git
- * and env tools; when they aren't registered (no git cache or container
- * runtime) the runner simply doesn't offer them.
+ * Every stdlib tool except the reviewer-only ones, sorted. Includes the git,
+ * env and code tools; when they aren't registered (no git cache, container
+ * runtime or sandbox) the runner simply doesn't offer them.
  */
 export const DEFAULT_TOOLSET: readonly string[] = [
   'chat.add_member',
@@ -23,6 +23,8 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'checklist.check',
   'checklist.request_review',
   'checklist.show',
+  'code.reset',
+  'code.run',
   'directory.find_contact',
   'directory.find_procedure',
   'directory.find_project',
@@ -88,6 +90,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'subscriptions.list',
   'subscriptions.subscribe',
   'subscriptions.unsubscribe',
+  'time.now',
   'triggers.create',
   'triggers.disable',
   'triggers.list',
@@ -102,6 +105,7 @@ export const REVIEWER_TOOLSET: readonly string[] = [
   'env.logs',
   'git.diff',
   'sessions.get',
+  'time.now',
 ]
 
 /**

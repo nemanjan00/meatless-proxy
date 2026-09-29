@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExecAbortedError, TIMEOUT_EXIT_CODE } from '@mp/containers'
-import { ConflictError, NotFoundError, UnavailableError, ValidationError, memoryLogger } from '@mp/core'
+import { ConflictError, DeniedError, NotFoundError, UnavailableError, ValidationError, memoryLogger } from '@mp/core'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { NotImplementedError, demuxBuffer, dockerRuntime, mapError } from '../src/index.ts'
 import { HttpError, MockDocker, frame } from './mock-docker.ts'
@@ -322,8 +322,29 @@ describe('destroyEnv', () => {
   })
 
   it('surfaces daemon errors', async () => {
-    docker.failures.listContainers = Object.assign(new Error('connect ENOENT /var/run/docker.sock'), { code: 'ENOENT' })
+    docker.failures.listContainers = Object.assign(new Error('connect ECONNREFUSED /var/run/docker.sock'), {
+      code: 'ECONNREFUSED',
+    })
     await expect(rt().destroyEnv('mp-x')).rejects.toBeInstanceOf(UnavailableError)
+  })
+
+  it("says what to fix when the app can't use the Docker socket, instead of retrying", async () => {
+    docker.failures.createNetwork = Object.assign(new Error('connect EACCES /var/run/docker.sock'), {
+      code: 'EACCES',
+      syscall: 'connect',
+    })
+    docker.images.add('node:22')
+    const err = await rt()
+      .createEnv({ name: 'x', image: 'node:22' })
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(DeniedError)
+    expect(err.message).toMatch(/can't use the Docker socket \(permission denied\).*DOCKER_GID/)
+    docker.failures.listContainers = Object.assign(new Error('connect ENOENT /var/run/docker.sock'), { code: 'ENOENT' })
+    const missing = await rt()
+      .destroyEnv('mp-x')
+      .catch((e) => e)
+    expect(missing).toBeInstanceOf(ValidationError)
+    expect(missing.message).toMatch(/Docker socket isn't there.*DOCKER_SOCKET/)
   })
 })
 
@@ -334,6 +355,10 @@ describe('mapError', () => {
     expect(mapError(new HttpError(400, 'x'), 'thing')).toBeInstanceOf(ValidationError)
     expect(mapError(new HttpError(500, 'x'), 'thing')).toBeInstanceOf(UnavailableError)
     expect(mapError(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }), 'thing')).toBeInstanceOf(UnavailableError)
+    expect(mapError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), 'thing')).toBeInstanceOf(UnavailableError)
+    expect(mapError(Object.assign(new Error('denied'), { code: 'EACCES' }), 'thing')).toBeInstanceOf(DeniedError)
+    expect(mapError(Object.assign(new Error('denied'), { code: 'EPERM' }), 'thing')).toBeInstanceOf(DeniedError)
+    expect(mapError(Object.assign(new Error('missing'), { code: 'ENOENT' }), 'thing')).toBeInstanceOf(ValidationError)
     const plain = new Error('other')
     expect(mapError(plain, 'thing')).toBe(plain)
   })

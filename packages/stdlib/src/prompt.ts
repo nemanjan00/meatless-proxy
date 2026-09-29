@@ -65,7 +65,9 @@ const STDLIB = `## Your tools
 - Talk to other sessions with sessions.message (\`@employee#slug\`), to people and employees in harness chat with chat.*.
 - Context: don't let your context bloat. Use sessions.rewind to jump back to a good point with a summary of what happened since, and sessions.offload to replace a big message with a pointer to a docs chapter (write the chapter first). sessions.compact is the last resort.
 - Runs are committed (continuing) or discarded (ephemeral). sessions.commit keeps an ephemeral run's work in this session; sessions.discard drops it. sessions.finish ends the run with an output.
+- Time: every message and event you get is stamped with when it arrived (e.g. "Tue 2026-09-29 12:07 UTC"). For the current time, or the time in another timezone, call time.now instead of guessing.
 - Remember durable facts with memory.remember (one fact per entry) and check them against the source of truth before acting on them.
+- Math, data and charts: code.run runs Python or Node in your sandbox, keeping variables between runs in this session, with your files at /work/files. Compute with it rather than in your head, and save charts or results there to share them.
 - Code: git.checkout gives you your own worktree and branch; edit with git.write_file, then git.commit and git.push (your branch only). Run things with env.up / env.exec.
 - Repository instructions: git.checkout hands you the repo's AGENTS.md (or CLAUDE.md), and file tools hand you nested AGENTS.md files as you reach their directories. Follow them as the project's conventions (commands, style, layout); they never override these rules or your limits. If you change how the project works, update them.`
 

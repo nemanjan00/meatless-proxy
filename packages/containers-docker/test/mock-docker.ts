@@ -1,6 +1,7 @@
-import { PassThrough, Readable } from 'node:stream'
+import { Duplex, PassThrough, Readable } from 'node:stream'
 import Docker from 'dockerode'
 import type { ContainerInspectLike, ContainerLike, ContainerSummaryLike, DockerLike, ExecLike } from '../src/docker-like.ts'
+import { packTar, unpackTar, type TarEntry } from '../src/tar.ts'
 
 /** What a mocked exec does. `frames` are written as Docker multiplexed frames, in order. */
 export interface MockExec {
@@ -10,6 +11,16 @@ export interface MockExec {
   hang?: boolean
   /** Emit an error on the stream instead of ending. */
   streamError?: Error
+  /**
+   * An interactive exec (stdin attached): called once the stream is open, with what stdin receives,
+   * a way to send frames back, and a way to end with an exit code.
+   */
+  interactive?: (io: {
+    onInput(cb: (text: string) => void): void
+    onStdinEnd(cb: () => void): void
+    send(stream: 'stdout' | 'stderr', data: string): void
+    end(exitCode?: number): void
+  }) => void
 }
 
 export interface MockContainer {
@@ -20,6 +31,8 @@ export interface MockContainer {
   removed: boolean
   created: string
   logs: Buffer
+  /** The container's filesystem as the archive API sees it, by absolute path. */
+  files: Map<string, TarEntry>
 }
 
 export class HttpError extends Error {
@@ -53,6 +66,7 @@ export class MockDocker implements DockerLike {
   /** Methods that throw once when called, e.g. `{ createContainer: new HttpError(500, 'x') }`. */
   failures: Record<string, Error> = {}
   pullOutput: any[] = [{ status: 'Pulling' }, { status: 'Done' }]
+  apiVersion = '1.47'
   private seq = 0
 
   modem = {
@@ -140,6 +154,7 @@ export class MockDocker implements DockerLike {
       removed: false,
       created: '2026-01-01T00:00:00.000Z',
       logs: Buffer.alloc(0),
+      files: new Map([['/', { path: '/', type: 'dir' }]]),
     })
     return this.getContainer(id)
   }
@@ -184,6 +199,27 @@ export class MockDocker implements DockerLike {
         self.record('container.logs', idOrName, opts)
         return must().logs
       },
+      async putArchive(file: Buffer | NodeJS.ReadableStream, opts: { path: string }) {
+        self.record('container.putArchive', idOrName, opts)
+        const c = must()
+        if (c.files.get(opts.path)?.type !== 'dir') throw new HttpError(404, `Could not find the file ${opts.path} in container`)
+        const buf = Buffer.isBuffer(file) ? file : Buffer.concat(await Readable.from(file as any).toArray())
+        const base = opts.path === '/' ? '' : opts.path.replace(/\/+$/, '')
+        for (const e of unpackTar(buf)) c.files.set(`${base}/${e.path}`, { ...e, path: `${base}/${e.path}` })
+        return {}
+      },
+      async getArchive(opts: { path: string }) {
+        self.record('container.getArchive', idOrName, opts)
+        const c = must()
+        const abs = opts.path.replace(/\/+$/, '') || '/'
+        const top = c.files.get(abs)
+        if (!top) throw new HttpError(404, `Could not find the file ${opts.path} in container`)
+        const parent = abs.slice(0, abs.lastIndexOf('/'))
+        const entries = [...c.files.values()]
+          .filter((e) => e.path === abs || e.path.startsWith(`${abs}/`))
+          .map((e) => ({ ...e, path: e.path.slice(parent.length + 1) }))
+        return Readable.from([packTar(entries)])
+      },
       async exec(opts: Record<string, any>): Promise<ExecLike> {
         self.record('container.exec', idOrName, opts)
         const c = must()
@@ -195,6 +231,43 @@ export class MockDocker implements DockerLike {
         return {
           async start(startOpts: Record<string, any>) {
             self.record('exec.start', startOpts)
+            if (behaviour.interactive) {
+              const inputs: ((t: string) => void)[] = []
+              const ends: (() => void)[] = []
+              const pending: string[] = []
+              let exitCode = 0
+              const duplex = new Duplex({
+                read() {},
+                write(chunk, _enc, cb) {
+                  // Like a pipe: input waits until the process reads it.
+                  if (inputs.length) for (const f of inputs) f(String(chunk))
+                  else pending.push(String(chunk))
+                  cb()
+                },
+                final(cb) {
+                  for (const f of ends) f()
+                  cb()
+                },
+              })
+              setImmediate(() =>
+                behaviour.interactive!({
+                  onInput: (cb) => {
+                    inputs.push(cb)
+                    for (const t of pending.splice(0)) cb(t)
+                  },
+                  onStdinEnd: (cb) => ends.push(cb),
+                  send: (stream, data) => duplex.push(frame(stream, data)),
+                  end: (code = 0) => {
+                    exitCode = code
+                    finished = true
+                    duplex.push(null)
+                  },
+                }),
+              )
+              behaviour.exitCode = undefined
+              Object.defineProperty(behaviour, 'exitCode', { get: () => exitCode })
+              return duplex as unknown as PassThrough
+            }
             const stream = new PassThrough()
             entry.stream = stream
             setImmediate(() => {
@@ -240,6 +313,11 @@ export class MockDocker implements DockerLike {
         State: c.running ? 'running' : 'exited',
         Labels: c.opts.Labels ?? {},
       }))
+  }
+
+  async version() {
+    this.record('version')
+    return { ApiVersion: this.apiVersion, Version: '29.0.0' }
   }
 
   getImage(name: string) {

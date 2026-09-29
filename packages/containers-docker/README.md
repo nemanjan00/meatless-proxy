@@ -27,6 +27,17 @@ Per environment `<name>`:
 - main container `<prefix><name>` (this is the env id): binds, env, workdir, `NanoCpus`/`Memory` limits, labels
   `mp.env=<name>`, `mp.managed=true`, `mp.role=main`, command default `sleep infinity`. Never privileged, never host
   network, `no-new-privileges`, a few capabilities dropped (`DEFAULT_CAP_DROP`), pids limit, runs as the image's user.
+- sandbox hardening: `user` -> `User`, `readOnlyRootfs` -> `ReadonlyRootfs`, `volumes` -> anonymous volumes (removed with
+  the container), `tmpfs` -> `Tmpfs` (`rw,nosuid,nodev,size=<n>m`), `limits.pids` -> `PidsLimit`, `volumeMounts` ->
+  `Mounts` of type `volume` with `VolumeOptions.Subpath` (and `NoCopy`). Only volumes named `<prefix>*` may be mounted,
+  and subpaths need Docker API `VOLUME_SUBPATH_API` (1.45, Engine 26) or later; `features()` reads `docker.version()`
+  once (`apiAtLeast`).
+- spawn: `sh -c 'echo <marker><pid> >&2; exec "$@"'` with stdin attached (`hijack`), so the process reports its pid on
+  stderr (hidden from the output) and then becomes the command. `kill` runs `kill -KILL -- -<pid>` (its process group,
+  when it leads one) and `kill -KILL <pid>`, then drops the stream. Needs `sh` in the image.
+- copyIn/copyOut: `putArchive`/`getArchive` with a small tar writer and reader (`src/tar.ts`: ustar, pax long names).
+  This works for anonymous and named volumes with a read-only root; not for tmpfs mounts (Docker's archive API doesn't
+  see them).
 - exec: `container.exec` + `exec.start({ hijack: true })`, demuxed with `modem.demuxStream`. On timeout the stream is
   dropped and the result has `timedOut: true`, exit code 124. Docker can't kill an exec'd process, so it is abandoned
   (it dies with the environment). Aborting rejects with `ExecAbortedError`.
@@ -40,14 +51,18 @@ Per environment `<name>`:
 - destroy: removes every container labelled `mp.env=<name>` (with anonymous volumes), the proxy, and both networks. Idempotent, and
   also cleans up half-created environments. A failed `createEnv` cleans up after itself.
 
-Errors: 404 -> `NotFoundError` (`getEnv` returns null), 409 -> `ConflictError`, 400 -> `ValidationError`, 5xx and socket
-errors -> `UnavailableError`.
+Errors: 404 -> `NotFoundError` (`getEnv` returns null), 409 -> `ConflictError`, 400 -> `ValidationError`, 5xx and
+connection errors (`ECONNREFUSED`, `ECONNRESET`, ...: the daemon restarting) -> `UnavailableError`, which is retried. A
+socket the app may not use (`EACCES`, `EPERM`) is a `DeniedError` and a missing socket (`ENOENT`) a `ValidationError`,
+both saying what to fix (the socket's group, `DOCKER_GID`, `DOCKER_SOCKET`): retrying wouldn't help, so the model gets a
+tool error it can report.
 
 ## The egress proxy
 
 `src/egress-proxy-core.cjs` is a small forward proxy in plain CommonJS with node built-ins only: plain HTTP forwarding
 (absolute-URI requests, hop-by-hop and `Proxy-*` headers dropped) and `CONNECT` tunnels. Anything not on the allowlist gets
-403. IP literals, `localhost` and hosts that resolve to private, loopback or link-local addresses are refused unless listed
+403, with a body naming the host, why (not on the allowlist; an IP or private address that needs an exact entry) and to
+ask an admin to add it to the project's or the employee's network allowlist. IP literals, `localhost` and hosts that resolve to private, loopback or link-local addresses are refused unless listed
 exactly; the proxy connects to the address it checked (no DNS rebinding). One JSON line per request on stdout:
 `{ at, method, host, port, allowed, reason? }`. The same file is loaded in-process by `createEgressProxy({ allow, logger?,
 lookup?, now? })` (returns an `http.Server`, not listening yet) and inlined verbatim into `EGRESS_PROXY_SOURCE`, which reads
@@ -73,7 +88,8 @@ checks the egress networks, the sidecar, aliases, proxy variables, cleanup and `
 (forwarding, 403s, CONNECT tunnels, private addresses, globs and ports, log lines), and `EGRESS_PROXY_SOURCE` as a
 `node -e` child process. `test/preview-docker.test.ts` checks the forwarder, its networks, `previewTarget`,
 `selfContainer` connects and disconnects and cleanup against the mock, and runs `createPreviewForwarder` and
-`PREVIEW_FORWARDER_SOURCE` against real local servers. `test/real-docker.test.ts` (`MP_DOCKER_TEST=1`) also serves
+`PREVIEW_FORWARDER_SOURCE` against real local servers. `test/interactive-docker.test.ts` checks the sandbox hardening, volume mounts, features, archives, tar and spawn
+against the mock. `test/real-docker.test.ts` (`MP_DOCKER_TEST=1`) runs `runtimeContract` (spawn, copies, kill) and also serves
 `python3 -m http.server` through the forwarder, once reached from the host and once from a stand-in harness container
 that the project container can't reach on any of its addresses.
 

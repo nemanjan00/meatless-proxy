@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { Writable } from 'node:stream'
@@ -6,17 +7,23 @@ import {
   ExecAbortedError,
   TIMEOUT_EXIT_CODE,
   invalidEgressEntries,
+  invalidEntryPath,
   invalidExpose,
+  invalidVolumeMounts,
   type ContainerRuntime,
   type EgressLogEntry,
   type EnvInfo,
   type EnvSpec,
   type ExecOptions,
   type ExecResult,
+  type FileEntry,
   type PreviewTarget,
+  type Process,
+  type RuntimeFeatures,
 } from '@mp/containers'
 import {
   ConflictError,
+  DeniedError,
   MpError,
   NotFoundError,
   UnavailableError,
@@ -31,6 +38,7 @@ import Docker from 'dockerode'
 import type { ContainerInspectLike, ContainerSummaryLike, DockerLike } from './docker-like.ts'
 import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
 import { PREVIEW_FORWARDER_SOURCE, PREVIEW_READY_MARKER } from './preview-forwarder.ts'
+import { packTar, unpackTar } from './tar.ts'
 
 export interface DockerRuntimeOptions {
   /** A dockerode instance (or anything shaped like one). Default: `new Docker({ socketPath })`. */
@@ -88,6 +96,11 @@ export class NotImplementedError extends MpError {
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/
+const USER_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$/
+/** The first Docker API version with volume subpaths (Engine 26). */
+export const VOLUME_SUBPATH_API = '1.45'
+/** How long `kill` waits for a spawned process to report its pid and to end. */
+const KILL_WAIT_MS = 5000
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
@@ -109,6 +122,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const self = opts.selfContainer
   /** Preview networks the harness container is already connected to. */
   const attached = new Set<string>()
+  let features: Promise<RuntimeFeatures> | null = null
 
   const envName = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
   const mainName = (name: string) => `${prefix}${name}`
@@ -324,13 +338,35 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Image: image,
       Cmd: spec.command ?? ['sleep', 'infinity'],
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
+      ...(spec.user ? { User: spec.user } : {}),
+      ...(spec.volumes?.length ? { Volumes: Object.fromEntries(spec.volumes.map((v) => [v, {}])) } : {}),
       Env: envList({ ...spec.env, ...viaProxy }),
       Labels: { ...labels, [LABEL_ROLE]: 'main', ...(spec.expose?.length ? { [LABEL_EXPOSE]: spec.expose.join(',') } : {}) },
       HostConfig: {
         ...hardening,
         NetworkMode: net,
         Binds: (spec.mounts ?? []).map((m) => `${m.hostPath}:${m.containerPath}${m.readOnly ? ':ro' : ''}`),
+        ...(spec.volumeMounts?.length
+          ? {
+              Mounts: spec.volumeMounts.map((m) => ({
+                Type: 'volume',
+                Source: m.volume,
+                Target: m.containerPath,
+                ReadOnly: m.readOnly === true,
+                VolumeOptions: { NoCopy: true, ...(m.subpath ? { Subpath: m.subpath } : {}) },
+              })),
+            }
+          : {}),
+        ...(spec.readOnlyRootfs ? { ReadonlyRootfs: true } : {}),
+        ...(spec.tmpfs
+          ? {
+              Tmpfs: Object.fromEntries(
+                Object.entries(spec.tmpfs).map(([p, t]) => [p, `rw,nosuid,nodev,size=${Math.round(t.sizeMb ?? 64)}m`]),
+              ),
+            }
+          : {}),
         ...limits(spec),
+        ...(spec.limits?.pids ? { PidsLimit: spec.limits.pids } : {}),
       },
       NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: ['main'] } } },
     })
@@ -378,6 +414,10 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const runtime: ContainerRuntime = {
     async createEnv(spec) {
       validate(spec)
+      const foreign = (spec.volumeMounts ?? []).filter((m) => !m.volume.startsWith(prefix)).map((m) => m.volume)
+      if (foreign.length) throw new ValidationError(`only volumes named ${prefix}* can be mounted`, foreign)
+      if (spec.volumeMounts?.some((m) => m.subpath) && !(await runtime.features!()).volumeSubpath)
+        throw new ValidationError(`volume subpaths need Docker Engine 26 (API ${VOLUME_SUBPATH_API}) or later`)
       const labels = { ...baseLabels, ...spec.labels, [LABEL_ENV]: spec.name, [LABEL_MANAGED]: 'true' }
       const id = mainName(spec.name)
       try {
@@ -437,6 +477,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
           Tty: false,
           Env: envList(o.env),
           ...(o.workdir ? { WorkingDir: o.workdir } : {}),
+          ...(o.user ? { User: o.user } : {}),
         })
         stream = await exec.start({ hijack: true, stdin: false })
       } catch (e) {
@@ -548,6 +589,149 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       return { host: ip, port }
     },
 
+    async spawn(envId, cmd, o = {}): Promise<Process> {
+      if (!cmd.length) throw new ValidationError('spawn needs a command')
+      const container = docker.getContainer(envId)
+      // The process reports its pid first (so `kill` can reach it), then becomes the command.
+      const marker = `mp-pid-${randomBytes(6).toString('hex')}:`
+      let exec: Awaited<ReturnType<typeof container.exec>>
+      let stream: NodeJS.ReadWriteStream & { destroy?(): void }
+      try {
+        exec = await container.exec({
+          Cmd: ['sh', '-c', `echo "${marker}$$" >&2; exec "$@"`, 'sh', ...cmd],
+          AttachStdin: true,
+          AttachStdout: true,
+          AttachStderr: true,
+          Tty: false,
+          Env: envList(o.env),
+          ...(o.workdir ? { WorkingDir: o.workdir } : {}),
+        })
+        stream = (await exec.start({ hijack: true, stdin: true })) as unknown as NodeJS.ReadWriteStream & { destroy?(): void }
+      } catch (e) {
+        throw mapError(e, `environment ${envId}`)
+      }
+
+      let resolvePid!: (pid: number | null) => void
+      const pid = new Promise<number | null>((r) => {
+        resolvePid = r
+      })
+      let head = ''
+      let headDone = false
+      const emit = (streamName: 'stdout' | 'stderr', text: string) => {
+        if (text) o.onOutput?.({ stream: streamName, text })
+      }
+      const out = new StringDecoder('utf8')
+      const err = new StringDecoder('utf8')
+      const stdout = new Writable({
+        write(chunk: Buffer, _enc, cb) {
+          emit('stdout', out.write(chunk))
+          cb()
+        },
+      })
+      const stderr = new Writable({
+        write(chunk: Buffer, _enc, cb) {
+          const text = err.write(chunk)
+          if (headDone) emit('stderr', text)
+          else {
+            head += text
+            const nl = head.indexOf('\n')
+            if (nl >= 0 || head.length > 256) {
+              headDone = true
+              const first = nl >= 0 ? head.slice(0, nl) : head
+              const n = first.startsWith(marker) ? Number(first.slice(marker.length)) : Number.NaN
+              resolvePid(Number.isInteger(n) && n > 0 ? n : null)
+              emit('stderr', first.startsWith(marker) ? head.slice(nl + 1) : head)
+              head = ''
+            }
+          }
+          cb()
+        },
+      })
+      docker.modem.demuxStream(stream, stdout, stderr)
+
+      let ended = false
+      let killed = false
+      const exited = new Promise<{ exitCode: number | null }>((resolve) => {
+        const done = async () => {
+          if (ended) return
+          ended = true
+          resolvePid(null)
+          emit('stdout', out.end())
+          emit('stderr', err.end())
+          if (killed) return resolve({ exitCode: null })
+          try {
+            resolve({ exitCode: (await exec.inspect()).ExitCode ?? null })
+          } catch {
+            resolve({ exitCode: null })
+          }
+        }
+        stream.on('end', done)
+        stream.on('close', done)
+        stream.on('error', done)
+      })
+
+      return {
+        exited,
+        write(data) {
+          if (ended) return Promise.reject(new ConflictError('the process has ended'))
+          return new Promise<void>((resolve, reject) => {
+            stream.write(typeof data === 'string' ? data : Buffer.from(data), (e) =>
+              e ? reject(mapError(e, 'stdin')) : resolve(),
+            )
+          })
+        },
+        end() {
+          if (!ended) stream.end()
+        },
+        async kill() {
+          if (ended) return
+          killed = true
+          const p = await Promise.race([pid, new Promise<null>((r) => setTimeout(() => r(null), KILL_WAIT_MS))])
+          if (p)
+            await runtime
+              .exec(envId, ['sh', '-c', 'kill -KILL -- "-$1" 2>/dev/null; kill -KILL "$1" 2>/dev/null; true', 'sh', String(p)], {
+                timeoutMs: KILL_WAIT_MS,
+              })
+              .catch((e) => log.warn('could not kill a process', { env: envId, err: errorMessage(e) }))
+          stream.destroy?.()
+          await Promise.race([exited, new Promise((r) => setTimeout(r, KILL_WAIT_MS))])
+        },
+      }
+    },
+
+    async copyIn(envId, dir, entries) {
+      if (!isAbsolute(dir)) throw new ValidationError(`dir must be absolute: ${dir}`)
+      const bad = entries.map((e) => invalidEntryPath(e.path)).filter((x): x is string => !!x)
+      if (bad.length) throw new ValidationError('invalid entries', bad)
+      try {
+        await docker.getContainer(envId).putArchive(packTar(entries), { path: dir })
+      } catch (e) {
+        throw mapError(e, `${dir} in ${envId}`)
+      }
+    },
+
+    async copyOut(envId, path): Promise<FileEntry[]> {
+      let stream: NodeJS.ReadableStream
+      try {
+        stream = await docker.getContainer(envId).getArchive({ path })
+      } catch (e) {
+        if (statusOf(e) === 404 && /no such (file|directory)|could not find the file/i.test(errorMessage(e))) return []
+        throw mapError(e, `${path} in ${envId}`)
+      }
+      return unpackTar(await readAll(stream))
+    },
+
+    async features(): Promise<RuntimeFeatures> {
+      features ??= docker.version().then(
+        (v) => ({ volumeSubpath: apiAtLeast(v.ApiVersion, VOLUME_SUBPATH_API) }),
+        (e) => {
+          features = null
+          throw mapError(e, 'docker version')
+        },
+      )
+      return features
+    },
+
     async destroyEnv(envId) {
       const name = envName(envId)
       await removeAll(name)
@@ -572,6 +756,12 @@ function validate(spec: EnvSpec) {
       issues.push(`service name ${PREVIEW_SUFFIX} is taken by the preview forwarder`)
   }
   issues.push(...invalidExpose(spec.expose))
+  issues.push(...invalidVolumeMounts(spec.volumeMounts))
+  for (const p of [...(spec.volumes ?? []), ...Object.keys(spec.tmpfs ?? {})])
+    if (!isAbsolute(p) || p.includes(':') || p.includes(',')) issues.push(`bad container path: ${p}`)
+  if (spec.user !== undefined && !USER_RE.test(spec.user)) issues.push(`bad user: ${spec.user}`)
+  if (spec.limits?.pids !== undefined && !(Number.isInteger(spec.limits.pids) && spec.limits.pids > 0))
+    issues.push('limits.pids must be a positive integer')
   if (spec.egress) {
     if (spec.allowInternet) issues.push('egress and allowInternet exclude each other')
     if (!Array.isArray(spec.egress.allow)) issues.push('egress.allow must be a list')
@@ -599,6 +789,13 @@ export function parseEgressLog(text: string): EgressLogEntry[] {
     }
   }
   return out
+}
+
+/** Whether Docker API version `v` (e.g. `1.47`) is at least `min`. */
+export function apiAtLeast(v: string | undefined, min: string): boolean {
+  const [a = 0, b = 0] = (v ?? '0').split('.').map(Number)
+  const [c = 0, d = 0] = min.split('.').map(Number)
+  return a > c || (a === c && b >= d)
 }
 
 function limits(spec: EnvSpec): Record<string, number> {
@@ -720,7 +917,17 @@ export function mapError(e: unknown, what: string): Error {
   if (status === 404) return new NotFoundError(what, undefined, { cause: msg })
   if (status === 409) return new ConflictError(`${what}: ${msg}`)
   if (status === 400) return new ValidationError(`${what}: ${msg}`)
-  if (['ECONNREFUSED', 'ENOENT', 'EACCES', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT'].includes(code) || (status && status >= 500)) {
+  // The socket itself: retrying won't help, a person has to fix the deployment.
+  if (!status && (code === 'EACCES' || code === 'EPERM'))
+    return new DeniedError(
+      "The app can't use the Docker socket (permission denied): run the container with the socket's group (the image's entrypoint does this by itself), or set DOCKER_GID",
+      { cause: msg },
+    )
+  if (!status && code === 'ENOENT')
+    return new ValidationError(
+      `The Docker socket isn't there (${msg}): mount it into the app container (/var/run/docker.sock), set DOCKER_SOCKET, or turn DOCKER_ENABLED off`,
+    )
+  if (['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT'].includes(code) || (status && status >= 500)) {
     return new UnavailableError(`docker: ${what}: ${msg}`)
   }
   return e instanceof Error ? e : new Error(msg)

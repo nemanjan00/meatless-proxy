@@ -1,0 +1,19 @@
+{
+  "name": "@mp/sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Code execution for employees: stateful Python and Node kernels in a sandbox container per employee, with the employee's files.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/containers": "0.0.0",
+    "@mp/files": "0.0.0"
+  },
+  "devDependencies": {
+    "@mp/records": "0.0.0"
+  }
+}

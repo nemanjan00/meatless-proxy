@@ -301,3 +301,18 @@ describe('project egress', () => {
     await expect(dir.projects.create({ name: 'Y', egress: {} as any })).rejects.toThrow(ValidationError)
   })
 })
+
+describe('employee network setting', () => {
+  it('takes none, project or an allowlist, and refuses anything else', async () => {
+    const { invalidNetwork } = await import('../src/index.ts')
+    const e = await dir.employees.create({ name: 'Net', network: { allow: ['pypi.org'] } })
+    expect(e.data.network).toEqual({ allow: ['pypi.org'] })
+    expect((await dir.employees.update(e.id, { network: 'none' })).data.network).toBe('none')
+    expect((await dir.employees.update(e.id, { network: 'project' })).data.network).toBe('project')
+    await expect(dir.employees.update(e.id, { network: 'all' as never })).rejects.toBeInstanceOf(ValidationError)
+    await expect(dir.employees.create({ name: 'Bad', network: { allow: [''] } })).rejects.toBeInstanceOf(ValidationError)
+    expect(invalidNetwork(undefined)).toBeNull()
+    expect(invalidNetwork({ allow: ['a'], extra: 1 })).toMatch(/network must be/)
+    expect(invalidNetwork(['a'])).toMatch(/network must be/)
+  })
+})

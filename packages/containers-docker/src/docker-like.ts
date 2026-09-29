@@ -13,6 +13,8 @@ export interface DockerLike {
   getContainer(id: string): ContainerLike
   listContainers(opts?: Record<string, any>): Promise<ContainerSummaryLike[]>
   getImage(name: string): { inspect(): Promise<unknown> }
+  /** The daemon's version (`ApiVersion`, e.g. `1.45`). */
+  version(): Promise<{ ApiVersion?: string; Version?: string }>
   pull(image: string, opts?: Record<string, any>): Promise<NodeJS.ReadableStream>
   buildImage(file: { context: string; src: string[] }, opts?: Record<string, any>): Promise<NodeJS.ReadableStream>
   modem: {
@@ -28,6 +30,10 @@ export interface ContainerLike {
   remove(opts?: Record<string, any>): Promise<unknown>
   logs(opts: Record<string, any>): Promise<Buffer | NodeJS.ReadableStream>
   exec(opts: Record<string, any>): Promise<ExecLike>
+  /** Extracts a tar archive into the container at `opts.path`. */
+  putArchive(file: Buffer | NodeJS.ReadableStream, opts: { path: string }): Promise<unknown>
+  /** A tar archive of `opts.path`. */
+  getArchive(opts: { path: string }): Promise<NodeJS.ReadableStream>
 }
 
 export interface ExecLike {

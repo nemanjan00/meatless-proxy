@@ -7,6 +7,7 @@ import { CopyButton } from '@/components/copy.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EmployeeIntegrationsSection } from '@/components/integration-setup.tsx'
 import { McpServers } from '@/components/mcp-servers.tsx'
+import { NetworkSetting } from '@/components/network-setting.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
@@ -40,9 +41,13 @@ function Property({ label, children }: { label: string; children: ReactNode }) {
 function Profile({
   employee,
   contact,
+  admin = false,
+  reload = () => {},
 }: {
-  employee: { id: string; key: string | null; data: EmployeeData }
+  employee: { id: string; key: string | null; version: number; data: EmployeeData }
   contact?: ContactData
+  admin?: boolean
+  reload?: () => void
 }) {
   const d = employee.data
   const allow = d.toolAllow ?? d.tools?.allow ?? []
@@ -81,6 +86,9 @@ function Profile({
         <Property label="Tools">
           {allow.length ? `${allow.length} allowed pattern${allow.length === 1 ? '' : 's'}` : 'none'}
           {deny.length ? `, ${deny.length} denied` : ''}
+        </Property>
+        <Property label="Network">
+          <NetworkSetting employee={employee} admin={admin} onSaved={reload} />
         </Property>
         {handles.length > 0 && (
           <Property label="Accounts">
@@ -244,7 +252,7 @@ export function EmployeePage() {
               </Button>
             </div>
           )}
-          <Profile employee={e} contact={contact.data?.data} />
+          <Profile employee={e} contact={contact.data?.data} admin={admin} reload={employee.reload} />
           <SshKey employeeId={e.id} admin={admin} />
           <EmployeeIntegrationsSection employeeId={e.id} employeeName={e.data.name} admin={admin} initial={params.get('setup')} />
           {/* Its own MCP servers (admins; the component renders nothing for others). */}

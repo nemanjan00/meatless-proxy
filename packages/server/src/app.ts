@@ -6,6 +6,7 @@ import { errorMessage } from '@mp/core'
 import { pendingMigrations } from '@mp/store-postgres'
 import { Hono } from 'hono'
 import { bootstrap, isEmpty } from './bootstrap.ts'
+import { addStdlibToolsToRouters } from './router-tools.ts'
 import type { Config } from './config.ts'
 import { createAuth, ensureAdmin, principalOf } from './auth/index.ts'
 import { apiRoutes } from './http/api.ts'
@@ -68,6 +69,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
+  // Router contexts created before a stdlib tool existed (time.now, code.run) get it now.
+  await addStdlibToolsToRouters(services)
   const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)
   // Guided integration setup and new employees (src/setup): the employee page.
   const setup = createSetup(services, { integrations: overrides.integrations, provisioning: () => hookProvisioning })

@@ -8,6 +8,7 @@ import {
   ProjectRoles,
   contactRef,
   directorySchemas,
+  invalidNetwork,
   projectRef,
   type ContactData,
   type EmployeeData,
@@ -236,6 +237,8 @@ export function createDirectory({ records }: DirectoryDeps): Directory {
       const { contact: extra, handle, ...data } = input
       const slug = slugify(handle?.replace(/^@/, '') || data.name || '')
       if (!slug) throw new ValidationError(`employee ${handle ? 'handle' : 'name'} must contain letters or digits`)
+      const badNetwork = invalidNetwork(data.network)
+      if (badNetwork) throw new ValidationError(badNetwork)
       validateRecord(records.kinds.get('employee'), { ...data, contactId: 'con_pending' })
       if (await records.getByKey('employee', slug)) throw new ConflictError(`an employee named ${slug} already exists`)
       const handles = [
@@ -261,6 +264,8 @@ export function createDirectory({ records }: DirectoryDeps): Directory {
     list: (q) => records.query<EmployeeData>('employee', q),
     async update(id, patch, opts) {
       if ('contactId' in patch) throw new ValidationError("an employee's contact can't be changed")
+      const badNetwork = 'network' in patch ? invalidNetwork(patch.network) : null
+      if (badNetwork) throw new ValidationError(badNetwork)
       const current = await employees.require(id)
       const o = { ...actorOpt(opts), ...(opts?.expectedVersion ? { expectedVersion: opts.expectedVersion } : {}) }
       if (patch.name === undefined || patch.name === current.data.name)

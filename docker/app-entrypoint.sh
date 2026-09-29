@@ -1,7 +1,7 @@
 #!/bin/sh
 # Starts the app as the unprivileged `node` user (1000:1000). When started as
 # root, it first gives that user the group of the mounted Docker socket (its
-# gid differs per host), and makes the data directory its own, then drops
+# gid differs per host), and makes the data and files directories its own, then drops
 # root. Started as any other user (e.g. `user:` in compose), it runs the
 # command as is.
 set -eu
@@ -23,9 +23,10 @@ if [ -n "${DOCKER_GID:-}" ]; then
   groups="$groups,$DOCKER_GID"
 fi
 
-data="${DATA_DIR:-/data}"
-if [ -d "$data" ] && [ "$(stat -c %u "$data")" != "$APP_UID" ]; then
-  chown -R "$APP_UID:$APP_GID" "$data"
-fi
+for dir in "${DATA_DIR:-/data}" "${FILES_DIR:-}"; do
+  if [ -n "$dir" ] && [ -d "$dir" ] && [ "$(stat -c %u "$dir")" != "$APP_UID" ]; then
+    chown -R "$APP_UID:$APP_GID" "$dir"
+  fi
+done
 
 exec setpriv --reuid="$APP_UID" --regid="$APP_GID" --groups="$groups" --inh-caps=-all --bounding-set=-all -- "$@"

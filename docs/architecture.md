@@ -45,7 +45,7 @@ touching the rest.
                     │
  L4  engine       router · runner
                     │
- L3  domain       records · directory · memory · skills · files · events · sessions · checklists · chat · tools · usage
+ L3  domain       records · directory · memory · skills · files · events · sessions · checklists · chat · tools · usage · sandbox
                     │
  L2  adapters     store-postgres · queue-bullmq · model-openai · mcp-sdk · containers-docker · git-cli · secrets-store
                     │   (only the server may depend on adapters)
@@ -61,7 +61,7 @@ touching the rest.
 | L1 | `@mp/queue` | `Queue` (jobs, delays, priorities, repeat) + in-memory implementation + contract tests |
 | L1 | `@mp/model` | `ModelClient` (OpenAI-compatible chat completions shape) + scripted fake |
 | L1 | `@mp/mcp` | `McpHub` (servers, tools, calls, notifications), `ManagedMcpHub` (servers added, removed and reconnected at runtime, with a status each) + fake + contract suites |
-| L1 | `@mp/containers` | `ContainerRuntime` (environments, jobs, logs) + fake |
+| L1 | `@mp/containers` | `ContainerRuntime` (environments, exec, interactive processes, file copies, logs) + fake + contract tests |
 | L1 | `@mp/git` | `GitCache` (mirrors, fetch, worktrees, push) + protected-branch guard + fake |
 | L1 | `@mp/secrets` | `SecretStore`, injection and redaction helpers + in-memory implementation |
 | L1 | `@mp/api` | HTTP and WebSocket contract types shared by server and web |
@@ -82,7 +82,8 @@ touching the rest.
 | L3 | `@mp/usage` | usage ledger, limits and budgets |
 | L3 | `@mp/checklists` | checklists, evidence rules, review requests |
 | L3 | `@mp/skills` | company-level and project-level skills |
-| L3 | `@mp/files` | each employee's filesystem, and sharing |
+| L3 | `@mp/files` | each employee's filesystem: a `FileStorage` port (a directory on the files volume, or memory) and sharing grants as records |
+| L3 | `@mp/sandbox` | code execution: Python and Node kernels per session in a sandbox container per employee, with the employee's files mounted or copied |
 | L4 | `@mp/router` | events → deliveries → runs or inbox items, deterministically |
 | L4 | `@mp/runner` | executes a run: context assembly, model calls, tool calls, journal, outbox, secrets, redaction, suspend and wake, commit |
 | L5 | `@mp/stdlib` | the model's standard library of tools, the employee prompt, and the policy hooks (checklist gate, docs maintenance, commit on stop, budgets, AI-to-AI streak) |

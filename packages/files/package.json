@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Each employee's filesystem, stored as records, with sharing to people and other employees.",
+  "description": "Each employee's filesystem: files in a storage port (a directory on a volume), sharing grants as records.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
   },
   "dependencies": {
     "@mp/core": "0.0.0",

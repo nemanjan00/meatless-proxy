@@ -7,8 +7,14 @@ import {
   type EnvSpec,
   type ExecOptions,
   type ExecResult,
+  type FileEntry,
   type PreviewTarget,
+  type Process,
+  type RuntimeFeatures,
+  type SpawnOptions,
+  invalidEntryPath,
   invalidExpose,
+  invalidVolumeMounts,
 } from './types.ts'
 import { checkEgress, invalidEgressEntries, type EgressLogEntry } from './egress.ts'
 
@@ -32,6 +38,7 @@ export interface FakeExecCall {
   cmd: string[]
   env?: Record<string, string>
   workdir?: string
+  user?: string
   timeoutMs?: number
   at: string
 }
@@ -41,13 +48,57 @@ export type FakeResponder = FakeResponse | ((call: FakeExecCall, env: FakeEnv) =
 /** Matches against the command joined with spaces, or a predicate on the argv. */
 export type FakeMatcher = RegExp | string | ((cmd: string[]) => boolean)
 
+/** A file or directory in a fake environment's filesystem. */
+export interface FakeFile {
+  type: 'file' | 'dir'
+  content: Uint8Array
+  mode: number
+  uid: number
+  gid: number
+  mtimeMs: number
+}
+
 export interface FakeEnv {
   info: EnvInfo
   spec: EnvSpec
   logs: string[]
   /** Decisions made through `egressAllowed`, as the proxy would log them. */
   egress: EgressLogEntry[]
+  /** The main container's filesystem as `copyIn`/`copyOut` and `writeFile` see it, by absolute path. */
+  files: Map<string, FakeFile>
 }
+
+export interface FakeSpawnCall {
+  envId: string
+  cmd: string[]
+  env?: Record<string, string>
+  workdir?: string
+  at: string
+}
+
+/** What a spawn handler drives: the fake process's side of stdin, stdout, stderr and its exit. */
+export interface FakeProcessHost {
+  call: FakeSpawnCall
+  /** The live environment (its `files` can be changed, as a real process would). */
+  env: FakeEnv
+  stdout(text: string): void
+  stderr(text: string): void
+  /** Ends the process with an exit code (default 0). Ignored once ended. */
+  exit(code?: number | null): void
+  /** Called with each chunk written to stdin, as text. */
+  onInput(cb: (text: string) => void): void
+  /** Called when stdin is closed. */
+  onEnd(cb: () => void): void
+  /** Called when the process is killed, before it ends. */
+  onKill(cb: () => void): void
+  readonly ended: boolean
+}
+
+/**
+ * Plays a spawned process. Without a matching handler, `cat` echoes its stdin and anything else
+ * waits for stdin to close; both then exit 0.
+ */
+export type FakeSpawnHandler = (host: FakeProcessHost) => void
 
 export interface FakeRuntimeOptions {
   clock?: Clock
@@ -58,6 +109,8 @@ export interface FakeRuntimeOptions {
    * the "environment" with a local server. `servePreview` overrides it per environment and port.
    */
   previewTarget?: (env: FakeEnv, port: number) => PreviewTarget
+  /** What `features()` reports. Default: everything supported. */
+  features?: RuntimeFeatures
 }
 
 export interface FakeRuntime extends ContainerRuntime {
@@ -85,6 +138,22 @@ export interface FakeRuntime extends ContainerRuntime {
   previewTarget(envId: string, port: number): Promise<PreviewTarget>
   /** Points an exposed port of an environment at `target`, e.g. a local test server on port 0. */
   servePreview(envId: string, port: number, target: PreviewTarget): void
+  spawn(envId: string, cmd: string[], opts?: SpawnOptions): Promise<Process>
+  copyIn(envId: string, dir: string, entries: FileEntry[]): Promise<void>
+  copyOut(envId: string, path: string): Promise<FileEntry[]>
+  features(): Promise<RuntimeFeatures>
+  /** Scripts spawned processes. Later handlers win over earlier ones. */
+  onSpawn(match: FakeMatcher, handler: FakeSpawnHandler): FakeRuntime
+  /** Every spawn call, in order. */
+  readonly spawns: FakeSpawnCall[]
+  /** Processes that haven't ended yet. */
+  running(): number
+  /** Writes a file into an environment's filesystem (creating parent directories), as a process in it would. */
+  writeFile(envId: string, path: string, content: string | Uint8Array, opts?: Partial<Omit<FakeFile, 'type' | 'content'>>): void
+  /** A file's content as text, or null when there is none. */
+  readFile(envId: string, path: string): string | null
+  /** Removes a file or a directory tree from an environment's filesystem. */
+  removeFile(envId: string, path: string): void
 }
 
 const matches = (m: FakeMatcher, cmd: string[]) =>
@@ -99,6 +168,15 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
   const created: EnvSpec[] = []
   let nextCreateError: Error | null = null
   const previewTargets = new Map<string, PreviewTarget>()
+  const spawnRules: { match: FakeMatcher; handler: FakeSpawnHandler }[] = []
+  const spawns: FakeSpawnCall[] = []
+  let live_ = 0
+  let lastMtime = 0
+  /** Distinct, increasing modification times, even when the clock stands still. */
+  const mtime = () => {
+    lastMtime = Math.max(clock.now(), lastMtime + 1)
+    return lastMtime
+  }
 
   const live = (envId: string) => {
     const env = envs.get(envId)
@@ -128,6 +206,10 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       }
       const badExpose = invalidExpose(spec.expose)
       if (badExpose.length) throw new ValidationError('invalid expose list', badExpose)
+      const badMounts = invalidVolumeMounts(spec.volumeMounts)
+      if (badMounts.length) throw new ValidationError('invalid volume mounts', badMounts)
+      if (spec.volumeMounts?.some((m) => m.subpath) && !(opts.features?.volumeSubpath ?? true))
+        throw new ValidationError('volume subpaths are not supported by this runtime')
       if ([...envs.values()].some((e) => e.info.name === spec.name))
         throw new ConflictError(`environment ${spec.name} already exists`)
       const info: EnvInfo = {
@@ -137,7 +219,9 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         labels: { ...spec.labels, 'mp.env': spec.name, 'mp.managed': 'true' },
         createdAt: clock.iso(),
       }
-      envs.set(info.id, { info, spec: structuredClone(spec), logs: [], egress: [] })
+      const files = new Map<string, FakeFile>()
+      for (const p of ['/', ...(spec.volumes ?? []), ...Object.keys(spec.tmpfs ?? {})]) mkdirs(files, p, 0)
+      envs.set(info.id, { info, spec: structuredClone(spec), logs: [], egress: [], files })
       return copy(info)
     },
 
@@ -162,6 +246,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         cmd: [...cmd],
         ...(o.env ? { env: { ...o.env } } : {}),
         ...(o.workdir ? { workdir: o.workdir } : {}),
+        ...(o.user ? { user: o.user } : {}),
         ...(o.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : {}),
         at: clock.iso(),
       }
@@ -236,12 +321,186 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       return runtime
     },
 
+    spawns,
+
+    async spawn(envId, cmd, o: SpawnOptions = {}) {
+      const env = live(envId)
+      if (env.info.status !== 'running') throw new ConflictError(`environment ${envId} is not running`)
+      if (!cmd.length) throw new ValidationError('spawn needs a command')
+      const call: FakeSpawnCall = {
+        envId,
+        cmd: [...cmd],
+        ...(o.env ? { env: { ...o.env } } : {}),
+        ...(o.workdir ? { workdir: o.workdir } : {}),
+        at: clock.iso(),
+      }
+      spawns.push(call)
+      const inputs: ((t: string) => void)[] = []
+      const ends: (() => void)[] = []
+      const kills: (() => void)[] = []
+      let ended = false
+      let stdinOpen = true
+      let resolveExit!: (v: { exitCode: number | null }) => void
+      const exited = new Promise<{ exitCode: number | null }>((r) => {
+        resolveExit = r
+      })
+      live_++
+      const finish = (code: number | null) => {
+        if (ended) return
+        ended = true
+        live_--
+        resolveExit({ exitCode: code })
+      }
+      const host: FakeProcessHost = {
+        call,
+        env,
+        stdout: (text) => {
+          if (!ended && text) o.onOutput?.({ stream: 'stdout', text })
+        },
+        stderr: (text) => {
+          if (!ended && text) o.onOutput?.({ stream: 'stderr', text })
+        },
+        exit: (code = 0) => finish(code),
+        onInput: (cb) => inputs.push(cb),
+        onEnd: (cb) => ends.push(cb),
+        onKill: (cb) => kills.push(cb),
+        get ended() {
+          return ended
+        },
+      }
+      const rule = [...spawnRules].reverse().find((r) => matches(r.match, cmd))
+      if (rule) rule.handler(host)
+      else {
+        if (cmd[0] === 'cat') host.onInput((t) => host.stdout(t))
+        host.onEnd(() => host.exit(0))
+      }
+      const proc: Process = {
+        async write(data) {
+          if (ended || !stdinOpen) throw new ConflictError('the process has ended')
+          const text = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
+          // Delivered asynchronously, like a pipe.
+          await Promise.resolve()
+          for (const cb of inputs) cb(text)
+        },
+        end() {
+          if (!stdinOpen) return
+          stdinOpen = false
+          queueMicrotask(() => {
+            for (const cb of ends) cb()
+          })
+        },
+        exited,
+        async kill() {
+          if (!ended) {
+            for (const cb of kills) cb()
+            finish(null)
+          }
+          await exited
+        },
+      }
+      return proc
+    },
+
+    onSpawn(match, handler) {
+      spawnRules.push({ match, handler })
+      return runtime
+    },
+
+    running: () => live_,
+
+    async features() {
+      return { volumeSubpath: true, ...opts.features }
+    },
+
+    async copyIn(envId, dir, entries) {
+      const env = live(envId)
+      if (!dir.startsWith('/')) throw new ValidationError(`dir must be absolute: ${dir}`)
+      const base = dir.replace(/\/+$/, '') || '/'
+      const d = env.files.get(base)
+      if (d?.type !== 'dir') throw new NotFoundError('directory', dir)
+      const bad = entries.map((e) => invalidEntryPath(e.path)).filter((x): x is string => !!x)
+      if (bad.length) throw new ValidationError('invalid entries', bad)
+      for (const e of entries) {
+        const abs = `${base === '/' ? '' : base}/${e.path.replace(/\/+$/, '')}`
+        mkdirs(env.files, parentOf(abs), 0)
+        const existing = env.files.get(abs)
+        if (e.type === 'dir') {
+          env.files.set(abs, {
+            type: 'dir',
+            content: new Uint8Array(),
+            mode: e.mode ?? existing?.mode ?? 0o755,
+            uid: e.uid ?? existing?.uid ?? 0,
+            gid: e.gid ?? existing?.gid ?? 0,
+            mtimeMs: e.mtimeMs ?? mtime(),
+          })
+        } else {
+          if (existing?.type === 'dir') removeTree(env.files, abs)
+          env.files.set(abs, {
+            type: 'file',
+            content: new Uint8Array(e.content ?? new Uint8Array()),
+            mode: e.mode ?? 0o644,
+            uid: e.uid ?? 0,
+            gid: e.gid ?? 0,
+            mtimeMs: e.mtimeMs ?? mtime(),
+          })
+        }
+      }
+    },
+
+    async copyOut(envId, path) {
+      const env = live(envId)
+      const abs = path.replace(/\/+$/, '') || '/'
+      const top = env.files.get(abs)
+      if (!top) return []
+      const name = abs === '/' ? '' : abs.slice(abs.lastIndexOf('/') + 1)
+      const entry = (rel: string, f: FakeFile): FileEntry => ({
+        path: rel,
+        type: f.type,
+        ...(f.type === 'file' ? { content: new Uint8Array(f.content) } : {}),
+        mode: f.mode,
+        uid: f.uid,
+        gid: f.gid,
+        mtimeMs: f.mtimeMs,
+      })
+      if (top.type === 'file') return [entry(name, top)]
+      const out: FileEntry[] = name ? [entry(name, top)] : []
+      const prefix = abs === '/' ? '/' : `${abs}/`
+      for (const [p, f] of [...env.files.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        if (p === abs || !p.startsWith(prefix)) continue
+        out.push(entry(`${name ? `${name}/` : ''}${p.slice(prefix.length)}`, f))
+      }
+      return out
+    },
+
+    writeFile(envId, path, content, o = {}) {
+      const env = live(envId)
+      mkdirs(env.files, parentOf(path), o.uid ?? 0)
+      env.files.set(path, {
+        type: 'file',
+        content: typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content),
+        mode: o.mode ?? 0o644,
+        uid: o.uid ?? 0,
+        gid: o.gid ?? 0,
+        mtimeMs: o.mtimeMs ?? mtime(),
+      })
+    },
+
+    readFile(envId, path) {
+      const f = live(envId).files.get(path)
+      return f?.type === 'file' ? new TextDecoder().decode(f.content) : null
+    },
+
+    removeFile(envId, path) {
+      removeTree(live(envId).files, path)
+    },
+
     envs: () =>
       [...envs.values()].map((e) => ({
         info: copy(e.info),
         spec: structuredClone(e.spec),
         logs: [...e.logs],
         egress: e.egress.map((l) => ({ ...l })),
+        files: new Map([...e.files].map(([p, f]) => [p, { ...f, content: new Uint8Array(f.content) }])),
       })),
 
     egressAllowed(envId, host, port) {
@@ -276,6 +535,21 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
     },
   }
   return runtime
+}
+
+const parentOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/'
+
+/** Creates `dir` and its missing ancestors as directories. */
+function mkdirs(files: Map<string, FakeFile>, dir: string, uid: number) {
+  const parts = dir.split('/').filter(Boolean)
+  for (let i = 0; i <= parts.length; i++) {
+    const p = `/${parts.slice(0, i).join('/')}`
+    if (!files.has(p)) files.set(p, { type: 'dir', content: new Uint8Array(), mode: 0o755, uid, gid: uid, mtimeMs: 0 })
+  }
+}
+
+function removeTree(files: Map<string, FakeFile>, path: string) {
+  for (const p of [...files.keys()]) if (p === path || p.startsWith(`${path}/`)) files.delete(p)
 }
 
 function waitFor(ms: number, signal?: AbortSignal): Promise<void> {

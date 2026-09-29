@@ -156,3 +156,27 @@ export function egressEntryCovered(entry: string, allow: string[]): boolean {
     return hostGlobMatch(e.host, r.host)
   })
 }
+
+/**
+ * What two allowlists both allow: for each pair of entries, the narrower host (one host glob covers
+ * the other, see `egressEntryCovered`) with the narrower port, deduplicated. Every result entry is
+ * allowed by both lists, so using the result never widens either. `['*']` against a list gives that list.
+ */
+export function intersectEgress(a: string[], b: string[]): string[] {
+  const out = new Set<string>()
+  const fmt = (host: string, port?: number) =>
+    port === undefined ? host : isIP(host) === 6 ? `[${host}]:${port}` : `${host}:${port}`
+  for (const ra of a) {
+    const x = parseEgressEntry(ra)
+    if (!x) continue
+    for (const rb of b) {
+      const y = parseEgressEntry(rb)
+      if (!y) continue
+      if (x.port !== undefined && y.port !== undefined && x.port !== y.port) continue
+      const port = x.port ?? y.port
+      if (egressEntryCovered(x.host, [y.host])) out.add(fmt(x.host, port))
+      else if (egressEntryCovered(y.host, [x.host])) out.add(fmt(y.host, port))
+    }
+  }
+  return [...out]
+}

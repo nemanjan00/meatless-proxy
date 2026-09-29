@@ -31,7 +31,7 @@ COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
 COPY docker/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh
-RUN mkdir -p /data && chown 1000:1000 /data
+RUN mkdir -p /data /var/lib/meatless-proxy/files && chown 1000:1000 /data /var/lib/meatless-proxy/files
 # The container starts as root only long enough for the entrypoint to give the
 # `node` user (1000:1000) the Docker socket's group, whose gid differs per host;
 # the app itself always runs as `node`.

@@ -37,6 +37,13 @@ about.
   same database.
 - Code is the exception: git repositories stay in git, with the
   [local cache](#git-repositories). The database stores the links to them.
+- Employee files are the other exception. **Employee files live on a volume,
+  not in the database; only sharing grants are stored in Postgres.** They are
+  working files that tools and code open directly (a CSV that pandas reads, a
+  chart matplotlib writes), so they are plain files in a directory that
+  [code execution](#code-execution) mounts. The grants (who may see or edit
+  which path) are permissions and stay in the database like every other
+  permission. See [employee filesystem](#employee-filesystem).
 - The job queue (BullMQ on Redis) isn't state. Its jobs only carry ids, and
   it can be rebuilt from the database ([execution model](execution.md#storage-and-processes)).
 
@@ -1024,10 +1031,29 @@ person follows a project's contributing guide.
 - **Network access through a proxy.** Project containers have no direct
   network access. Each environment's private network has an **egress proxy**,
   and containers get `HTTP_PROXY`/`HTTPS_PROXY` pointing at it. The proxy only
-  lets through an allowlist of destinations, set per project (e.g. the npm
-  registry, the git host, the project's own staging services), and logs every
-  request to the session's audit trail. Anything else is blocked, including
-  the harness's own Postgres and Redis.
+  lets through an allowlist of destinations (e.g. the npm registry, the git
+  host, the project's own staging services), and logs every request to the
+  session's audit trail. Anything else is blocked with a 403 that names the
+  host and says it isn't on the allowlist, including the harness's own
+  Postgres and Redis.
+- **Who decides the allowlist.** The project's `egress.allow` and the
+  employee's **network** setting, both:
+  - `none`: never any network, whatever the project allows.
+  - `project` (the default): the project's allowlist.
+  - `{ allow: [hosts] }`: the employee's own hosts. With a project allowlist,
+    only what both allow (the narrower host and port of each pair).
+  - A session with no project (or a project without a list) falls back to the
+    employee's own list, or else to the deployment default `DEFAULT_EGRESS`
+    (none unless set).
+  - `['*']` allows any public host. It's only ever an admin's explicit choice
+    for one employee, never a default. IP literals and private, loopback and
+    link-local addresses stay blocked unless listed exactly, and every request
+    is still logged.
+  - The model can only narrow the result, with `env.up { egress }`.
+  - `env.up` says what it got: the allowed hosts (curl, wget, npm, pip and git
+    work through `HTTP_PROXY`/`HTTPS_PROXY` as they are), or no network and
+    why, with what to ask an admin for.
+  - The [code sandbox](#code-execution) follows the same setting.
 - Output from builds, tests and running services (logs, exit codes, artifacts)
   is captured and available to the model and in the task's
   [audit trail](employee.md#4-boundaries).
@@ -1293,14 +1319,40 @@ repository.
 - **Private by default.** An employee's files are visible only to that
   employee's sessions.
 - **Sharing.** A file or a directory can be shared with another employee or a
-  person, read-only or read-write. Sharing is a [link](#links-between-contacts-and-projects)
-  with a role (`shared_with`) and a permission. Shared files show up under
+  person, read-only or read-write. Shared files show up under
   `/shared/<owner>/…` for the recipient.
-- **Stored in the database** ([database first](#database-first)), as files with
-  paths and content, with edit history like other records.
-- **Usable in environments.** A session can copy files from its employee's
-  filesystem into its checkout or container, and results back out.
+- **On a volume, not in the database.** Employee files live on a volume; only
+  sharing grants are stored in Postgres ([database first](#database-first)).
+  The files are a directory per employee, `<FILES_DIR>/<employee id>/<path>`,
+  on a named volume (`mp-files` in the compose file) mounted into the app.
+  Listing, sizes, types and modification times come from the directory itself:
+  there is no index to keep in step. Paths can't leave the employee's
+  directory (`..` is refused, symbolic links are never followed), and every
+  write goes to a temporary file that is renamed into place, so nobody reads
+  half a file.
+- **Grants** are records: owner employee, path (a file, or a directory covering
+  everything under it), grantee contact, and `read` or `write`. Moving or
+  deleting a path through the harness moves or removes its grants. A grant
+  whose path no longer exists is dangling: it's ignored (in listings and in
+  sandbox mounts) until the path is back.
+- **Versions.** A file's version is its modification time, and a write can be
+  made conditional on it (compare-and-swap), so two editors can't overwrite
+  each other silently. There is no content history yet; it can come later, for
+  example by making each employee's directory a git repository.
+- **Change events.** Every change through the harness (fs.* tools, the API)
+  and every change a [code.run](#code-execution) cell makes is published as
+  `file.changed` (owner, path, operation, actor).
+- **Several app instances** share the same volume: a named volume with
+  compose, a ReadWriteMany volume on Kubernetes. An object store can take its
+  place later behind the same storage interface.
+- **Usable in environments.** Code runs with the files at hand
+  ([code execution](#code-execution)), and a session can copy files into its
+  checkout or container, and results back out.
 - Browsable and editable in the [web UI](#web-ui).
+- **Upgrading.** Deployments from when files were records are migrated at
+  start: each old file record's content is written to the volume, then the
+  record is deleted. It is idempotent and safe to interrupt; grants were
+  already records of their own and stay.
 
 | Tool          | What it does                                            |
 |---------------|---------------------------------------------------------|
@@ -1312,8 +1364,86 @@ repository.
 
 Open questions:
 
-- Size limits per employee, and are large binary files kept in the database or
-  in an object store it references?
+- Size limits per employee (a quota per directory)?
+
+### Time
+
+The model has no clock of its own, so the harness gives it the time without
+touching the cached prompt prefix:
+
+- **Every event carries its time.** When an event becomes a run's input, its
+  header says when it arrived, e.g. `[chat message.posted thread msg_…; from a
+  person; Tue 2026-09-29 12:07 UTC]`. That is new content, so the cached
+  prefix stays byte-identical.
+- **`time.now`** (read-only) returns the current time: `{ iso, local,
+  timezone, weekday, unix }`, in the company timezone (the `timezone` setting,
+  an IANA name, default `UTC`) or the one asked for. An unknown timezone is an
+  error naming an example.
+- The system prompt never contains the current time. It says that messages
+  carry their time and to call `time.now` for the time now or elsewhere.
+- Router contexts get `time.now` too. Router contexts created before a
+  standard library tool existed get it added at the next start.
+
+### Code execution
+
+Employees can run code for math, data and charts, with their own files at
+hand.
+
+| Tool        | What it does |
+|-------------|--------------|
+| code.run    | `{ language: 'python' \| 'node', code, timeoutMs?, fresh? }` → `{ stdout, stderr, result?, error?, files_changed, duration_ms }`. Non-idempotent. |
+| code.reset  | restart this session's kernel for a language (or both). Idempotent. |
+
+- **Like a notebook.** Each session has one long-lived kernel per language.
+  Variables, imports and functions persist between `code.run` calls, and the
+  value of the last expression comes back as `result` (like a REPL). Python
+  cells may use top-level `await`; Node cells run in a `vm` context with
+  top-level `await`. Output is capped (20,000 characters per stream) with a
+  note saying how much was cut.
+- **Timeouts.** Default 30 s, at most 5 min. A cell that runs out of time is
+  killed with its kernel, and the result says the state was lost. `fresh:
+  true` runs in a throwaway kernel. Kernels stop after 15 minutes idle and when
+  their session ends.
+- **Files.** The working directory is `/work/files`: the employee's own files,
+  the same ones as `fs.*`. A chart saved there (`plt.savefig('chart.png')`) is
+  a real file the employee can share with `fs.share`. Files shared with the
+  employee are under `/work/shared/<owner>/<path>`, read-only unless the grant
+  allows writing. After each cell, `files_changed` lists what the cell created,
+  changed or deleted (from a before-and-after scan of sizes and modification
+  times), and `file.changed` is published for each.
+- **Mounted or copied.** With the files volume (`FILES_VOLUME`) and Docker
+  Engine 26+, the sandbox mounts only this employee's directory of the volume
+  (a volume subpath) at `/work/files`, and each share's path at
+  `/work/shared/<owner>/<path>` with the grant's permission; nothing is copied.
+  A named volume, not a host path, because the app itself runs in a container
+  with the Docker socket, where host paths mean nothing. When a share is added
+  or removed, the container is recreated at the next run once it's idle, and
+  the result says so. Otherwise (no files volume, an older Docker) files are
+  copied: what changed since the last cell goes in before it, and what the
+  cell changed comes back after it (files over 25 MB are skipped, with a
+  note); shares are then read-only copies.
+
+#### Sandbox security model
+
+- Code never runs in the harness process. Each employee has one sandbox
+  container, `mp-<employee>-sandbox`, from `SANDBOX_IMAGE` (default: the
+  published image built from `docker/sandbox/Dockerfile`: Python 3 with numpy,
+  pandas, sympy and matplotlib, and Node). Sessions share it, each with
+  kernels of its own.
+- **No network** by default: the container's network is internal. Hosts come
+  from the employee's network setting (a sandbox has no project, so its own
+  list, else `DEFAULT_EGRESS`), and then go through the same allowlisting,
+  logging egress proxy as [environments](#docker-orchestration). When the
+  setting changes, the container is recreated at its next idle run.
+- A non-root user (uid 1000, the app's own, so both can write the files
+  volume), a read-only root filesystem with only `/work` and `/tmp` writable,
+  CPU, memory and process limits, no new privileges, dropped capabilities, no
+  Docker socket, no host paths, and no secrets in its environment.
+- Only this employee's files and the paths shared with it are mounted: no
+  employee can see another's files.
+- A container that died is recreated on the next run. Containers left by an
+  earlier harness process are replaced (their kernels are gone anyway). Only
+  Docker resources named `mp-*` are ever touched.
 
 ### Checklists
 

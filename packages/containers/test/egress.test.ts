@@ -119,3 +119,20 @@ describe('fakeRuntime egress', () => {
     await expect(rt.createEnv({ name: 'x', image: 'i', egress: { allow: [] } })).resolves.toMatchObject({ name: 'x' })
   })
 })
+
+describe('intersectEgress', () => {
+  it('keeps what both lists allow, narrowing hosts and ports', async () => {
+    const { intersectEgress, checkEgress } = await import('../src/index.ts')
+    expect(intersectEgress(['*'], ['registry.npmjs.org', '*.github.com:443'])).toEqual(['registry.npmjs.org', '*.github.com:443'])
+    expect(intersectEgress(['api.github.com', 'pypi.org'], ['*.github.com:443'])).toEqual(['api.github.com:443'])
+    expect(intersectEgress(['a.test:80'], ['a.test:443'])).toEqual([])
+    expect(intersectEgress(['pypi.org'], ['registry.npmjs.org'])).toEqual([])
+    expect(intersectEgress(['bad entry!'], ['*'])).toEqual([])
+    // A wildcard never reaches IP literals or private names.
+    expect(intersectEgress(['*'], ['10.0.0.5'])).toEqual([])
+    expect(intersectEgress(['10.0.0.5:5432'], ['10.0.0.5'])).toEqual(['10.0.0.5:5432'])
+    const both = intersectEgress(['*.example.com'], ['api.example.com', 'example.com'])
+    expect(both).toEqual(['api.example.com'])
+    expect(checkEgress(both, 'www.example.com', 443).allowed).toBe(false)
+  })
+})

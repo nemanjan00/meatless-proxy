@@ -8,6 +8,7 @@ import { createFiles } from '@mp/files'
 import { fakeGitCache } from '@mp/git'
 import { createMemory } from '@mp/memory'
 import { createDocs, createRecords } from '@mp/records'
+import { createSandbox, fakeSandboxRuntime } from '@mp/sandbox'
 import { createSessions } from '@mp/sessions'
 import { createSkills } from '@mp/skills'
 import { memoryStore } from '@mp/store'
@@ -48,6 +49,8 @@ export function memoryWorktreeFs(onWrite: (root: string, rel: string, content: s
 export interface StackOptions {
   git?: boolean
   containers?: boolean
+  /** The code.run sandbox (on a fake runtime whose kernels run JavaScript). Default on. */
+  sandbox?: boolean
   defaults?: StdlibDeps['config']['defaults']
   /** Replaces the default `enqueueRun` (which only records ids). */
   enqueueRun?: (runId: string) => Promise<void>
@@ -82,6 +85,8 @@ export async function stack(opts: StackOptions = {}) {
   const usage = createUsage({ records, clock, bus })
   const git = fakeGitCache()
   const containers = fakeRuntime({ clock })
+  const sandboxRuntime = fakeSandboxRuntime({ clock })
+  const sandbox = createSandbox({ runtime: sandboxRuntime, files, image: 'mp-sandbox:test', clock, reapIntervalMs: 0 })
   const tools = createToolRegistry()
   const hooks = createHooks()
   const logger = memoryLogger()
@@ -103,6 +108,7 @@ export async function stack(opts: StackOptions = {}) {
     usage,
     ...(opts.git === false ? {} : { git }),
     ...(opts.containers === false ? {} : { containers }),
+    ...(opts.sandbox === false ? {} : { sandbox }),
     enqueueRun:
       opts.enqueueRun ??
       (async (id) => {
@@ -221,6 +227,8 @@ export async function stack(opts: StackOptions = {}) {
     usage,
     git,
     containers,
+    sandbox,
+    sandboxRuntime,
     tools,
     hooks,
     logger,

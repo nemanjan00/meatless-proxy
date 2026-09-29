@@ -1,6 +1,7 @@
 import { generateSshKeypair } from '@mp/git'
 import { describe, expect, it } from 'vitest'
 import { MAX_ENV_NAME, envNameFor } from '../src/tools/env.ts'
+import { PROXY_NOTE } from '../src/index.ts'
 import { REPO, stack } from './helpers.ts'
 
 describe('environment names', () => {
@@ -42,7 +43,7 @@ describe('env.up naming and egress', () => {
     await t.out('git.checkout', { projectId: t.project.id })
     const up = await t.out('env.up', {})
     expect(t.containers.created[0]!.egress).toEqual({ allow: ['registry.npmjs.org', '*.github.com:443'] })
-    expect(up.network).toEqual({ via: 'proxy', allow: ['registry.npmjs.org', '*.github.com:443'] })
+    expect(up.network).toEqual({ via: 'proxy', allow: ['registry.npmjs.org', '*.github.com:443'], note: PROXY_NOTE })
     expect(t.containers.egressAllowed(up.envId, 'api.github.com', 443)).toBe(true)
     expect(t.containers.egressAllowed(up.envId, 'evil.example.com', 443)).toBe(false)
   })
@@ -82,7 +83,7 @@ describe('env.up naming and egress', () => {
     await u.out('git.checkout', { projectId: u.project.id })
     expect((await u.call('env.up', { egress: ['registry.npmjs.org'] })).isError).toBe(true)
     const up = await u.out('env.up', { egress: [] })
-    expect(up.network).toBe('none')
+    expect(up.network).toMatchObject({ via: 'none', reason: expect.stringMatching(/^no network: this session has no project/) })
     expect(u.containers.created.at(-1)!.egress).toBeUndefined()
     expect(u.containers.egressAllowed(up.envId, 'registry.npmjs.org', 443)).toBe(false)
   })
@@ -120,5 +121,82 @@ describe('git tools with the employee SSH key', () => {
     const u = await stack()
     await u.out('git.checkout', { projectId: u.project.id })
     expect(u.git.auths.map((a) => a.auth)).toEqual([undefined, undefined])
+  })
+})
+
+describe('the employee network setting', () => {
+  const allowOf = (t: Awaited<ReturnType<typeof stack>>) => t.containers.created.at(-1)!.egress
+
+  it("defaults to the project's allowlist", async () => {
+    const t = await stack()
+    await t.directory.projects.update(t.project.id, { egress: { allow: ['registry.npmjs.org'] } })
+    await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('env.up', {})
+    expect(allowOf(t)).toEqual({ allow: ['registry.npmjs.org'] })
+  })
+
+  it('none overrides a project list, and says why', async () => {
+    const t = await stack()
+    await t.directory.projects.update(t.project.id, { egress: { allow: ['registry.npmjs.org'] } })
+    await t.directory.employees.update(t.employee.id, { network: 'none' })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const up = await t.out('env.up', {})
+    expect(allowOf(t)).toBeUndefined()
+    expect(up.network).toEqual({ via: 'none', reason: expect.stringContaining("this employee's network setting is none") })
+  })
+
+  it('with a project, only what both allow', async () => {
+    const t = await stack()
+    await t.directory.projects.update(t.project.id, { egress: { allow: ['registry.npmjs.org', '*.github.com:443'] } })
+    await t.directory.employees.update(t.employee.id, { network: { allow: ['api.github.com', 'pypi.org'] } })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const up = await t.out('env.up', {})
+    expect(allowOf(t)).toEqual({ allow: ['api.github.com:443'] })
+    expect(t.containers.egressAllowed(up.envId, 'api.github.com', 443)).toBe(true)
+    expect(t.containers.egressAllowed(up.envId, 'pypi.org', 443)).toBe(false)
+    expect(t.containers.egressAllowed(up.envId, 'registry.npmjs.org', 443)).toBe(false)
+  })
+
+  it("an employee's ['*'] still only gets the project's hosts", async () => {
+    const t = await stack()
+    await t.directory.projects.update(t.project.id, { egress: { allow: ['registry.npmjs.org'] } })
+    await t.directory.employees.update(t.employee.id, { network: { allow: ['*'] } })
+    await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('env.up', {})
+    expect(allowOf(t)).toEqual({ allow: ['registry.npmjs.org'] })
+  })
+
+  it("without a project, the employee's list, else the deployment default", async () => {
+    const t = await stack()
+    await t.directory.employees.update(t.employee.id, { network: { allow: ['pypi.org'] } })
+    await t.out('env.up', { image: 'python:3' })
+    expect(allowOf(t)).toEqual({ allow: ['pypi.org'] })
+
+    const u = await stack()
+    u.deps.config.defaultEgress = ['files.pythonhosted.org']
+    const up = await u.out('env.up', { image: 'python:3' })
+    expect(allowOf(u)).toEqual({ allow: ['files.pythonhosted.org'] })
+    expect(up.network).toMatchObject({ via: 'proxy', allow: ['files.pythonhosted.org'] })
+  })
+
+  it("the model can't widen the list, only narrow it", async () => {
+    const t = await stack()
+    await t.directory.employees.update(t.employee.id, { network: { allow: ['pypi.org', 'files.pythonhosted.org'] } })
+    const wide = await t.call('env.up', { image: 'python:3', egress: ['pypi.org', 'evil.example.com'] })
+    expect(wide.isError).toBe(true)
+    expect(wide.output).toMatchObject({ notAllowed: ['evil.example.com'], allowed: ['pypi.org', 'files.pythonhosted.org'] })
+    expect((await t.call('env.up', { image: 'python:3', egress: ['*'] })).isError).toBe(true)
+    await t.out('env.up', { image: 'python:3', egress: ['pypi.org'] })
+    expect(allowOf(t)).toEqual({ allow: ['pypi.org'] })
+  })
+
+  it('rejects malformed settings', async () => {
+    const t = await stack()
+    await expect(t.directory.employees.update(t.employee.id, { network: 'everything' as never })).rejects.toThrow(
+      /network must be/,
+    )
+    await expect(t.directory.employees.update(t.employee.id, { network: { allow: 'x' } as never })).rejects.toThrow(
+      /network must be/,
+    )
   })
 })

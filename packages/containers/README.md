@@ -18,9 +18,22 @@ The containers port (L1): isolated project environments and commands run in them
   process connects to reach an exposed port. `NotFoundError` when the environment is gone or doesn't expose the port.
 - `egressLog?(envId)` (optional on `ContainerRuntime`): the proxy's log, `EgressLogEntry[]` (`{ at, method, host, port,
   allowed, reason? }`).
-- Allowlist helpers: `checkEgress(allow, host, port)` (the decision, before DNS), `parseEgressEntry`,
+- Allowlist helpers: `checkEgress(allow, host, port)` (the decision, before DNS), `intersectEgress(a, b)` (what both lists
+  allow: the narrower host and port of each covering pair, so it never widens either), `parseEgressEntry`,
   `invalidEgressEntries`, `hostGlobMatch`, `isPrivateAddress`, `egressEntryCovered(entry, allow)` (whether a requested
   entry only narrows `allow`).
+- Hardening for sandboxes: `EnvSpec.user` (`uid:gid`), `readOnlyRootfs`, `volumes` (container paths that get a fresh volume,
+  removed with the environment), `tmpfs` (`{ '/tmp': { sizeMb } }`), `limits.pids`, and `volumeMounts` (`VolumeMount`:
+  part of an existing named volume, `{ volume, subpath?, containerPath, readOnly? }`; `invalidVolumeMounts` checks them).
+  `ExecOptions.user` runs one command as another user.
+- `spawn?(envId, cmd, { env, workdir, onOutput })` (optional): a long-running process with stdin attached, a `Process`
+  (`write`, `end`, `exited` with the exit code or null, `kill`, which also kills its process group when it leads one).
+- `copyIn?(envId, dir, entries)` / `copyOut?(envId, path)` (optional): `FileEntry` files and directories (`path` relative,
+  `content`, `mode`, `uid`, `gid`, `mtimeMs`) into a directory of the main container, or a file or a tree out of it (paths
+  relative to its parent; a missing path gives `[]`). `invalidEntryPath` checks entry paths.
+- `features?()` (optional): `RuntimeFeatures` (`volumeSubpath`).
+- `runtimeContract(name, make, { image })` from `@mp/containers/contract`: the suite for `spawn`, `copyIn`, `copyOut` and
+  `features` (the image needs `sh` and `cat`).
 - `TIMEOUT_EXIT_CODE` (124): the exit code of a command that hit `timeoutMs` (`timedOut: true`).
 - `ExecAbortedError`: what `exec` rejects with when its `signal` aborts.
 - `fakeRuntime(opts?)`: in-memory runtime for tests. Tracks environments, records every exec in `calls`, and
@@ -29,11 +42,16 @@ The containers port (L1): isolated project environments and commands run in them
   Also `appendLog`, `stop`, `failNextCreate`, `envs()`, `created`. `egressAllowed(envId, host, port)` answers what the real
   runtime would allow (allowlist with `egress`, anything with `allowInternet`, else nothing) and adds proxied decisions to
   `egressLog(envId)`. `previewTarget` points exposed ports at `127.0.0.1:<port>` (or the `previewTarget` option's
-  answer), and `servePreview(envId, port, target)` points one at a local test server.
+  answer), and `servePreview(envId, port, target)` points one at a local test server. `spawn` plays processes:
+  `onSpawn(match, host => …)` scripts them (`host.stdout`, `stderr`, `exit`, `onInput`, `onEnd`, `onKill`, `env`); without a
+  handler `cat` echoes and anything else waits for stdin to close. `spawns` and `running()` show what ran. Each environment
+  has an in-memory filesystem (`env.files`) for `copyIn`/`copyOut`, with `writeFile`, `readFile` and `removeFile` for tests
+  acting as a process would (modification times always increase). The `features` option sets `features()`.
 
 ## Tests
 
-`test/fake.test.ts` covers the fake, `test/egress.test.ts` the allowlist logic and the fake's egress, `test/preview.test.ts`
+`test/interactive.test.ts` runs `runtimeContract` against the fake and covers spawn handlers, the fake filesystem and
+volume mounts. `test/fake.test.ts` covers the fake, `test/egress.test.ts` the allowlist logic and the fake's egress, `test/preview.test.ts`
 `invalidExpose` and the fake's previews. Adapters (e.g. `@mp/containers-docker`) have their own tests.
 
 ## Replacing it

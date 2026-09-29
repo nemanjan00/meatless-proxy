@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Containers port: isolated project environments and commands run in them. Includes a fake runtime.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
   },
   "dependencies": {
     "@mp/core": "0.0.0"

@@ -83,6 +83,12 @@ export const employeeSchema: KindSchema = {
     { name: 'toolDeny', type: 'list', of: { type: 'string' }, description: 'Tool name patterns this employee may never use.' },
     { name: 'model', type: 'string' },
     {
+      name: 'network',
+      type: 'json',
+      description:
+        "Where this employee's environments and sandbox may connect, through the egress proxy: 'none', 'project' (the default: the project's egress allowlist), or { allow: [hosts] } (its own list; with a project, only hosts both allow). ['*'] allows any public host and is an admin's explicit choice.",
+    },
+    {
       name: 'git',
       type: 'object',
       fields: [
@@ -104,6 +110,22 @@ export interface EmployeeScope {
   procedures?: string[]
 }
 
+/**
+ * An employee's network: `none` (never any), `project` (the default: the session's project allowlist) or
+ * its own hostname allowlist (see `EnvSpec.egress` in `@mp/containers`).
+ */
+export type EmployeeNetwork = 'none' | 'project' | { allow: string[] }
+
+/** Why a network setting is unusable, or null when it's fine. Entries are checked where they're used. */
+export function invalidNetwork(v: unknown): string | null {
+  if (v === undefined || v === 'none' || v === 'project') return null
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const allow = (v as { allow?: unknown }).allow
+    if (Object.keys(v).length === 1 && Array.isArray(allow) && allow.every((e) => typeof e === 'string' && e.trim())) return null
+  }
+  return "network must be 'none', 'project' or { allow: [hosts] }"
+}
+
 export interface EmployeeData extends Record<string, unknown> {
   contactId: string
   name: string
@@ -113,6 +135,7 @@ export interface EmployeeData extends Record<string, unknown> {
   toolAllow?: string[]
   toolDeny?: string[]
   model?: string
+  network?: EmployeeNetwork
   git?: { name?: string; email?: string; branchPrefix?: string }
   routerSessionId?: string
   limits?: unknown

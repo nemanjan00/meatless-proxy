@@ -17,7 +17,7 @@ import {
 } from '@mp/core'
 import { createDirectory, type Directory, type Employee } from '@mp/directory'
 import { createEvents, type Events } from '@mp/events'
-import { createFiles, type FilesService } from '@mp/files'
+import { createFiles, directoryStorage, migrateFileRecords, type FileStorage, type FilesService } from '@mp/files'
 import type { GitCache } from '@mp/git'
 import { isManagedHub, type McpHub } from '@mp/mcp'
 import { createMcpHub } from '@mp/mcp-sdk'
@@ -31,6 +31,8 @@ import { beforeDeliver, createRouter, type RecipientResolver, type Router } from
 import { afterModelCall, createRunner, type Runner } from '@mp/runner'
 import type { SecretStore } from '@mp/secrets'
 import { storeSecretStore } from '@mp/secrets-store'
+import { createSandbox, type Sandbox } from '@mp/sandbox'
+import { networkFor } from '@mp/stdlib'
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
 import { createSkills, type SkillsService } from '@mp/skills'
 import { memoryStore, type Store } from '@mp/store'
@@ -42,7 +44,7 @@ import type { Config } from './config.ts'
 import { createControl, type Control } from './control.ts'
 import { wireMcpNotifications } from './mcp-in.ts'
 import { enqueueOnIngest, withJobDefaults, QUEUES } from './queues.ts'
-import { SettingNames, createSettings, type Settings } from './settings.ts'
+import { DEFAULT_SETTINGS, SettingNames, createSettings, type Settings } from './settings.ts'
 import { loadStdlib, type StdlibModule } from './stdlib.ts'
 import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
@@ -60,6 +62,8 @@ export interface AppOverrides {
   mcpHub?: McpHub
   git?: GitCache
   containers?: ContainerRuntime
+  /** Where employee files live. Default: `directoryStorage` on FILES_DIR. */
+  fileStorage?: FileStorage
   secrets?: SecretStore
   clock?: Clock
   logger?: Logger
@@ -88,6 +92,8 @@ export interface Services {
   /** The per-employee git stores behind `git` (null when a git cache was injected). */
   gitStores: EmployeeGit | null
   containers: ContainerRuntime | null
+  /** code.run's sandboxes, when containers are enabled and SANDBOX_ENABLED. */
+  sandbox: Sandbox | null
   secrets: SecretStore
   records: Records
   docs: Docs
@@ -213,7 +219,10 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   defineAuthKinds(records)
   const memory = createMemory({ records, clock })
   const skills = createSkills({ records })
-  const files = createFiles({ records })
+  // Employee files live on disk (the files volume); only sharing grants are records.
+  const fileStorage = o.fileStorage ?? directoryStorage({ root: config.FILES_DIR })
+  const files = createFiles({ records, storage: fileStorage, bus })
+  await migrateFileRecords({ records: store.records, storage: fileStorage, logger: logger.child({ component: 'files' }) })
   const rawEvents = createEvents({ records, clock, bus })
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = createSessions({ records, clock, bus })
@@ -233,6 +242,24 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     resolveSessionSlug: async (employeeId, slug) => (await sessions.bySlug(employeeId, slug))?.id ?? null,
   })
   const tools = createToolRegistry()
+  const sandbox =
+    containers && config.SANDBOX_ENABLED
+      ? createSandbox({
+          runtime: containers,
+          files,
+          image: config.SANDBOX_IMAGE,
+          clock,
+          logger: logger.child({ component: 'sandbox' }),
+          ...(config.FILES_VOLUME ? { filesVolume: config.FILES_VOLUME } : {}),
+          user: config.SANDBOX_USER,
+          limits: { cpus: config.SANDBOX_CPUS, memoryMb: config.SANDBOX_MEMORY_MB, pids: config.SANDBOX_PIDS },
+          // No project: the employee's own list, or DEFAULT_EGRESS.
+          egress: async (id) =>
+            networkFor({ network: (await directory.employees.get(id))?.data.network, fallback: config.DEFAULT_EGRESS }).allow,
+          idleMs: config.SANDBOX_IDLE_MINUTES * 60_000,
+          nameFor: async (id) => (await directory.employees.get(id))?.key ?? id,
+        })
+      : null
   const usage = createUsage({ records, clock, bus, ...(config.PRICING ? { pricing: config.PRICING } : {}) })
   const settings = createSettings(records)
 
@@ -379,6 +406,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     git,
     gitStores,
     containers,
+    sandbox,
     secrets,
     records,
     docs,
@@ -406,6 +434,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     toolListsFor,
     async close() {
       await queue.close().catch((e) => logger.warn('queue close failed', { err: errorMessage(e) }))
+      await sandbox?.close().catch((e) => logger.warn('sandbox close failed', { err: errorMessage(e) }))
       await services.integrations?.close().catch((e) => logger.warn('integrations close failed', { err: errorMessage(e) }))
       await mcpServers?.close().catch((e) => logger.warn('mcp servers close failed', { err: errorMessage(e) }))
       await mcpHub?.close().catch((e) => logger.warn('mcp close failed', { err: errorMessage(e) }))
@@ -434,7 +463,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       usage,
       git,
       ...(containers ? { containers } : {}),
+      ...(sandbox ? { sandbox } : {}),
       sshKeyFor: async (employeeId: string) => (await sshPrivateKey({ secrets }, employeeId)) ?? undefined,
+      defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
       enqueueRun: (runId: string, opts?: { priority?: number }) => runner.enqueue(runId, opts ?? {}),
       wakeRun: (runId: string) => runner.wake(runId),
       clock,
@@ -443,6 +474,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       config: {
         worktreesRoot: config.WORKTREES_DIR,
         pushPolicy: { protected: ['main', 'master', 'production', 'release/**'], allow: ['mp/**'] },
+        defaultEgress: config.DEFAULT_EGRESS,
       },
     }
     const names = stdlib.registerStdlib(tools, deps)

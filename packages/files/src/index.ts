@@ -1,2 +1,5 @@
 export * from './paths.ts'
+export * from './storage.ts'
+export * from './directory.ts'
 export * from './files.ts'
+export * from './migrate.ts'

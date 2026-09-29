@@ -127,6 +127,17 @@ const HOP_HEADERS = new Set([
   'upgrade',
 ])
 
+/** The body of a 403: which host, why, and what to do about it. */
+function refusal(host, port, reason) {
+  const why =
+    reason === 'private address'
+      ? 'private, loopback and link-local addresses are only reachable when listed exactly'
+      : reason === 'ip literal'
+        ? 'IP addresses are only reachable when listed exactly'
+        : `${host || 'it'} is not on this environment's egress allowlist`
+  return `egress to ${host}:${port} is blocked: ${why}. Ask an admin to add it to the project's or the employee's network allowlist.\n`
+}
+
 /**
  * An HTTP forward proxy (plain HTTP forwarding and CONNECT tunnels) that lets through only
  * destinations on `allow`, refusing everything else with 403. `logger(line)` gets one object per
@@ -176,7 +187,7 @@ function createEgressProxy(opts) {
     log(req.method, host, port, d.allowed, d.reason)
     if (!d.allowed) {
       res.writeHead(403, { 'content-type': 'text/plain' })
-      return res.end(`egress to ${host}:${port} is not allowed (${d.reason})\n`)
+      return res.end(refusal(host, port, d.reason))
     }
     const headers = {}
     for (const [k, v] of Object.entries(req.headers)) if (!HOP_HEADERS.has(k)) headers[k] = v
@@ -207,7 +218,7 @@ function createEgressProxy(opts) {
     const d = await check(host, port)
     log('CONNECT', host, port, d.allowed, d.reason)
     if (!d.allowed)
-      return socket.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\negress to ${host}:${port} is not allowed\n`)
+      return socket.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n${refusal(host, port, d.reason)}`)
     let established = false
     const upstream = net.connect(port, d.address, () => {
       established = true

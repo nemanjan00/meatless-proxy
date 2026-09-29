@@ -122,9 +122,17 @@ describe('createEgressProxy', () => {
     const before = upstreamRequests.length
     const r = await viaProxy(p.port, `http://evil.test:${upPort}/`)
     expect(r.status).toBe(403)
-    expect(r.body).toContain('not allowed')
+    // The body names the host, says why, and what to do.
+    expect(r.body).toBe(
+      `egress to evil.test:${upPort} is blocked: evil.test is not on this environment's egress allowlist. Ask an admin to add it to the project's or the employee's network allowlist.\n`,
+    )
     // Right host, wrong port.
     expect((await viaProxy(p.port, `http://upstream.test:${upPort + 1}/`)).status).toBe(403)
+    const priv = await viaProxy(p.port, 'http://10.0.0.1/')
+    expect(priv.body).toMatch(
+      /^egress to 10\.0\.0\.1:80 is blocked: private, loopback and link-local addresses are only reachable when listed exactly\./,
+    )
+    p.lines.pop()
     expect(upstreamRequests.length).toBe(before)
     expect(p.lines).toEqual([
       { at: 'NOW', method: 'GET', host: 'evil.test', port: upPort, allowed: false, reason: 'not in allowlist' },

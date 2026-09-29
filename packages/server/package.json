@@ -32,6 +32,7 @@
     "@mp/records": "0.0.0",
     "@mp/router": "0.0.0",
     "@mp/runner": "0.0.0",
+    "@mp/sandbox": "0.0.0",
     "@mp/secrets": "0.0.0",
     "@mp/secrets-store": "0.0.0",
     "@mp/sessions": "0.0.0",

@@ -19,6 +19,9 @@ services:
       DOCKER_SOCKET: /var/run/docker.sock
       DOCKER_GID: ${DOCKER_GID:-}
       DATA_DIR: /data
+      # Employee files: a named volume the app writes and code sandboxes mount (only their own part of it).
+      FILES_DIR: /var/lib/meatless-proxy/files
+      FILES_VOLUME: mp-files
       HOST: 0.0.0.0
       PORT: "3000"
       # Live previews are served on their own origin: this port, or PREVIEW_DOMAIN (see packages/server/README.md).
@@ -29,6 +32,7 @@ services:
       - "${PREVIEW_HOST_PORT:-3001}:3001"
     volumes:
       - data:/data
+      - mp-files:/var/lib/meatless-proxy/files
       # Full Docker socket access (an accepted risk, see docs/execution.md#deployment):
       # project environments run as sibling containers on this host.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -71,5 +75,8 @@ services:
 
 volumes:
   data:
+  # Named explicitly: sandbox containers mount it by this name, with a subpath per employee.
+  mp-files:
+    name: mp-files
   pgdata:
   redisdata:

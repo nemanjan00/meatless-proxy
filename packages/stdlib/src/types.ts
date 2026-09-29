@@ -12,6 +12,7 @@ import type { FilesService } from '@mp/files'
 import type { GitCache, PushPolicy } from '@mp/git'
 import type { MemoryService } from '@mp/memory'
 import type { Docs, Records } from '@mp/records'
+import type { Sandbox } from '@mp/sandbox'
 import type { Sessions } from '@mp/sessions'
 import type { SkillsService } from '@mp/skills'
 import type { UsageService } from '@mp/usage'
@@ -31,11 +32,18 @@ export interface StdlibDeps {
   /** Optional: without them the git and env tools aren't registered. */
   git?: GitCache
   containers?: ContainerRuntime
+  /** Runs code for `code.run` (Python and Node kernels in a sandbox container). Optional: without it the code tools aren't registered. */
+  sandbox?: Sandbox
   /**
    * The employee's SSH private key (its `SSH_PRIVATE_KEY` secret), used for git fetches and pushes
    * for the duration of each command. Optional: without it git runs with the harness's own credentials.
    */
   sshKeyFor?: (employeeId: string) => Promise<string | undefined>
+  /**
+   * The company timezone (an IANA name, the `timezone` setting), used by `time.now` when the call
+   * names none. Optional: without it, or when it returns nothing, `UTC`.
+   */
+  defaultTimezone?: () => Promise<string | undefined>
   /** Queues a run for execution (the server wires it to the runner). */
   enqueueRun: (runId: string, opts?: { priority?: number }) => Promise<void>
   /** Wakes a suspended run if its wait is satisfied. */
@@ -88,6 +96,11 @@ export interface StdlibConfig {
   worktreesRoot: string
   /** Branches employees may push to, and never push to. */
   pushPolicy: PushPolicy
+  /**
+   * Hosts environments and sandboxes may reach when neither the employee's `network` setting nor the
+   * session's project names any (`DEFAULT_EGRESS`). Default: none.
+   */
+  defaultEgress?: string[]
   /** Default limits used when none are configured. */
   defaults?: { maxFanOut?: number; maxDepth?: number; maxConcurrentSessions?: number }
 }

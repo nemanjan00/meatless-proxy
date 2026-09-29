@@ -159,6 +159,35 @@ that employee only), with no restart:
 stdio servers, which run a command on the host, can only be set in the
 `MCP_SERVERS` config. See [docs/spec.md](docs/spec.md#connecting-mcp-servers).
 
+### Code execution
+
+Employees run Python and Node for math, data and charts with `code.run`, like
+a notebook: variables and imports stay between runs in a session, and the last
+expression's value comes back. Code runs in a sandbox container per employee
+(`mp-<employee>-sandbox`: no network, non-root, read-only root, CPU, memory
+and process limits, no secrets), never in the app. The employee's files are
+its working directory, so a chart it saves is a file it can share.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
+| `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
+| `SANDBOX_ENABLED` | `true` | turn code execution off (it also needs `DOCKER_ENABLED`) |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY_MB`, `SANDBOX_PIDS` | 1, 1024, 256 | limits per employee's container |
+| `SANDBOX_IDLE_MINUTES` | 15 | idle kernels, then containers, are stopped |
+| `FILES_DIR` | `<DATA_DIR>/files` | where employee files live, one directory per employee |
+| `FILES_VOLUME` | none | the named volume mounted at `FILES_DIR` (`mp-files`); with it, sandboxes mount the employee's files instead of copying them |
+
+Network access follows each employee's **network** setting (on its page:
+the project's allowlist, the default; none; or hosts of its own, narrowed to
+what the project allows too), always through the logging egress proxy.
+
+Build the image yourself with `docker build -t mp-sandbox docker/sandbox` and
+set `SANDBOX_IMAGE=mp-sandbox`. Employees also know the time: every message
+carries when it arrived, and `time.now` answers in the company timezone
+(the `timezone` setting, UTC by default). See
+[docs/spec.md](docs/spec.md#code-execution).
+
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
 in `.env`.
@@ -234,6 +263,7 @@ packages/
   router/ runner/     the engine
   stdlib/             the model's tools
   server/ web/        the app: API, WebSocket, workers, and the web UI
+docker/sandbox/       the code.run sandbox image
 scripts/              architecture and secret checks
 ```
 

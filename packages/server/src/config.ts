@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseEgressEntry } from '@mp/containers'
 import { z } from 'zod'
 
 /**
@@ -123,6 +124,38 @@ export const configSchema = z.object({
   WORKTREES_DIR: optStr,
   DOCKER_ENABLED: bool(false),
   DOCKER_SOCKET: optStr,
+  /** Employee files: `<FILES_DIR>/<employeeId>/<path>`. Default `<DATA_DIR>/files`. */
+  FILES_DIR: optStr,
+  /**
+   * The named Docker volume mounted at FILES_DIR (compose: `mp-files`). With it, code.run sandboxes mount
+   * each employee's directory of it (volume subpaths, Docker Engine 26+) instead of copying files.
+   */
+  FILES_VOLUME: optStr.refine(
+    (v) => v === undefined || /^mp-[A-Za-z0-9_.-]+$/.test(v),
+    'must be a volume name starting with mp-',
+  ),
+  /** code.run: Python and Node in a sandbox container per employee. Needs DOCKER_ENABLED. */
+  SANDBOX_ENABLED: bool(true),
+  /** The sandbox image (docker/sandbox/Dockerfile). */
+  SANDBOX_IMAGE: optStr.transform((v) => v ?? 'ghcr.io/nemanjan00/meatless-proxy-sandbox:latest'),
+  /**
+   * Hosts environments and code.run sandboxes may reach through the egress proxy when neither the employee's
+   * network setting nor the session's project names any, comma-separated (e.g. `pypi.org,files.pythonhosted.org`).
+   * Default: none, so no network.
+   */
+  DEFAULT_EGRESS: optStr.transform((v) =>
+    (v ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+  ),
+  /** The sandbox user, `uid:gid`: the same as the app's, so both can write the files volume. */
+  SANDBOX_USER: optStr.transform((v) => v ?? '1000:1000').refine((v) => /^\d+:\d+$/.test(v), 'must be uid:gid'),
+  SANDBOX_CPUS: z.coerce.number().positive().default(1),
+  SANDBOX_MEMORY_MB: z.coerce.number().int().min(64).default(1024),
+  SANDBOX_PIDS: z.coerce.number().int().min(16).default(256),
+  /** Minutes a kernel (and then the container) may sit idle before it is stopped. */
+  SANDBOX_IDLE_MINUTES: z.coerce.number().positive().default(15),
   MCP_SERVERS: jsonOrFile('MCP_SERVERS').pipe(z.array(mcpServerSchema).optional()),
   LOG_LEVEL: z
     .string()
@@ -193,9 +226,10 @@ export const configSchema = z.object({
 
 export type RawConfig = z.infer<typeof configSchema>
 
-export interface Config extends Omit<RawConfig, 'GIT_CACHE_DIR' | 'WORKTREES_DIR' | 'MCP_SERVERS'> {
+export interface Config extends Omit<RawConfig, 'GIT_CACHE_DIR' | 'WORKTREES_DIR' | 'MCP_SERVERS' | 'FILES_DIR'> {
   GIT_CACHE_DIR: string
   WORKTREES_DIR: string
+  FILES_DIR: string
   MCP_SERVERS: McpServerEntry[]
 }
 
@@ -237,6 +271,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const oidc = ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL'] as const
   if (oidc.some((k) => c[k]) && !oidc.every((k) => c[k]))
     issues.push(`OIDC: set all of ${oidc.join(', ')}, or none (missing ${oidc.filter((k) => !c[k]).join(', ')})`)
+  const badEgress = c.DEFAULT_EGRESS.filter((e) => !parseEgressEntry(e))
+  if (badEgress.length) issues.push(`DEFAULT_EGRESS: not hostname globs: ${badEgress.join(', ')}`)
   if (c.PREVIEW_PORT !== 0 && c.PREVIEW_PORT === c.PORT)
     issues.push('PREVIEW_PORT: must differ from PORT (previews need their own origin)')
   if (issues.length) throw new ConfigError(issues)
@@ -244,6 +280,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ...c,
     GIT_CACHE_DIR: resolve(c.GIT_CACHE_DIR ?? `${c.DATA_DIR}/git`),
     WORKTREES_DIR: resolve(c.WORKTREES_DIR ?? `${c.DATA_DIR}/worktrees`),
+    FILES_DIR: resolve(c.FILES_DIR ?? `${c.DATA_DIR}/files`),
     MCP_SERVERS: c.MCP_SERVERS ?? [],
   }
 }
@@ -261,6 +298,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
     secretsKey: c.SECRETS_KEY ? 'set' : 'ephemeral',
     dataDir: c.DATA_DIR,
     docker: c.DOCKER_ENABLED,
+    defaultEgress: c.DEFAULT_EGRESS.length ? c.DEFAULT_EGRESS : 'none',
+    files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
+    sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),
     bootstrap: c.MP_BOOTSTRAP,
     logLevel: c.LOG_LEVEL,

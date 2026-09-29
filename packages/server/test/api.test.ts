@@ -543,7 +543,8 @@ describe('files', () => {
   it('writes, reads and lists an employee filesystem with CAS', async () => {
     const w = await t.req('PUT', `/api/files/${employeeId}/content?path=/notes/a.md`, { content: '# A' })
     expect(w.status).toBe(200)
-    expect(w.body).toMatchObject({ path: '/notes/a.md', content: '# A', version: 1 })
+    expect(w.body).toMatchObject({ path: '/notes/a.md', content: '# A' })
+    expect(w.body.version).toBeGreaterThan(0)
     expect((await t.req('PUT', `/api/files/${employeeId}/content?path=/notes/a.md`, { content: '# B', version: 7 })).status).toBe(
       409,
     )

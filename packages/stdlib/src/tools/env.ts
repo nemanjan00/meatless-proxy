@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Json } from '@mp/core'
 import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
+import { PROXY_NOTE, networkFor } from '../network.ts'
 import { worktreeFor } from './git.ts'
 
 /**
@@ -51,7 +52,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the project's egress allowlist; without one there is no network. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -71,7 +72,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           egress: {
             type: 'array',
             items: { type: 'string' },
-            description: "Narrow the project's egress allowlist to these hosts (a subset of it). Default: the whole list.",
+            description: 'Narrow the allowed hosts to these (a subset of them). Default: all of them.',
           },
           expose: {
             type: 'array',
@@ -106,26 +107,29 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
       if (!str(a.image) && !w) return fail('give an image, or check out a repository first (git.checkout) to build it')
 
-      // Egress: the checkout's project (else the session's first linked project) sets the allowlist.
+      // Egress: the employee's network setting with the checkout's project (else the session's first
+      // linked project), or the deployment default. The model can only narrow it.
       const projectId = w?.projectId ?? (await kit.projectsOf(session))[0]
       const project = projectId ? await kit.deps.directory.projects.get(projectId) : null
-      const projectAllow = project?.data.egress?.allow
-      let egress: EnvSpec['egress']
+      const emp = await kit.employee(ctx.employeeId)
+      const net = networkFor({
+        network: emp.data.network,
+        projectAllow: project?.data.egress?.allow,
+        fallback: kit.deps.config.defaultEgress ?? [],
+      })
+      let egress: EnvSpec['egress'] = net.allow.length ? { allow: [...net.allow] } : undefined
       if (a.egress !== undefined) {
         if (!Array.isArray(a.egress)) return fail('egress must be a list of hosts')
         const requested = (a.egress as unknown[]).map(String)
-        const wider = requested.filter((e) => !projectAllow || !egressEntryCovered(e, projectAllow))
+        const wider = requested.filter((e) => !egressEntryCovered(e, net.allow))
         if (wider.length)
           return fail(
-            projectAllow
-              ? "egress can only narrow the project's allowlist"
-              : 'the project has no egress allowlist, so there is no network to narrow',
-            { notAllowed: wider },
+            net.allow.length ? 'egress can only narrow the allowed hosts' : `there is no network to narrow (${net.reason})`,
+            { notAllowed: wider, allowed: net.allow },
           )
-        if (projectAllow) egress = { allow: requested }
-      } else if (projectAllow) egress = { allow: [...projectAllow] }
+        if (net.allow.length) egress = { allow: requested }
+      }
 
-      const emp = await kit.employee(ctx.employeeId)
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
         ...(str(a.image)
@@ -148,7 +152,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         name: info.name,
         status: info.status,
         ...(w ? { workspace: '/workspace' } : {}),
-        network: egress ? { via: 'proxy', allow: egress.allow } : 'none',
+        network: egress
+          ? { via: 'proxy', allow: egress.allow, note: PROXY_NOTE }
+          : { via: 'none', reason: net.reason ?? 'no network: env.up was asked for no hosts' },
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
       })
     },

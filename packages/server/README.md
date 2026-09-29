@@ -36,6 +36,14 @@ first by a small built-in loader; variables already set win.
 | `WORKTREES_DIR` | `$DATA_DIR/worktrees` | Session worktrees |
 | `DOCKER_ENABLED` | `false` (`true` in compose) | Use the Docker runtime for project environments (`env.*` tools) |
 | `DOCKER_SOCKET` | dockerode default | Docker socket path |
+| `FILES_DIR` | `$DATA_DIR/files` | Employee files, `<dir>/<employeeId>/<path>` (only sharing grants are in the database) |
+| `FILES_VOLUME` | none | The named Docker volume mounted at `FILES_DIR` (`mp-files`). With it, `code.run` sandboxes mount each employee's directory of it (Docker Engine 26+) instead of copying files |
+| `SANDBOX_ENABLED` | `true` | `code.run`/`code.reset` (needs `DOCKER_ENABLED`) |
+| `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | The sandbox image (`docker/sandbox/Dockerfile`) |
+| `DEFAULT_EGRESS` | none | Hosts environments and sandboxes may reach through the egress proxy when neither the employee's `network` setting nor the session's project names any, comma-separated. Checked at start. Default: no network |
+| `SANDBOX_USER` | `1000:1000` | The sandbox user, the same as the app's so both can write the files volume |
+| `SANDBOX_CPUS` / `SANDBOX_MEMORY_MB` / `SANDBOX_PIDS` | `1` / `1024` / `256` | Limits per employee's sandbox container |
+| `SANDBOX_IDLE_MINUTES` | `15` | Idle kernels, then idle containers, are stopped |
 | `MCP_SERVERS` | `[]` | JSON array of MCP servers, or a path to a JSON file (see below) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` (JSON lines) |
 | `MP_BOOTSTRAP` | `true` | Seed an empty store at startup |
@@ -378,6 +386,18 @@ claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp --header "Author
   employee (`src/git-store.ts`, chosen by the run's employee); `containers-docker`
   when `DOCKER_ENABLED`; the `mcp-sdk` hub from `MCP_SERVERS` plus the runtime
   servers (`src/mcp-servers`), resolving secrets from the secret store. Tests replace any of them with `overrides`.
+- Employee files: `directoryStorage` on `FILES_DIR` (or `overrides.fileStorage`),
+  and at every start `migrateFileRecords` moves file contents left in the
+  database by older versions onto it. The `@mp/sandbox` sandbox (when
+  containers are on and `SANDBOX_ENABLED`) gets the runtime, the files and the
+  `SANDBOX_*` settings, and each employee's allowlist from `networkFor` (its
+  `network` setting, else `DEFAULT_EGRESS`; a sandbox has no project); it picks mount mode with `FILES_VOLUME` and a daemon
+  with volume subpaths, else copy mode, and logs which. `services.sandbox` is
+  closed on shutdown. The stdlib gets `defaultTimezone` from the `timezone`
+  setting (`SettingNames.timezone`, default `DEFAULT_SETTINGS.timezone`, UTC).
+- At start, `addStdlibToolsToRouters` (`src/router-tools.ts`) appends stdlib
+  tools added since a router context was created (e.g. `time.now`,
+  `code.run`) to its fixed toolset, so the sessions it starts get them too.
 - Services: records, docs, directory, memory, skills, files, events, sessions,
   checklists, chat, the tool registry (stdlib and MCP tools), usage, router
   (default router, procedure contexts, chat channel members as recipients),
@@ -602,6 +622,11 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 `npx vitest run --project node packages/server`:
 
 - `api.test.ts`: every `@mp/api` route exists, shapes, error mapping, secrets never returned, pause-all.
+- `tools-files.test.ts`: router contexts get new stdlib tools (and code tools with a sandbox), `time.now` follows the
+  `timezone` setting, employee files land in `FILES_DIR` with no file records.
+- `sandbox-docker.test.ts` (`MP_DOCKER_TEST=1`): builds `docker/sandbox` as `mp-sandbox:test` and runs `code.run` for real,
+  in mount mode (a bind-backed `mp-itest-…-files` volume standing in for the files volume) and copy mode: state across
+  cells, Node, sympy, pandas, matplotlib, files both ways, read-only shares, no network, the hardening, timeouts.
 - `live.test.ts`: the real server on port 0 and a WebSocket client (run.state, entry.appended, model.delta), slow clients.
 - `mcp-server.test.ts`: the MCP SDK client over streamable HTTP with a token; tools and notifications.
 - `scenarios.test.ts`: end-to-end scenarios with a scripted model (routing to a worker and back through a
