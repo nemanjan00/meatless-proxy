@@ -334,6 +334,18 @@ function integrationSuite(backend: Backend) {
     expect(s.tools.isAllowed('mcp.slack.reply', { allow: ['**'], deny: [] })).toBe(true)
   })
 
+  it("offers an integration's tools only to employees with its token", async () => {
+    const s = t.a.services
+    const deny = async (id: string) => [...(await s.toolListsFor(id)).deny, ...(await s.integrations!.hiddenToolsFor(id))]
+    // Meatless has every token; Kai only GitLab's.
+    expect((await deny(meatless)).filter((p) => p.startsWith('mcp.'))).toEqual([])
+    expect(await deny(kai)).toEqual(expect.arrayContaining(['mcp.slack.*', 'mcp.linear.*']))
+    expect(await deny(kai)).not.toContain('mcp.gitlab.*')
+    const lists = { ...(await s.toolListsFor(kai)), deny: await deny(kai) }
+    expect(s.tools.isAllowed('mcp.slack.post_message', lists)).toBe(false)
+    expect(s.tools.isAllowed('mcp.gitlab.get_project', lists)).toBe(true)
+  })
+
   it('slack end to end: a signed mention is routed to the router, the tool acts with the right bot, and the answer goes back out', async () => {
     const s = t.a.services
     api.reset()

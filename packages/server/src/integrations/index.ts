@@ -82,6 +82,11 @@ export interface Integrations {
   /** The instance an employee's calls go through (the deployment-wide one without an employee). */
   instanceFor(name: string, employeeId?: string): Promise<IntegrationInstance>
   /**
+   * Tool patterns an employee isn't offered: `mcp.<integration>.*` for each integration it has no
+   * token for, so the model doesn't try tools that can only fail. Setting the token brings them back.
+   */
+  hiddenToolsFor(employeeId: string): Promise<string[]>
+  /**
    * Handles one webhook: `employeeRef` (an employee id or handle) selects that
    * employee's secrets, and its events carry the employee id. Events are
    * ingested with their actor mapped to a contact.
@@ -182,6 +187,16 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
   }
   toolNames.sort()
 
+  // Read from the secret store each time (not the instance cache), so a token set a moment ago counts.
+  const hiddenToolsFor = async (employeeId: string): Promise<string[]> => {
+    const all = Object.values(specs)
+    const values = await deps.secrets.resolve(
+      all.map((spec) => spec.tokenSecret),
+      { employeeId },
+    )
+    return all.filter((spec) => !values[spec.tokenSecret]).map((spec) => `mcp.${spec.name}.*`)
+  }
+
   const offPolicies = registerIntegrationPolicies({
     hooks: deps.hooks,
     bus: deps.bus,
@@ -276,6 +291,7 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
   return {
     specs,
     toolNames,
+    hiddenToolsFor,
     instanceFor: (name, employeeId) => {
       const spec = specs[name]
       if (!spec) throw new Error(`no integration ${name}`)

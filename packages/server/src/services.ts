@@ -335,9 +335,21 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   }
   // Another employee's MCP servers' tools are denied (src/mcp-servers).
   let mcpServers: McpServers | null = null
+  // Set once the integrations exist (below); until then no integration tools are hidden.
+  let integrationsForTools: Integrations | null = null
   const toolListsFor = async (employeeId: string): Promise<ToolLists> => {
     const lists = await baseToolLists(employeeId)
     const hidden = mcpServers?.hiddenFor(employeeId) ?? []
+    return hidden.length ? { ...lists, deny: [...lists.deny, ...hidden] } : lists
+  }
+  /**
+   * What the runner offers the model, at each call: the lists above, minus the tools of integrations
+   * the employee has no token for (they can only fail). Not used for toolsets fixed at creation, so a
+   * token set later brings the tools back without a new session.
+   */
+  const offeredToolListsFor = async (employeeId: string): Promise<ToolLists> => {
+    const lists = await toolListsFor(employeeId)
+    const hidden = (await integrationsForTools?.hiddenToolsFor(employeeId).catch(() => [])) ?? []
     return hidden.length ? { ...lists, deny: [...lists.deny, ...hidden] } : lists
   }
 
@@ -424,7 +436,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     bus,
     clock,
     logger: logger.child({ component: 'runner' }),
-    toolListsFor,
+    toolListsFor: offeredToolListsFor,
     projectOf,
     maxSteps: config.MAX_STEPS,
     limitsFor: runLimitsFor(usage),
@@ -593,6 +605,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       { tools, hooks, bus, secrets, events, sessions, directory, records, clock, logger },
       { enabled: config.INTEGRATIONS, ...o.integrations, baseUrls },
     )
+    integrationsForTools = services.integrations
   }
 
   // ── MCP tools and notifications ──────────────────────────────────────────
