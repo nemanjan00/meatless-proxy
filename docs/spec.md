@@ -155,10 +155,32 @@ fondness for tidy commit messages.
 - Every session, fork and procedure context uses the same identity and
   personality, so the company is always dealing with one recognisable colleague.
 
+#### Multiple employees
+
+A company can run **several employees**. Each employee is closer to an
+isolated **workspace** than to a persona: its main job is to protect against
+context bloat.
+
+- **Scope.** Each employee is responsible for a slice of the company, e.g. a
+  team, a group of projects, or a set of procedures. Its sessions, triggers,
+  subscriptions and memories belong to that slice. It only loads what's
+  relevant to that slice, so its contexts stay small.
+- **Isolation.** One employee's sessions and memories aren't visible to another
+  unless they're shared explicitly. One employee's work doesn't bloat another's
+  context.
+- **Shared company knowledge.** Contacts, projects and procedures live once in
+  the database. Each employee sees the part of them its scope covers.
+- **Own identity.** Each employee has its own contact record, handles, git
+  identity and personality, as described above.
+- **Talking to each other.** Employees are contacts, so they can hand work to
+  each other and ask each other questions directly. That's the
+  AI-to-AI path from the [goals](#goals), with no person relaying.
+
 Open questions:
 
-- One employee per company, or several with different identities and roles
-  (e.g. one per team)?
+- How is an employee's scope defined: by projects, teams, procedures, or links
+  to all three?
+- When a request fits several employees' scopes, or none, who takes it?
 - Which trailer format links a commit to its session and requester?
 - Can people tune the personality for themselves, e.g. "less chatty with me",
   through their contact preferences?
