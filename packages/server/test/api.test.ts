@@ -358,10 +358,14 @@ describe('chat', () => {
 
     const msgs = await t.req('GET', `/api/chat/channels/${ch.body.id}/messages`)
     expect(msgs.body.map((m: any) => m.id)).toEqual([root.body.id])
-    expect(msgs.body[0].data.replyCount).toBe(1)
     const thread = await t.req('GET', `/api/chat/threads/${root.body.id}`)
     expect(thread.body.root.id).toBe(root.body.id)
-    expect(thread.body.replies.map((m: any) => m.data.text)).toEqual(['Never mind'])
+    // The person's reply, and the employee's answer to being tagged, posted where it was asked.
+    expect(thread.body.replies.filter((m: any) => m.data.author.type !== 'session').map((m: any) => m.data.text)).toEqual([
+      'Never mind',
+    ])
+    expect(thread.body.replies.some((m: any) => m.data.author.type === 'session')).toBe(true)
+    expect(msgs.body[0].data.replyCount).toBeGreaterThanOrEqual(2)
 
     const session = await t.a.services.sessions.create({ employeeId, title: 'Incident helper', toolset: [] })
     const added = await t.req('POST', `/api/chat/channels/${ch.body.id}/members`, { type: 'session', id: session.id })
@@ -370,7 +374,8 @@ describe('chat', () => {
 
     const channels = await t.req('GET', '/api/chat/channels')
     const inc = channels.body.find((c: any) => c.channel.id === ch.body.id)
-    expect(inc.messages).toBe(2)
+    // The question, the reply, and the employee's answer in the thread.
+    expect(inc.messages).toBe(3)
     expect(inc.lastMessageAt).toBeTruthy()
   })
 })

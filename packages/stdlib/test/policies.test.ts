@@ -271,3 +271,39 @@ describe('AI streak (router)', () => {
     ).toBeUndefined()
   })
 })
+
+describe('answer where asked: needsAutoReply', async () => {
+  const { needsAutoReply } = await import('../src/policies.ts')
+  const ev = (expectedToAct: boolean, source = 'chat') =>
+    ({
+      kind: 'event',
+      content: { source, expectedToAct, text: 'q', type: 'message.posted', eventId: 'e', trusted: false },
+    }) as any
+  const res = (name: string, isError = false) =>
+    ({ kind: 'tool_result', content: { toolCallId: 'c', name, output: {}, isError } }) as any
+
+  it('posts only for chat requests it was expected to act on, with an answer', () => {
+    expect(needsAutoReply([ev(true)], 'The answer.')).toBe(true)
+    expect(needsAutoReply([ev(true)], '   ')).toBe(false)
+    expect(needsAutoReply([ev(true)], undefined)).toBe(false)
+    expect(needsAutoReply([ev(false)], 'fyi only')).toBe(false)
+    expect(needsAutoReply([ev(true, 'mcp:linear')], 'not chat')).toBe(false)
+  })
+
+  it('does not post when the run already answered in chat or handed the work off', () => {
+    for (const name of [
+      'chat.post',
+      'chat.reply',
+      'chat.invite',
+      'sessions.fork',
+      'sessions.loop',
+      'sessions.create',
+      'sessions.message',
+      'procedures.run',
+    ])
+      expect(needsAutoReply([ev(true), res(name)], 'done'), name).toBe(false)
+    // A failed reply doesn't count as having answered.
+    expect(needsAutoReply([ev(true), res('chat.reply', true)], 'done')).toBe(true)
+    expect(needsAutoReply([ev(true), res('docs.read')], 'done')).toBe(true)
+  })
+})

@@ -186,7 +186,10 @@ describe('router', () => {
     member = (await t.mk('member')).id
     const ev = await t.ingest({ source: 'chat', type: 'message.posted', text: 'hi all' })
     const plan = await t.router.plan(ev)
-    expect(plan.map((d) => d.reason).sort()).toEqual(['fallback', 'member'])
+    // Plain conversation (no tags, no trigger) doesn't fall back to a router; members still see it.
+    expect(plan.map((d) => d.reason).sort()).toEqual(['member'])
+    const other = await t.ingest({ source: 'webhook', type: 'ping', text: 'not chat' })
+    expect((await t.router.plan(other)).map((d) => d.reason).sort()).toEqual(['fallback', 'member'])
   })
 
   it('beforeDeliver can skip or pause deliveries', async () => {

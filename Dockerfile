@@ -4,7 +4,7 @@
 # ── Build: install dependencies and build the web UI ─────────────────────────
 FROM node:26-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
 RUN npm ci --no-audit --no-fund
 # Build the web UI when it has a build script; the server serves packages/web/dist.
@@ -16,6 +16,8 @@ RUN if node -e "process.exit(require('./packages/web/package.json').scripts?.bui
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM node:26-slim AS runtime
+# Versions come from the pinned base image's Debian release; pinning each package would break on every point release.
+# hadolint ignore=DL3008
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git openssh-client ca-certificates tini \
   && rm -rf /var/lib/apt/lists/*
@@ -28,11 +30,12 @@ WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
-RUN mkdir -p /data && chown node:node /data
-USER node
+RUN mkdir -p /data && chown 1000:1000 /data
+# The image's `node` user.
+USER 1000:1000
 EXPOSE 3000
 VOLUME ["/data"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "--import", "tsx", "packages/server/src/main.ts"]

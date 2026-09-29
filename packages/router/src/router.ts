@@ -209,8 +209,10 @@ export function createRouter(opts: RouterOptions): Router {
     }
 
     // 5. Fallback: the router session of the employee (or the default router).
-    // A session's own message that nobody claimed isn't new work for a router.
-    if (!claimed() && !tags.authorSessionId) {
+    // Not for a session's own message, and not for plain conversation in chat: a message
+    // that tags nobody, in a channel no trigger listens to, is people talking to each other.
+    const plainChat = event.data.source === 'chat' && tags.sessions.length === 0 && tags.employees.length === 0
+    if (!claimed() && !tags.authorSessionId && !plainChat) {
       const fallback = await opts.routerSessionFor(event.data.employeeId)
       if (fallback) add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })
     }

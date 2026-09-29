@@ -183,6 +183,33 @@ export function scenarioSuite(backend: Backend) {
     expect(thread.body.replies.map((m: any) => m.data.text)).toEqual(['391.', 'and times 2?', '782.'])
   })
 
+  it('1c. a run that answers with plain text (no chat tool) gets its answer posted in the thread', async () => {
+    let t!: TestApp
+    const script = async (req: ModelRequest): Promise<ScriptResult> => {
+      if ((lastMsg(req).content ?? '').includes('and in French')) return reply('Je suis Meatless.')
+      return reply("I'm Meatless, an AI employee.")
+    }
+    t = await make({ script })
+    const s = t.a.services
+    const requests = await requestsChannel(t)
+    const root = await post(t, requests, 'In one sentence: what are you?')
+    await quiet(t)
+    const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
+    expect(thread.body.replies.map((m: any) => [m.data.author.type, m.data.text])).toEqual([
+      ['session', "I'm Meatless, an AI employee."],
+    ])
+    // The answering session is subscribed, so a follow-up comes back to it and is answered in the thread too.
+    await post(t, requests, 'and in French?', root.id)
+    await quiet(t)
+    const after = await t.req('GET', `/api/chat/threads/${root.id}`)
+    expect(after.body.replies.map((m: any) => m.data.text)).toEqual([
+      "I'm Meatless, an AI employee.",
+      'and in French?',
+      'Je suis Meatless.',
+    ])
+    expect(await s.sessions.children((await s.routerSessionFor())!)).toHaveLength(1)
+  })
+
   it('1. a request in #requests is routed to the router, which forks a worker; the reply comes back to the worker', async () => {
     let t!: TestApp
     const script = async (req: ModelRequest): Promise<ScriptResult> => {

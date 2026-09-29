@@ -14,6 +14,11 @@ export const NO_DOCS_PHRASE = /no docs update needed:\s*\S/i
 /** Paths that count as docs when written with git.write_file. */
 export const DOCS_PATH = /(^|\/)docs\/|\.mdx?$/i
 
+/** Tools that answer in chat: a run that used one has already replied somewhere. */
+export const CHAT_ANSWER_TOOLS = ['chat.post', 'chat.reply', 'chat.invite']
+/** Tools that hand the work to another session: that session answers, not this run. */
+export const HANDOFF_TOOLS = ['sessions.fork', 'sessions.loop', 'sessions.create', 'sessions.message', 'procedures.run']
+
 /** Bus topic published when an AI-to-AI streak pauses deliveries in a thread. */
 export const AI_STREAK_TOPIC = 'limit.ai_streak'
 
@@ -58,12 +63,29 @@ export const wroteDocs = (entries: Entry[]) =>
   )
 
 /**
+ * Whether a run should have its final text posted where it was asked: it was
+ * started by a chat message it was expected to act on, it finished with text,
+ * and it neither answered in chat nor handed the work to another session.
+ */
+export function needsAutoReply(entries: Entry[], output: string | undefined): boolean {
+  if (!output?.trim()) return false
+  const asked = entries.some(
+    (e) => e.kind === 'event' && (e.content as any)?.source === 'chat' && (e.content as any)?.expectedToAct,
+  )
+  if (!asked) return false
+  return !results(entries).some((r) => !r.isError && (CHAT_ANSWER_TOOLS.includes(r.name) || HANDOFF_TOOLS.includes(r.name)))
+}
+
+/**
  * The built-in run policies, on the runner's hook points:
  *
  * - checklist gate (`beforeFinish`): no successful finish while required checklist items are open.
  * - docs maintenance (`beforeFinish`): a run that committed code must write docs, or say "no docs update needed: <reason>".
  * - session document (`beforeFinish`, off by default): the run must update its session document.
  * - commit on stop (`afterRun`): uncommitted worktree changes are committed to the session's branch.
+ * - answer where asked (`afterRun`): a run started by a chat message that ends with a final answer,
+ *   without replying or handing the work off, has that answer posted in the thread it was asked in.
+ *   The session is subscribed to the thread, so follow-ups come back to it.
  * - tool gates (`beforeToolCall`): `git.push` to a protected branch is denied before it reaches git.
  *   Allow and deny lists are enforced by the runner itself, so there is no duplicate check here.
  *
@@ -133,6 +155,36 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
               block:
                 'update your session document first (sessions.save_metadata with document): purpose, what was done, decisions, and anything left open.',
             }
+      }),
+    )
+
+  if (config.answerWhereAsked !== false)
+    offs.push(
+      hooks.on(afterRun, async ({ run, session, result }) => {
+        if (result.status !== 'completed') return undefined
+        const eventId = run.data.cause.eventId
+        if (!eventId) return undefined
+        try {
+          const event = await deps.events.get(eventId)
+          const payload = event?.data.payload as ChatEventPayload | undefined
+          if (event?.data.source !== 'chat' || !payload?.channelId || !payload.messageId) return undefined
+          const entries = await runEntries(deps, run)
+          if (!needsAutoReply(entries, result.output)) return undefined
+          const threadId = payload.threadId ?? payload.messageId
+          await deps.chat.post({
+            channelId: payload.channelId,
+            threadId,
+            author: { kind: 'session', id: session.id },
+            text: result.output!,
+          })
+          const subject = { system: 'mp', id: threadId }
+          const subs = await deps.events.subscriptions.forSubject(subject)
+          if (!subs.some((x) => x.data.sessionId === session.id))
+            await deps.events.subscriptions.subscribe(session.id, subject, { primary: !subs.some((x) => x.data.primary) })
+        } catch (err) {
+          deps.logger.warn('answer where asked: could not post the reply', { runId: run.id, err: errorMessage(err) })
+        }
+        return undefined
       }),
     )
 

@@ -97,6 +97,8 @@ export interface PolicyConfig {
   docsMaintenance?: boolean
   /** A run can't complete while required checklist items are open. Default true. */
   checklistGate?: boolean
+  /** Post a run's final answer in the chat thread it was asked in, if it didn't reply itself. Default true. */
+  answerWhereAsked?: boolean
   /** Commit uncommitted worktree changes when a run ends. Default true. */
   commitOnStop?: boolean
   /** A run must update its session document before finishing. Default false. */

@@ -122,7 +122,7 @@ describe('MCP server /mcp', () => {
       arguments: { channel: asked.channelId, text: 'Thanks!', thread_id: asked.threadId },
     })
     await t.settle()
-    expect(notes.slice(before).filter((n) => n.type?.startsWith('chat.'))).toEqual([])
+    expect(notes.slice(before).filter((n) => n.type?.startsWith('chat.') && n.author === 'Ana Example')).toEqual([])
     expect(t.a.mcp.size).toBe(1)
     await client.close()
   })
