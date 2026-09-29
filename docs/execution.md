@@ -137,6 +137,12 @@ and tags combine as described below:
 5. **Fallback.** Anything left over goes to the router session of the employee
    whose scope covers the subject, or to the deployment's default router
    session.
+   Not for plain chat between people, not for a message addressed to someone
+   else (it mentions others and not this employee, `payload.addressedToOthers`:
+   two employees' Slack apps both get it, and only the one mentioned acts),
+   and not for reactions (the thread's owner gets them through its
+   subscription). A router's final text is its decision, never posted as a
+   reply: the session it starts answers.
 
 Only the router sessions in steps 3 and 5 involve a model. That's where
 [untrusted input](spec.md#untrusted-input) is judged critically, and where

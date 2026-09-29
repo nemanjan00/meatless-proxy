@@ -79,6 +79,12 @@ export const filesText = (files: SlackMessage['files']) =>
 const mentionsApp = (text: string | undefined, self: SelfIdentity) =>
   !!text && [...self.userIds].some((id) => text.includes(`<@${id}>`))
 
+/** Whether a message mentions someone, and not this app: it's addressed to them (the router doesn't fall back to this employee). */
+const addressedToOthers = (text: string | undefined, self: SelfIdentity) => {
+  const mentioned = [...(text ?? '').matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].map((m) => m[1]!)
+  return mentioned.length > 0 && !mentioned.some((id) => self.userIds.has(id))
+}
+
 const pick = (obj: Record<string, Json | undefined>): Json =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Json
 
@@ -184,6 +190,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           thread_ts: ev.thread_ts,
           is_reply: reply,
           mentions_app: mentioned,
+          addressedToOthers: !isDm && !mentioned && addressedToOthers(ev.text, self) ? true : undefined,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
         }),
         messageKey(channel, ev.ts),

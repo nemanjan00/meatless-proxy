@@ -94,6 +94,12 @@ function lastAssistantText(entries: Entry[]): string | undefined {
   return undefined
 }
 
+/** A router context, current or retired: its runs decide where work goes, they don't answer. */
+const isRouter = (session: Session) => {
+  const role = session.data.meta?.role
+  return role === 'router' || role === 'router-retired'
+}
+
 /** Subscribes a session to a subject, unless it already is. Router contexts never hold conversations. */
 export async function subscribeOnce(events: Events, session: Session, subject: Subject, primary: boolean) {
   if (session.data.meta?.role === 'router') return false
@@ -177,6 +183,9 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
     offs.push(
       deps.hooks.on(afterRun, async ({ run, session, result }) => {
         if (result.status !== 'completed') return undefined
+        // A router's final text is its routing decision ("Routed to …", "Logged."), never an answer: it
+        // hands work to a session, which answers. Live, "Logged." and a reaction's NO_REPLY note were posted.
+        if (isRouter(session)) return undefined
         const eventId = run.data.cause.eventId
         if (!eventId) return undefined
         try {

@@ -106,6 +106,24 @@ describe('router', () => {
     expect((await t.events.triggers.list())[0]!.data.fired).toBe(1)
   })
 
+  it('does not fall back for a message addressed to someone else, or for a reaction', async () => {
+    const t = await setup()
+    // Two employees' Slack apps both get a message that mentions only one of them: the other one's copy.
+    const other = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.posted',
+      employeeId: 'emp_b',
+      text: '@Meatless build it',
+      payload: { addressedToOthers: true },
+    })
+    expect(await t.router.plan(other)).toEqual([])
+    const reaction = await t.ingest({ source: 'integration:slack', type: 'reaction.added', employeeId: 'emp_b', text: ':eyes:' })
+    expect(await t.router.plan(reaction)).toEqual([])
+    // A plain message still falls back.
+    const plain = await t.ingest({ source: 'integration:slack', type: 'message.posted', employeeId: 'emp_b', text: 'anyone?' })
+    expect((await t.router.plan(plain)).map((d) => d.reason)).toEqual(['fallback'])
+  })
+
   it('falls back to the employee router, or the default router', async () => {
     const t = await setup()
     const e1 = await t.ingest({ source: 'mcp:slack', type: 'message.posted', employeeId: 'emp_b', text: 'hello?' })

@@ -277,6 +277,8 @@ const script = async (req: ModelRequest): Promise<ScriptResult> => {
   if (text.includes('merge request merged') || text.includes('moved to Done')) return reply('NO_REPLY')
   if (text.includes('integration:slack') && text.includes('please react'))
     return callTools([{ name: 'mcp.slack.react', args: { channel: 'C1', ts: '1700000000.000100', name: 'eyes' } }])
+  // A router that ends with its decision and no answer (live: "Logged." was posted in Slack).
+  if (text.includes('integration:slack') && text.includes('just log it')) return reply('Logged.')
   if (text.includes('integration:slack')) return reply('NO_REPLY')
   if (text.includes('integration:linear')) return callTools([{ name: 'mcp.linear.viewer', args: {} }])
   if (text.includes('integration:gitlab'))
@@ -449,6 +451,29 @@ function integrationSuite(backend: Backend) {
     // And the session follows the thread from now on.
     const subs = await s.events.subscriptions.forSubject({ system: 'slack', id: 'C1/1700000000.000100' })
     expect(subs.map((x) => x.data.sessionId)).toEqual([session.id])
+  })
+
+  it('slack: a router run ending with its decision posts nothing back', async () => {
+    const s = t.a.services
+    api.reset()
+    // As deployed: the Slack trigger runs in the router context itself (this suite forks it otherwise).
+    const trigger = (await s.events.triggers.list()).find((x) => x.data.name === 'Slack: mentions and DMs')!
+    await s.events.triggers.update(trigger.id, { fork: false, mode: 'ephemeral' })
+    try {
+      const r = await post(
+        '/webhooks/slack/meatless',
+        slackRequest(SLACK_SECRET_A, mention('EvLog', 'U_ANA', 'just log it', '1700000001.000200')),
+      )
+      expect(r.status).toBe(200)
+      await settle()
+      const routerId = (await s.directory.employees.require(meatless)).data.routerSessionId!
+      expect((await s.sessions.require(routerId)).data.meta?.role).toBe('router')
+      const runs = await s.sessions.runs({ sessionId: routerId })
+      expect(runs.some((x) => x.data.result?.output === 'Logged.')).toBe(true)
+      expect(api.calls.filter((c) => c.path === 'chat.postMessage')).toEqual([])
+    } finally {
+      await s.events.triggers.update(trigger.id, { fork: true, mode: 'continuing' })
+    }
   })
 
   it('slack: a NO_REPLY answer posts nothing back', async () => {

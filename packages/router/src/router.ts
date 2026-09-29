@@ -310,7 +310,12 @@ export function createRouter(opts: RouterOptions): Router {
     // Not for a session's own message, and not for plain conversation in chat: a message
     // that tags nobody, in a channel no trigger listens to, is people talking to each other.
     const plainChat = event.data.source === 'chat' && tags.sessions.length === 0 && tags.employees.length === 0
-    if (!claimed() && !tags.authorSessionId && !plainChat) {
+    // Nor for a message addressed to someone else (it mentions others, not this employee: two employees'
+    // apps both get it, and only the one mentioned acts), nor for a reaction: whoever owns the thread gets
+    // it through its subscription, and a router run per emoji costs a model call for nothing.
+    const payload = event.data.payload as { addressedToOthers?: unknown } | undefined
+    const notForFallback = payload?.addressedToOthers === true || event.data.type.startsWith('reaction.')
+    if (!claimed() && !tags.authorSessionId && !plainChat && !notForFallback) {
       const fallback = await opts.routerSessionFor(event.data.employeeId)
       if (fallback) add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })
     }

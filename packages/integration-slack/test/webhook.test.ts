@@ -416,6 +416,16 @@ describe('event mapping', () => {
     expect((await deliver(envelope({ type: 'message', subtype: undefined, channel: 'C1' }))).events).toEqual([])
   })
 
+  it('marks a message that mentions someone else, and not this app, as addressed to others', async () => {
+    const payloadOf = async (text: string, ts: string) =>
+      (await deliver(msg({ text, ts }))).events[0]?.payload as { addressedToOthers?: boolean; mentions_app?: boolean }
+    expect((await payloadOf('<@UOTHERBOT>, build a json viewer', '1700000101.000100')).addressedToOthers).toBe(true)
+    expect(
+      (await payloadOf(`<@${BOT_USER}> and <@UOTHERBOT>, both of you`, '1700000102.000100')).addressedToOthers,
+    ).toBeUndefined()
+    expect((await payloadOf('anyone around?', '1700000103.000100')).addressedToOthers).toBeUndefined()
+  })
+
   it('clips long text in the rendering, keeps it whole in the payload', async () => {
     const long = 'x'.repeat(5000)
     const e = (await deliver(msg({ text: long }))).events[0]

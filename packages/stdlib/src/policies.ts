@@ -188,6 +188,9 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
     offs.push(
       hooks.on(afterRun, async ({ run, session, result }) => {
         if (result.status !== 'completed') return undefined
+        // A router's final text is its routing decision, never an answer: the session it starts replies.
+        const role = session.data.meta?.role
+        if (role === 'router' || role === 'router-retired') return undefined
         const eventId = run.data.cause.eventId
         if (!eventId) return undefined
         try {
