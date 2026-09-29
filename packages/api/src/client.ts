@@ -51,6 +51,9 @@ import type {
   UsageSeries,
 } from './resources.ts'
 import type { McpOAuthStart, McpServerCreate, McpServerInfo, McpServerPatch, McpServerTool } from './mcp-servers.ts'
+import { ATTACHMENT_ROUTES, type AttachmentsApi, attachmentsMethods } from './attachments.ts'
+import { PROJECT_ROUTES, type ProjectsApi, projectsMethods } from './projects.ts'
+import { PROCEDURE_ROUTES, type ProceduresApi, proceduresMethods } from './procedures.ts'
 import { SETUP_ROUTES, type SetupApi, setupMethods } from './setup.ts'
 
 /**
@@ -151,6 +154,9 @@ export const ROUTES = {
   ready: ['GET', '/readyz'],
 
   ...SETUP_ROUTES,
+  ...PROJECT_ROUTES,
+  ...ATTACHMENT_ROUTES,
+  ...PROCEDURE_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -238,7 +244,7 @@ export interface ApiClientOptions {
  * (and its mock) code against this interface. Errors are thrown as
  * `ApiRequestError` (see errors.ts for the error body and status codes).
  */
-export interface ApiClient extends SetupApi {
+export interface ApiClient extends SetupApi, ProjectsApi, ProceduresApi, AttachmentsApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -377,11 +383,11 @@ export interface ApiClient extends SetupApi {
   /** `GET /api/chat/threads/:id` (id = root message id) → the root, its replies and the sessions on it. */
   thread(threadId: string): Promise<ChatThread>
   /**
-   * `POST /api/chat/channels/:id/messages` body `{ text, threadId? }` → the
+   * `POST /api/chat/channels/:id/messages` body `{ text, threadId?, attachments? }` → the
    * message, posted as the current person. Tags in the text are parsed and
-   * routed.
+   * routed. `attachments` are ids of your uploads (`uploadAttachment`); the text may then be empty.
    */
-  postMessage(channelId: string, body: { text: string; threadId?: string }): Promise<Message>
+  postMessage(channelId: string, body: { text: string; threadId?: string; attachments?: string[] }): Promise<Message>
   /** `POST /api/chat/channels/:id/members` body `ChatMember` → the channel. */
   addMember(channelId: string, member: Omit<ChatMember, 'label'> & { label?: string }): Promise<ApiRecord<ChannelData>>
   /** `PATCH /api/chat/messages/:id` body `{ text }` → the message. Only its author may edit it (403 otherwise). */
@@ -648,6 +654,18 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     ready: () => call('ready'),
 
     ...setupMethods(call),
+    ...projectsMethods(call),
+    ...attachmentsMethods(
+      { base, fetch: doFetch, headers: () => ({ ...(typeof opts.headers === 'function' ? opts.headers() : opts.headers) }) },
+      (status, body, fallback) =>
+        new ApiRequestError(
+          status,
+          body?.error?.code ?? codeForStatus(status),
+          body?.error?.message ?? fallback,
+          body?.error?.details,
+        ),
+    ),
+    ...proceduresMethods(call),
   }
 }
 

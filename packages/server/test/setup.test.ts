@@ -62,9 +62,13 @@ function fakeWorld() {
       projects: [
         {
           id: 42,
+          name: 'billing',
+          description: 'Invoices and payments.',
           path_with_namespace: 'acme/billing',
           default_branch: 'main',
           web_url: 'https://gitlab.test/acme/billing',
+          http_url_to_repo: 'https://gitlab.test/acme/billing.git',
+          ssh_url_to_repo: 'git@gitlab.test:acme/billing.git',
           permissions: { project_access: { access_level: 30 }, group_access: null },
         },
       ] as any[],
@@ -120,6 +124,11 @@ function fakeWorld() {
         return new Response(null, { status: 204 })
       }
       if (method === 'GET' && path === '/projects') return json(w.gitlab.projects)
+      const one = /^\/projects\/(\d+)$/.exec(path)
+      if (method === 'GET' && one) {
+        const p = w.gitlab.projects.find((x) => x.id === Number(one[1]))
+        return p ? json(p) : json({ message: '404 Project Not Found' }, 404)
+      }
       const pb = /^\/projects\/(\d+)\/protected_branches$/.exec(path)
       if (method === 'GET' && pb) return json((w.gitlab.protected[Number(pb[1])] ?? []).map((name) => ({ name })))
       return json({ message: '404 Not found' }, 404)
@@ -199,7 +208,8 @@ function setupSuite(backend: Backend) {
   const stepOf = (i: any, id: string) => i.steps.find((s: any) => s.id === id)
   const setSecrets = (name: string, values: Record<string, string>, headers?: Record<string, string>) =>
     t.req('POST', `/api/employees/${emp}/integrations/${name}/secrets`, { values }, headers)
-  const act = (name: string, action: string) => t.req('POST', `/api/employees/${emp}/integrations/${name}/actions/${action}`, {})
+  const act = (name: string, action: string, input: unknown = {}, headers?: Record<string, string>) =>
+    t.req('POST', `/api/employees/${emp}/integrations/${name}/actions/${action}`, input, headers)
   const ownSecrets = async () =>
     (await t.a.services.secrets.list()).filter((m) => m.scope.type === 'employee' && m.scope.id === emp).map((m) => m.name)
 
@@ -492,6 +502,91 @@ function setupSuite(backend: Backend) {
       expect(token.status).toBe('warning')
       expect(token.detail).toMatch(/expires in (9|10) days/)
       expect(gl.state).toBe('needs_attention')
+    })
+
+    it('adds reachable GitLab projects as harness projects with the employee as a member, idempotently', async () => {
+      const s = t.a.services
+      fake.world.gitlab.projects.push({
+        id: 43,
+        name: 'billing',
+        path_with_namespace: 'other/billing',
+        default_branch: 'main',
+        http_url_to_repo: 'https://gitlab.test/other/billing.git',
+        ssh_url_to_repo: 'git@gitlab.test:other/billing.git',
+        permissions: { project_access: { access_level: 30 }, group_access: null },
+      })
+      await setSecrets('gitlab', { GITLAB_TOKEN: 'glpat-good' })
+      const gl = await status('gitlab')
+      expect(gl.actions).toContain('add-projects')
+      const step = stepOf(gl, 'projects')
+      expect(step.data.projects.map((p: any) => p.added)).toEqual([null, null])
+      expect(step.detail).toMatch(/2 aren’t a harness project of the employee yet/)
+      const contact = await s.directory.employees.contact(emp)
+      const before = (await s.directory.projects.list({ limit: 1000 })).items.length
+
+      const r = await act('gitlab', 'add-projects', { projects: [42, 43] })
+      expect(r.status).toBe(200)
+      expect(r.body.message).toBe('Added 2 projects: acme/billing, other/billing.')
+      const mine = await s.directory.projects.forContact(contact.id)
+      const byPath = new Map(
+        mine.map((m) => [m.project.data.repositories?.[0]?.url, { project: m.project, roles: m.roles }] as const),
+      )
+      const billing = byPath.get('git@gitlab.test:acme/billing.git')!
+      expect(billing.roles).toEqual(['member'])
+      expect(billing.project.data).toMatchObject({
+        name: expect.stringMatching(/billing$/),
+        description: 'Invoices and payments.',
+        repositories: [
+          { url: 'git@gitlab.test:acme/billing.git', httpUrl: 'https://gitlab.test/acme/billing.git', defaultBranch: 'main' },
+        ],
+      })
+      // The second one's short name was taken, so it is named by its path.
+      expect(byPath.get('git@gitlab.test:other/billing.git')!.project.data.name).toBe('other/billing')
+      const added = stepOf(r.body.integration, 'projects').data.projects
+      expect(added.every((p: any) => p.added?.linked === true)).toBe(true)
+
+      // Again: nothing new.
+      const again = await act('gitlab', 'add-projects', { projects: [42] })
+      expect(again.body.message).toBe('Already added: acme/billing.')
+      expect((await s.directory.projects.list({ limit: 1000 })).items.length).toBe(before + 2)
+      for (const m of await s.directory.projects.forContact(contact.id))
+        await s.records.delete('project', m.project.id, { cascade: true })
+    })
+
+    it('only links the employee to a project whose repository the harness already has', async () => {
+      const s = t.a.services
+      const existing = await s.directory.projects.create({
+        name: `Billing app ${n}`,
+        repositories: [{ url: 'https://gitlab.test/acme/billing' }],
+      })
+      await setSecrets('gitlab', { GITLAB_TOKEN: 'glpat-good' })
+      expect(stepOf(await status('gitlab'), 'projects').data.projects[0].added).toEqual({
+        projectId: existing.id,
+        name: existing.data.name,
+        linked: false,
+      })
+      const before = (await s.directory.projects.list({ limit: 1000 })).items.length
+      const r = await act('gitlab', 'add-projects', { projects: ['42'] })
+      expect(r.body.message).toMatch(/^Linked Billing \d+ to 1 existing project: acme\/billing\.$/)
+      expect((await s.directory.projects.list({ limit: 1000 })).items.length).toBe(before)
+      const contact = await s.directory.employees.contact(emp)
+      expect((await s.directory.projects.members(existing.id)).map((m) => [m.contact.id, m.roles])).toContainEqual([
+        contact.id,
+        ['member'],
+      ])
+      await s.records.delete('project', existing.id, { cascade: true })
+    })
+
+    it('add-projects checks its input, the token, and who may run it', async () => {
+      expect((await act('gitlab', 'add-projects', { projects: [42] })).status).toBe(422)
+      await setSecrets('gitlab', { GITLAB_TOKEN: 'glpat-good' })
+      expect((await act('gitlab', 'add-projects', {})).status).toBe(422)
+      expect((await act('gitlab', 'add-projects', { projects: [{}] })).status).toBe(422)
+      expect((await act('gitlab', 'add-projects', { projects: [42] }, member)).status).toBe(403)
+      const missing = await act('gitlab', 'add-projects', { projects: [999] })
+      expect(missing.body.message).toBe('Couldn’t add: 999 (the token can’t see it).')
+      const bad = await t.req('POST', `/api/employees/${emp}/integrations/gitlab/actions/add-projects`, '[1]')
+      expect(bad.status).toBe(400)
     })
 
     it('adds a routing trigger for issues assigned to its username', async () => {

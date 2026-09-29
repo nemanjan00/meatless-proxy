@@ -40,10 +40,13 @@ export function RecordPicker({
   autoFocus,
   onCancel,
   className,
+  filter,
 }: {
   kinds: string[]
   onPick(option: PickOption): void
   exclude?: string[]
+  /** Keeps only the records this returns true for (e.g. no AI contacts when employees are offered too). */
+  filter?(record: ApiRecord): boolean
   placeholder?: string
   id?: string
   autoFocus?: boolean
@@ -59,6 +62,8 @@ export function RecordPicker({
   const [options, setOptions] = useState<PickOption[]>([])
   const [loading, setLoading] = useState(false)
   const seq = useRef(0)
+  const filterRef = useRef(filter)
+  filterRef.current = filter
   const kindsKey = kinds.join(',')
   const excludeKey = exclude.join(',')
 
@@ -73,7 +78,11 @@ export function RecordPicker({
         kindsKey.split(',').map((kind) =>
           api
             .listRecords(kind, { ...(text && !pasted ? { text } : {}), limit: 8, orderBy: 'updatedAt', dir: 'desc' })
-            .then((p) => p.items.map((r) => ({ id: r.id, kind, label: recordLabel(r), detail: detailOf(r) })))
+            .then((p) =>
+              p.items
+                .filter((r) => !filterRef.current || filterRef.current(r))
+                .map((r) => ({ id: r.id, kind, label: recordLabel(r), detail: detailOf(r) })),
+            )
             .catch(() => [] as PickOption[]),
         ),
       )
@@ -126,12 +135,15 @@ export function RecordPicker({
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() =>
+        onBlur={(e) => {
+          const input = e.currentTarget
           setTimeout(() => {
+            // Focused again in the meantime (e.g. after picking): stay open.
+            if (document.activeElement === input) return
             setOpen(false)
             onCancel?.()
           }, 150)
-        }
+        }}
         onKeyDown={onKey}
         placeholder={placeholder ?? `Search ${kinds.join(' or ')}…`}
         role="combobox"

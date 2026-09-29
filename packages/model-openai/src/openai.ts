@@ -1,6 +1,8 @@
 import { type Clock, type Logger, MpError, silentLogger, systemClock, UnavailableError } from '@mp/core'
 import {
   type ChatMessage,
+  type ImagePart,
+  type ModelCapabilities,
   type ModelClient,
   type ModelRequest,
   type ModelResponse,
@@ -170,11 +172,98 @@ export function openAiModel(opts: OpenAiModelOptions): ModelClient {
     return { retryable: true, reason: `network error: ${msg}` }
   }
 
-  return { defaultModel: opts.model, complete }
+  const caps = new Map<string, Promise<ModelCapabilities | null>>()
+  /** `GET {baseUrl}/models`: Kimi (and others) list `supports_image_in` or `modalities.input` per model. Cached per model. */
+  function capabilities(name = opts.model): Promise<ModelCapabilities | null> {
+    let p = caps.get(name)
+    if (!p) {
+      p = fetchCapabilities(name).catch((e) => {
+        log.debug('model capabilities unavailable', { model: name, err: redact(e instanceof Error ? e.message : String(e)) })
+        caps.delete(name)
+        return null
+      })
+      caps.set(name, p)
+    }
+    return p
+  }
+  async function fetchCapabilities(name: string): Promise<ModelCapabilities | null> {
+    const res = await doFetch(`${opts.baseUrl.replace(/\/+$/, '')}/models`, {
+      headers: { accept: 'application/json', ...opts.headers, authorization: `Bearer ${opts.apiKey}` },
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 10_000)),
+    })
+    if (!res.ok) return null
+    const list = ((await res.json()) as { data?: unknown })?.data
+    if (!Array.isArray(list)) return null
+    const m = list.find((x) => x && typeof x === 'object' && (x as { id?: unknown }).id === name) as
+      | Record<string, any>
+      | undefined
+    if (!m) return null
+    if (typeof m.supports_image_in === 'boolean') return { vision: m.supports_image_in }
+    const input = m.modalities?.input ?? m.input_modalities ?? m.architecture?.input_modalities
+    if (Array.isArray(input)) return { vision: input.includes('image') }
+    return {}
+  }
+
+  return { defaultModel: opts.model, complete, capabilities }
+}
+
+/** A short note for an image the model gets as an attachment, e.g. `image chart.png, 800x600, attached below`. */
+function imageNote(img: ImagePart, where: string): string {
+  const size = img.width && img.height ? `, ${img.width}x${img.height}` : ''
+  return img.data ? `[image ${img.name ?? img.mime}${size}, ${where}]` : `[image ${img.name ?? img.mime}: no longer available]`
+}
+
+const imageUrlPart = (img: ImagePart) => ({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.data}` } })
+
+/**
+ * Serialises messages. Images of a `user` message become `image_url` parts of it. Tool messages
+ * must be text on most providers, so a tool result's images are noted in its text and sent in one
+ * user message after the last tool message of that turn.
+ */
+export function serializeMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = []
+  let pending: ImagePart[] = []
+  const flush = () => {
+    if (!pending.length) return
+    out.push({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `[the ${pending.length === 1 ? 'image' : `${pending.length} images`} from the tool results above]`,
+        },
+        ...pending.map(imageUrlPart),
+      ],
+    })
+    pending = []
+  }
+  for (const m of messages) {
+    if (m.role !== 'tool') flush()
+    const images = m.images ?? []
+    if (!images.length || (m.role !== 'tool' && m.role !== 'user')) {
+      out.push(serializeMessage(m))
+      continue
+    }
+    const loaded = images.filter((i) => i.data)
+    if (m.role === 'tool') {
+      const notes = images.map((i) => imageNote(i, 'attached below')).join('\n')
+      out.push(serializeMessage({ ...m, content: `${m.content ?? ''}${m.content ? '\n' : ''}${notes}` }))
+      pending.push(...loaded)
+      continue
+    }
+    const missing = images.filter((i) => !i.data).map((i) => imageNote(i, ''))
+    const text = [m.content ?? '', ...missing].filter(Boolean).join('\n')
+    out.push({
+      ...serializeMessage(m),
+      content: loaded.length ? [...(text ? [{ type: 'text', text }] : []), ...loaded.map(imageUrlPart)] : text,
+    })
+  }
+  flush()
+  return out
 }
 
 function buildBody(req: ModelRequest, model: string, stream: boolean): Record<string, unknown> {
-  const body: Record<string, unknown> = { model, messages: req.messages.map(serializeMessage) }
+  const body: Record<string, unknown> = { model, messages: serializeMessages(req.messages) }
   if (req.tools?.length) body.tools = req.tools
   if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature

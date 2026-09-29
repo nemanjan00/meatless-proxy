@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AuthorInfo, ChatAuthor, Message } from '@mp/chat'
+import { attachmentsOf, type AuthorInfo, type ChatAuthor, type Message } from '@mp/chat'
 import { DeniedError, NotFoundError, errorMessage, isMpError, type BusMessage } from '@mp/core'
 import type { Contact, Employee } from '@mp/directory'
 import type { RunData } from '@mp/sessions'
@@ -11,6 +11,7 @@ import { contactForToken } from './tokens.ts'
 import { accessOf, atLeast } from './auth/access.ts'
 import { AgentChat, type AgentChatOptions, type AgentMessage } from './mcp-agents/agents.ts'
 import { searchChat } from './mcp-agents/search.ts'
+import { mcpAttachmentContent, uploadMcpAttachments } from './mcp-attachments.ts'
 
 /** What the harness pushes to connected MCP clients, as the `data` of `notifications/message`. */
 export type HarnessNotification =
@@ -302,6 +303,7 @@ export class HarnessMcpServer {
       author: await agents.authorName(m.data.author),
       text: m.data.text,
       at: m.data.createdAt,
+      ...(attachmentsOf(m.data).length ? { attachments: attachmentsOf(m.data) } : {}),
     })
 
     server.registerTool(
@@ -415,25 +417,53 @@ export class HarnessMcpServer {
       'chat_post',
       {
         description:
-          'Post a message in a harness chat channel, or reply in a thread. Tag employees with @name to ask them to act.',
+          'Post a message in a harness chat channel, or reply in a thread. Tag employees with @name to ask them to act. Attach images (PNG, JPEG, GIF or WebP, base64) with attachments; the text may then be empty.',
         inputSchema: {
           channel: z.string().describe('Channel name (e.g. requests) or id'),
-          text: z.string().min(1),
+          text: z.string(),
           thread_id: z.string().optional().describe('Reply in this thread (the root message id)'),
+          attachments: z
+            .array(
+              z.object({
+                name: z.string().optional().describe('File name, e.g. screenshot.png'),
+                mime: z.string().optional().describe('image/png, image/jpeg, image/gif or image/webp'),
+                data: z.string().describe('The image, base64'),
+              }),
+            )
+            .optional(),
         },
       },
-      safe(async ({ channel, text: body, thread_id }) => {
+      safe(async ({ channel, text: body, thread_id, attachments }) => {
         const a = await writer()
+        if (!body.trim() && !attachments?.length) throw new Error('text is required')
         const ch = await channelOf(channel, a.contact)
+        const ids = await uploadMcpAttachments(s, a.author, attachments ?? [])
         const msg = await s.chat.post({
           channelId: ch.id,
           author: a.author,
           text: body,
           ...(thread_id ? { threadId: thread_id } : {}),
           ...(a.info ? { authorInfo: a.info } : {}),
+          ...(ids.length ? { attachments: ids } : {}),
         })
         return text({ messageId: msg.id, threadId: msg.data.threadId ?? msg.id, channelId: ch.id })
       }),
+    )
+
+    server.registerTool(
+      'chat_attachment',
+      {
+        description:
+          'Look at an image attached to a chat message you can see (the id from chat_read, chat_search or a notification).',
+        inputSchema: { id: z.string().describe('The attachment id (att_…)') },
+      },
+      async ({ id }) => {
+        try {
+          return await mcpAttachmentContent(s, id, async (channelId) => canSee((await actor()).contact, channelId))
+        } catch (e) {
+          return fail(isMpError(e) || e instanceof Error ? e.message : errorMessage(e))
+        }
+      },
     )
 
     server.registerTool(

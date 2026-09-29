@@ -279,7 +279,8 @@ export function scenarioSuite(backend: Backend) {
     await quiet(t)
     const thread = await t.req('GET', `/api/chat/threads/${root.id}`)
     expect(thread.body.replies.map((m: any) => [m.data.author.type, m.data.text])).toEqual([
-      ['session', "I'm Meatless, an AI employee."],
+      // The router context speaks as the employee.
+      ['employee', "I'm Meatless, an AI employee."],
     ])
     expect(await s.events.subscriptions.forSession((await s.routerSessionFor())!)).toEqual([])
   })

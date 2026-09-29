@@ -24,3 +24,15 @@ export * from './subscription-presets.ts'
 export { HANDOFF_TOOLS, NO_REPLY, NO_REPLY_RE, needsAutoReply } from './policies.ts'
 export { ROUTER_MARK, routerAwareScript } from './testing/router-aware.ts'
 export { networkFor, PROXY_NOTE, type NetworkDecision } from './network.ts'
+export * from './procedure-context.ts'
+export {
+  currentProjects,
+  lastProjectsText,
+  MAX_LISTED_PROJECTS,
+  PROJECTS_ENTRY_META,
+  PROJECTS_HEADER,
+  projectsEntry,
+  projectsText,
+  type ProjectLine,
+  type ProjectsEntry,
+} from './projects-entry.ts'

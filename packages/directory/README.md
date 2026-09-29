@@ -16,7 +16,13 @@ as extendable records on top of `@mp/records`.
   `byContact`, `byHandle('@name')`, `contact(employeeId)`.
 - `projects`: `create`, `get`, `require`, `update`, `list`, `search`, `byName` (name or alias), `addMember(projectId, contactId, role)`,
   `removeMember`, `setOwner`, `owner`, `members` (`{contact, roles, links}[]`), `forContact` (`{project, roles, links}[]`).
-- `procedures`: `create`, `get`, `require`, `update`, `list`, `find(text, { projectIds })` (keyword scoring over name, applies, body).
+- `procedures`: `create`, `get`, `require`, `update`, `list`, `find(text, { projectIds })` (keyword scoring over name, applies, body;
+  archived procedures are left out). `approvals` are `{ contactId | role, step? }`; `archived: true` retires one.
+
+A repository is `{ url, httpUrl?, defaultBranch?, path? }`: `url` is what git fetches and pushes (ssh when the
+employee pushes with its key), `httpUrl` the same repository over https. An employee works on a project through a
+link from its AI contact (the harness's "Your projects" entry and GitLab hook provisioning read it); its older
+`scope.projects` is only a fallback that the server migrates to links.
 
 Ownership and membership are links `contact -> project` with a role (`ProjectRoles`: owner, backup, member, reviewer,
 stakeholder, or any string), stored once and read from both sides. Any contact can own a project, including an employee's.

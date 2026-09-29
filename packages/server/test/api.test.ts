@@ -39,6 +39,8 @@ describe('routes', () => {
         employeeId: 'emp_00000000000000000000000000',
         name: 'slack',
         action: 'add-trigger',
+        contactId: 'con_00000000000000000000000000',
+        triggerId: 'trg_00000000000000000000000000',
       })
       const res = await t.a.app.request(url, {
         method,
@@ -194,6 +196,8 @@ describe('sessions and runs', () => {
     const runHistory = await t.req('GET', `/api/runs/${runId}/history`)
     expect(runHistory.body.map((e: any) => e.kind)).toEqual([
       'system',
+      'system',
+      // The employee's current projects (the run's input, after the cached history).
       'system',
       'event',
       'assistant',
@@ -371,10 +375,16 @@ describe('chat', () => {
     const thread = await t.req('GET', `/api/chat/threads/${root.body.id}`)
     expect(thread.body.root.id).toBe(root.body.id)
     // The person's reply, and the employee's answer to being tagged, posted where it was asked.
-    expect(thread.body.replies.filter((m: any) => m.data.author.type !== 'session').map((m: any) => m.data.text)).toEqual([
+    expect(thread.body.replies.filter((m: any) => m.data.author.type === 'person').map((m: any) => m.data.text)).toEqual([
       'Never mind',
     ])
-    expect(thread.body.replies.some((m: any) => m.data.author.type === 'session')).toBe(true)
+    // The router context answered: shown as the employee, not as `@meatless#router`.
+    expect(thread.body.replies.find((m: any) => m.data.author.type !== 'person').data.author).toEqual({
+      type: 'employee',
+      id: employeeId,
+      name: 'Meatless',
+      handle: 'meatless',
+    })
     expect(msgs.body[0].data.replyCount).toBeGreaterThanOrEqual(2)
 
     const session = await t.a.services.sessions.create({ employeeId, title: 'Incident helper', toolset: [] })

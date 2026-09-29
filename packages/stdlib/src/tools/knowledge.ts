@@ -405,7 +405,8 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.read',
-      description: 'Read a file from your filesystem (or one shared with you under /shared/<owner>/…).',
+      description:
+        'Read a file from your filesystem (or one shared with you under /shared/<owner>/…). To look at an image, use image.view instead.',
       effect: 'read',
       params: { properties: { path: { type: 'string' } }, required: ['path'] },
     },
@@ -425,7 +426,8 @@ export function registerKnowledgeTools(kit: Kit): void {
   kit.tool(
     {
       name: 'fs.write',
-      description: 'Create or replace a file in your filesystem. Writing under /shared/<owner>/… needs a write share.',
+      description:
+        "Create or replace a file in your filesystem. Writing under /shared/<owner>/… needs a write share. Binary files, e.g. a PNG to attach to a chat message, go in as base64 with encoding: 'base64'.",
       effect: 'idempotent',
       params: {
         properties: {

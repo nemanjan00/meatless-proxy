@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { createChat, type Chat } from '@mp/chat'
+import { createChat, createChatAttachments, type Chat, type ChatAttachments } from '@mp/chat'
 import { createChecklists, type Checklists } from '@mp/checklists'
 import type { ContainerRuntime } from '@mp/containers'
 import { dockerRuntime } from '@mp/containers-docker'
@@ -32,7 +32,7 @@ import { afterModelCall, createRunner, type Runner } from '@mp/runner'
 import type { SecretStore } from '@mp/secrets'
 import { storeSecretStore } from '@mp/secrets-store'
 import { createSandbox, type Sandbox } from '@mp/sandbox'
-import { networkFor } from '@mp/stdlib'
+import { networkFor, type ProcedureContexts } from '@mp/stdlib'
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
 import { createSkills, type SkillsService } from '@mp/skills'
 import { memoryStore, type Store } from '@mp/store'
@@ -41,6 +41,7 @@ import { createToolRegistry, registerMcpTools, type ToolLists, type ToolRegistry
 import { createUsage, type UsageService } from '@mp/usage'
 import pg from 'pg'
 import type { Config } from './config.ts'
+import { imageLoader, resolveVision, type VisionSettings } from './attachments.ts'
 import { createControl, type Control } from './control.ts'
 import { wireMcpNotifications } from './mcp-in.ts'
 import { enqueueOnIngest, withJobDefaults, QUEUES } from './queues.ts'
@@ -108,6 +109,10 @@ export interface Services {
   sessions: Sessions
   checklists: Checklists
   chat: Chat
+  /** Chat image attachments, on the files volume (src/attachments.ts). */
+  attachments: ChatAttachments
+  /** Whether the model can see images (MODEL_VISION), and the image limits. */
+  vision: VisionSettings
   tools: ToolRegistry
   usage: UsageService
   settings: Settings
@@ -116,6 +121,8 @@ export interface Services {
   runner: Runner
   /** The stdlib module, when it is available and enabled. */
   stdlib: StdlibModule | null
+  /** Procedure contexts: build, check, rebuild and start (from the stdlib; null without it). */
+  procedureContexts: ProcedureContexts | null
   /** Tool names registered from `MCP_SERVERS` servers. */
   mcpTools: string[]
   /** MCP servers added at runtime (src/mcp-servers), null when the hub can't add servers. */
@@ -227,11 +234,20 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = createSessions({ records, clock, bus })
   const checklists = createChecklists({ records, sessions, clock, bus })
+  // Chat attachments live on the files volume too, under `attachments/`, apart from employees' files.
+  const attachments = createChatAttachments({
+    records,
+    storage: fileStorage,
+    clock,
+    logger: logger.child({ component: 'attachments' }),
+    limits: { maxBytes: config.CHAT_ATTACHMENT_MAX_BYTES, maxPerMessage: config.CHAT_ATTACHMENTS_PER_MESSAGE },
+  })
   const chat = createChat({
     records,
     events,
     clock,
     bus,
+    attachments,
     async resolveName(name) {
       const emp = await directory.employees.byHandle(name)
       if (emp) return { type: 'employee', employeeId: emp.id, contactId: emp.data.contactId }
@@ -345,10 +361,13 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     return author?.kind === 'session' ? { skip: 'a session message nobody subscribed to' } : undefined
   })
 
+  const vision = await resolveVision(config, model, logger)
   const runner = createRunner({
     sessions,
     tools,
     model,
+    vision: vision.enabled,
+    loadImage: imageLoader({ attachments, storage: fileStorage, maxSide: vision.maxSide, maxBytes: vision.maxBytes }),
     queue,
     hooks,
     secrets,
@@ -419,6 +438,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     sessions,
     checklists,
     chat,
+    attachments,
+    vision,
     tools,
     usage,
     settings,
@@ -426,6 +447,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     router,
     runner,
     stdlib: null,
+    procedureContexts: null,
     mcpTools: [],
     mcpServers: null,
     integrations: null,
@@ -461,6 +483,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       files,
       checklists,
       usage,
+      attachments,
+      vision: { enabled: vision.enabled, maxSide: vision.maxSide, maxBytes: vision.maxBytes },
       git,
       ...(containers ? { containers } : {}),
       ...(sandbox ? { sandbox } : {}),
@@ -482,6 +506,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     stdlib.registerUsagePolicies(hooks, deps)
     stdlib.registerRouterPolicies(hooks, deps)
     services.stdlib = stdlib
+    services.procedureContexts = stdlib.createProcedureContexts(tools, deps)
     logger.debug('stdlib registered', { tools: names.length })
   } else {
     // Without the stdlib's usage policy, still keep the ledger.

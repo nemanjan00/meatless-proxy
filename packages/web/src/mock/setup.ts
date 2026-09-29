@@ -8,6 +8,7 @@ import {
   type IntegrationSetupStatus,
   type IntegrationsOverview,
   type Json,
+  type ProjectData,
   type SetupApi,
   type SetupResult,
   type SetupStep,
@@ -15,6 +16,7 @@ import {
   type TriggerData,
 } from '@mp/api'
 import { EMP, type MockDb, mockId } from './data.ts'
+import { mockRepoKey } from './projects.ts'
 
 /** What the setup mock borrows from the mock API. */
 export interface MockSetupHelpers {
@@ -27,6 +29,37 @@ export interface MockSetupHelpers {
 }
 
 const MOCK_PUBLIC_URL = 'https://mp.example.com'
+
+/** What the demo GitLab account can reach. payments-api is the Payments project's repository already. */
+const GITLAB_PROJECTS = [
+  {
+    id: 1,
+    path: 'acme/payments-api',
+    name: 'payments-api',
+    description: 'The payments API.',
+    web: 'https://git.example.com/acme/payments-api',
+    http: 'https://git.example.com/acme/payments-api.git',
+    ssh: 'git@git.example.com:acme/payments-api.git',
+  },
+  {
+    id: 2,
+    path: 'acme/invoices',
+    name: 'Invoices service',
+    description: 'Invoice PDFs and the monthly run.',
+    web: 'https://git.example.com/acme/invoices',
+    http: 'https://git.example.com/acme/invoices.git',
+    ssh: 'git@git.example.com:acme/invoices.git',
+  },
+  {
+    id: 3,
+    path: 'acme/infra',
+    name: 'infra',
+    description: 'Clusters and deploy tooling.',
+    web: 'https://git.example.com/acme/infra',
+    http: 'https://git.example.com/acme/infra.git',
+    ssh: 'git@git.example.com:acme/infra.git',
+  },
+] as const
 const SCOPES = 'app_mentions:read, channels:history, channels:read, chat:write, im:history, reactions:write, users:read'
 
 /** A fake, stable public key per employee (never a real key). */
@@ -149,6 +182,78 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
     return k
   }
   const hookUrl = (name: string, id: string) => `${MOCK_PUBLIC_URL}/webhooks/${name}/${id}`
+
+  /** The harness project with a repository of this GitLab project, and whether the employee is on it. */
+  const addedOf = (employeeId: string, g: (typeof GITLAB_PROJECTS)[number]) => {
+    const keys = new Set([g.ssh, g.http].map(mockRepoKey))
+    const p = h
+      .all<ProjectData>('project')
+      .find((x) =>
+        (x.data.repositories ?? []).some((r) => keys.has(mockRepoKey(r.url)) || (r.httpUrl && keys.has(mockRepoKey(r.httpUrl)))),
+      )
+    if (!p) return null
+    const contactId = h.get<EmployeeData>('employee', employeeId)?.data.contactId
+    return { projectId: p.id, name: p.data.name, linked: h.db.links.some((l) => l.from.id === contactId && l.to.id === p.id) }
+  }
+  /** The GitLab projects the demo account reaches, with their access and whether each is a harness project yet. */
+  const gitlabProjects = (employeeId: string, warn: boolean) =>
+    GITLAB_PROJECTS.map((g) => {
+      const maintainer = warn && g.id === 3
+      return {
+        id: g.id,
+        path: g.path,
+        webUrl: g.web,
+        accessLevel: maintainer ? 40 : 30,
+        role: maintainer ? 'Maintainer' : 'Developer',
+        defaultBranch: 'main',
+        protected: true,
+        added: addedOf(employeeId, g),
+        warnings: maintainer ? ['Maintainer: it could merge or push to protected branches. Developer is recommended.'] : [],
+      }
+    })
+  /** "Add as project": a harness project with the repository, or only a link when the harness has it already. */
+  const addGitlabProjects = (employeeId: string, ids: unknown[]) => {
+    const contactId = h.get<EmployeeData>('employee', employeeId)?.data.contactId
+    if (!contactId) throw new ApiRequestError(404, 'not_found', 'employee not found')
+    const created: string[] = []
+    const linked: string[] = []
+    const already: string[] = []
+    for (const g of GITLAB_PROJECTS.filter((x) => ids.map(String).includes(String(x.id)))) {
+      const a = addedOf(employeeId, g)
+      const link = (projectId: string) =>
+        h.db.links.push({
+          id: mockId('lnk', ++h.db.seq),
+          from: { kind: 'contact', id: contactId },
+          to: { kind: 'project', id: projectId },
+          role: 'member',
+          data: {},
+          createdAt: h.iso(),
+        })
+      if (a?.linked) already.push(g.path)
+      else if (a) {
+        link(a.projectId)
+        linked.push(g.path)
+      } else {
+        const pid = mockId('pro', `g${++h.db.seq}`)
+        h.write<ProjectData>('project', pid, {
+          name: g.name,
+          description: g.description,
+          status: 'active',
+          repositories: [{ url: g.ssh, httpUrl: g.http, defaultBranch: 'main' }],
+        })
+        link(pid)
+        created.push(g.path)
+      }
+    }
+    const parts = [
+      created.length ? `Added ${created.length} project${created.length === 1 ? '' : 's'}: ${created.join(', ')}.` : '',
+      linked.length
+        ? `Linked it to ${linked.length} existing project${linked.length === 1 ? '' : 's'}: ${linked.join(', ')}.`
+        : '',
+      already.length ? `Already added: ${already.join(', ')}.` : '',
+    ].filter(Boolean)
+    return parts.join(' ') || 'Nothing to add.'
+  }
 
   const stepsOf = (id: string, name: string): SetupStep[] => {
     const e = employee(id)
@@ -279,51 +384,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
               st.projects === 'warning'
                 ? '1 of 3 projects need attention.'
                 : 'Developer on 3 projects, with protected default branches.',
-              {
-                projects: [
-                  {
-                    id: 1,
-                    path: 'example/payments-api',
-                    webUrl: 'https://gitlab.com/example/payments-api',
-                    accessLevel: 30,
-                    role: 'Developer',
-                    defaultBranch: 'main',
-                    protected: true,
-                    warnings: [],
-                  },
-                  {
-                    id: 2,
-                    path: 'example/invoices',
-                    webUrl: 'https://gitlab.com/example/invoices',
-                    accessLevel: 30,
-                    role: 'Developer',
-                    defaultBranch: 'main',
-                    protected: true,
-                    warnings: [],
-                  },
-                  st.projects === 'warning'
-                    ? {
-                        id: 3,
-                        path: 'example/infra',
-                        webUrl: 'https://gitlab.com/example/infra',
-                        accessLevel: 40,
-                        role: 'Maintainer',
-                        defaultBranch: 'main',
-                        protected: true,
-                        warnings: ['Maintainer: it could merge or push to protected branches. Developer is recommended.'],
-                      }
-                    : {
-                        id: 3,
-                        path: 'example/infra',
-                        webUrl: 'https://gitlab.com/example/infra',
-                        accessLevel: 30,
-                        role: 'Developer',
-                        defaultBranch: 'main',
-                        protected: true,
-                        warnings: [],
-                      },
-                ],
-              },
+              { projects: gitlabProjects(id, st.projects === 'warning') as unknown as Json },
             ),
         s(
           'webhooks',
@@ -416,6 +477,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
     if (name === 'slack' && tokenSet && open('routing')) actions.push('add-trigger')
     if (name === 'gitlab' && tokenSet) {
       if (open('ssh-key')) actions.push('add-ssh-key')
+      actions.push('add-projects')
       actions.push('register-webhooks')
       if (open('routing')) actions.push('add-trigger')
     }
@@ -546,7 +608,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
       return result(id, name, k ? `Connected as ${handleOf(employee(id))}.` : 'Signing secret saved.')
     },
 
-    async integrationAction(id, name, action) {
+    async integrationAction(id, name, action, input) {
       const st = stageOf(id)[name]
       if (!st) return reject(404, 'not_found', `integration ${name} not found`)
       if (action === 'add-trigger') {
@@ -573,6 +635,11 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
           name,
           was === 'done' ? `The key is already on @${handle}.` : `Added the key to @${handle} as “meatless-proxy ${handle}”.`,
         )
+      }
+      if (name === 'gitlab' && action === 'add-projects') {
+        const ids = input?.projects
+        if (!Array.isArray(ids) || !ids.length) return reject(422, 'validation', 'Pick the GitLab projects to add.')
+        return result(id, name, addGitlabProjects(id, ids))
       }
       if (name === 'gitlab' && action === 'register-webhooks') {
         st.webhooks = 'done'

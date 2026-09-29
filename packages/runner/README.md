@@ -20,6 +20,12 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   - `afterToolCall` (transform)
   - control signals: suspend, commit, discard, rewind, offload, restore,
     compact, end
+- **Images:** a tool may return `images` (`ImageRef`s); the tool result entry
+  keeps them, never the bytes. Before each model call the image resolver
+  (`createImageResolver`, `src/images.ts`) loads them with `loadImage` (a small
+  in-memory cache of hits). Without `vision`, tools tagged `vision` aren't
+  offered or run ("this model can't see images"), and images in the history
+  become a short note.
 - **Crash recovery:** the run resumes from its journal. Read and idempotent
   calls without a result are run again. Non-idempotent calls are marked
   *uncertain*, so the model checks before retrying.

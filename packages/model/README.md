@@ -5,6 +5,11 @@ The model port: OpenAI-compatible Chat Completions shapes (`ChatMessage`, `ToolS
 
 ## API
 
+- Images: `ChatMessage.images?: ImagePart[]` on `user` and `tool` messages, `ImagePart { type: 'image', mime, data?, ref?,
+  name?, width?, height? }`. `ref` is an `ImageRef` (`source: 'attachment' | 'file'`, `id` or `owner` + `path`, `sha256`,
+  `name`, `mime`, size): what histories keep; the runner fills in `data` (base64) before a call.
+- `ModelClient.capabilities?(model?)` → `{ vision? }` or null: what the provider says a model can do.
+  `knownVisionModel(name)` guesses from the name when it doesn't say.
 - `ModelClient` — `complete(req)`; streams through `req.onDelta` when the implementation streams; honours `req.signal`.
 - `scriptedModel(script, { model?, chunkSize?, chunkDelayMs? })` — a fake `ModelClient`. `script` is an array of steps
   (a `ModelResponse`, a `PartialModelResponse`, a string reply, an `Error` to throw, or a `(req, callIndex) => …`

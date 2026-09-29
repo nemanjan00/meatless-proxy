@@ -5,11 +5,12 @@ import { createNodeWebSocket } from '@hono/node-ws'
 import { errorMessage } from '@mp/core'
 import { pendingMigrations } from '@mp/store-postgres'
 import { Hono } from 'hono'
-import { bootstrap, isEmpty } from './bootstrap.ts'
+import { bootstrap, isEmpty, migrateEmployees } from './bootstrap.ts'
 import { addStdlibToolsToRouters } from './router-tools.ts'
 import type { Config } from './config.ts'
 import { createAuth, ensureAdmin, principalOf } from './auth/index.ts'
 import { apiRoutes } from './http/api.ts'
+import { chatAttachmentRoutes } from './http/chat-attachments.ts'
 import { Metrics, metricsRoutes } from './http/metrics.ts'
 import { defaultWebDist, serveWeb } from './http/static.ts'
 import { webhookRoutes } from './http/webhooks.ts'
@@ -19,7 +20,12 @@ import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
+import { procedureRoutes } from './procedures/index.ts'
+import { projectRoutes } from './projects/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
+import { registerThreadContext } from './thread-context.ts'
+import { upgradeEmployees } from './upgrade.ts'
+import { registerSessionProjects } from './session-projects.ts'
 import { createSetup, type Setup, setupRoutes } from './setup/index.ts'
 import { ensureSshKey } from './ssh.ts'
 import { buildServices, type AppOverrides, type Services } from './services.ts'
@@ -61,6 +67,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   const services = await buildServices(config, overrides)
   const log = services.logger
   registerSessionMemory(services)
+  registerThreadContext(services)
+  registerSessionProjects(services)
   if (config.MP_BOOTSTRAP && (await isEmpty(services))) {
     const r = await bootstrap(services)
     log.info('bootstrap done', { employeeId: r.employeeId, routerSessionId: r.routerSessionId })
@@ -69,6 +77,10 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
+  // Employees from older versions: the old default personality, projects in `scope` instead of links.
+  await migrateEmployees(services)
+  // Employees from before a provisioning step existed (router instructions, routing toolset, trigger shape) get it now.
+  await upgradeEmployees(services)
   // Router contexts created before a stdlib tool existed (time.now, code.run) get it now.
   await addStdlibToolsToRouters(services)
   const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)
@@ -122,6 +134,9 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     integrationStatusRoutes(services, () => hookProvisioning),
   )
   app.route('/', mcpServerRoutes(services))
+  app.route('/', projectRoutes(services))
+  app.route('/', procedureRoutes(services))
+  app.route('/', chatAttachmentRoutes(services, auth.visibility))
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })

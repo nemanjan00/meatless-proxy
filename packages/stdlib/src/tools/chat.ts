@@ -1,9 +1,10 @@
 import { subscriptionScope } from '../subscription-presets.ts'
 import { DeniedError, NotFoundError, ValidationError, type Json } from '@mp/core'
-import type { Channel, Message } from '@mp/chat'
+import { attachmentLine, attachmentsOf, type Channel, type Message } from '@mp/chat'
 import type { Ref } from '@mp/store'
 import type { ToolContext } from '@mp/tools'
 import { clip, fail, ok, str, type Kit } from '../kit.ts'
+import { uploadFiles } from './images.ts'
 
 /** Thread ids as the model may write them: `msg_…`, or `mp:msg_…` as event subjects show them. */
 export function threadRef(id: string): string {
@@ -11,6 +12,12 @@ export function threadRef(id: string): string {
 }
 
 const channelProp = { type: 'string', description: 'Channel name (e.g. deploys or #deploys) or id (chn_…).' }
+const attachmentsProp = {
+  type: 'array',
+  description:
+    'Images from your filesystem to attach (PNG, JPEG, GIF or WebP), e.g. a chart code.run saved: [{ "path": "/chart.png" }]. Files shared with you work too (/shared/<owner>/…).',
+  items: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+}
 
 export function registerChatTools(kit: Kit): void {
   const { deps } = kit
@@ -26,13 +33,17 @@ export function registerChatTools(kit: Kit): void {
 
   const author = (ctx: ToolContext) => ({ kind: 'session' as const, id: ctx.sessionId })
 
-  const msgView = (m: Message): Json => ({
-    id: m.id,
-    author: `${m.data.author.kind}:${m.data.author.id}`,
-    text: clip(m.data.text, 1000),
-    ...(m.data.threadId ? { threadId: m.data.threadId } : {}),
-    at: m.data.createdAt,
-  })
+  const msgView = (m: Message): Json => {
+    const images = attachmentsOf(m.data)
+    return {
+      id: m.id,
+      author: `${m.data.author.kind}:${m.data.author.id}`,
+      text: clip(m.data.text, 1000),
+      ...(images.length ? { attachments: images.map(attachmentLine) } : {}),
+      ...(m.data.threadId ? { threadId: m.data.threadId } : {}),
+      at: m.data.createdAt,
+    }
+  }
 
   /** An employee name, `@employee#slug`, a contact/employee/session id, or a person's handle or name. */
   const resolveMember = async (spec: unknown): Promise<Ref & { tag: string }> => {
@@ -85,8 +96,15 @@ export function registerChatTools(kit: Kit): void {
     if (owner !== ctx.employeeId) throw new DeniedError(`only the employee that created #${ch.data.name} can manage it`)
   }
 
-  const post = async (ctx: ToolContext, channelId: string, text: string, threadId?: string) => {
-    const msg = await chat.post({ channelId, author: author(ctx), text, ...(threadId ? { threadId } : {}) })
+  const post = async (ctx: ToolContext, channelId: string, text: string, threadId?: string, files?: unknown) => {
+    const attachments = await uploadFiles(kit, ctx, files, author(ctx))
+    const msg = await chat.post({
+      channelId,
+      author: author(ctx),
+      text,
+      ...(threadId ? { threadId } : {}),
+      ...(attachments.length ? { attachments } : {}),
+    })
     const thread = msg.data.threadId ?? msg.id
     // A new thread is this session's piece of work: replies come straight back here.
     if (!msg.data.threadId)
@@ -102,21 +120,26 @@ export function registerChatTools(kit: Kit): void {
     {
       name: 'chat.post',
       description:
-        'Post in a harness chat channel, or in a thread with threadId. Tag who should act: @employee, @employee#session-slug, @person. A new top-level message starts a thread and subscribes this session to it, so replies come back to you. Returns messageId and threadId.',
+        'Post in a harness chat channel, or in a thread with threadId. Tag who should act: @employee, @employee#session-slug, @person. A new top-level message starts a thread and subscribes this session to it, so replies come back to you. Attach images from your filesystem with attachments. Returns messageId and threadId.',
       effect: 'idempotent',
       params: {
-        properties: { channel: channelProp, text: { type: 'string' }, threadId: { type: 'string' } },
+        properties: {
+          channel: channelProp,
+          text: { type: 'string' },
+          threadId: { type: 'string' },
+          attachments: attachmentsProp,
+        },
         required: ['channel', 'text'],
       },
     },
     async (a, ctx) => {
-      const text = str(a.text)
-      if (!text) return fail('text is required')
+      const text = str(a.text) ?? ''
+      if (!text && !a.attachments?.length) return fail('text is required')
       const output = await kit.once('chat.post', ctx, async () => {
         const ch = await channel(a.channel)
         return {
           channel: ch.data.name,
-          ...(await post(ctx, ch.id, text, a.threadId ? threadRef(String(a.threadId)) : undefined)),
+          ...(await post(ctx, ch.id, text, a.threadId ? threadRef(String(a.threadId)) : undefined, a.attachments)),
         }
       })
       return ok(output)
@@ -127,17 +150,20 @@ export function registerChatTools(kit: Kit): void {
     {
       name: 'chat.reply',
       description:
-        'Reply in a harness chat thread (threadId = the thread root, or any message in it). You are subscribed to the thread, so replies come back to you.',
+        'Reply in a harness chat thread (threadId = the thread root, or any message in it). You are subscribed to the thread, so replies come back to you. Attach images from your filesystem with attachments.',
       effect: 'idempotent',
-      params: { properties: { threadId: { type: 'string' }, text: { type: 'string' } }, required: ['threadId', 'text'] },
+      params: {
+        properties: { threadId: { type: 'string' }, text: { type: 'string' }, attachments: attachmentsProp },
+        required: ['threadId', 'text'],
+      },
     },
     async (a, ctx) => {
-      const text = str(a.text)
-      if (!text) return fail('text is required')
+      const text = str(a.text) ?? ''
+      if (!text && !a.attachments?.length) return fail('text is required')
       const output = await kit.once('chat.reply', ctx, async () => {
         const m = await chat.getMessage(threadRef(a.threadId))
         if (!m) throw new NotFoundError('message', threadRef(a.threadId))
-        const out = await post(ctx, m.data.channelId, text, m.id)
+        const out = await post(ctx, m.data.channelId, text, m.id, a.attachments)
         // Replying makes the thread this session's conversation: follow-ups come back here.
         // It becomes the primary subscriber only if nobody else is. A router context never
         // subscribes: follow-ups come back through its trigger and it decides again.

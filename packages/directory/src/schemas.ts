@@ -160,6 +160,7 @@ export const projectSchema: KindSchema = {
         type: 'object',
         fields: [
           { name: 'url', type: 'string', required: true },
+          { name: 'httpUrl', type: 'string', description: 'The https URL of the same repository, when url is ssh.' },
           { name: 'defaultBranch', type: 'string' },
           { name: 'path', type: 'string' },
         ],
@@ -188,7 +189,10 @@ export const projectSchema: KindSchema = {
 }
 
 export interface Repository {
+  /** The remote git fetches and pushes (ssh when the employee pushes with its key). */
   url: string
+  /** The same repository over https, when `url` is ssh. */
+  httpUrl?: string
   defaultBranch?: string
   path?: string
 }
@@ -223,6 +227,7 @@ export const procedureSchema: KindSchema = {
         fields: [
           { name: 'contactId', type: 'ref', ref: 'contact' },
           { name: 'role', type: 'string' },
+          { name: 'step', type: 'string', description: 'At which step, e.g. "before issuing the refund".' },
         ],
       },
     },
@@ -246,6 +251,7 @@ export const procedureSchema: KindSchema = {
       of: { type: 'ref', ref: 'project' },
       description: 'Projects it applies to (empty: all).',
     },
+    { name: 'archived', type: 'boolean', description: 'Archived: not found, not run, its triggers off.' },
   ],
 }
 
@@ -260,11 +266,14 @@ export interface ProcedureData extends Record<string, unknown> {
   applies: string
   body?: string
   ownerId?: string
-  approvals?: { contactId?: string; role?: string }[]
+  /** Who has to say yes (a contact or a role), and at which step. */
+  approvals?: { contactId?: string; role?: string; step?: string }[]
   contextSessionId?: string
   checklist?: ChecklistItem[]
   skills?: string[]
   projectIds?: string[]
+  /** Archived procedures are not found or run, and their triggers are off. */
+  archived?: boolean
 }
 
 /** Common roles on contact -> project links. Any other string is allowed too. */

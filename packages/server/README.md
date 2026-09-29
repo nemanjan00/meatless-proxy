@@ -125,6 +125,12 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   setup](#employees-and-guided-setup)): `POST /api/employees`, `GET /api/employees/:id/ssh-key`,
   `GET /api/employees/:id/integrations`, `POST /api/employees/:id/integrations/:name/secrets` and `/actions/:action`,
   `GET /api/employees/:id/integrations/slack/manifest`.
+- Projects and who works on them (`@mp/api` `PROJECT_ROUTES`, served by `src/projects`, see [Projects and
+  assignments](#projects-and-assignments)): `POST /api/projects`, `GET|POST /api/projects/:id/people`,
+  `DELETE /api/projects/:id/people/:contactId`, `GET /api/employees/:id/projects`.
+- Procedures (`@mp/api` `PROCEDURE_ROUTES`, served by `src/procedures`, see [Procedures](#procedures)):
+  `GET|POST /api/procedures`, `GET /api/procedures/:id`, `POST /api/procedures/:id/run`, `…/context/rebuild`,
+  `…/archive`, `POST /api/procedures/:id/triggers`, `PATCH|DELETE /api/procedures/:id/triggers/:triggerId`.
 - `GET /oauth/mcp/callback`: the end of an MCP server's OAuth sign-in (`src/http/mcp-servers.ts`); it checks the
   signed-in admin against the state itself and redirects back to the UI with `mcp_oauth=connected|error`.
 - `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
@@ -324,6 +330,11 @@ returns the thread id), `session_get`, `sessions_search`, `docs_search`,
 `chat_join_channel`, `chat_leave_channel`, `chat_inbox`. Posting, reacting
 and joining need `member` access (a viewer's token reads and searches only).
 Chat reads, posts and search follow `ChatVisibility`: DMs only for members.
+Images (`src/mcp-attachments.ts`): `chat_read`, `chat_search` and deliveries
+carry a message's `attachments`, `chat_attachment` (id) returns one as MCP
+`image` content plus its metadata, and `chat_post` takes `attachments: [{ name?,
+mime?, data }]` (base64; the web upload's limits, and a `mime` the bytes don't
+bear out is refused).
 
 ### Local agents in chat (`src/mcp-agents`)
 
@@ -445,12 +456,18 @@ is a `ConflictError`; two creates with the same handle at once give one) and pro
 
 - `setup/slack.ts`, `setup/gitlab.ts`, `setup/linear.ts`: one `IntegrationSetupModule` each: its secret fields, a
   `check(ctx)` returning the steps, `validate(ctx, values)` before secrets are stored (a rejected token or a missing
-  scope is a 422 and nothing is stored), and actions (`add-trigger`, `add-ssh-key`, `register-webhooks`,
-  `create-webhook`). Every external call goes through the injected `fetch` (the integrations' `fetch` and base URL
+  scope is a 422 and nothing is stored), and actions (`add-trigger`, `add-ssh-key`, `add-projects`,
+  `register-webhooks`, `create-webhook`), each given the request's JSON body as its input. Every external call goes through the injected `fetch` (the integrations' `fetch` and base URL
   overrides apply), with a 10 s timeout; secret values are masked in every message, never returned and never logged.
 - `setup/index.ts`: `createSetup(s, { integrations, provisioning })` runs the checks, cached per employee for 30 s
   (`?refresh=1` runs them again; a changed secret or trigger drops the cache), and `setupRoutes(s, setup)` serves the
   routes. Reads are for everyone signed in, writes for admins (`GUARD_RULES`).
+- `setup/gitlab-projects.ts`: GitLab's "Add as project". The projects step marks each reachable GitLab project with
+  `added: { projectId, name, linked } | null` (matched by repository, https or ssh). `add-projects` with
+  `{ projects: [GitLab project ids] }` fetches each as the employee's token sees it and creates a harness project
+  (ssh `url`, https `httpUrl`, default branch, description; named by its full path when the short name is taken) with
+  the employee as a `member`, or only links the employee when the harness has the repository. Serialized in the
+  process, so a double click can't create a project twice.
 - `setup/activity.ts`: a middleware in front of `/webhooks/*` that records every webhook the integration accepted
   (2xx, so only valid signatures), per employee (or `deployment`) and integration, and per project for GitLab. It's
   kept in memory and written to the setting `webhook.activity:<owner>:<integration>` at most every 30 s.
@@ -513,6 +530,79 @@ start runs: tagging the employee is a notification, otherwise a failing
 provider would keep alerting about its own alerts. Replies in an alert's
 thread are routed as usual.
 
+## Projects and assignments
+
+`src/projects` (docs/spec.md#assigning-projects): an employee works on a project through a `contact -> project` link
+from its AI contact, with a role, the same link GitLab hook provisioning and the "Your projects" entry read.
+`createProject(s, body, actor)` validates everything first (repository URLs, docs links, the owner and members as
+`{ contactId }` or `{ employeeId }`), refuses a taken name or a repository another project has (compared with
+`repoKey`, so https and ssh match), then creates the project and its links (and removes it again if a link fails).
+`addProjectPerson` (`owner` replaces the owner), `removeProjectPerson` (one role or all; an employee losing its last
+role also loses the project from its older `scope.projects`), `projectPeople`, `employeeProjects`,
+`projectByRepository`. `projectRoutes(s)` serves them; writes need a member (`GUARD_RULES`), like links.
+`createEmployee` links its `projects` as `member`.
+
+## Procedures
+
+`src/procedures` (docs/spec.md#procedures): the procedures API over the directory, triggers and sessions.
+
+- `starts.ts`: a `ProcedureStart` (the UI's "how it starts") to a trigger and back. `parseStart` checks a body (400),
+  `matchFor` builds the match: a channel is `chat` `message.posted` with `payload.channelId` and a person as author;
+  an @tag is a chat message whose tags include that unresolved name (so `@access-request` can't collide with an
+  employee's tag); a schedule is a schedule trigger (in the company's time zone unless given); an integration event
+  is its source, type and field matches; each can add a raw `filter`. A match that narrows nothing is a 422 with
+  `CATCH_ALL_START_MESSAGE`. Triggers made here target `{ type: 'procedure' }`, fork the context per event, run
+  `continuing` (each fork is one instance) and keep their start in `data.start`; `startOf` reads older triggers from
+  their match.
+- `views.ts`: `ProcedureViews` builds list rows and details: contexts (the current one and older ones, `context_of`
+  links), triggers targeting the procedure or one of its contexts, instances (children of the contexts, and sessions
+  linked `runs_procedure`) with who started them (the trigger from the event's routing, the calling session, the
+  person) and their latest run, runs in 30 days, and the context state from the stdlib's `ProcedureContexts.state`.
+- `index.ts`: `procedureRoutes(s)`. Create checks everything first (the employee, owner, approvals and every start),
+  then creates the procedure, builds its context and creates its triggers, removing all of it if a step fails. A
+  repeated `idempotencyKey` (create, and run) returns the first result, across processes: a `procedure_request`
+  record keyed by it is reserved before the work and holds the result. Run now is `ProcedureContexts.start` (a fork,
+  its checklist, links, a queued `manual` run with the person as requester); rebuild builds a fresh context the
+  way the first was built and marks the old one done; archiving turns the procedure's triggers off. Members create,
+  run, rebuild and archive (procedures are knowledge); triggers, also inside a create, are for admins, as in the
+  records API.
+
+## Your projects in every run
+
+`src/session-projects.ts` handles the router's `runInput` hook: every run the router starts gets the stdlib's
+`projectsEntry` (the employee's current projects, one line each) as a `system` entry after the history and before the
+event, unless the history already ends with the same list. The system prompt has no projects, so the cached prefix
+never changes when someone assigns one. A failure only logs a warning.
+
+## Chat attachments and vision
+
+`src/attachments.ts` and `src/http/chat-attachments.ts`:
+
+- `createChatAttachments` (from `@mp/chat`) on the files storage, owner
+  `attachments` (`<FILES_DIR>/attachments/…`), with `CHAT_ATTACHMENT_MAX_BYTES`
+  and `CHAT_ATTACHMENTS_PER_MESSAGE`; `services.attachments`.
+- `POST /api/chat/attachments?name=` (raw body or multipart `file`; members,
+  like every chat write; 413 over the limit, 422 for anything that isn't an
+  image by content) → `{ attachment, expiresAt }`. `GET
+  /api/chat/attachments/:id` for whoever can see the channel (a pending upload:
+  its uploader), with the sniffed type, `nosniff`, `inline` (or `?download=1`),
+  and `default-src 'none'; sandbox`. `POST /api/chat/channels/:id/messages`
+  takes `attachments: [id…]` (the text may then be empty).
+- `startAttachmentCleanup` (with the workers, every 10 minutes) deletes uploads
+  nobody attached within the hour.
+- `resolveVision(config, model, logger)` at start: `MODEL_VISION` `true` /
+  `false`, or `auto`: the provider's `capabilities()` (5 s at most), else
+  `knownVisionModel(name)`. `services.vision` goes to the runner and stdlib.
+- `imageLoader({ attachments, storage, maxSide, maxBytes })` is the runner's
+  `loadImage`: it reads the attachment or file, checks the sha256, and
+  downscales (`prepareImage`).
+
+## Router contexts in chat
+
+`Views.author` and `Views.member` (`src/http/views.ts`) show a router context (`meta.role` `router`) as its
+employee: `{ type: 'employee', id, name, handle }`, never `@employee#router`. Other sessions stay
+`@employee#slug`; employee authors carry their `handle`.
+
 ## Memory at session start
 
 `src/session-memory.ts` handles the router's `afterFork` hook. When a context
@@ -527,12 +617,17 @@ kind, id, content snippet). The fork keeps the context's cached prefix.
 ## Bootstrap
 
 When `MP_BOOTSTRAP` is on and the store has no employee, `src/bootstrap.ts`
-creates the employee "Meatless" (AI contact, a personality, `toolAllow: ['**']`,
+creates the employee "Meatless" (AI contact, a personality without a sign-off, `toolAllow: ['**']`,
 `env.*` denied without Docker) and provisions it with `provisionEmployee`: its
 router session (system prompt from the stdlib's `employeePrompt`), the channels
 #general and #requests, a trigger routing new top-level messages in #requests to
 the router. Then it sets the default router setting. Every step is idempotent
 (`npm run seed`).
+
+Every start also runs `migrateEmployees` (idempotent): an employee whose personality is exactly an old default
+(`OLD_DEFAULT_PERSONALITIES`, the one that signed off with "— Meatless (AI)") gets the current default and a committed
+note in its router context; an edited personality is left alone. Projects in an employee's older `scope.projects`
+become `member` links and leave `scope`.
 
 With `MP_BOOTSTRAP` on, every start also makes sure there is an admin
 (`src/auth/bootstrap-admin.ts`): if no person has `access: admin`, the contact
@@ -638,6 +733,18 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 - `alerts.test.ts`: failed runs (once, tags, no run started), `ALERTS_ENABLED`, paused runs, dependencies that keep
   failing, and the run worker reporting a provider outage.
 - `session-memory.test.ts`: recalled memories in a request fork, before the event; visibility; the limit of 5.
+- `projects.test.ts`: `repoKey`; creating a project with repositories, docs, an employee owner and members in one
+  step; a taken name or repository, bad URLs and unknown people refused with nothing created; members and admins
+  write, viewers and anonymous callers don't; adding (idempotent, several roles), owner replacing the owner, removing
+  one role or all (and the older scope); the router run's "Your projects" entry current after a later assignment and
+  unassignment, after the history, with the system prompt byte-identical; `migrateEmployees` (the old default
+  personality only, a router note, idempotent; scope projects to links); router context authors shown as the employee.
+- `procedures.test.ts`: starts to matches and back; create with a channel, schedule, GitLab and @tag trigger and
+  a built context (names and approval steps in it); a catch-all refused with nothing created; a double submit makes
+  one; viewers read, members write, admins own triggers; Run now (a fork, `manual`, idempotent); a channel message
+  starting a fork through its trigger, credited to it; an edit putting the context out of date, and rebuild; a
+  missing context built on the first run, and legacy contexts read by revisions; trigger add, change to a
+  schedule, off, and remove (another procedure's is a 404); archiving. On memory, and Postgres + BullMQ when set.
 - `transfer.test.ts`: export and import: round trip into a fresh app gives the identical tree (memory, and
   Postgres when `DATABASE_URL` is set), idempotence, dry run changes nothing, doc links onto existing records with
   other ids, messy CSV rows, matching by email, handle and name, owner replacement, strict mode.
@@ -649,7 +756,9 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   provisioning), the SSH key endpoint, and the guided setup against fake Slack, GitLab and Linear APIs: bad tokens and
   missing scopes refused and not stored, values never returned or logged, signed webhooks recorded (unsigned ones
   not), idempotent triggers and SSH keys, a key already on another account, a rotated key replaced, Maintainer and
-  unprotected branch warnings, an expiring token, the Linear webhook, members read-only, the 30 s cache. On memory,
+  unprotected branch warnings, an expiring token, GitLab's "Add as project" (created with ssh and https URLs and
+  the employee as member, named by path when the name is taken, idempotent, only linked when the harness has the
+  repository, input and access checks), the Linear webhook, members read-only, the 30 s cache. On memory,
   and on Postgres and BullMQ when configured.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.

@@ -5,6 +5,7 @@ import { NavLink, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { CopyButton } from '@/components/copy.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
+import { EmployeeProjects } from '@/components/employee-projects.tsx'
 import { EmployeeIntegrationsSection } from '@/components/integration-setup.tsx'
 import { McpServers } from '@/components/mcp-servers.tsx'
 import { NetworkSetting } from '@/components/network-setting.tsx'
@@ -188,7 +189,7 @@ function SshKey({ employeeId, admin }: { employeeId: string; admin: boolean }) {
   )
 }
 
-/** `/employees/:id`: an employee's profile, SSH key, guided integration setup and MCP servers. */
+/** `/employees/:id`: an employee's profile, projects, SSH key, guided integration setup and MCP servers. */
 export function EmployeePage() {
   const { id = '' } = useParams()
   const [params, setParams] = useSearchParams()
@@ -253,6 +254,7 @@ export function EmployeePage() {
             </div>
           )}
           <Profile employee={e} contact={contact.data?.data} admin={admin} reload={employee.reload} />
+          <EmployeeProjects employeeId={e.id} employeeName={e.data.name} />
           <SshKey employeeId={e.id} admin={admin} />
           <EmployeeIntegrationsSection employeeId={e.id} employeeName={e.data.name} admin={admin} initial={params.get('setup')} />
           {/* Its own MCP servers (admins; the component renders nothing for others). */}

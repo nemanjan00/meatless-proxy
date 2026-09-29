@@ -25,6 +25,11 @@ export function useApi(): ApiClient {
   return useData().api
 }
 
+/** The API client, or null outside a `DataProvider` (for components that also render standalone). */
+export function useOptionalApi(): ApiClient | null {
+  return useContext(DataContext)?.api ?? null
+}
+
 export interface Loaded<T> {
   data: T | undefined
   error: Error | undefined

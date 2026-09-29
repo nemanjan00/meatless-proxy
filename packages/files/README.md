@@ -50,6 +50,17 @@ than the replaced file's), `list`, `walk`, `delete`, `move`, and optional `local
   directories left by deletes and moves are removed.
 - `fileStorageContract(name, make)` from `@mp/files/contract`: the suite every implementation passes.
 
+### Images
+
+`src/images.ts`, no dependencies (`node:zlib` only):
+
+- `sniffImage(bytes)` → `{ mime, width?, height? }` for PNG, JPEG, GIF and WebP (VP8, VP8L, VP8X), from magic bytes and
+  headers; null for anything else (SVG and HTML included). `IMAGE_MIMES`.
+- `prepareImage(bytes, { maxSide })`: PNGs over `maxSide` are decoded (8-bit grey, RGB, palette, grey+alpha, RGBA; not
+  interlaced), box-filtered down and re-encoded, deterministically (same input, same bytes); other types and PNGs it can't
+  decode pass through unchanged.
+- `decodePng`, `encodePng`, `resizeRgba`, `solidPng(w, h, rgba)` (for tests), `sha256Hex`.
+
 ### Migration
 
 `migrateFileRecords({ records: store.records, storage, logger? })` moves deployments from when files were records

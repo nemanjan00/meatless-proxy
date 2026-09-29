@@ -6,7 +6,7 @@ import { createMockDb } from './data.ts'
 import { createMockLive, type MockLive, startSimulation } from './live.ts'
 
 export { createMockApi } from './api.ts'
-export { CHN, CON, createMockDb, EMP, mockId, PRO, RUN, SES } from './data.ts'
+export { CHN, CON, createMockDb, EMP, mockId, PRC, PRO, RUN, SES } from './data.ts'
 export { createMockLive, startSimulation } from './live.ts'
 
 /**

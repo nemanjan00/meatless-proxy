@@ -18,7 +18,7 @@ import type {
   MemoryData,
   MessageData,
   NowItem,
-  ProcedureData,
+  ProcedureRecordData,
   ProjectData,
   RunData,
   RunState,
@@ -29,6 +29,7 @@ import type {
   TriggerData,
   UsageData,
 } from '@mp/api'
+import { seedProcedures } from './procedures-data.ts'
 
 /**
  * Fake data for the mock API: a small company (people named Ana, Bob, …,
@@ -222,15 +223,29 @@ const KINDS: ApiKindSchema[] = [
   {
     kind: 'procedure',
     prefix: 'prc',
-    description: 'A company procedure, with a context that knows how to run it.',
+    description: 'How something is done here: when it applies, who approves, and its steps.',
     titleField: 'name',
     core: [
       { name: 'name', type: 'string', required: true },
-      { name: 'applies', type: 'text', required: true, description: 'When it applies, in plain words' },
-      { name: 'owner', type: 'ref', ref: 'contact' },
-      { name: 'approvals', type: 'list', of: { type: 'string' } },
-      { name: 'context', type: 'ref', ref: 'session', description: 'The procedure context' },
-      { name: 'document', type: 'text' },
+      { name: 'applies', type: 'string', required: true, description: 'When it applies, in plain words.' },
+      { name: 'body', type: 'text', description: 'Steps and details, markdown.' },
+      { name: 'ownerId', type: 'ref', ref: 'contact', description: "Who to ask when it's unclear or out of date." },
+      {
+        name: 'approvals',
+        type: 'list',
+        description: 'Who has to say yes: a contact or a role.',
+        of: {
+          type: 'object',
+          fields: [
+            { name: 'contactId', type: 'ref', ref: 'contact' },
+            { name: 'role', type: 'string' },
+            { name: 'step', type: 'string' },
+          ],
+        },
+      },
+      { name: 'contextSessionId', type: 'ref', ref: 'session', description: 'The procedure context.' },
+      { name: 'projectIds', type: 'list', of: { type: 'ref', ref: 'project' }, description: 'Projects it applies to.' },
+      { name: 'archived', type: 'boolean' },
     ],
     extensions: [{ name: 'reviewEveryDays', type: 'number' }],
   },
@@ -565,32 +580,36 @@ Webhooks are retried with exponential backoff for 24 hours. See [[session:${SES.
     document: '# Support Portal\n\nIn maintenance mode: bug fixes only.\n',
   })
 
-  put<ProcedureData>('procedure', PRC.refund, {
+  // Procedures (their triggers, instances and context states: ./procedures-data.ts).
+  put<ProcedureRecordData>('procedure', PRC.refund, {
     name: 'Refund approval',
     applies: 'A customer refund above $250, or any refund on a disputed charge.',
-    owner: CON.ana,
-    approvals: [CON.ana],
-    context: SES.refundCtx,
+    ownerId: CON.ana,
+    approvals: [{ contactId: CON.ana, step: 'before issuing the refund' }],
+    contextSessionId: SES.refundCtx,
+    projectIds: [PRO.payments],
     reviewEveryDays: 90,
-    document:
-      '# Refund approval\n\n1. Confirm the charge and the amount against the billing system.\n2. Ask the owner for approval in the thread, with the evidence.\n3. Issue the refund only after an explicit "approved".\n4. Reply to the customer and link the ticket.\n',
+    body: '## When to use\n\nA customer refund above $250, or any refund on a disputed charge.\n\n## Steps\n\n1. Confirm the charge and the amount against the billing system.\n2. Ask the owner for approval in the thread, with the evidence.\n3. Issue the refund only after an explicit "approved".\n4. Reply to the customer and link the ticket.\n\n## Done when\n\nThe refund is issued, the customer has the reply, and the ticket links to both.\n\n## Escalate if\n\nThe charge is disputed with the card network, or the amount is above $5,000.\n',
   })
-  put<ProcedureData>('procedure', PRC.deploy, {
+  put<ProcedureRecordData>('procedure', PRC.deploy, {
     name: 'Production deploy',
     applies: 'Any change that has to reach production.',
-    owner: CON.bob,
-    approvals: [CON.bob, CON.dana],
-    context: SES.deployCtx,
-    document:
-      '# Production deploy\n\n- CI green on the PR\n- Approval from the service owner\n- Deploy window: weekdays 10–16 UTC\n- Employees open PRs; people or CI merge.\n',
+    ownerId: CON.bob,
+    approvals: [
+      { contactId: CON.bob, step: 'before the deploy starts' },
+      { contactId: CON.dana, step: 'for database migrations' },
+    ],
+    contextSessionId: SES.deployCtx,
+    projectIds: [PRO.platform, PRO.payments],
+    body: "## When to use\n\nAny change that has to reach production.\n\n## Steps\n\n1. Check that CI is green on the merge request.\n2. Get the service owner's approval in #deploys.\n3. Deploy inside the window: weekdays 10:00–16:00 UTC.\n4. Watch the error rate for 15 minutes and post the result.\n\n## Done when\n\nThe new version serves traffic and the error rate is flat.\n\n## Escalate if\n\nThe error rate rises above 1%: roll back first, then tell @bob.\n\nEmployees open merge requests; people or CI merge them.\n",
   })
-  put<ProcedureData>('procedure', PRC.access, {
+  put<ProcedureRecordData>('procedure', PRC.access, {
     name: 'Access request',
     applies: 'Someone asks for access to a system, dashboard or repository.',
-    owner: CON.dana,
-    approvals: [CON.dana],
-    context: SES.accessCtx,
-    document: '# Access request\n\nCheck the requester against their contact and team, then ask the owner of the system.\n',
+    ownerId: CON.dana,
+    approvals: [{ contactId: CON.dana, step: 'before access is granted' }],
+    contextSessionId: SES.accessCtx,
+    body: '## When to use\n\nSomeone asks for access to a system, dashboard or repository.\n\n## Steps\n\n1. Check the requester against their contact and team.\n2. Find the owner of the system in the directory.\n3. Ask the owner in the thread, with who asked and why.\n4. Grant the smallest access that does the job, and say when it expires.\n\n## Done when\n\nThe requester confirms they can get in.\n\n## Escalate if\n\nThe request is for production data or admin rights: ask @dana.\n',
   })
 
   put<SkillData>('skill', mockId('skl', 1), {
@@ -2717,6 +2736,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
   ]
 
   void [bi1, bi2, rc1, p10, p11, ro1]
+  seedProcedures(db, at)
   return db
 }
 

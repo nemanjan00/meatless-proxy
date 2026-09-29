@@ -10,6 +10,9 @@ export const QUEUES = {
 } as const
 
 /** Why a session receives an event. The first matching rule wins for each session. */
+/** Deliveries that go to a router context, or a trigger's context, and run ephemeral unless the trigger says otherwise. */
+const EPHEMERAL_REASONS = new Set<string>(['employee_tag', 'thread_participant', 'trigger', 'fallback'])
+
 export type DeliveryReason =
   | 'session_tag'
   | 'subscription'
@@ -368,7 +371,9 @@ export function createRouter(opts: RouterOptions): Router {
           ).entries
         : []
 
-    const mode: RunMode = d.mode ?? (d.reason === 'trigger' || d.reason === 'fallback' ? 'ephemeral' : 'continuing')
+    // Router contexts (tags, follow-ups, triggers and the fallback) handle each request in an ephemeral run
+    // and keep only a one-line decision; subscriptions and session tags continue a session's work.
+    const mode: RunMode = d.mode ?? (EPHEMERAL_REASONS.has(d.reason) ? 'ephemeral' : 'continuing')
 
     // A continuing run in progress: the delivery waits in the inbox and is seen at the next step.
     if (mode === 'continuing' && !d.fork) {

@@ -4,7 +4,7 @@
  */
 import type { Clock, EventBus, Logger } from '@mp/core'
 import type { Checklists } from '@mp/checklists'
-import type { Chat } from '@mp/chat'
+import type { Chat, ChatAttachments } from '@mp/chat'
 import type { ContainerRuntime } from '@mp/containers'
 import type { Directory } from '@mp/directory'
 import type { Events } from '@mp/events'
@@ -29,6 +29,14 @@ export interface StdlibDeps {
   files: FilesService
   checklists: Checklists
   usage: UsageService
+  /** Chat image attachments. Optional: without it chat.post and chat.reply take no attachments. */
+  attachments?: ChatAttachments
+  /**
+   * Whether the model can see images (`MODEL_VISION`), with image.view's limits: images are
+   * downscaled to `maxSide` pixels (PNG; default 1568) and refused over `maxBytes` (default 5 MB).
+   * Off (the default): image.view says so.
+   */
+  vision?: { enabled: boolean; maxSide?: number; maxBytes?: number }
   /** Optional: without them the git and env tools aren't registered. */
   git?: GitCache
   containers?: ContainerRuntime

@@ -46,7 +46,13 @@ export interface Setup {
     values: Record<string, string>,
     o: { origin: string; actor: Actor },
   ): Promise<Api.SetupResult>
-  action(employeeId: string, name: string, action: string, o: { origin: string; actor: Actor }): Promise<Api.SetupResult>
+  /** Runs an action; `o.input` is its input, e.g. `{ projects: [ids] }` for GitLab's `add-projects`. */
+  action(
+    employeeId: string,
+    name: string,
+    action: string,
+    o: { origin: string; actor: Actor; input?: Record<string, unknown> },
+  ): Promise<Api.SetupResult>
   slackManifest(employeeId: string, o: { origin: string; actor: Actor }): Promise<Api.SlackManifest>
   /** Drops cached checks (one employee, or all). */
   invalidate(employeeId?: string): void
@@ -199,7 +205,7 @@ export function createSetup(s: Services, opts: SetupOptions = {}): Setup {
       const run = m.actions[action]
       if (!run) throw new NotFoundError(`${m.label} action`, action)
       const employee = await s.directory.employees.require(employeeId)
-      const message = await run(await contextFor(employee, m, o.origin, o.actor))
+      const message = await run(await contextFor(employee, m, o.origin, o.actor), o.input ?? {})
       s.logger.info('integration setup action', { integration: name, action, employeeId })
       return { ok: true, message, integration: await fresh(employeeId, name, o.origin, o.actor) }
     },
@@ -301,9 +307,22 @@ export function setupRoutes(s: Services, setup: Setup): Hono {
     return c.json(await setup.setSecrets(c.req.param('id'), c.req.param('name'), body.values as Record<string, string>, ctxOf(c)))
   })
 
-  app.post('/api/employees/:id/integrations/:name/actions/:action', async (c) =>
-    c.json(await setup.action(c.req.param('id'), c.req.param('name'), c.req.param('action'), ctxOf(c))),
-  )
+  app.post('/api/employees/:id/integrations/:name/actions/:action', async (c) => {
+    const text = await c.req.text()
+    let input: unknown = {}
+    try {
+      input = text.trim() ? JSON.parse(text) : {}
+    } catch {
+      throw new BadRequestError('the body must be JSON')
+    }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestError('the body must be a JSON object')
+    return c.json(
+      await setup.action(c.req.param('id'), c.req.param('name'), c.req.param('action'), {
+        ...ctxOf(c),
+        input: input as Record<string, unknown>,
+      }),
+    )
+  })
 
   return app
 }

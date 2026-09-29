@@ -1,5 +1,5 @@
 import { NotFoundError, ValidationError } from '@mp/core'
-import type { ChatAuthor, Message } from '@mp/chat'
+import { attachmentsOf, type Attachment, type ChatAuthor, type Message } from '@mp/chat'
 import type { Contact } from '@mp/directory'
 import type { Ref } from '@mp/store'
 import type { Services } from '../services.ts'
@@ -27,6 +27,8 @@ export interface ChatSearchHit {
   author: string
   at: string
   snippet: string
+  /** Images on the message; fetch one with chat_attachment. */
+  attachments?: Attachment[]
 }
 
 const time = (label: string, v: string | undefined) => {
@@ -122,6 +124,7 @@ export async function searchChat(
       author: await agents.authorName(m.data.author),
       at: m.data.createdAt,
       snippet: snippet(m.data.text, q.query),
+      ...(attachmentsOf(m.data).length ? { attachments: attachmentsOf(m.data) } : {}),
     })
   return { results, nextCursor: more ? page.at(-1)!.id : null }
 }

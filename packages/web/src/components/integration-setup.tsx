@@ -16,6 +16,7 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import { CopyButton, CopyField } from '@/components/copy.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
+import { GitlabProjects } from '@/components/gitlab-projects.tsx'
 import { SectionTitle } from '@/components/page.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
@@ -236,42 +237,8 @@ function StepExtras({ integration, step, all }: { integration: string; step: Set
         </div>
       ) : null
     case 'gitlab.projects':
-      return Array.isArray(d.projects) && d.projects.length ? (
-        <div className="overflow-hidden rounded-md border" data-testid="gitlab-projects">
-          {d.projects.map(
-            (p: {
-              id: number
-              path: string
-              webUrl: string | null
-              role: string
-              defaultBranch: string | null
-              protected: boolean | null
-              warnings: string[]
-            }) => (
-              <div key={p.id} className="border-b px-2.5 py-1.5 last:border-b-0">
-                <div className="flex items-center gap-2">
-                  <StepIcon status={p.warnings.length ? 'warning' : 'done'} className="size-3.5" />
-                  <span className="min-w-0 flex-1 truncate font-mono text-micro text-fg-secondary">
-                    {p.webUrl ? <Link href={p.webUrl}>{p.path}</Link> : p.path}
-                  </span>
-                  <span className="shrink-0 text-micro text-fg-tertiary">{p.role}</span>
-                  {p.defaultBranch && (
-                    <span className="shrink-0 text-micro text-fg-quaternary">
-                      {p.defaultBranch}
-                      {p.protected === true ? ' · protected' : p.protected === false ? ' · unprotected' : ''}
-                    </span>
-                  )}
-                </div>
-                {p.warnings.map((w) => (
-                  <p key={w} className="mt-0.5 pl-5.5 text-micro text-[var(--orange)]">
-                    {w}
-                  </p>
-                ))}
-              </div>
-            ),
-          )}
-        </div>
-      ) : null
+      // With its "Add as project" buttons: rendered by StepItem (GitlabProjects), which can act.
+      return null
     case 'gitlab.webhooks':
       return (
         <div className="flex flex-col gap-2">
@@ -518,6 +485,15 @@ function StepItem({
           ))}
           <StepExtras integration={integration.name} step={step} all={integration.steps} />
           {integration.name === 'slack' && step.id === 'app' && admin && <CopyManifest employeeId={employeeId} />}
+          {integration.name === 'gitlab' && step.id === 'projects' && (
+            <GitlabProjects
+              employeeId={employeeId}
+              step={step}
+              admin={admin}
+              canAdd={integration.actions.includes('add-projects')}
+              onChange={onChange}
+            />
+          )}
           {doc?.links && (
             <div className="flex flex-wrap gap-3 text-micro">
               {doc.links.map((l) => (

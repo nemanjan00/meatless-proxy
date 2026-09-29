@@ -76,6 +76,7 @@ describe('MCP server /mcp', () => {
     const tools = (await client.listTools()).tools.map((x) => x.name).sort()
     expect(tools).toEqual([
       'ask',
+      'chat_attachment',
       'chat_inbox',
       'chat_join',
       'chat_join_channel',

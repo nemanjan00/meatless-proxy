@@ -484,3 +484,106 @@ describe('helpers', () => {
     expect(err.message).not.toContain(KEY)
   })
 })
+
+describe('image input', () => {
+  const img = (name: string, data?: string) => ({
+    type: 'image' as const,
+    mime: 'image/png',
+    name,
+    width: 2,
+    height: 3,
+    ...(data ? { data } : {}),
+  })
+
+  it('sends a tool result as text and its images in one user message after the last tool message', async () => {
+    handlers.push(json(completion({ content: 'red' })))
+    await make().complete({
+      messages: [
+        { role: 'user', content: 'look' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'image__view', arguments: '{}' } },
+            { id: 'c2', type: 'function', function: { name: 'image__view', arguments: '{}' } },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', content: '{"image":"a.png"}', images: [img('a.png', 'QUFB')] },
+        { role: 'tool', tool_call_id: 'c2', content: '{"image":"b.png"}', images: [img('b.png', 'QkJC'), img('gone.png')] },
+      ],
+    })
+    const msgs = seen[0]!.body.messages
+    expect(msgs.map((m: any) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'user'])
+    expect(msgs[2].content).toBe('{"image":"a.png"}\n[image a.png, 2x3, attached below]')
+    expect(msgs[3].content).toContain('[image gone.png: no longer available]')
+    expect(typeof msgs[3].content).toBe('string')
+    expect(msgs[4].content).toEqual([
+      { type: 'text', text: '[the 2 images from the tool results above]' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QUFB' } },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QkJC' } },
+    ])
+    // No image field leaks into the wire format.
+    expect(JSON.stringify(msgs)).not.toContain('"images"')
+  })
+
+  it('puts a user message’s images in its content parts, and flushes tool images before the next message', async () => {
+    handlers.push(json(completion({ content: 'ok' })))
+    await make().complete({
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'x', arguments: '' } }],
+        },
+        { role: 'tool', tool_call_id: 'c1', content: 'done', images: [img('a.png', 'QUFB')] },
+        { role: 'user', content: 'and this one?', images: [img('c.png', 'Q0ND'), img('d.png')] },
+      ],
+    })
+    const msgs = seen[0]!.body.messages
+    expect(msgs.map((m: any) => m.role)).toEqual(['assistant', 'tool', 'user', 'user'])
+    expect(msgs[2].content[1].image_url.url).toBe('data:image/png;base64,QUFB')
+    expect(msgs[3].content).toEqual([
+      { type: 'text', text: 'and this one?\n[image d.png: no longer available]' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,Q0ND' } },
+    ])
+  })
+
+  it('leaves messages without images exactly as before', async () => {
+    handlers.push(json(completion({ content: 'ok' })))
+    await make().complete({ messages: [{ role: 'user', content: 'hi', images: [] }] })
+    expect(seen[0]!.body.messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+})
+
+describe('capabilities', () => {
+  it('reads supports_image_in or modalities from GET /models, cached per model', async () => {
+    const list = {
+      data: [
+        { id: 'test-model', supports_image_in: true },
+        { id: 'text-only', modalities: { input: ['text'] } },
+        { id: 'silent' },
+      ],
+    }
+    handlers.push(json(list), json(list), json(list))
+    const m = make()
+    expect(await m.capabilities!()).toEqual({ vision: true })
+    expect(await m.capabilities!()).toEqual({ vision: true })
+    expect(await m.capabilities!('text-only')).toEqual({ vision: false })
+    expect(await m.capabilities!('silent')).toEqual({})
+    expect(seen.map((x) => x.url)).toEqual(['/v1/models', '/v1/models', '/v1/models'])
+    expect(seen[0]!.headers.authorization).toBe(`Bearer ${KEY}`)
+  })
+
+  it('answers null for unknown models, provider errors and broken responses', async () => {
+    handlers.push(
+      json({ data: [] }),
+      json({ error: { message: 'nope' } }, 404),
+      (_r, res) => void res.writeHead(200).end('not json'),
+    )
+    const m = make()
+    expect(await m.capabilities!()).toBeNull()
+    expect(await m.capabilities!('other')).toBeNull()
+    expect(await m.capabilities!('broken')).toBeNull()
+    expect(seen).toHaveLength(3)
+  })
+})

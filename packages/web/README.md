@@ -23,7 +23,7 @@ and the page it opens.
 | `src/styles/globals.css` | the stylebook tokens verbatim (`:root` / `.dark`), shadcn's `@theme inline` mapping, extra Linear tokens (`text-fg-tertiary`, `bg-level-2`, status colours), the type scale (`text-tiny` … `text-title3`), 510/590/680 weights, focus, selection, motion |
 | `src/components/ui/` | shadcn/ui components (generated with `npx shadcn add`, then tuned for density: 13 px menus and buttons, 32 px buttons, 2 px accent focus ring) |
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects shown readably, raw JSON on edit; references are picked by name with `<RecordPicker kinds>`, a typeahead over `GET /api/records/:kind?text=`, never typed as ids), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
-| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
+| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Procedures (list and page, see below), Projects / Contacts / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
 | `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
 | `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events and chat |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
@@ -62,6 +62,57 @@ opens its page with `?new=1`. Settings → Integrations is an overview linking t
 The mock (`src/mock/setup.ts`) has Slack connected, GitLab needing attention and Linear not set up for
 the demo employee.
 
+### Projects and who works on them
+
+The employee page's **Projects** section (`src/components/employee-projects.tsx`) lists the projects the employee
+works on (`GET /api/employees/:id/projects`) with its roles, each owner and repository; members and admins add one
+with the `RecordPicker` and a role (`RoleSelect`: member or owner), remove one, or press **New project**.
+`src/components/new-project-dialog.tsx` is that dialog (name, description, repository URLs, docs links, an employee
+owner, preset to the page's employee) over `POST /api/projects`; the Projects list's **New project** opens it too,
+instead of the generic record form. A project's page shows `ProjectPeopleSection`
+(`src/components/project-people.tsx`): the employees and people on it, owners first, with the same add and remove.
+In GitLab's setup, the projects step (`src/components/gitlab-projects.tsx`) shows which GitLab projects are already
+harness projects of the employee, with **Add as project** per row and **Add selected** (`add-projects`).
+`RecordPicker` takes a `filter`, so AI contacts aren't offered twice next to employees. The mock
+(`src/mock/projects.ts`) keeps assignments as links like the server, and its GitLab account reaches
+`acme/payments-api` (already the Payments project), `acme/invoices` and `acme/infra`.
+
+### Procedures
+
+`src/pages/procedures.tsx` over the typed procedures API (`@mp/api` `PROCEDURE_ROUTES`), not the generic records:
+
+- **`/procedures`**: a one-line explainer, then a row per procedure with its purpose, how it starts (from its enabled
+  triggers, in plain words, or "Manual only"), owner, approvals, runs in the last 30 days, the last run's state and
+  time, and the context state (Ready / Out of date / Not built). Search, an owner filter, archived ones on request,
+  and an empty state with **New procedure**. Narrow screens fold the columns into one line of facts.
+- **`/procedures/:id`**: the name, purpose, owner and the employee it runs as, with **Run now**, **Edit** (name,
+  purpose, owner), **Duplicate** and **Archive** / **Unarchive**. **When it runs** lists "whenever someone starts it"
+  and each trigger as a sentence ("When someone posts in #deploys", "Every Monday at 09:00 (Europe/Belgrade)"),
+  with an on/off switch, an inline editor and remove for admins, and **Add a trigger**. **Steps** renders the body;
+  **Edit steps** opens `StepsEditor` (textarea and live preview side by side, Write / Preview tabs under 1024 px);
+  saving is a new version, and **History** lists versions with who changed what, reads any of them and restores
+  its steps. **Runs** lists each instance (a fork of the context): state, who or what started it (a trigger, a
+  person's Run now, another session), when, how long, its outcome, linked to the session. The side panel has the
+  **Context** (state and why, when it was built and from which version, the session, **Rebuild context** or
+  **Build context**), **Approvals** (who approves at which step, edited inline, and runs waiting now) and details.
+  Everything reloads on live `records:procedure|run|session|trigger` events.
+- **New procedure** (`src/components/new-procedure-dialog.tsx`): what it is (name, when it applies, the employee
+  that runs it, an owner from `RecordPicker`), the steps from a template (When to use, Steps, Done when, Escalate
+  if), how it starts (admins; members are told it starts manually) and approvals (a person or a role, with the step).
+  One `createProcedure` call with an idempotency key per opening, so a double submit makes one procedure; then its
+  page. **Duplicate** opens it prefilled.
+- `src/components/start-form.tsx` builds a `ProcedureStart` from choices (a channel from the channel list, an @tag, a
+  schedule preset or cron with a time zone, a GitLab / Linear / Slack event with its field, or another source), with
+  the raw filter under **Advanced**, and says what it built in a sentence (`describeStart`). The server's catch-all
+  refusal shows under the form.
+
+The mock (`src/mock/procedures.ts`, data in `src/mock/procedures-data.ts`) has six procedures: channel, @tag,
+schedule, GitLab and Linear triggers and a manual-only one; a month of instances in every state; and contexts that
+are ready, out of date after an edit, or not built.
+
+Chat shows a router context's messages as the employee (its name, `@handle` quieter, the AI badge), and `@`
+suggestions leave router contexts out.
+
 Data comes from `@mp/api`'s `createApiClient` and `createLiveClient`; pages load over
 HTTP and apply live events from `/ws` (streamed deltas are applied in place, chat
 messages, edits, deletions and reactions are replaced in place, other changes trigger a
@@ -91,6 +142,14 @@ and people, keyboard navigable; unread counts and a mentions badge per channel, 
 read while a channel or thread is open and the tab is visible; edit and delete your own
 messages ("(edited)", "message deleted"); reactions (✅ 👀 👍 ❤️ 🎉 ❌) as chips that
 toggle; "New message" opens a DM with any employee or person.
+
+Images (`components/chat-attachments.tsx`): the composer (channels and threads) has an
+attach button and takes pasted and dropped images, uploading each at once
+(`usePendingAttachments`: thumbnails with progress and remove; only PNG, JPEG, GIF and
+WebP, at most 10); a message shows its images as thumbnails (`AttachmentGrid`, one image
+larger) and a click opens `Lightbox` (Esc closes, ←/→ move, download link). The mock keeps
+uploads as object URLs and seeds images on the PAY-123 thread and the staging disk incident
+(`mock/attachments.ts`).
 
 ## Screenshots (real server, seeded demo data)
 
@@ -138,6 +197,15 @@ and the chat page's autocomplete, search, reactions, edit, delete, new DM and un
 `employee.test.tsx`: the employee page (profile, SSH key, card states), the GitLab panel and "Add it for me", the
 secret form (a refused token, a stored one never shown again), members read-only, rotating the key, the new
 employee dialog (derived handle, a taken handle, a missing name), and the Settings → Integrations overview links.
+`projects.test.tsx`: the employee page's Projects section (roles, owner, remove, add with a role, empty, read-only
+for viewers), the New project dialog (owner preset, repositories and docs, a missing name, a taken name, from the
+Projects list with a picked owner), a project's people (owners first, the AI badge and handle, adding an employee, no
+duplicate AI contacts), and GitLab's Add as project.
+`procedures.test.tsx`: the list (starts, owners, approvals, context states, search, owner filter, empty state), the
+page (triggers in words, approvals, runs, rebuilding an out-of-date context, Run now linking to the run, adding a
+schedule trigger, the catch-all message, editing steps with the preview and a new version, history, archiving,
+read-only for viewers), and New procedure (one call, once on a double submit, template, @tag, a role approver; a
+missing name or purpose; members told about triggers).
 `auth.test.tsx`: signed-out people land on the login page (and a later 401 sends them there),
 login errors and the single sign-on button, the sidebar's user menu and sign-out, what viewers,
 members and admins see (kill switch, settings sections, chat message box), and the tokens page.

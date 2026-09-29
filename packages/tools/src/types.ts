@@ -1,5 +1,5 @@
 import type { Clock, Json, Logger } from '@mp/core'
-import type { ToolSpec } from '@mp/model'
+import type { ImageRef, ToolSpec } from '@mp/model'
 import type { WaitCondition } from '@mp/sessions'
 
 /** How a tool call behaves when repeated after a crash. See docs/execution.md#side-effects. */
@@ -56,6 +56,11 @@ export interface ToolResult {
   output: Json
   isError?: boolean
   control?: ControlSignal[]
+  /**
+   * Images for the model to look at, by reference (never the bytes): the history keeps these, and
+   * the runner loads the bytes each time it builds a request (e.g. `image.view`).
+   */
+  images?: ImageRef[]
 }
 
 /** Handlers validate their own arguments beyond the minimal schema check. */

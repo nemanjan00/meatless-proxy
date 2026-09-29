@@ -8,7 +8,7 @@ import {
   type FieldDef,
   type KindSchema,
 } from '@mp/core'
-import { ChatTopics, type ChatAuthor, type ChatMessagePosted, type Message } from '@mp/chat'
+import { ChatTopics, attachmentsOf, type Attachment, type ChatAuthor, type ChatMessagePosted, type Message } from '@mp/chat'
 import type { Contact, ContactData } from '@mp/directory'
 import type { Condition } from '@mp/store'
 import { RateLimiter } from '../auth/rate-limit.ts'
@@ -71,6 +71,8 @@ export interface AgentMessage {
   author: string
   text: string
   at: string
+  /** Images on the message; fetch one with chat_attachment. */
+  attachments?: Attachment[]
 }
 
 /** Gets a delivery to an agent's live connections. Returns true when it reached an open notification stream. */
@@ -348,6 +350,7 @@ export class AgentChat {
       author: await this.authorName(msg.data.author),
       text: msg.data.deleted ? '(deleted)' : msg.data.text,
       at: msg.data.createdAt,
+      ...(attachmentsOf(msg.data).length && !msg.data.deleted ? { attachments: attachmentsOf(msg.data) } : {}),
     }
   }
 

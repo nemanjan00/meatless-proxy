@@ -71,8 +71,8 @@ export interface IntegrationSetupModule {
    * Throws `ValidationError` for a value the system rejects, so it isn't stored.
    */
   validate(ctx: SetupContext, given: Record<string, string>): Promise<Validated>
-  /** Actions by name. Each returns the message to show. */
-  actions: Record<string, (ctx: SetupContext) => Promise<string>>
+  /** Actions by name. Each returns the message to show. `input` is the request body (`{}` when none). */
+  actions: Record<string, (ctx: SetupContext, input: Record<string, unknown>) => Promise<string>>
   /** The actions that make sense given the steps. */
   available(steps: SetupStep[], ctx: SetupContext): string[]
 }

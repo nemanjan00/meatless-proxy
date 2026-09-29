@@ -4,6 +4,7 @@ import {
   DeniedError,
   NotFoundError,
   ValidationError,
+  newId,
   systemClock,
   type Clock,
   type EventBus,
@@ -13,6 +14,7 @@ import {
 import type { Events } from '@mp/events'
 import { parseDocLinks, type Records } from '@mp/records'
 import type { Actor, Condition, Ref, StoredRecord } from '@mp/store'
+import { type Attachment, type ChatAttachments, attachmentLine, attachmentsOf } from './attachments.ts'
 import { parseTags } from './tags.ts'
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
@@ -62,6 +64,12 @@ export const messageSchema: KindSchema = {
       description: 'Deleted by its author: the text is gone, a placeholder stays in the thread.',
     },
     { name: 'reactions', type: 'json', description: 'Emoji -> list of `{kind, id}` who reacted.' },
+    {
+      name: 'attachments',
+      type: 'list',
+      of: { type: 'json' },
+      description: 'Images attached to it: `{ id, name, mime, size, width?, height? }`. The bytes are on the files volume.',
+    },
   ],
 }
 
@@ -150,6 +158,8 @@ export interface MessageData extends Record<string, unknown> {
   deleted?: boolean
   /** Emoji -> who reacted with it. */
   reactions?: Record<string, Ref[]>
+  /** Images attached to it (their bytes are chat attachments on the files volume). */
+  attachments?: Attachment[]
 }
 export type Message = StoredRecord<MessageData>
 
@@ -195,6 +205,8 @@ export interface ChatEventPayload {
   text: string
   tags: ChatTag[]
   author: ChatAuthor & AuthorInfo
+  /** Images attached to the message (metadata only; the model looks at one with `image.view`). */
+  attachments?: Attachment[]
 }
 
 export type NameResolution =
@@ -211,6 +223,8 @@ export interface ChatOptions {
   resolveName: (name: string) => Promise<NameResolution>
   /** Resolves `@employee#slug` to a session id. */
   resolveSessionSlug: (employeeId: string, slug: string) => Promise<string | null>
+  /** Image attachments. Without it, messages can't have any. */
+  attachments?: ChatAttachments
 }
 
 export interface CreateChannelInput {
@@ -230,6 +244,11 @@ export interface PostInput {
   text: string
   /** Extra facts about the author for the durable event's payload (the message record keeps `{kind, id}`). */
   authorInfo?: AuthorInfo
+  /**
+   * Ids of uploads (`ChatAttachments.upload`) by the same author to attach. The text may be empty
+   * when there are attachments.
+   */
+  attachments?: string[]
 }
 
 export interface Chat {
@@ -258,7 +277,7 @@ export interface Chat {
    * again, the earlier text stays in the record's revisions, and a `message.edited` event goes to the thread.
    */
   edit(messageId: string, text: string, by: Ref): Promise<Message>
-  /** Deletes a message: only its author may. The text is cleared and a placeholder stays in the thread. */
+  /** Deletes a message: only its author may. The text and attachments are removed and a placeholder stays in the thread. */
   delete(messageId: string, by: Ref): Promise<Message>
   /** Adds a reaction (idempotent). A `reaction.added` event goes to the thread, so a subscribed session can act on it. */
   react(messageId: string, emoji: string, by: Ref): Promise<Message>
@@ -447,7 +466,10 @@ export function createChat(opts: ChatOptions): Chat {
         .map((l) => ({ kind: l.to.kind, id: l.to.id, addedAt: l.createdAt }))
     },
     async post(input) {
-      if (typeof input.text !== 'string' || !input.text.trim()) throw new ValidationError('message text is required')
+      const attachmentIds = input.attachments ?? []
+      if (attachmentIds.length && !opts.attachments) throw new ValidationError('this chat takes no attachments')
+      if (typeof input.text !== 'string' || (!input.text.trim() && !attachmentIds.length))
+        throw new ValidationError('message text is required')
       if (!input.author || (input.author.kind !== 'contact' && input.author.kind !== 'session') || !input.author.id)
         throw new ValidationError('author must be { kind: "contact" | "session", id }')
       const ch = await requireChannel(input.channelId)
@@ -461,10 +483,26 @@ export function createChat(opts: ChatOptions): Chat {
       const tags = await resolveTags(input.text)
       const mentions = parseDocLinks(input.text).map((l) => ({ kind: l.kind, id: l.id }))
       const author: ChatAuthor = { kind: input.author.kind, id: input.author.id }
+      let attachments: Attachment[] = []
+      let id: string | undefined
+      if (attachmentIds.length) {
+        // Claimed first, for the message about to exist: a crash in between leaves a claim the cleanup removes.
+        id = newId('msg', clock.now())
+        attachments = await opts.attachments!.claim(attachmentIds, { by: author, channelId: ch.id, messageId: id })
+      }
       const msg = await records.create<MessageData>(
         'message',
-        { channelId: ch.id, threadId, author, text: input.text, tags, mentions, createdAt: clock.iso() },
-        { actor: authorActor(author) },
+        {
+          channelId: ch.id,
+          threadId,
+          author,
+          text: input.text,
+          tags,
+          mentions,
+          createdAt: clock.iso(),
+          ...(attachments.length ? { attachments } : {}),
+        },
+        { actor: authorActor(author), ...(id ? { id } : {}) },
       )
       const payload: ChatEventPayload = {
         messageId: msg.id,
@@ -473,14 +511,17 @@ export function createChat(opts: ChatOptions): Chat {
         text: input.text,
         tags,
         author: { ...input.authorInfo, ...author },
+        ...(attachments.length ? { attachments } : {}),
       }
+      // Images are named, not shown: the session looks at one with image.view when it needs to.
+      const lines = attachments.map(attachmentLine).join('\n')
       await events.ingest({
         source: 'chat',
         type: threadId ? 'message.replied' : 'message.posted',
         dedupeKey: `chat:${msg.id}`,
         subject: { system: 'mp', id: threadId ?? msg.id },
         payload: payload as unknown as Json,
-        text: `#${ch.data.name}: ${input.text.length > 200 ? `${input.text.slice(0, 200)}…` : input.text}`,
+        text: `#${ch.data.name}: ${input.text.length > 200 ? `${input.text.slice(0, 200)}…` : input.text}${lines ? `\n${lines}` : ''}`,
         ...(author.kind === 'contact' ? { actorContactId: author.id } : {}),
       })
       bus?.publish<ChatMessagePosted>(ChatTopics.message, { channelId: ch.id, threadId, messageId: msg.id })
@@ -540,9 +581,10 @@ export function createChat(opts: ChatOptions): Chat {
       const next = await records.update<MessageData>(
         'message',
         msg.id,
-        { text: '', tags: [], mentions: [], deleted: true, editedAt: clock.iso() },
+        { text: '', tags: [], mentions: [], deleted: true, editedAt: clock.iso(), attachments: undefined },
         { actor: authorActor(msg.data.author), expectedVersion: msg.version },
       )
+      if (attachmentsOf(msg.data).length) await opts.attachments?.removeForMessage(msg.id)
       await threadEvent(next, 'message.deleted', {})
       return next
     },

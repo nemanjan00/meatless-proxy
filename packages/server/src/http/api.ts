@@ -801,8 +801,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
   })
 
   app.post('/api/chat/channels/:id/messages', async (c) => {
-    const body = await jsonBody<{ text?: unknown; threadId?: unknown }>(c)
-    const text = requireString(body.text, 'text')
+    const body = await jsonBody<{ text?: unknown; threadId?: unknown; attachments?: unknown }>(c)
+    const attachments = body.attachments ?? []
+    if (!Array.isArray(attachments) || attachments.some((a) => typeof a !== 'string'))
+      throw new BadRequestError('attachments must be a list of attachment ids')
+    // With attachments, the text may be empty.
+    const text = attachments.length ? (typeof body.text === 'string' ? body.text : '') : requireString(body.text, 'text')
     if (body.threadId !== undefined && body.threadId !== null && typeof body.threadId !== 'string')
       throw new BadRequestError('threadId must be a string')
     const contactId = await currentContact(s, c)
@@ -812,6 +816,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       ...(typeof body.threadId === 'string' ? { threadId: body.threadId } : {}),
       author: { kind: 'contact', id: contactId },
       text,
+      ...(attachments.length ? { attachments: attachments as string[] } : {}),
     })
     return c.json(await views().message(msg), 201)
   })

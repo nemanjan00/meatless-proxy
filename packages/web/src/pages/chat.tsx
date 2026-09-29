@@ -427,10 +427,11 @@ function ThreadPanel({
           <Can fallback={<ReadOnlyNote />}>
             <Composer
               compact
+              attachments
               placeholder="Reply…"
               suggestions={suggestions}
-              onSend={async (text) => {
-                const m = await api.postMessage(channelId, { text, threadId })
+              onSend={async (text, attachments) => {
+                const m = await api.postMessage(channelId, { text, threadId, ...(attachments.length ? { attachments } : {}) })
                 onChange(m)
               }}
             />
@@ -845,8 +846,9 @@ export function ChatPage() {
                     placeholder={`Message ${channel.data.dm ? channelLabel(channel, me.data?.contactId) : `#${channel.data.name}`}`}
                     examples={tagExamples(channel, suggestions)}
                     suggestions={suggestions}
-                    onSend={async (text) => {
-                      const m = await api.postMessage(channel.id, { text })
+                    attachments
+                    onSend={async (text, attachments) => {
+                      const m = await api.postMessage(channel.id, { text, ...(attachments.length ? { attachments } : {}) })
                       onChange(m)
                     }}
                   />

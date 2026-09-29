@@ -19,7 +19,7 @@ export interface CreateEmployeeBody {
   instructions?: string
   /** Model name. Default: the deployment's `MODEL`. */
   model?: string
-  /** Project ids in its scope. */
+  /** Project ids it works on (linked from its contact as `member`). */
   projects?: string[]
   /** Harness chat channel ids it joins (it always joins #general). */
   channels?: string[]
@@ -171,8 +171,11 @@ export interface SetupApi {
    * scoped to the employee after validating them (admins). A rejected token is 422 and is not stored.
    */
   setIntegrationSecrets(id: string, name: string, values: Record<string, string>): Promise<SetupResult>
-  /** `POST /api/employees/:id/integrations/:name/actions/:action`, e.g. `add-ssh-key`, `add-trigger` (admins). */
-  integrationAction(id: string, name: string, action: string): Promise<SetupResult>
+  /**
+   * `POST /api/employees/:id/integrations/:name/actions/:action`, e.g. `add-ssh-key`, `add-trigger` (admins).
+   * Some actions take input, e.g. `add-projects` takes `{ projects: [GitLab project ids] }`.
+   */
+  integrationAction(id: string, name: string, action: string, input?: Record<string, Json>): Promise<SetupResult>
   /** `GET /api/employees/:id/integrations/slack/manifest` (admins). */
   slackManifest(id: string): Promise<SlackManifest>
   /** `GET /api/integrations/status` (admins). */
@@ -194,7 +197,7 @@ export function setupMethods(call: Call): SetupApi {
     rotateSshKey: (id) => call('rotateSshKey', { id }, undefined, {}),
     employeeIntegrations: (id, o = {}) => call('employeeIntegrations', { id }, { refresh: o.refresh ? 1 : undefined }),
     setIntegrationSecrets: (id, name, values) => call('setIntegrationSecrets', { id, name }, undefined, { values }),
-    integrationAction: (id, name, action) => call('integrationAction', { id, name, action }, undefined, {}),
+    integrationAction: (id, name, action, input) => call('integrationAction', { id, name, action }, undefined, input ?? {}),
     slackManifest: (id) => call('slackManifest', { id }),
     integrationsStatus: () => call('integrationsStatus'),
   }

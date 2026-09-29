@@ -47,6 +47,9 @@ import {
 import { type MockDb, mockId } from './data.ts'
 import { createMockSetupApi } from './setup.ts'
 import { createMockMcpApi } from './mcp.ts'
+import { createMockAttachmentsApi } from './attachments.ts'
+import { createMockProjectsApi } from './projects.ts'
+import { createMockProceduresApi } from './procedures.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -109,6 +112,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
   }
   const fail = (e: Error): Promise<never> => Promise.reject(e)
   const tokens: ApiToken[] = []
+  const attachments = createMockAttachmentsApi({ db, meId: me.id, ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}) })
 
   const kindMap = (kind: string) => {
     if (!db.records.has(kind)) db.records.set(kind, new Map())
@@ -934,6 +938,12 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         } else if (emp) tags.push({ type: 'employee', id: emp.id, text: m[0] })
         else tags.push({ type: 'person', id: m[1]!, text: m[0] })
       }
+      let files: MessageData['attachments'] = []
+      try {
+        files = body.attachments?.length ? attachments.take(body.attachments) : []
+      } catch (e) {
+        return fail(e as Error)
+      }
       const id = mockId('msg', ++db.seq)
       const message = write<MessageData>('message', id, {
         channelId,
@@ -942,6 +952,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         text: body.text,
         tags,
         mentions: [],
+        ...(files.length ? { attachments: files } : {}),
       }) as Message
       if (body.threadId) {
         const root = get<MessageData>('message', body.threadId)
@@ -975,7 +986,14 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       const m = get<MessageData>('message', id)
       if (!m) return fail(notFound('message'))
       if (m.data.author.id !== me.id) return fail(new ApiRequestError(403, 'denied', 'only the author can delete a message'))
-      const next = write<MessageData>('message', id, { ...m.data, text: '', deleted: true, tags: [] }) as Message
+      attachments.drop(m.data.attachments)
+      const next = write<MessageData>('message', id, {
+        ...m.data,
+        text: '',
+        deleted: true,
+        tags: [],
+        attachments: undefined,
+      }) as Message
       emit('chat.message', { channelId: m.data.channelId, message: next })
       return delay(next)
     },
@@ -1220,6 +1238,15 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // MCP servers, global and per employee (./mcp.ts).
     ...createMockMcpApi({ db, iso, delay }),
+
+    // Chat image attachments (./attachments.ts).
+    ...attachments.api,
+
+    // Projects and who works on them (./projects.ts).
+    ...createMockProjectsApi({ db, iso, delay, write, get, all }),
+
+    // Procedures: how they start, their runs and context (./procedures.ts).
+    ...createMockProceduresApi({ db, iso, delay, write, get, all, whoami: () => api.me() }),
   }
   return api
 }

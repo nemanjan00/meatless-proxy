@@ -1,0 +1,158 @@
+import { type ApiRecord, ApiRequestError, type AttachmentsApi, type ChatAttachment, type MessageData } from '@mp/api'
+import { type MockDb, mockId } from './data.ts'
+
+/**
+ * Chat attachments in the mock: uploads live in memory as object URLs; a couple of seeded messages
+ * carry demo images (drawn as SVG, which the real server never serves: it takes PNG, JPEG, GIF and
+ * WebP only).
+ */
+
+const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const MAX_BYTES = 10 * 1024 * 1024
+
+const svg = (w: number, h: number, body: string) =>
+  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="Inter, system-ui, sans-serif">${body}</svg>`,
+  )}`
+
+/** A bar chart of disk usage, as the infra employee would make with code.run. */
+function diskChart(): string {
+  const bars = [
+    ['postgres', 212, '#5e6ad2'],
+    ['docker', 61, '#4ea7fc'],
+    ['logs', 18, '#27a644'],
+    ['wal', 9, '#f0bf00'],
+    ['other', 6, '#8a8f98'],
+  ] as const
+  const rows = bars
+    .map(([name, gb, color], i) => {
+      const y = 92 + i * 88
+      const w = (gb / 212) * 820
+      return `<text x="40" y="${y + 36}" font-size="24" fill="#d0d6e0">${name}</text><rect x="190" y="${y + 8}" width="${w}" height="44" rx="6" fill="${color}"/><text x="${200 + w}" y="${y + 38}" font-size="22" fill="#8a8f98">${gb} G</text>`
+    })
+    .join('')
+  return svg(
+    1200,
+    560,
+    `<rect width="1200" height="560" fill="#0f1011"/><text x="40" y="56" font-size="28" font-weight="600" fill="#f7f8f8">staging-eu-1 · disk by use</text>${rows}`,
+  )
+}
+
+/** Two charges two seconds apart, as a timeline. */
+function chargesTimeline(): string {
+  const tick = (x: number, label: string) =>
+    `<line x1="${x}" y1="250" x2="${x}" y2="262" stroke="#62666d" stroke-width="2"/><text x="${x}" y="292" font-size="20" fill="#8a8f98" text-anchor="middle">${label}</text>`
+  const charge = (x: number, key: string) =>
+    `<circle cx="${x}" cy="180" r="16" fill="#eb5757"/><text x="${x}" y="130" font-size="22" fill="#f7f8f8" text-anchor="middle">$412.00</text><text x="${x}" y="226" font-size="18" fill="#8a8f98" text-anchor="middle">${key}</text>`
+  return svg(
+    1000,
+    340,
+    `<rect width="1000" height="340" fill="#0f1011"/><text x="40" y="56" font-size="26" font-weight="600" fill="#f7f8f8">INV-1002 · charges on Sep 27</text><line x1="80" y1="250" x2="920" y2="250" stroke="#34343a" stroke-width="3"/>${tick(160, '14:02:10')}${tick(500, '14:02:11')}${tick(840, '14:02:12')}${charge(160, 'key a81f…')}${charge(840, 'key 3c07…')}`,
+  )
+}
+
+/** A screenshot-like image of the provider dashboard. */
+function dashboard(): string {
+  const row = (y: number, a: string, b: string, c: string) =>
+    `<text x="48" y="${y}" font-size="20" fill="#d0d6e0">${a}</text><text x="420" y="${y}" font-size="20" fill="#8a8f98">${b}</text><text x="760" y="${y}" font-size="20" fill="${c === 'succeeded' ? '#27a644' : '#eb5757'}">${c}</text>`
+  return svg(
+    960,
+    420,
+    `<rect width="960" height="420" fill="#f8f8f8"/><rect width="960" height="64" fill="#ffffff"/><text x="48" y="42" font-size="24" font-weight="600" fill="#282a30">Payments · INV-1002</text><rect x="24" y="88" width="912" height="308" rx="12" fill="#ffffff" stroke="#e9e8ea"/>${row(140, 'ch_3Pq…a81f', 'Sep 27 14:02:10', 'succeeded')}${row(196, 'ch_3Pq…3c07', 'Sep 27 14:02:12', 'succeeded')}${row(252, 're_1Mx…77aa', 'Sep 29 09:15:44', 'pending')}`,
+  )
+}
+
+interface Stored {
+  attachment: ChatAttachment
+  url: string
+  owner: string
+  claimed: boolean
+}
+
+export function createMockAttachmentsApi(ctx: { db: MockDb; meId: string; latencyMs?: number }) {
+  const store = new Map<string, Stored>()
+  let seq = 0
+
+  const seed = (messageNo: number, items: { name: string; url: string; width: number; height: number; size: number }[]) => {
+    const m = ctx.db.records.get('message')?.get(mockId('msg', messageNo)) as ApiRecord<MessageData> | undefined
+    if (!m) return
+    const list = items.map((it) => {
+      const attachment: ChatAttachment = {
+        id: mockId('att', ++seq),
+        name: it.name,
+        mime: 'image/png',
+        size: it.size,
+        width: it.width,
+        height: it.height,
+      }
+      store.set(attachment.id, { attachment, url: it.url, owner: 'seed', claimed: true })
+      return attachment
+    })
+    m.data = { ...m.data, attachments: list }
+  }
+  seed(3, [
+    { name: 'charges-timeline.png', url: chargesTimeline(), width: 1000, height: 340, size: 48_213 },
+    { name: 'provider-dashboard.png', url: dashboard(), width: 960, height: 420, size: 131_877 },
+  ])
+  seed(20, [{ name: 'disk-by-use.png', url: diskChart(), width: 1200, height: 560, size: 61_402 }])
+
+  const dims = async (file: Blob): Promise<{ width?: number; height?: number }> => {
+    if (typeof createImageBitmap !== 'function') return {}
+    try {
+      const b = await createImageBitmap(file)
+      const d = { width: b.width, height: b.height }
+      b.close()
+      return d
+    } catch {
+      return {}
+    }
+  }
+
+  const api: AttachmentsApi = {
+    async uploadAttachment(file, opts = {}) {
+      if (!TYPES.includes(file.type))
+        throw new ApiRequestError(422, 'validation', 'only images can be attached: PNG, JPEG, GIF or WebP (checked by content)')
+      if (file.size > MAX_BYTES) throw new ApiRequestError(422, 'validation', 'an attachment can be at most 10 MB')
+      // Progress in a few steps, like a real upload.
+      for (const f of [0.2, 0.55, 0.85]) {
+        opts.onProgress?.(f)
+        if (ctx.latencyMs) await new Promise((r) => setTimeout(r, ctx.latencyMs! / 2))
+      }
+      const attachment: ChatAttachment = {
+        id: mockId('att', ++seq),
+        name: opts.name ?? (file as File).name ?? 'image',
+        mime: file.type,
+        size: file.size,
+        ...(await dims(file)),
+      }
+      let url = ''
+      try {
+        if (typeof URL.createObjectURL === 'function') url = URL.createObjectURL(file)
+      } catch {
+        // jsdom: no object URLs.
+      }
+      store.set(attachment.id, { attachment, url, owner: ctx.meId, claimed: false })
+      opts.onProgress?.(1)
+      return { attachment, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
+    },
+    attachmentUrl: (id) => store.get(id)?.url ?? '',
+  }
+
+  /** Claims uploads of the current person for a message (the mock of the server's checks). */
+  const take = (ids: string[]): ChatAttachment[] => {
+    if (ids.length > 10) throw new ApiRequestError(422, 'validation', 'a message can have at most 10 attachments')
+    return ids.map((id) => {
+      const s = store.get(id)
+      if (!s) throw new ApiRequestError(404, 'not_found', `attachment ${id} not found`)
+      if (s.owner !== ctx.meId) throw new ApiRequestError(403, 'denied', 'only the uploader can attach an upload')
+      if (s.claimed) throw new ApiRequestError(409, 'conflict', `attachment ${id} is already on a message`)
+      s.claimed = true
+      return s.attachment
+    })
+  }
+  /** A message was deleted: its images go with it. */
+  const drop = (list: ChatAttachment[] | undefined) => {
+    for (const a of list ?? []) store.delete(a.id)
+  }
+  return { api, take, drop }
+}

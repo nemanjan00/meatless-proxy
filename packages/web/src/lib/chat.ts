@@ -34,6 +34,11 @@ export function mpHandle(c: ApiRecord<ContactData>): string | undefined {
 
 const isAi = (c: ApiRecord<ContactData>) => c.data.kind === 'ai' || c.data.ai === true
 
+/** Whether a session is its employee's router context (`meta.role` router), which chat shows as the employee. */
+export function isRouterSession(s: ApiRecord<SessionData>): boolean {
+  return (s.data.meta as Record<string, unknown> | undefined)?.role === 'router'
+}
+
 /** One `@` suggestion. `insert` is what replaces the typed `@…` (with the `@`). */
 export interface TagSuggestion {
   type: 'employee' | 'session' | 'person'
@@ -57,6 +62,8 @@ export function tagCandidates(
   for (const { session: s } of sessions) {
     const h = handle.get(s.data.employeeId)
     if (!h || (s.data.status !== 'active' && s.data.status !== 'waiting')) continue
+    // A router context is internal: tag the employee instead.
+    if (isRouterSession(s)) continue
     out.push({ type: 'session', id: s.id, insert: `@${h}#${s.data.slug}`, label: s.data.title, detail: 'session' })
   }
   for (const c of contacts) {

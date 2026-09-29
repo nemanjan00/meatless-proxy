@@ -1,6 +1,7 @@
 import type { ApiRef, Message } from '@mp/api'
 import { MessageSquare, MoreHorizontal, Pencil, SmilePlus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { AttachmentGrid } from '@/components/chat-attachments.tsx'
 import { Markdown } from '@/components/markdown.tsx'
 import { AuthorAvatar } from '@/components/people.tsx'
 import { Button } from '@/components/ui/button.tsx'
@@ -11,9 +12,19 @@ import { REACTIONS, reactionChips } from '@/lib/chat.ts'
 import { formatDateTime, formatTime, timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
-/** An author's name; a session's `@employee#slug` shows the employee, with the slug quieter and shortened. */
+/**
+ * An author's name; a session's `@employee#slug` shows the employee, with the slug quieter and shortened.
+ * An employee (its router context included) shows its `@handle` quieter after its name.
+ */
 function AuthorName({ author }: { author: Message['data']['author'] }) {
   const i = author.type === 'session' ? author.name.indexOf('#') : -1
+  if (author.type === 'employee' && author.handle)
+    return (
+      <span className="flex min-w-0 items-baseline gap-1.5" title={`@${author.handle}`}>
+        <span className="shrink-0 font-medium text-foreground">{author.name}</span>
+        <span className="min-w-0 truncate font-mono text-micro text-fg-tertiary">@{author.handle}</span>
+      </span>
+    )
   if (i < 0) return <span className="shrink-0 font-medium text-foreground">{author.name}</span>
   return (
     <span className="flex min-w-0 items-baseline" title={author.name}>
@@ -153,7 +164,10 @@ export function MessageItem({
             </div>
           </div>
         ) : (
-          <Markdown text={d.text} className="text-small" tags />
+          <>
+            {d.text && <Markdown text={d.text} className="text-small" tags />}
+            {d.attachments?.length ? <AttachmentGrid attachments={d.attachments} /> : null}
+          </>
         )}
         {chips.length > 0 && !d.deleted && (
           <div className="mt-1 flex flex-wrap gap-1" data-testid="reactions">

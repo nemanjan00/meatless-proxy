@@ -35,6 +35,11 @@ export interface ToolResultContent {
   name: string
   output: Json
   isError?: boolean
+  /**
+   * Images the tool returned, as references (`ImageRef` of `@mp/model`: source, id or owner and path,
+   * sha256, name, mime, size), never their bytes. The runner loads the bytes when it builds a request.
+   */
+  images?: Json[]
 }
 export interface EventContent {
   eventId: string

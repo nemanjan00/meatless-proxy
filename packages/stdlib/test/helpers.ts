@@ -1,5 +1,5 @@
 import { ManualClock, NotFoundError, createEventBus, createHooks, memoryLogger, newId, type Json } from '@mp/core'
-import { createChat } from '@mp/chat'
+import { createChat, createChatAttachments } from '@mp/chat'
 import { createChecklists } from '@mp/checklists'
 import { fakeRuntime } from '@mp/containers'
 import { createDirectory } from '@mp/directory'
@@ -54,6 +54,8 @@ export interface StackOptions {
   defaults?: StdlibDeps['config']['defaults']
   /** Replaces the default `enqueueRun` (which only records ids). */
   enqueueRun?: (runId: string) => Promise<void>
+  /** Whether the model can see images (image.view). Default on. */
+  vision?: boolean
 }
 
 export async function stack(opts: StackOptions = {}) {
@@ -65,11 +67,14 @@ export async function stack(opts: StackOptions = {}) {
   const directory = createDirectory({ records })
   const sessions = createSessions({ records, clock, bus })
   const events = createEvents({ records, clock, bus })
+  const files = createFiles({ records })
+  const attachments = createChatAttachments({ records, storage: files.storage, clock })
   const chat = createChat({
     records,
     events,
     clock,
     bus,
+    attachments,
     resolveName: async (name) => {
       const emp = await directory.employees.byHandle(name)
       if (emp) return { type: 'employee', employeeId: emp.id, contactId: emp.data.contactId }
@@ -80,7 +85,6 @@ export async function stack(opts: StackOptions = {}) {
   })
   const memory = createMemory({ records, clock })
   const skills = createSkills({ records })
-  const files = createFiles({ records })
   const checklists = createChecklists({ records, sessions, clock, bus })
   const usage = createUsage({ records, clock, bus })
   const git = fakeGitCache()
@@ -106,6 +110,8 @@ export async function stack(opts: StackOptions = {}) {
     files,
     checklists,
     usage,
+    attachments,
+    vision: { enabled: opts.vision ?? true },
     ...(opts.git === false ? {} : { git }),
     ...(opts.containers === false ? {} : { containers }),
     ...(opts.sandbox === false ? {} : { sandbox }),
@@ -223,6 +229,7 @@ export async function stack(opts: StackOptions = {}) {
     memory,
     skills,
     files,
+    attachments,
     checklists,
     usage,
     git,

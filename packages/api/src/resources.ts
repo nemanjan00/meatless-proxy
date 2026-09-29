@@ -8,6 +8,7 @@
  * typed `…Data` interfaces below describe the `data` of the kinds the UI
  * knows about. Unknown fields (schema extensions) are allowed everywhere.
  */
+import type { ChatAttachment } from './attachments.ts'
 
 /** Any JSON value. */
 export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
@@ -217,7 +218,8 @@ export interface ProjectData extends Record<string, unknown> {
   description: string
   status: string
   owner?: string
-  repositories?: { url: string; defaultBranch?: string; path?: string }[]
+  /** `httpUrl` is the https URL of a repository whose `url` is ssh. */
+  repositories?: { url: string; httpUrl?: string; defaultBranch?: string; path?: string }[]
   links?: { system: string; ref: string }[]
   document?: string
 }
@@ -653,7 +655,11 @@ export interface MessageData extends Record<string, unknown> {
   channelId: string
   /** Id of the thread's root message; null for a top-level message. */
   threadId: string | null
-  author: { type: 'employee' | 'session' | 'person'; id: string; name: string }
+  /**
+   * Who wrote it. A session of an employee is `session` with `@employee#slug` as its name, except
+   * the employee's router context, which is internal: its messages are the employee's, with its `handle`.
+   */
+  author: { type: 'employee' | 'session' | 'person'; id: string; name: string; handle?: string }
   /** Markdown. May contain `[[kind:id]]` links and tags. */
   text: string
   tags: ChatTag[]
@@ -670,6 +676,8 @@ export interface MessageData extends Record<string, unknown> {
   deleted?: boolean
   /** Emoji → who reacted with it (`contact`, `session` or `employee` refs). */
   reactions?: Record<string, ApiRef[]>
+  /** Images attached to it; fetch one from `GET /api/chat/attachments/:id`. */
+  attachments?: ChatAttachment[]
 }
 export type Message = ApiRecord<MessageData>
 

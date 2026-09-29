@@ -14,9 +14,29 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
   and returns their names. `git.*` needs `deps.git`, `env.*` needs
   `deps.containers`, `code.*` needs `deps.sandbox` (`@mp/sandbox`).
   `deps.defaultTimezone()` gives `time.now` the company timezone (default UTC).
-- `employeePrompt({ employee, contact, projects?, procedures?, skills?, memories?, now })`:
+- `employeePrompt({ employee, contact, procedures?, skills?, memories?, now })`:
   the system prompt (identity, personality, the employee rules, how to use the
-  stdlib, skill names and descriptions). Only `now` varies.
+  stdlib, skill names and descriptions). Only `now` varies. It lists no
+  projects: those come per run (below), so an assignment never changes it.
+- Procedure contexts (`procedure-context.ts`): `createProcedureContexts(registry, deps)` → `ProcedureContexts`:
+  `ensure(procedureId, employeeId, { toolset? })` (the context, built the first time: the employee prompt and the
+  procedure's entry, `procedureContextText`, with names for its owner and approvers and each approval's step;
+  default toolset the employee's router context's; concurrent callers get one), `rebuild(procedureId, { employeeId? })`
+  (a fresh context built the same way, the procedure pointed at it, the old one marked done), `state(procedure)`
+  (`ready`, `stale` or `missing`: contexts record `meta.procedureDigest` of the fields they were built from;
+  older ones are compared with the procedure's revisions) and `start(procedureId, { work?, requesterId?, actor })`
+  (Run now: a fork, the checklist, links, a queued `manual` run). `procedures.run` uses `ensure`, and refuses an
+  archived procedure. The server keeps one as `services.procedureContexts`.
+- "Your projects" (`projects-entry.ts`): `currentProjects(directory, employeeId)`
+  (the projects its AI contact is linked to: name, id, roles owner first,
+  repository URLs, owner or `you`, a one-line description), `projectsText(lines)`
+  (deterministic; at most `MAX_LISTED_PROJECTS`, then a count; with none, to ask
+  an admin), and `projectsEntry(deps, employeeId, sessionId?)`: the `system`
+  entry for a new run (meta `projectsEntry`: the project ids), or null when the
+  session's history already ends with the same list. `kit.startRun` adds it
+  before the instruction of every new session, fork and review (not loop
+  children, whose item stays last); the server adds it to router runs through
+  the router's `runInput` hook.
 - `DEFAULT_TOOLSET` (every stdlib tool except reviewer-only ones),
   `REVIEWER_TOOLSET`, `REVIEWER_ONLY_TOOLS`.
 - `registerPolicies(hooks, deps, config?)` on the runner hooks: checklist gate,
@@ -43,7 +63,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `sessions.*` | create, fork, loop, wait, look_up, list, search, tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
 | `chat.*` | post, reply, read, search, create_channel, add_member, remove_member, archive, invite |
 | `subscriptions.*` / `triggers.*` | subscribe, unsubscribe, list / list, create, update, disable |
-| `directory.*` / `procedures.run` | find_contact, get_contact, find_project, get_project, projects_of, find_procedure, get_procedure / run |
+| `directory.*` / `procedures.run` | find_contact, get_contact, find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
@@ -76,6 +96,20 @@ Notes on behaviour:
   router stamps event headers) and to call `time.now` for the time now; the
   prompt itself holds no clock time beyond the session's start, so its cached
   prefix never changes. `time.now` and `code.*` are in router toolsets too.
+- **Images** (`src/tools/images.ts`). `image.view { attachment? | path? }`
+  returns `{ output, images: [ImageRef] }`: a reference with the sha256, never
+  the bytes, which the runner loads for each request. Attachments only of
+  messages in channels the employee sees (`employeeSeesChannel`: named
+  channels, and DMs the employee, its contact or one of its sessions is in);
+  files through `files.forEmployee`, so shares apply. It is tagged `vision`:
+  without `deps.vision.enabled` the runner doesn't offer it, and it answers
+  "this model can't see images". It reports the size the model gets
+  (`shownAs` when a PNG is downscaled to `vision.maxSide`) and refuses images
+  over `vision.maxBytes`. `chat.post` and `chat.reply` take `attachments:
+  [{ path }]` (`uploadFiles`: read with the employee's permissions, uploaded
+  to `deps.attachments` as the session, then posted); `chat.read` lists a
+  message's attachments as `[image: <name> <w>x<h>, attachment <id>]`. The
+  prompt has one line on this, the same whether vision is on or not.
 - **Code.** `code.run` is `sandbox.run` for the calling session, with the
   session as the actor of file changes; a cell's error (or a timeout) is a
   tool error with the output. A session that ends (`done`, `abandoned`) loses
@@ -133,6 +167,10 @@ scripted model (fork + wait, chat replies through subscriptions, procedures
 with the checklist gate, git with a denied push and the docs policy, commit on
 stop, memory, files, session messages). `test/env-egress.test.ts` covers env
 naming, egress allowlists and narrowing, and the SSH key passed to git.
+`test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
+project, `you`, role order, the limit), skipping a repeat, new sessions and forks
+getting the current list with the system prompt byte-identical after an
+assignment, and `directory.projects_of` defaulting to the caller.
 
 ## Replacing it
 

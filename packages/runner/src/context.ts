@@ -1,5 +1,5 @@
 import type { Json } from '@mp/core'
-import type { ChatMessage } from '@mp/model'
+import type { ChatMessage, ImagePart, ImageRef } from '@mp/model'
 import type { Entry } from '@mp/store'
 import type {
   AssistantContent,
@@ -65,7 +65,9 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
       }
       case 'tool_result': {
         const r = c as ToolResultContent
-        out.push({ role: 'tool', tool_call_id: r.toolCallId, content: stringifyOutput(r.output, r.isError) })
+        const msg: ChatMessage = { role: 'tool', tool_call_id: r.toolCallId, content: stringifyOutput(r.output, r.isError) }
+        if (r.images?.length) msg.images = (r.images as unknown as ImageRef[]).map(imagePartOf)
+        out.push(msg)
         break
       }
       case 'event': {
@@ -89,6 +91,18 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
     }
   }
   return out
+}
+
+/** An image reference as a message part, to be loaded when the request is built. */
+export function imagePartOf(ref: ImageRef): ImagePart {
+  return {
+    type: 'image',
+    mime: ref.mime,
+    ref,
+    name: ref.name,
+    ...(ref.width ? { width: ref.width } : {}),
+    ...(ref.height ? { height: ref.height } : {}),
+  }
 }
 
 function stringifyOutput(output: Json, isError?: boolean): string {

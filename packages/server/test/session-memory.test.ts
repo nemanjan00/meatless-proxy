@@ -52,7 +52,9 @@ describe('memory at session start', () => {
     // The run starts at the router's head as it was (its prompt and instructions), unchanged: the cached prefix.
     const base = history.findIndex((e) => e.id === run.data.base)
     expect(base).toBe(1)
-    const added = history.slice(base + 1)
+    // First the employee's current projects, then the memories, then the event.
+    const added = history.slice(base + 1).filter((e) => !e.meta.projectsEntry)
+    expect(history[base + 1]!.meta.projectsEntry).toBeDefined()
     expect(added.slice(0, 2).map((e) => e.kind)).toEqual(['system', 'event'])
     const text = (added[0]!.content as { text: string }).text
     expect(text.startsWith(SESSION_MEMORY_HEADER)).toBe(true)

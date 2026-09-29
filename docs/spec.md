@@ -141,6 +141,27 @@ with a base URL, an API key and a model name.
 - **Caching.** [Forks](#sessions) and [procedure contexts](#procedure-contexts)
   are designed to share long common prefixes. The harness keeps those prefixes
   byte-identical, so a provider with prefix caching can reuse them.
+- **Image input.** A message can carry images (the model port's
+  `ChatMessage.images`: `{ type: 'image', mime, data | ref }`). Histories keep
+  a **reference** (an attachment id, or an employee file's owner and path),
+  with the sha256 of the bytes, never base64: the runner loads the bytes when
+  it builds a request, so the same image is the same bytes every time (cache
+  friendly, and the database stays small). An image that is gone or changed is
+  shown as "[image no longer available]". PNGs over `MODEL_IMAGE_MAX_SIDE`
+  pixels (default 1568) are downscaled first, deterministically, and images
+  over `MODEL_IMAGE_MAX_BYTES` (default 5 MB) aren't sent. Chat Completions
+  tool messages must be text on most providers, so a tool result's images are
+  noted in its text ("[image chart.png, 800x600, attached below]") and sent as
+  `image_url` data URLs in one user message after the turn's last tool
+  message.
+- **Vision** (`MODEL_VISION`): `auto` (the default) asks the provider's
+  `GET /models` (Kimi lists `supports_image_in` and `modalities.input` per
+  model), then goes by known vision model names (e.g. `gpt-4o`, `claude-*`,
+  `kimi-k2-7-*`, `k3`); `true` or `false` override it. Without vision,
+  `image.view` isn't offered, says "this model can't see images" if called,
+  and images in a history become a short note. Kimi's coding endpoint accepts
+  images on `kimi-k2-7-code` (tested: it names the colour of a red square
+  returned by a tool).
 
 Open questions:
 
@@ -198,6 +219,11 @@ fondness for tidy commit messages.
   a serious conversation (incidents, HR, customers).
 - Every session, fork and procedure context uses the same identity and
   personality, so the company is always dealing with one recognisable colleague.
+- The default employee's personality ("Dry, friendly and brief. Likes tidy
+  commit messages and short threads.") has no sign-off: harness chat already
+  marks its messages as an AI's. An employee still on the earlier default,
+  which signed off with "— Meatless (AI)", is moved to the new one at startup,
+  with a note in its router context; an edited personality is left alone.
 
 #### Multiple employees
 
@@ -459,6 +485,10 @@ relevant employees and sessions.
   person, work the same way: they're a thread linked to a session.
 - Messages can mention projects, sessions and procedures by id, like
   [links](#links-between-contacts-and-projects) in docs.
+- **Authors.** A session's messages show as `@employee#session-slug`, except
+  the employee's [router context](#the-router-context), an internal detail:
+  its messages show as the employee itself (its name, `@handle` and the AI
+  badge), and tag suggestions don't offer `#router`.
 
 #### Tagging
 
@@ -501,6 +531,48 @@ Harness chat should feel like Slack to the people using it:
   proposal. Reactions are events too, so a subscribed session can treat ✅ as
   an approval.
 - **Starting a DM** with any employee or person from the UI.
+- **Images** on messages ([attachments](#attachments)), shown inline and in
+  a lightbox.
+
+#### Attachments
+
+A message can have images: `attachments: [{ id, name, mime, size, width?,
+height? }]` on the message record. Their bytes live on the
+[files volume](#employee-filesystem), apart from employees' own files
+(`<FILES_DIR>/attachments/<channel id>/<attachment id>`, and
+`attachments/pending/<id>` until a message claims them); a `chat_attachment`
+record holds each one's metadata and sha256. Nothing of the bytes is in
+Postgres.
+
+- **Only images:** PNG, JPEG, GIF and WebP, recognised by their magic bytes,
+  never by the name or the claimed type. SVG and HTML are refused. At most
+  `CHAT_ATTACHMENT_MAX_BYTES` (10 MB) each and
+  `CHAT_ATTACHMENTS_PER_MESSAGE` (10) per message.
+- **Upload, then post.** `POST /api/chat/attachments` (a raw body or a
+  multipart `file`) stores a pending upload and returns its id; the message is
+  posted with `attachments: [id…]`, and may then have no text. Only the
+  uploader can attach an upload, only within an hour, and only once (two posts
+  racing for one upload: one wins, the other is refused and rolled back).
+  Uploads nobody attached are deleted after about an hour.
+- **Download:** `GET /api/chat/attachments/:id`, only for someone who can see
+  the message's channel (a DM's members; 404 for anyone else, admins
+  included). Served with the type sniffed from the bytes,
+  `X-Content-Type-Options: nosniff`, `Content-Disposition: inline` (images
+  only; `?download=1` for `attachment`) and a `default-src 'none'; sandbox`
+  CSP of its own. There are no thumbnails: the browser scales the image.
+- **Deleting a message** deletes its attachments.
+- **Employees see them lazily.** The chat event of a message with images names
+  them, one line each: `[image: chart.png 800x600, attachment att_…]`. The
+  image isn't included: the employee calls `image.view` when it needs to
+  look, which keeps token costs down.
+
+| Tool        | What it does |
+|-------------|--------------|
+| image.view  | `{ attachment?: id, path?: string }` → the image, attached to the result: an attachment of a message in a channel the employee can see (a DM only if the employee, its contact or one of its sessions is a member), or an image in its filesystem (own files, or shared with it). Read-only; tagged `vision` (see [model calls](#model-calls)). |
+
+`chat.post` and `chat.reply` take `attachments: [{ path }]`: images from the
+employee's filesystem (its own files, or ones shared with it that it can
+read), copied into chat attachments.
 
 #### People can join
 
@@ -737,7 +809,7 @@ found. **Steps are ticked by real checks, never by the admin saying so.**
 | | Steps |
 |---|---|
 | Slack | **Create the app** from a manifest generated for the employee (its name, bot scopes, events, and the request URL `<PUBLIC_URL>/webhooks/slack/<employee id>`), with a one-click link that opens Slack with it filled in · **Tokens**: the bot token and signing secret, checked with `auth.test` (bot user, workspace, missing scopes) · **Events** reached the harness with a valid signature · **Channels** the bot is in (`users.conversations`), with the `/invite` command · **Routing**: a trigger for its mentions and DMs, or "Add recommended trigger" (router context, ephemeral) |
-| GitLab | **Instance** (`GITLAB_BASE_URL`, or a secret) · **Service account** (a service account on Premium or Ultimate, else a dedicated user; never an administrator) · **Token** with the `api` scope, checked with `/user` and `/personal_access_tokens/self`, with a warning under 30 days to expiry · **SSH key** on the account, found by fingerprint in `/user/keys`; "Add it for me" adds it (and removes the key it replaced after a rotation), and a key that's already on another account is reported as such · **Projects** it's a member of, with a warning for Maintainer or higher and for an unprotected default branch · **Webhooks**: the hooks the harness registered, their errors and when each project last sent an event, with "Register webhooks now" · **Routing**: issues assigned to its username |
+| GitLab | **Instance** (`GITLAB_BASE_URL`, or a secret) · **Service account** (a service account on Premium or Ultimate, else a dedicated user; never an administrator) · **Token** with the `api` scope, checked with `/user` and `/personal_access_tokens/self`, with a warning under 30 days to expiry · **SSH key** on the account, found by fingerprint in `/user/keys`; "Add it for me" adds it (and removes the key it replaced after a rotation), and a key that's already on another account is reported as such · **Projects** it's a member of, with a warning for Maintainer or higher and for an unprotected default branch, and whether each is one of the employee's harness projects yet: "Add as project" (or "Add selected") creates a harness project with the repository (ssh as its `url`, https as its `httpUrl`) and the employee as a member; one whose repository the harness already has is only linked, so adding twice changes nothing · **Webhooks**: the hooks the harness registered, their errors and when each project last sent an event, with "Register webhooks now" · **Routing**: issues assigned to its username |
 | Linear | **API key**, checked with the `viewer` query · **Webhook**: created with `webhookCreate` and a generated signing secret (Linear admins only), or by hand with the URL shown · **Routing**: issues assigned to it |
 
 Settings → Integrations is an overview of every employee's integrations that
@@ -751,7 +823,11 @@ harness. That's the AI-to-AI path from the [goals](#goals).
 
 - **Tools:** post in harness chat, react, ask an employee (`@employee`),
   search chat, look up sessions, read and search documents, and check on work
-  the caller started. They're scoped to what the connected contact may see and
+  the caller started. Images: `chat_read`, `chat_search` and deliveries list a
+  message's attachments, `chat_attachment { id }` returns one as MCP image
+  content (if the caller can see its channel), and `chat_post` takes
+  `attachments: [{ name, mime, data }]` (base64), with the web upload's limits
+  and checks (a `mime` the bytes don't bear out is refused). They're scoped to what the connected contact may see and
   ask for ([permissions](#permissions)): DMs only for their members, and a
   viewer's token reads and searches but doesn't post.
 - **Notifications out:** the server pushes MCP notifications to connected
@@ -905,6 +981,51 @@ removed or redefined.
   linked to a given contact (e.g. "what does Ana own?").
 - Following links in either direction is supported: which documents link to
   this one, and which documents mention this person.
+
+#### Assigning projects
+
+An employee works on a project through a [link](#links-between-contacts-and-projects)
+from its AI contact to the project, with a role (`owner` or `member`, or any
+other role). People are assigned the same way. That one link is what the
+directory, [GitLab webhook provisioning](#integrations) and the employee's
+"Your projects" entry all read, so assigning a project also registers its
+webhooks.
+
+- **In the web UI.** The employee page has a **Projects** section: its
+  projects with its roles, each project's owner and repository, a typeahead to
+  add a project with a role, remove, and **New project**. A project's page
+  lists the employees and people on it (owners first) and adds them the same
+  way.
+- **New project** (`POST /api/projects`): name, description, repository URLs
+  (https or ssh), optional docs links (stored as `links` with system `docs`),
+  and an employee as owner, created and linked in one step. A name or a
+  repository another project already has is refused. `owner` replaces the
+  current owner; other roles add to what someone already holds.
+- **From GitLab**, in the employee's [guided setup](#guided-setup): "Add as
+  project" on each GitLab project its account reaches.
+- **Who.** Members and admins, like any link on the records API; everyone
+  signed in can see them.
+- **Older employees.** Projects in an employee's old `scope.projects` become
+  `member` links at startup.
+
+#### The employee always sees its current projects
+
+The system prompt doesn't list projects. Instead, every run gets a short
+**"Your projects"** system entry after the session's history, and before the
+event: for each project its name and id, the employee's role, the repository
+URLs, the owner and a one-line description (at most 20, then a count). With
+none, it says so and tells the employee to ask an admin to assign projects.
+
+- It's added by the router's `runInput` hook for every delivery, and for new
+  sessions, forks and reviews the employee starts (`kit.startRun`). Loop
+  children skip it: they branch from the looping session, and their item
+  stays last.
+- The cached prefix never changes: an assignment made after a session was
+  created reaches its next run, and the system prompt stays byte-identical.
+- It's skipped when the session's committed history already ends with the
+  same list.
+- `directory.projects_of` without a contact answers "which projects do I work
+  on" from the same links.
 
 Open questions:
 
@@ -1358,7 +1479,7 @@ repository.
 |---------------|---------------------------------------------------------|
 | fs.list       | list a directory (own files and `/shared`)              |
 | fs.read       | read a file                                             |
-| fs.write      | write a file                                            |
+| fs.write      | write a file (binary files, e.g. a PNG, as base64 with `encoding: 'base64'`) |
 | fs.move / fs.delete | move or delete a file                             |
 | fs.share      | share a file or directory with an employee or person   |
 
@@ -1775,8 +1896,12 @@ with an extendable schema, linked to contacts and projects.
 | `name`      | string                    | e.g. "production deploy", "access request"   |
 | `applies`   | string                    | when it applies, in plain words              |
 | `owner`     | contact id                | who to ask when it's unclear or out of date  |
-| `approvals` | list of contact / role    | who has to say yes                           |
+| `approvals` | list of contact / role, each with a step | who has to say yes, and when (e.g. "before issuing the refund") |
 | `context`   | session id                | the procedure context, see below             |
+| `archived`  | boolean                   | retired: not found, not run, its triggers off |
+
+In the code the owner is `ownerId`, the steps are `body` and the context is
+`contextSessionId`.
 
 The steps and details are in the markdown document. Links connect a procedure
 to the projects it applies to and to the contacts that take part in it.
@@ -1810,12 +1935,27 @@ procedure, its linked docs and its history, and is ready to run it.
 | find procedure  | find the procedures that apply to a piece of work               |
 | run procedure   | fork the procedure context for this work and start the fork     |
 
+- **Building and rebuilding.** The context is built the first time the
+  procedure runs, or when it's created from the web UI: the employee's prompt,
+  then the procedure (when it applies, the owner, who approves at which step,
+  the steps). It records what it was built from, so an edit to any of those
+  shows it as **out of date**. It is not rebuilt by itself: **Rebuild context**
+  builds a fresh one the same way and points the procedure at it. Forks that
+  are already running carry on with the version they started from.
+- **How it starts.** Manually (Run now in the UI, or `procedures.run` from any
+  session), or from triggers that target the procedure: a new message from a
+  person in a chat channel, a chat message that tags `@<tag>` (a name that is no
+  employee's or person's), a schedule, or an integration event (a GitLab merge
+  request, a Linear issue, a Slack message), each with an optional filter. Each
+  event forks the context; the fork's work is kept, so follow-ups continue it.
+
 Open questions:
 
-- When a procedure document is edited, is the procedure context rebuilt from
-  scratch or updated with a committed run?
-- Should forks that are still running continue with the old version of the
-  procedure, or be told about the change?
+- Should a rebuilt context keep what earlier forks committed to the old one
+  ("the approver changed"), instead of starting again from the document?
+- The harness has no approval records: approvals happen in threads, and a run
+  waiting for one shows as waiting. Should approvals be first-class, with an
+  inbox item for the approver?
 
 ### Memory
 
@@ -1939,6 +2079,11 @@ All of these update live over the WebSocket.
   them into a thread.
 - From a thread, you can jump to the session handling it, and from a session to
   its threads.
+- Images: the composer (channel and thread) has an attach button, takes pasted
+  and dropped images, and shows pending ones as thumbnails with upload
+  progress and a remove button. Messages show their images as a grid of
+  thumbnails; clicking one opens a lightbox (Esc closes it, ← and → move
+  between the message's images) with a download link.
 
 #### Usage
 
@@ -1956,12 +2101,43 @@ All of these update live over the WebSocket.
   Settings → Employees): its profile (handle, role, model, router context,
   its accounts in each system), its **SSH public key** with a copy button,
   fingerprint, creation date and **Rotate** (with a confirmation that the
-  old key stops working), the [guided setup](#guided-setup) of its
+  old key stops working), its **Projects** ([assigning
+  projects](#assigning-projects)), the [guided setup](#guided-setup) of its
   integrations under a short "how integrations work", and its own MCP
   servers.
 - **New employee** (admins), in Settings → Employees and on every employee
   page: a short dialog, then straight to the new employee's page with its
   integrations as the next step. See [adding an employee](#multiple-employees).
+
+#### Procedures
+
+- **Procedures** (`/procedures`) starts with one line on what a procedure is:
+  a written, repeatable way of doing a task, followed in a fork of the
+  procedure's context so each run starts with the procedure already read. Each
+  row shows its purpose, how it starts (from its triggers, in plain words, or
+  manual only), its owner, whether it needs approvals, its runs in the last 30
+  days, the last run's state and time, and the context state (ready, out of
+  date after an edit, not built). You can search and filter by owner.
+- **A procedure's page** has its name, purpose and owner, and **Run now**,
+  **Edit**, **Duplicate** and **Archive**. **When it runs** lists its triggers
+  as sentences ("When someone posts in #access-requests", "Every Monday at
+  09:00"), which admins add, change, switch off and remove with a small form
+  (source, event, channel, tag or schedule, and the raw filter under Advanced)
+  instead of JSON; a trigger that would catch everything is refused with a
+  message that says why. **Steps** is the procedure's document, edited with a
+  live preview; every save is a version, with a history to read and restore.
+  **Runs** lists each instance with its state, what started it, when, how
+  long and its outcome, updating live. The side panel shows the context (its
+  state, when it was built, **Rebuild context**) and the approvals (who, at
+  which step, and runs waiting now).
+- **Run now** asks what to do (optional) and starts a fork like a trigger
+  would, then links to it.
+- **New procedure** asks for a name, when it applies, the employee that runs
+  it, an owner, the steps (from a template: When to use, Steps, Done when,
+  Escalate if), how it starts and the approvals, and creates the procedure,
+  its trigger and its context in one step. A double submit creates one.
+- Viewers read; members create, edit, run, rebuild and archive procedures;
+  only admins change their triggers, as with every trigger.
 
 #### Knowledge
 

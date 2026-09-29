@@ -6,6 +6,7 @@ import type { Actor, Entry, Ref } from '@mp/store'
 import type { EffectClass, ToolContext, ToolRegistry, ToolResult } from '@mp/tools'
 import { checkForkLimits } from '@mp/usage'
 import { employeePrompt } from './prompt.ts'
+import { projectsEntry } from './projects-entry.ts'
 import type { StdlibDeps } from './types.ts'
 
 /** Record kind remembering the output of a tool call by idempotency key, so retries don't repeat the effect. */
@@ -51,6 +52,8 @@ export interface ToolSpecInput {
   description: string
   effect: EffectClass
   params?: ParamSpec
+  /** Registry tags, e.g. `vision` for tools that need a model that can see images. */
+  tags?: string[]
 }
 
 export type Handler = (args: any, ctx: ToolContext) => Promise<ToolResult>
@@ -71,7 +74,7 @@ export interface Kit {
   employee(id: string): Promise<Employee>
   /** The system prompt for a new session of an employee. */
   promptFor(employeeId: string, projectIds?: string[]): Promise<string>
-  /** Projects linked to a session (plus the employee's scope). */
+  /** Projects linked to a session, then the ones its employee works on. */
   projectsOf(session: Session): Promise<string[]>
   contactsOf(session: Session): Promise<string[]>
   /** Where to fork "at the current point": the run's tip, minus the assistant message that made this call. */
@@ -182,6 +185,14 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     })
   }
 
+  /** The projects an employee works on: its contact's project links, then any older `scope.projects`. */
+  const assignedProjects = async (employee: Employee): Promise<string[]> => [
+    ...new Set([
+      ...(await directory.projects.forContact(employee.data.contactId)).map((m) => m.project.id),
+      ...(employee.data.scope?.projects ?? []),
+    ]),
+  ]
+
   const kit: Kit = {
     deps,
     registry,
@@ -194,6 +205,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
           description: spec.description,
           effect: spec.effect,
           source: 'stdlib',
+          ...(spec.tags?.length ? { tags: spec.tags } : {}),
           parameters: {
             type: 'object',
             properties: spec.params?.properties ?? {},
@@ -246,19 +258,18 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
       const employee = await directory.employees.require(employeeId)
       const contact = await directory.contacts.require(employee.data.contactId)
       const scope = employee.data.scope ?? {}
-      const pids = [...new Set([...(scope.projects ?? []), ...projectIds])]
-      const projects = (await Promise.all(pids.map((p) => directory.projects.get(p)))).filter((p) => p !== null)
+      const pids = [...new Set([...(await assignedProjects(employee)), ...projectIds])]
       const procedures = (await Promise.all((scope.procedures ?? []).map((p) => directory.procedures.get(p)))).filter(
         (p) => p !== null,
       )
       const skills = await deps.skills.available({ projectIds: pids })
-      return employeePrompt({ employee, contact, projects, procedures, skills, now: deps.clock.iso() })
+      return employeePrompt({ employee, contact, procedures, skills, now: deps.clock.iso() })
     },
 
     async projectsOf(session) {
       const linked = await records.linked({ kind: 'session', id: session.id }, { direction: 'out', kind: 'project' })
       const emp = await directory.employees.get(session.data.employeeId)
-      return [...new Set([...linked.map((l) => l.record.id), ...(emp?.data.scope?.projects ?? [])])]
+      return [...new Set([...linked.map((l) => l.record.id), ...(emp ? await assignedProjects(emp) : [])])]
     },
 
     async contactsOf(session) {
@@ -315,12 +326,20 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     async startRun(sessionId, ctx, o) {
       // A router hands the subject over: the new session owns it now, so follow-ups reach it directly.
       if (o.type !== 'loop') await handOverSubject(sessionId, ctx)
+      // The employee's current projects, after the history (so the cached prefix stays), unless unchanged.
+      // Loop children skip it: they branch from the looping session's context, and their item stays last.
+      const target = await sessions.require(sessionId)
+      const projects = o.type === 'loop' ? null : await projectsEntry(deps, target.data.employeeId, sessionId)
+      const input = [
+        ...(projects ? [projects] : []),
+        ...(o.instruction ? [{ kind: 'user' as const, content: { text: o.instruction } }] : []),
+      ]
       const run = await sessions.createRun({
         sessionId,
         ...(o.mode ? { mode: o.mode } : {}),
         cause: { type: o.type, parentRunId: ctx.runId, ...(o.note ? { note: o.note } : {}) },
         ...(ctx.requesterId ? { requesterId: ctx.requesterId } : {}),
-        ...(o.instruction ? { input: [{ kind: 'user', content: { text: o.instruction } }] } : {}),
+        ...(input.length ? { input } : {}),
         actor: kit.actor(ctx),
       })
       await deps.enqueueRun(run.id)

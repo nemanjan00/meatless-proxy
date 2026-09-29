@@ -104,6 +104,7 @@ export const INTEGRATION_DOCS: Record<string, IntegrationDoc> = {
         text: [
           'Add the account to the projects it works on as Developer: enough to push branches and open merge requests, not to merge. Protect each default branch so only people can merge into it.',
           'Employees never merge, deploy or push to protected branches. The harness refuses, and GitLab should enforce it too.',
+          'Then add them as harness projects (“Add as project”): that is how the employee knows it works on them, and the harness registers their webhooks. One the harness already has is only linked.',
         ],
       },
       webhooks: {

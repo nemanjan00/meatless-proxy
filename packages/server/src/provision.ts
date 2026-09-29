@@ -18,6 +18,7 @@ export interface NewEmployee {
   personality?: string
   instructions?: string
   model?: string
+  /** Project ids it works on (linked as `member`). */
   projects?: string[]
   channels?: string[]
 }
@@ -257,7 +258,6 @@ export async function createEmployee(
       ...(input.personality?.trim() ? { personality: input.personality.trim() } : {}),
       ...(input.instructions?.trim() ? { instructions: input.instructions.trim() } : {}),
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
-      ...(input.projects?.length ? { scope: { projects: input.projects } } : {}),
       contact: {
         ...(input.role?.trim() ? { role: input.role.trim() } : {}),
         ...(input.description?.trim() ? { bio: input.description.trim() } : {}),
@@ -266,6 +266,9 @@ export async function createEmployee(
     return s.directory.employees.create(data, { actor })
   })
   s.logger.info('employee created', { employeeId: employee.id })
+  // Its projects: member links from its contact, the same as assigning them later.
+  for (const p of new Set(input.projects ?? []))
+    await s.directory.projects.addMember(p, employee.data.contactId, 'member', {}, { actor })
   const result = await provisionEmployee(s, employee.id, actor, input.channels?.length ? { channels: input.channels } : {})
   return { ...result, employee: await s.directory.employees.require(employee.id) }
 }

@@ -1,5 +1,6 @@
-import { Send } from 'lucide-react'
-import { forwardRef, type KeyboardEvent, useImperativeHandle, useRef, useState } from 'react'
+import { ImagePlus, Send } from 'lucide-react'
+import { type DragEvent, forwardRef, type KeyboardEvent, useImperativeHandle, useRef, useState } from 'react'
+import { ATTACHMENT_ACCEPT, PendingAttachments, usePendingAttachments } from '@/components/chat-attachments.tsx'
 import { AuthorAvatar } from '@/components/people.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
@@ -19,7 +20,10 @@ export const Composer = forwardRef<
   ComposerHandle,
   {
     placeholder: string
-    onSend(text: string): Promise<void>
+    /** `attachments` are the ids of uploaded images (only with `attachments` on). */
+    onSend(text: string, attachments: string[]): Promise<void>
+    /** Images: an attach button, paste and drag and drop, uploaded as they are added. */
+    attachments?: boolean
     compact?: boolean
     /** Tags to show in the hint, e.g. `@employee`, `@employee#slug`, `@person`. */
     examples?: string[]
@@ -27,8 +31,14 @@ export const Composer = forwardRef<
     suggestions?: TagSuggestion[]
     className?: string
   }
->(function Composer({ placeholder, onSend, compact = false, examples = [], suggestions = [], className }, ref) {
+>(function Composer(
+  { placeholder, onSend, attachments = false, compact = false, examples = [], suggestions = [], className },
+  ref,
+) {
   const [text, setText] = useState('')
+  const pending = usePendingAttachments()
+  const [dragging, setDragging] = useState(false)
+  const picker = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
@@ -40,13 +50,15 @@ export const Composer = forwardRef<
   const matches = mention && dismissed !== mention.start ? matchSuggestions(suggestions, mention.query) : []
   const open = matches.length > 0
 
+  const canSend = (!!text.trim() || pending.ready.length > 0) && !pending.uploading && !pending.failed
   const send = async () => {
-    if (!text.trim() || busy) return
+    if (!canSend || busy) return
     setBusy(true)
     try {
-      await onSend(text.trim())
+      await onSend(text.trim(), pending.ready)
       setText('')
       setCaret(0)
+      pending.clear()
     } finally {
       setBusy(false)
     }
@@ -91,14 +103,36 @@ export const Composer = forwardRef<
     // on a control (the hint row, the padding) focuses the textarea.
     // biome-ignore lint/a11y/noStaticElementInteractions: the textarea inside is the accessible control
     <div
-      className={cn('relative m-4 cursor-text rounded-lg border bg-level-1 focus-within:border-ring/70', className)}
+      className={cn(
+        'relative m-4 cursor-text rounded-lg border bg-level-1 focus-within:border-ring/70',
+        dragging && 'border-ring/70 bg-accent-tint',
+        className,
+      )}
       data-testid="composer"
       onMouseDown={(e) => {
         const target = e.target as HTMLElement
-        if (target.closest('textarea, button, a, [role="listbox"]')) return
+        if (target.closest('textarea, button, a, input, [role="listbox"]')) return
         e.preventDefault()
         area.current?.focus()
       }}
+      {...(attachments
+        ? {
+            onDragOver: (e: DragEvent) => {
+              if (![...e.dataTransfer.types].includes('Files')) return
+              e.preventDefault()
+              setDragging(true)
+            },
+            onDragLeave: (e: DragEvent) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+            },
+            onDrop: (e: DragEvent) => {
+              if (!e.dataTransfer.files.length) return
+              e.preventDefault()
+              setDragging(false)
+              pending.add(e.dataTransfer.files)
+            },
+          }
+        : {})}
     >
       {open && (
         <div
@@ -130,8 +164,16 @@ export const Composer = forwardRef<
           ))}
         </div>
       )}
+      {attachments && <PendingAttachments items={pending.items} onRemove={pending.remove} />}
       <Textarea
         ref={area}
+        onPaste={(e) => {
+          if (!attachments) return
+          const files = [...e.clipboardData.files]
+          if (!files.length) return
+          e.preventDefault()
+          pending.add(files)
+        }}
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -148,7 +190,38 @@ export const Composer = forwardRef<
         className="min-h-12 resize-none border-0 bg-transparent text-small shadow-none dark:bg-transparent"
       />
       <div className="flex items-center gap-2 px-2 pb-2 text-micro text-fg-quaternary">
-        {!compact && (
+        {attachments && (
+          <>
+            <input
+              ref={picker}
+              type="file"
+              accept={ATTACHMENT_ACCEPT}
+              multiple
+              hidden
+              data-testid="attach-input"
+              onChange={(e) => {
+                if (e.target.files) pending.add(e.target.files)
+                e.target.value = ''
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Attach images"
+              title="Attach images (or paste, or drop them here)"
+              onClick={() => picker.current?.click()}
+              className="text-fg-tertiary"
+            >
+              <ImagePlus />
+            </Button>
+          </>
+        )}
+        {pending.notice && (
+          <span className="min-w-0 truncate text-destructive" role="status" data-testid="attach-notice">
+            {pending.notice}
+          </span>
+        )}
+        {!compact && !pending.notice && (
           <span className="hidden min-w-0 truncate sm:inline" data-testid="tag-hint">
             {examples.length ? (
               <>
@@ -165,7 +238,7 @@ export const Composer = forwardRef<
             )}
           </span>
         )}
-        <Button size="sm" className="ml-auto" onClick={send} disabled={busy || !text.trim()}>
+        <Button size="sm" className="ml-auto" onClick={send} disabled={busy || !canSend}>
           <Send /> Send
         </Button>
       </div>

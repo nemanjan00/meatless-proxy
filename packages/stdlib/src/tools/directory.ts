@@ -1,7 +1,8 @@
-import { NotFoundError, isMpError, type Json } from '@mp/core'
+import { ConflictError, type Json } from '@mp/core'
 import type { Contact, Procedure, Project } from '@mp/directory'
 import type { Session } from '@mp/sessions'
 import { Roles, clip, fail, line, ok, str, type Kit } from '../kit.ts'
+import { createProcedureContexts, isArchived } from '../procedure-context.ts'
 
 const contactView = (c: Contact): Json => ({
   id: c.id,
@@ -142,14 +143,28 @@ export function registerDirectoryTools(kit: Kit): void {
   kit.tool(
     {
       name: 'directory.projects_of',
-      description: 'The projects a contact is linked to, with their roles (e.g. "what does Ana own?": role owner).',
+      description:
+        'Which projects you work on (no contactId), or the projects a contact is linked to, with their roles (e.g. "what does Ana own?": role owner).',
       effect: 'read',
-      params: { properties: { contactId: { type: 'string' }, role: { type: 'string' } }, required: ['contactId'] },
+      params: {
+        properties: {
+          contactId: { type: 'string', description: 'Default: you.' },
+          role: { type: 'string' },
+        },
+      },
     },
-    async (a) => {
-      await directory.contacts.require(a.contactId)
-      const list = await directory.projects.forContact(a.contactId, a.role ? { role: a.role } : {})
-      return ok({ projects: list.map((m) => ({ ...(projectView(m.project) as object), roles: m.roles })) })
+    async (a, ctx) => {
+      const contactId = str(a.contactId) ?? (await kit.employee(ctx.employeeId)).data.contactId
+      await directory.contacts.require(contactId)
+      const list = await directory.projects.forContact(contactId, a.role ? { role: a.role } : {})
+      const projects = list.map((m) => ({ ...(projectView(m.project) as object), roles: m.roles }))
+      return ok({
+        contactId,
+        projects,
+        ...(!projects.length && !a.contactId
+          ? { note: 'No project is assigned to you yet. Ask an admin to assign you projects (on your employee page).' }
+          : {}),
+      })
     },
   )
 
@@ -200,43 +215,10 @@ export function registerDirectoryTools(kit: Kit): void {
     },
   )
 
-  /** The procedure's context session, created (from its body) the first time it's needed. */
-  const contextOf = async (p: Procedure, employeeId: string, toolset: string[]): Promise<Session> => {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const id = p.data.contextSessionId
-      const existing = id ? await sessions.get(id) : null
-      if (existing) return existing
-      const prompt = await kit.promptFor(employeeId, p.data.projectIds ?? [])
-      const approvals = (p.data.approvals ?? []).map((x) => x.contactId ?? x.role).filter(Boolean)
-      const s = await sessions.create({
-        employeeId,
-        title: `Procedure: ${p.data.name}`,
-        toolset,
-        document: `Procedure context for [[procedure:${p.id}|${p.data.name}]].`,
-        entries: [
-          { kind: 'system', content: { text: prompt } },
-          {
-            kind: 'system',
-            content: {
-              text: `You are the context for the procedure "${p.data.name}" (${p.id}). Every fork of you carries out one instance of it.\n\nApplies when: ${p.data.applies}\n${p.data.ownerId ? `Owner (ask when it's unclear or out of date): ${p.data.ownerId}\n` : ''}${approvals.length ? `Approvals needed from: ${approvals.join(', ')}\n` : ''}${p.data.skills?.length ? `Skills its steps use: ${p.data.skills.join(', ')}\n` : ''}\n## Steps\n\n${p.data.body ?? '(no steps written down: ask the owner)'}`,
-            },
-          },
-        ],
-        links: [{ ref: { kind: 'procedure', id: p.id }, role: 'context_of' }],
-        meta: { procedureId: p.id },
-      })
-      try {
-        await directory.procedures.update(p.id, { contextSessionId: s.id }, { expectedVersion: p.version })
-        return s
-      } catch (e) {
-        if (!isMpError(e, 'conflict')) throw e
-        // Someone else created one at the same time: use theirs.
-        await sessions.update(s.id, { status: 'abandoned' })
-        p = await directory.procedures.require(p.id)
-      }
-    }
-    throw new NotFoundError('procedure context', p.id)
-  }
+  /** The procedure's context session, created (from its body) the first time it's needed (../procedure-context.ts). */
+  const contexts = createProcedureContexts(kit.registry, deps, kit)
+  const contextOf = (p: Procedure, employeeId: string, toolset: string[]): Promise<Session> =>
+    contexts.ensure(p.id, employeeId, { toolset })
 
   kit.tool(
     {
@@ -259,6 +241,7 @@ export function registerDirectoryTools(kit: Kit): void {
       const output = await kit.once('procedures.run', ctx, async () => {
         const caller = await kit.ownSession(undefined, ctx)
         const p = await directory.procedures.require(a.procedureId)
+        if (isArchived(p)) throw new ConflictError(`procedure "${p.data.name}" is archived: it no longer runs`)
         const context = await contextOf(p, ctx.employeeId, caller.data.toolset)
         await kit.checkLimits(ctx.employeeId, context, 1)
         const fork = await sessions.fork(context.id, {

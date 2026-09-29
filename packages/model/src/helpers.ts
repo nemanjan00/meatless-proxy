@@ -74,3 +74,26 @@ export function callTools(calls: ToolCallInput[], text?: string, usage?: Partial
 export function estimateTokens(text: string): number {
   return text.length === 0 ? 0 : Math.ceil(text.length / 4)
 }
+
+/** Model names known to accept images, for when the provider's metadata doesn't say. */
+const VISION_MODELS = [
+  /vision/i,
+  /(^|[-_/])vl([-_]|$)/i,
+  /gpt-4o/i,
+  /gpt-4\.1/i,
+  /gpt-5/i,
+  /^o[34]/i,
+  /claude/i,
+  /gemini/i,
+  /pixtral/i,
+  /llava/i,
+  /^kimi-for-coding/i,
+  /^kimi-k2[.-]?[5-9]/i,
+  /^kimi-latest/i,
+  /^k3/i,
+]
+
+/** Whether a model name is one known to accept image input. A guess from the name; provider metadata wins. */
+export function knownVisionModel(model: string): boolean {
+  return VISION_MODELS.some((re) => re.test(model))
+}

@@ -175,6 +175,37 @@ export const configSchema = z.object({
   MAX_STEPS: z.coerce.number().int().min(1).default(60),
   /** max_tokens per model call (leave room for reasoning). */
   MAX_TOKENS: z.coerce.number().int().min(1).optional(),
+  /**
+   * Whether the model can see images (image.view): `auto` (default: what the provider's model list says,
+   * else known vision model names), `true` or `false`.
+   */
+  MODEL_VISION: z
+    .string()
+    .optional()
+    .transform((v) => {
+      const s = (v ?? '').trim().toLowerCase()
+      if (s === '' || s === 'auto') return 'auto' as const
+      if (['1', 'true', 'yes', 'on'].includes(s)) return 'on' as const
+      if (['0', 'false', 'no', 'off'].includes(s)) return 'off' as const
+      return s
+    })
+    .pipe(z.enum(['auto', 'on', 'off'])),
+  /** Images for the model are downscaled to this many pixels on the longest side (PNG; other types pass through). */
+  MODEL_IMAGE_MAX_SIDE: z.coerce.number().int().min(64).default(1568),
+  /** Images larger than this (after downscaling) aren't sent to the model. */
+  MODEL_IMAGE_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .default(5 * 1024 * 1024),
+  /** Chat attachments: bytes per image (PNG, JPEG, GIF, WebP). */
+  CHAT_ATTACHMENT_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .default(10 * 1024 * 1024),
+  /** Chat attachments per message. */
+  CHAT_ATTACHMENTS_PER_MESSAGE: z.coerce.number().int().min(1).max(50).default(10),
   /** Alerts in #alerts (src/alerts.ts). */
   ALERTS_ENABLED: bool(true),
   ALERT_PAUSED_MINUTES: z.coerce.number().min(0).default(30),
@@ -300,6 +331,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     docker: c.DOCKER_ENABLED,
     defaultEgress: c.DEFAULT_EGRESS.length ? c.DEFAULT_EGRESS : 'none',
     files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
+    vision: c.MODEL_VISION,
     sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),
     bootstrap: c.MP_BOOTSTRAP,

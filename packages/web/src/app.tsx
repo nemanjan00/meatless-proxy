@@ -20,6 +20,8 @@ const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
 const LineagePage = page(() => import('@/pages/lineage.tsx'), 'LineagePage')
 const LoginPage = page(() => import('@/pages/login.tsx'), 'LoginPage')
 const NowPage = page(() => import('@/pages/now.tsx'), 'NowPage')
+const ProcedurePage = page(() => import('@/pages/procedures.tsx'), 'ProcedurePage')
+const ProceduresPage = page(() => import('@/pages/procedures.tsx'), 'ProceduresPage')
 const RecordDetailPage = page(() => import('@/pages/records.tsx'), 'RecordDetailPage')
 const RecordListPage = page(() => import('@/pages/records.tsx'), 'RecordListPage')
 const SessionDetailPage = page(() => import('@/pages/session-detail.tsx'), 'SessionDetailPage')
@@ -28,11 +30,10 @@ const SettingsPage = page(() => import('@/pages/settings.tsx'), 'SettingsPage')
 const TriggersPage = page(() => import('@/pages/triggers.tsx'), 'TriggersPage')
 const UsagePage = page(() => import('@/pages/usage.tsx'), 'UsagePage')
 
-/** Knowledge pages: one generic list and detail per record kind. */
+/** Knowledge pages: one generic list and detail per record kind. Procedures have their own pages. */
 export const KNOWLEDGE = [
   { path: 'projects', kind: 'project', title: 'Projects' },
   { path: 'contacts', kind: 'contact', title: 'Contacts' },
-  { path: 'procedures', kind: 'procedure', title: 'Procedures' },
   { path: 'skills', kind: 'skill', title: 'Skills' },
   { path: 'memory', kind: 'memory', title: 'Memory' },
 ] as const
@@ -78,6 +79,8 @@ export function AppRoutes() {
             element={<RecordDetailPage kind={k.kind} title={k.title} basePath={`/${k.path}`} />}
           />
         ))}
+        <Route path="procedures" element={<ProceduresPage />} />
+        <Route path="procedures/:id" element={<ProcedurePage />} />
         <Route path="records/:kind/:id" element={<RecordDetailPage />} />
         <Route path="employees/:id" element={<EmployeePage />} />
         <Route path="files" element={<FilesPage />} />

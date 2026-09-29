@@ -110,6 +110,7 @@ export const GUARD_RULES: GuardRule[] = [
   // The employee page: everyone signed in sees an employee's SSH key and setup status; changes are for admins (src/setup).
   { method: 'GET', path: '/api/employees/:id/ssh-key', need: 'viewer' },
   { method: 'GET', path: '/api/employees/:id/integrations', need: 'viewer' },
+  { method: 'GET', path: '/api/employees/:id/projects', need: 'viewer' },
   { method: 'POST', path: '/api/employees', need: 'admin' },
   { method: '*', path: '/api/employees/*', need: 'admin' },
   { method: 'POST', path: '/api/control/*', need: 'admin' },
@@ -138,7 +139,18 @@ export const GUARD_RULES: GuardRule[] = [
     need: (p) => (LINKABLE_KINDS.has(p.kind ?? '') ? 'member' : 'admin'),
   },
   { method: 'DELETE', path: '/api/links/:id', need: 'member' },
+  // Projects and who works on them (src/projects): knowledge too, like the links they are.
+  { method: 'POST', path: '/api/projects', need: 'member' },
+  { method: 'POST', path: '/api/projects/:id/people', need: 'member' },
+  { method: 'DELETE', path: '/api/projects/:id/people/:contactId', need: 'member' },
   { method: 'PUT', path: '/api/files/:employeeId/content', need: 'member' },
+  // Procedures (src/procedures): knowledge, so members create, run, rebuild and archive them; their triggers are admins'.
+  { method: 'POST', path: '/api/procedures', need: 'member' },
+  { method: 'POST', path: '/api/procedures/:id/run', need: 'member' },
+  { method: 'POST', path: '/api/procedures/:id/context/rebuild', need: 'member' },
+  { method: 'POST', path: '/api/procedures/:id/archive', need: 'member' },
+  { method: '*', path: '/api/procedures/:id/triggers', need: 'admin' },
+  { method: '*', path: '/api/procedures/:id/triggers/:triggerId', need: 'admin' },
 
   // Chat, messages to sessions, forks, and steering one's own work. Marking read is your own state.
   { method: 'POST', path: '/api/chat/read', need: 'viewer' },

@@ -122,7 +122,7 @@ export interface Procedures {
   /**
    * Procedures that may apply to a piece of work, best first: keyword scoring
    * over name, `applies` and body. With `projectIds`, only procedures for those
-   * projects or for all projects.
+   * projects or for all projects. Archived procedures are left out.
    */
   find(text: string, opts?: { projectIds?: string[]; limit?: number }): Promise<Scored<Procedure>[]>
 }
@@ -425,6 +425,7 @@ export function createDirectory({ records }: DirectoryDeps): Directory {
       )
       const scoped = opts?.projectIds
       return hits
+        .filter((h) => h.record.data.archived !== true)
         .filter((h) => !scoped || !h.record.data.projectIds?.length || h.record.data.projectIds.some((p) => scoped.includes(p)))
         .slice(0, opts?.limit ?? 10)
     },

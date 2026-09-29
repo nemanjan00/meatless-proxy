@@ -11,13 +11,14 @@ import {
   type Json,
   type Logger,
 } from '@mp/core'
-import type { ChatMessage, ModelClient, ModelResponse, ToolSpec } from '@mp/model'
+import type { ChatMessage, ImageRef, ModelClient, ModelResponse, ToolSpec } from '@mp/model'
 import type { Queue } from '@mp/queue'
 import { createRedactor, type SecretStore } from '@mp/secrets'
 import type { AssistantContent, Run, RunResult, Session, Sessions, ToolResultContent, WaitCondition } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import type { ControlSignal, ToolContext, ToolDefinition, ToolLists, ToolRegistry, ToolResult } from '@mp/tools'
 import { lastAssistantText, renderMessages } from './context.ts'
+import { createImageResolver, VISION_TAG, type LoadedImage } from './images.ts'
 
 export const RUNS_QUEUE = 'runs'
 
@@ -78,6 +79,16 @@ export interface RunnerOptions {
   /** Times `beforeFinish` may block before the run pauses for a person. Default 3. */
   maxFinishBlocks?: number
   maxTokens?: number
+  /**
+   * Whether the model can see images (`MODEL_VISION`). Off: tools tagged `vision` (image.view) are
+   * neither offered nor run, and images in a history are replaced by a short note. Default false.
+   */
+  vision?: boolean
+  /**
+   * Loads the bytes of an image a history refers to, when a request is built. Null when it is gone
+   * or its bytes changed (the model then sees "[image no longer available]").
+   */
+  loadImage?: (ref: ImageRef) => Promise<LoadedImage | null>
 }
 
 export type ExecuteOutcome =
@@ -173,9 +184,17 @@ export function createRunner(opts: RunnerOptions): Runner {
     return { status: result.status, runId: run.id }
   }
 
+  const vision = opts.vision === true
+  const resolveImages = createImageResolver({ vision, ...(opts.loadImage ? { load: opts.loadImage } : {}), logger: baseLogger })
+  /** A vision tool (image.view) when the model can't see images. */
+  const blind = (def: ToolDefinition) => !vision && !!def.tags?.includes(VISION_TAG)
+
   const toolSpecsFor = async (session: Session): Promise<{ specs: ToolSpec[]; names: string[] }> => {
     const lists = await opts.toolListsFor(session.data.employeeId)
-    const names = session.data.toolset.filter((n) => tools.get(n) && tools.isAllowed(n, lists))
+    const names = session.data.toolset.filter((n) => {
+      const t = tools.get(n)
+      return t && !blind(t.def) && tools.isAllowed(n, lists)
+    })
     return { specs: names.length ? tools.specs(names) : [], names }
   }
 
@@ -245,6 +264,7 @@ export function createRunner(opts: RunnerOptions): Runner {
     const base = { toolCallId: call.id, name }
     if (!registered) return { content: { ...base, output: { error: `unknown tool ${call.name}` }, isError: true }, control: [] }
     const def = registered.def
+    if (blind(def)) return { content: { ...base, output: { error: "this model can't see images" }, isError: true }, control: [] }
     const lists = await opts.toolListsFor(session.data.employeeId)
     if (!session.data.toolset.includes(name) || !tools.isAllowed(name, lists)) {
       return {
@@ -314,7 +334,12 @@ export function createRunner(opts: RunnerOptions): Runner {
     const output = redact(result.output)
     emit('tool.result', { runId: run.id, sessionId: session.id, callId: call.id, step, name, isError: !!result.isError })
     return {
-      content: { ...base, output, ...(result.isError ? { isError: true } : {}) },
+      content: {
+        ...base,
+        output,
+        ...(result.isError ? { isError: true } : {}),
+        ...(result.images?.length ? { images: result.images as unknown as Json[] } : {}),
+      },
       control: result.control ?? [],
     }
   }
@@ -443,7 +468,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         const modelName = session.data.model ?? model.defaultModel
         const response = await model.complete({
           model: modelName,
-          messages,
+          messages: await resolveImages(messages),
           ...(specs.length ? { tools: specs } : {}),
           ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
           onDelta: (d) => emit('model.delta', { runId, sessionId: session.id, ...d }),

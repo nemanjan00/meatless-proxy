@@ -7,6 +7,7 @@ import { registerDirectoryTools } from './tools/directory.ts'
 import { registerEnvTools } from './tools/env.ts'
 import { registerEventTools } from './tools/events.ts'
 import { registerGitTools } from './tools/git.ts'
+import { registerImageTools } from './tools/images.ts'
 import { registerKnowledgeTools } from './tools/knowledge.ts'
 import { registerSessionTools } from './tools/sessions.ts'
 import { registerTimeTools } from './tools/time.ts'
@@ -27,6 +28,7 @@ export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string
   registerKnowledgeTools(kit)
   registerChecklistTools(kit)
   registerTimeTools(kit)
+  registerImageTools(kit)
   if (deps.git) registerGitTools(kit, deps.git, deps.worktreeFs ?? nodeWorktreeFs())
   if (deps.containers) registerEnvTools(kit, deps.containers)
   if (deps.sandbox) registerCodeTools(kit, deps.sandbox)

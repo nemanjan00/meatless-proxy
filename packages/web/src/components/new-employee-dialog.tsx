@@ -231,7 +231,7 @@ export function NewEmployeeDialog({ open, onOpenChange }: { open: boolean; onOpe
                   className="font-mono text-micro"
                 />
               </Row>
-              <Row id="ne-projects" label="Projects" hint="Its scope">
+              <Row id="ne-projects" label="Projects" hint="It works on them, as a member">
                 <div id="ne-projects" className="flex flex-wrap gap-1">
                   {(projectList.data?.items ?? []).map((p) => (
                     <Chip key={p.id} on={projects.includes(p.id)} onClick={() => setProjects((l) => toggle(l, p.id))}>

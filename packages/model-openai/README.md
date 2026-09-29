@@ -19,13 +19,18 @@
   with `details.status`. A stream that breaks after output was delivered is not retried (it would repeat deltas).
 - `timeoutMs` (default 300 s) covers a whole attempt, stream included. `signal` aborts immediately, also during backoff.
 - The API key is sent only as the `Authorization` header and is redacted from errors and logs.
+- Images (`serializeMessages`): a user message's images become `image_url` parts with `data:` URLs. Tool messages stay
+  text: their images are noted in the text (`[image chart.png, 800x600, attached below]`) and sent in one user message after
+  the turn's last tool message. An image without `data` is noted as no longer available.
+- `capabilities(model?)`: `GET {baseUrl}/models`, reading `supports_image_in` (Kimi) or `modalities.input` for the model;
+  cached per model, null when the provider doesn't list it or fails.
 - Also exports `mapUsage(usage)` and `parseRetryAfter(value, nowMs)`.
 
 ## Tests
 
 `npx vitest run --project node packages/model-openai` runs against a local `node:http` fake server (no network).
 `MP_LIVE_MODEL_TEST=1` with `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `MODEL` set enables one tiny live call
-(`test/live.test.ts`).
+(`test/live.test.ts`), and a second one that returns a red square from a tool and asks its colour (vision).
 
 ## Replacing
 

@@ -10,7 +10,6 @@ describe('employeePrompt', () => {
     const input = {
       employee: t.employee,
       contact,
-      projects: [t.project],
       procedures: [proc],
       skills: [{ name: 'release', description: 'Cut a release' }],
       now: '2026-09-29T09:00:00.000Z',
@@ -40,7 +39,7 @@ describe('employeePrompt', () => {
       'sessions.rewind',
       'sessions.offload',
       '- release: Cut a release',
-      'Billing (',
+      'Your projects',
       'Deploy (',
       'Session started: 2026-09-29T09:00:00.000Z.',
     ])

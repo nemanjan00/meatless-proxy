@@ -1,6 +1,7 @@
 import type { Json, SetupStep } from '@mp/api'
 import { ConflictError, DeniedError, errorMessage, globMatch, UnavailableError, ValidationError } from '@mp/core'
 import { GITLAB_HOOK_KIND, type GitlabHookData } from '../integrations/provisioning.ts'
+import { addGitlabProjects, harnessProjectsByRepo } from './gitlab-projects.ts'
 import { sshFingerprint } from '../ssh.ts'
 import {
   addHandle,
@@ -72,10 +73,14 @@ interface GitlabKey {
   key: string
 }
 
-interface GitlabProject {
+export interface GitlabProject {
   id: number
+  name?: string
   path_with_namespace: string
+  description?: string | null
   web_url?: string
+  http_url_to_repo?: string
+  ssh_url_to_repo?: string
   default_branch?: string | null
   archived?: boolean
   permissions?: {
@@ -302,6 +307,8 @@ export const gitlabSetup: IntegrationSetupModule = {
         const r = await api(ctx, token, '/projects?membership=true&archived=false&per_page=100&order_by=last_activity_at')
         if (!r.ok) throw new UnavailableError(`GitLab answered GET /projects with HTTP ${r.status}`)
         const projects = (r.json ?? []) as GitlabProject[]
+        // Which of them the harness already has as a project, and whether the employee is on it.
+        const known = await harnessProjectsByRepo(ctx)
         const checked = await Promise.all(
           projects.map(async (p, i) => {
             const level = accessOf(p)
@@ -319,10 +326,12 @@ export const gitlabSetup: IntegrationSetupModule = {
                 if (!protectedDefault) warnings.push(`${p.default_branch} isn’t protected: protect it so only people can merge.`)
               }
             }
+            const added = known(p)
             return {
               id: p.id,
               path: p.path_with_namespace,
               webUrl: p.web_url ?? null,
+              added,
               accessLevel: level,
               role: roleName(level),
               defaultBranch: p.default_branch ?? null,
@@ -332,6 +341,10 @@ export const gitlabSetup: IntegrationSetupModule = {
           }),
         )
         const warned = checked.filter((p) => p.warnings.length)
+        const notAdded = checked.filter((p) => !p.added?.linked).length
+        const addNote = notAdded
+          ? ` ${notAdded} ${notAdded === 1 ? 'isn’t' : 'aren’t'} a harness project of the employee yet: add ${notAdded === 1 ? 'it' : 'them'} so it knows it works on ${notAdded === 1 ? 'it' : 'them'}.`
+          : ''
         steps.push(
           step(
             'projects',
@@ -340,9 +353,9 @@ export const gitlabSetup: IntegrationSetupModule = {
             !checked.length
               ? `@${user.username} isn’t a member of any project. Add it as Developer to the projects it works on.`
               : warned.length
-                ? `${warned.length} of ${checked.length} project${checked.length === 1 ? '' : 's'} need attention.`
-                : `Developer on ${checked.length} project${checked.length === 1 ? '' : 's'}, with protected default branches.`,
-            { projects: checked as unknown as Json },
+                ? `${warned.length} of ${checked.length} project${checked.length === 1 ? '' : 's'} need attention.${addNote}`
+                : `Developer on ${checked.length} project${checked.length === 1 ? '' : 's'}, with protected default branches.${addNote}`,
+            { projects: checked as unknown as Json, notAdded },
           ),
         )
       } catch (err) {
@@ -500,6 +513,22 @@ export const gitlabSetup: IntegrationSetupModule = {
       throw new UnavailableError(redact(ctx, `GitLab couldn’t add the key (HTTP ${r.status}${message ? `: ${message}` : ''}).`))
     },
 
+    /** `{ projects: [GitLab project ids] }`: each becomes a harness project with the employee as a member (idempotent). */
+    async 'add-projects'(ctx, input) {
+      const token = ctx.values.GITLAB_TOKEN
+      if (!token) throw new ValidationError('Paste the account’s token first.')
+      const ids = input.projects
+      if (!Array.isArray(ids) || !ids.length || ids.some((x) => typeof x !== 'number' && typeof x !== 'string'))
+        throw new ValidationError('Pick the GitLab projects to add.')
+      const fetchProject = async (projectId: number | string) => {
+        const r = await api(ctx, token, `/projects/${encodeURIComponent(String(projectId))}`)
+        if (r.status === 404 || r.status === 403) return null
+        if (!r.ok) throw new UnavailableError(`GitLab answered GET /projects/${projectId} with HTTP ${r.status}`)
+        return r.json as GitlabProject
+      }
+      return addGitlabProjects(ctx, fetchProject, ids as (number | string)[])
+    },
+
     async 'register-webhooks'(ctx) {
       const p = ctx.deps.provisioning()
       if (!p) throw new ValidationError('The GitLab integration is disabled.')
@@ -538,6 +567,8 @@ export const gitlabSetup: IntegrationSetupModule = {
     const status = (id: string) => steps.find((s) => s.id === id)?.status
     const tokenOk = status('token') === 'done' || status('token') === 'warning'
     if (tokenOk && status('ssh-key') !== 'done') out.push('add-ssh-key')
+    const projects = steps.find((x) => x.id === 'projects')?.data?.projects
+    if (ctx.values.GITLAB_TOKEN && Array.isArray(projects) && projects.length) out.push('add-projects')
     if (ctx.deps.provisioning()?.enabled && ctx.values.GITLAB_TOKEN) out.push('register-webhooks')
     if (status('routing') !== 'done' && ctx.values.GITLAB_TOKEN) out.push('add-trigger')
     return out

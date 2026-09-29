@@ -32,6 +32,9 @@ correctly.
 - **Procedures as contexts.** Each company procedure has a context that
   already knows it. Work that needs the procedure runs in a fork of that
   context, with nothing to re-read.
+- **Images, both ways.** People attach screenshots in chat; employees attach
+  charts they made and look at an image only when they need to (`image.view`),
+  so images cost tokens only when they matter.
 - **Safe by construction.** AI employees open pull requests and never merge or
   deploy. Secrets are injected at call time and never shown to the model.
   Checklists need evidence before anything counts as done.
@@ -91,6 +94,16 @@ channels are optional. It gets what Meatless got: a router session, its own
 `#requests-<handle>` channel with a trigger to the router, a place in
 `#general`, and an SSH keypair. `POST /api/employees` does the same.
 
+### Assigning projects
+
+An employee only knows what it works on once it's assigned: on its page,
+**Projects** adds an existing project with a role (owner or member), and
+**New project** creates one it owns, with its repository URLs and docs links.
+A project's page adds employees and people the same way, and GitLab's setup
+step adds the repositories the employee's account can reach with **Add as
+project**. The employee sees its current projects at the start of every piece
+of work, and the harness registers GitLab webhooks on their repositories.
+
 ### Connecting Slack, GitLab and Linear
 
 Each employee's page (`/employees/<id>`) has a guided setup per integration.
@@ -104,7 +117,8 @@ only when the harness has checked it for real:
 - **GitLab:** paste the service account's token (checked for the `api` scope
   and its expiry). "Add it for me" puts the employee's SSH key on the
   account. The page warns about Maintainer access and unprotected default
-  branches, and shows the webhooks the harness registered.
+  branches, adds the account's GitLab projects as harness projects ("Add as
+  project"), and shows the webhooks the harness registered.
 - **Linear:** paste the API key, then create the webhook from the page (or
   by hand) and add the trigger.
 
@@ -187,6 +201,24 @@ set `SANDBOX_IMAGE=mp-sandbox`. Employees also know the time: every message
 carries when it arrived, and `time.now` answers in the company timezone
 (the `timezone` setting, UTC by default). See
 [docs/spec.md](docs/spec.md#code-execution).
+
+### Images in chat
+
+People attach images to chat messages (the attach button, paste, or drag and
+drop), and employees attach files from their filesystem, such as a chart
+`code.run` saved. Messages name their images to employees
+(`[image: chart.png 800x600, attachment att_…]`), and an employee looks at one
+with `image.view` only when it needs to. Images are PNG, JPEG, GIF or WebP,
+checked by their content; they live on the files volume, and only people who
+can see the channel can open them.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `MODEL_VISION` | `auto` | whether the model can see images: `auto` asks the provider's model list, then goes by the model's name; `true` or `false` to say so |
+| `MODEL_IMAGE_MAX_SIDE` | 1568 | images for the model are downscaled to this many pixels on the longest side (PNG; other types pass through) |
+| `MODEL_IMAGE_MAX_BYTES` | 5 MB | larger images aren't sent to the model |
+| `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached image |
+| `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | images per message |
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`

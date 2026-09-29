@@ -20,7 +20,9 @@ import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { LinksGraph } from '@/components/links-graph.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { SplitView } from '@/components/split-view.tsx'
+import { NewProjectDialog } from '@/components/new-project-dialog.tsx'
 import { PersonAvatar } from '@/components/people.tsx'
+import { ProjectPeopleSection } from '@/components/project-people.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog.tsx'
@@ -248,8 +250,18 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
           })}
         </div>
       )}
-      {schema && (
-        <NewRecord schema={schema} open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => navigate(`${basePath}/${r.id}`)} />
+      {kind === 'project' ? (
+        // Projects get their own dialog: repositories, docs and an owner, linked in one step.
+        <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(r) => navigate(`${basePath}/${r.project.id}`)} />
+      ) : (
+        schema && (
+          <NewRecord
+            schema={schema}
+            open={newOpen}
+            onOpenChange={setNewOpen}
+            onCreated={(r) => navigate(`${basePath}/${r.id}`)}
+          />
+        )
       )}
     </Page>
   )
@@ -424,6 +436,7 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
                 ))}
               </section>
             )}
+            {kind === 'project' && <ProjectPeopleSection projectId={r.id} className="mb-8" />}
             <Tabs defaultValue="links">
               <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b pb-0">
                 <TabsTrigger value="links" className="flex-none px-0">

@@ -211,15 +211,24 @@ export class Views {
     return `@${e?.key ?? e?.data.name ?? 'employee'}#${session.data.slug}`
   }
 
+  /** Whether a session is its employee's router context (an internal detail: it speaks as the employee). */
+  isRouter(session: Session): boolean {
+    return session.data.meta?.role === 'router'
+  }
+
   async author(a: { kind: string; id: string }): Promise<Api.MessageData['author']> {
     if (a.kind === 'session') {
       const s = await this.session(a.id)
+      if (s && this.isRouter(s)) {
+        const e = await this.employee(s.data.employeeId)
+        if (e) return { type: 'employee', id: e.id, name: e.data.name, ...(e.key ? { handle: e.key } : {}) }
+      }
       return { type: 'session', id: a.id, name: s ? await this.sessionLabel(s) : a.id }
     }
     const c = await this.contact(a.id)
     if (c?.data.kind === 'ai') {
       const e = await this.employeeOfContact(c.id)
-      if (e) return { type: 'employee', id: e.id, name: e.data.name }
+      if (e) return { type: 'employee', id: e.id, name: e.data.name, ...(e.key ? { handle: e.key } : {}) }
     }
     return { type: 'person', id: a.id, name: c?.data.name ?? a.id }
   }
@@ -253,6 +262,7 @@ export class Views {
       ...(d.editedAt ? { editedAt: d.editedAt } : {}),
       ...(d.deleted ? { deleted: true } : {}),
       ...(d.reactions && Object.keys(d.reactions).length ? { reactions: d.reactions } : {}),
+      ...(d.attachments?.length && !d.deleted ? { attachments: d.attachments } : {}),
     }
     if (!d.threadId && opts.summary !== false) {
       const replies = await this.s.records.query<DomainMessage['data']>('message', {
@@ -271,6 +281,10 @@ export class Views {
   async member(ref: Ref): Promise<Api.ChatMember> {
     if (ref.kind === 'session') {
       const s = await this.session(ref.id)
+      if (s && this.isRouter(s)) {
+        const e = await this.employee(s.data.employeeId)
+        if (e) return { type: 'employee', id: e.id, label: e.data.name }
+      }
       return { type: 'session', id: ref.id, label: s ? await this.sessionLabel(s) : ref.id }
     }
     if (ref.kind === 'employee') {
