@@ -35,6 +35,7 @@ module to it:
 | links             | [Links](#links-between-contacts-and-projects) |
 | repos, runtime    | [Project code and runtime](#project-code-and-runtime) |
 | sessions          | [Sessions](#sessions)                         |
+| triggers          | [Triggers](#triggers)                         |
 | memory            | [Memory](#memory)                             |
 
 ## Structure
@@ -62,7 +63,8 @@ Requirements:
   task system means configuring a server, not changing harness code.
 - The harness supports both directions. It acts on a system (MCP tool calls),
   and it also finds out when something happens there: a new message, a mention,
-  a task assigned to it. How it receives those events is still open (see below).
+  a task assigned to it. Those events are routed by [triggers](#triggers). How
+  they are delivered from the MCP server is still open (see below).
 
 Open questions:
 
@@ -283,6 +285,10 @@ documented and templatable.
   document, following the same pattern as projects.
 - **Templatable.** A session can be created from a template (see below), and
   an existing session can be saved as a template.
+- **Ephemeral or committed runs.** Any session can do a piece of work as an
+  **ephemeral** run, which is discarded afterwards and leaves the session as it
+  was. Or it can **commit** the run to itself, so the run becomes part of the
+  session's history (see [Runs](#runs-ephemeral-or-committed)).
 
 #### Metadata
 
@@ -343,6 +349,25 @@ The model has tools for working with sessions:
 | link / unlink  | add or remove links to contacts, projects and other sessions  |
 | save template  | turn a session into a template                                |
 | wait           | block until the given children (one, some or all) finish, and return their results |
+| commit         | keep the current run: add it to the session's history          |
+
+#### Runs: ephemeral or committed
+
+A **run** is one piece of work done in a session, for example handling one
+[trigger](#triggers) or one item in a loop. The run starts from the session's
+current history, and the result is one of two things:
+
+- **Ephemeral.** When the run ends, its messages and tool calls are dropped
+  from the session. Its effects on the outside world stay (a reply sent, a
+  ticket updated), and so do the run's log and usage. The session goes into its
+  next run as clean as before, which keeps its context small.
+- **Committed.** The run calls `commit` to keep itself: its history becomes part
+  of the session, and later runs build on it. This is how a long-lived context
+  accumulates what it has learned or decided.
+
+Every session can do both. Sessions created by a loop are usually ephemeral
+runs of one context, and a context commits a run when there is something worth
+carrying forward.
 
 #### Waiting
 
@@ -364,6 +389,43 @@ Open questions:
 - Are forks limited, e.g. by depth or by how many children one loop can have?
 - Does `wait` take a timeout, and can the parent cancel children it no longer
   needs?
+- Is a run ephemeral by default and committed only on `commit`, or can a
+  trigger or template set the default?
+- Can a run commit only part of itself, for example a summary instead of the
+  full history?
+
+### Triggers
+
+External events don't each start a new session. A **trigger** routes an event
+into a specific, long-lived **context** (a session) that is assigned to that
+kind of event. The context decides what to do with it.
+
+Example: a task system's MCP server sends a notification that a new task was
+assigned. The trigger for "new task" is assigned to a context that knows how
+to take tasks in. That context runs, reads the task, and then orchestrates:
+it forks or loops out other sessions to do the work, waits for them or not,
+and commits to itself only what it needs to remember.
+
+- **Sources.** An event can come from an MCP notification (new message,
+  mention, new or changed task), a schedule, a git push, or the web UI.
+- **Assignment.** Each trigger names the event it matches (source, type, and
+  filters such as project, channel or contact) and the context it runs in. One
+  context can handle many triggers.
+- **Handling.** Each event starts one [run](#runs-ephemeral-or-committed) in the
+  assigned context. The event is passed in as the run's input, and the run is
+  ephemeral unless it commits.
+- **Orchestration.** From that run, the context can use the whole session
+  library: create, fork and loop sessions, route work to other contexts, and
+  wait or not.
+- **Traceability.** Every run records the event that started it, so the web UI
+  can show a chain from event to context to child sessions.
+
+Open questions:
+
+- What happens when events arrive faster than a context can handle them: queue
+  them, run them in parallel, or batch them into one run?
+- Can a context create or change triggers itself, as part of scripting its own
+  work?
 
 ### Memory
 
