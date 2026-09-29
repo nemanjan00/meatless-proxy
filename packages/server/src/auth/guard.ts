@@ -136,6 +136,8 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'DELETE', path: '/api/chat/*', need: 'member' },
   { method: 'POST', path: '/api/sessions/:id/message', need: 'member' },
   { method: 'POST', path: '/api/sessions/:id/fork', need: 'member' },
+  // Live previews: a token for yourself, to watch a session's environment (src/previews).
+  { method: 'POST', path: '/api/previews/token', need: 'member' },
   { method: 'POST', path: '/api/runs/:id/pause', need: 'member', check: ownRun },
   { method: 'POST', path: '/api/runs/:id/resume', need: 'member', check: ownRun },
   { method: 'POST', path: '/api/runs/:id/cancel', need: 'member', check: ownRun },

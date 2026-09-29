@@ -60,6 +60,8 @@ export interface LiveTopics {
   'chat.message': { channelId: string; message: Message }
   /** An event was stored. */
   'event.ingested': { event: ApiEvent }
+  /** The commit a session's environment runs changed (a live preview should reload). */
+  'preview.commit': { sessionId: string; envId: string; sha: string; subject?: string; repo?: string }
   /** The global pause flag changed. */
   'control.changed': { paused: boolean }
 }

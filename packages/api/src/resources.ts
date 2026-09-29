@@ -721,6 +721,37 @@ export interface LoginLink {
   expiresAt: string
 }
 
+/**
+ * `GET /api/sessions/:id/preview`: what the session's environment serves as live previews
+ * (docs/spec.md "Live previews"). `ports` is empty when the session has no environment or it
+ * exposes nothing.
+ */
+export interface SessionPreview {
+  sessionId: string
+  envId: string | null
+  /** `none`: the session has no environment. `missing`: it was destroyed. */
+  status: 'running' | 'stopped' | 'missing' | 'none'
+  /** Ports the environment serves, e.g. a dev server on 5173. */
+  ports: number[]
+  /** The commit the environment's checkout is at, when known. */
+  commit: { sha: string; subject?: string; repo?: string } | null
+}
+
+/**
+ * `POST /api/previews/token`: a short-lived token (about 5 minutes) for one environment, one port
+ * and the signed-in viewer. `url` opens the preview on its own origin and exchanges the token for
+ * that origin's cookie: use it as the frame's `src`, or open it in a new tab.
+ */
+export interface PreviewToken {
+  envId: string
+  port: number
+  token: string
+  url: string
+  /** The preview's origin, e.g. `https://mp-bot-fix-5173.preview.example.com`. */
+  origin: string
+  expiresAt: string
+}
+
 /** An API token's metadata (the token itself is shown only once, when it is created). */
 export interface ApiToken {
   id: string

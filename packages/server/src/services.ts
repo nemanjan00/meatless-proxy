@@ -49,6 +49,7 @@ import { createIntegrations, type Integrations, type IntegrationsOptions } from 
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
+import { selfContainer } from './previews/self.ts'
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -193,7 +194,12 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const containers =
     o.containers ??
     (config.DOCKER_ENABLED
-      ? dockerRuntime({ ...(config.DOCKER_SOCKET ? { socketPath: config.DOCKER_SOCKET } : {}), logger, clock })
+      ? dockerRuntime({
+          ...(config.DOCKER_SOCKET ? { socketPath: config.DOCKER_SOCKET } : {}),
+          ...selfContainer(config),
+          logger,
+          clock,
+        })
       : null)
 
   // ── Domain ───────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Json } from '@mp/core'
-import { egressEntryCovered, type ContainerRuntime, type EnvSpec } from '@mp/containers'
+import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
 import { worktreeFor } from './git.ts'
 
@@ -28,6 +28,20 @@ export function envNameFor(employeeSlug: string, sessionSlug: string, max = MAX_
   return `${full.slice(0, max - hash.length - 1).replace(/-+$/, '')}-${hash}`
 }
 
+/** The exposed ports recorded in a session's environment meta. */
+const exposedOf = (env: object | null): number[] => {
+  const e = (env as { expose?: unknown } | null)?.expose
+  return Array.isArray(e) ? e.filter((p): p is number => Number.isInteger(p)) : []
+}
+
+/**
+ * The harness UI link to a session's live preview of `port`: its session page with the Preview tab
+ * open. Relative to the harness's own origin, so it works in chat and in the UI. It carries no token:
+ * the UI mints one for whoever signed in opens it.
+ */
+export const previewLink = (sessionId: string, port: number) =>
+  `/sessions/${encodeURIComponent(sessionId)}?tab=preview&port=${port}`
+
 /** Keeps the end of long output, which is usually where the error is. */
 const tail = (text: string, max = 8000) =>
   text.length <= max ? text : `[… ${text.length - max} earlier characters truncated]\n${text.slice(-max)}`
@@ -37,7 +51,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the project's egress allowlist; without one there is no network. Calling it again returns the running one. Use env.exec to build, test or run.",
+        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the project's egress allowlist; without one there is no network. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -59,6 +73,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             items: { type: 'string' },
             description: "Narrow the project's egress allowlist to these hosts (a subset of it). Default: the whole list.",
           },
+          expose: {
+            type: 'array',
+            items: { type: 'number' },
+            description: 'Ports your app serves, e.g. [5173] for a dev server, shown to people as live previews (env.preview).',
+          },
         },
       },
     },
@@ -67,8 +86,23 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const current = envOf(session)
       if (current) {
         const info = await runtime.getEnv(current.id)
-        if (info?.status === 'running') return ok({ envId: info.id, name: info.name, status: info.status, existing: true })
+        if (info?.status === 'running') {
+          const exposed = exposedOf(current)
+          return ok({
+            envId: info.id,
+            name: info.name,
+            status: info.status,
+            existing: true,
+            ...(exposed.length ? { previews: exposed.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
+            ...(a.expose !== undefined && JSON.stringify(a.expose) !== JSON.stringify(exposed)
+              ? { note: 'the environment is already running with its own ports: env.down first to change them' }
+              : {}),
+          })
+        }
       }
+      const badExpose = invalidExpose(a.expose)
+      if (badExpose.length) return fail('expose must be a list of distinct ports (1-65535)', { issues: badExpose })
+      const expose = (a.expose as number[] | undefined) ?? []
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
       if (!str(a.image) && !w) return fail('give an image, or check out a repository first (git.checkout) to build it')
 
@@ -101,16 +135,21 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
         ...(egress ? { egress } : {}),
+        ...(expose.length ? { expose } : {}),
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
-      await kit.patchMeta(session.id, (m) => ({ ...m, env: { id: info.id, name: info.name } }))
+      await kit.patchMeta(session.id, (m) => ({
+        ...m,
+        env: { id: info.id, name: info.name, ...(expose.length ? { expose } : {}) },
+      }))
       return ok({
         envId: info.id,
         name: info.name,
         status: info.status,
         ...(w ? { workspace: '/workspace' } : {}),
         network: egress ? { via: 'proxy', allow: egress.allow } : 'none',
+        ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
       })
     },
   )
@@ -168,6 +207,34 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       if (!env) return fail('this session has no environment')
       const logs = await runtime.logs(env.id, { tail: Math.min(Math.max(1, a.tail ?? 200), 2000) })
       return ok({ envId: env.id, logs: tail(logs, 12000) })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'env.preview',
+      description:
+        "A link people open to watch a port of your environment live (from env.up's expose), in this session's Preview tab of the harness UI. Share it in chat, e.g. [Preview](link). It reloads as you commit.",
+      effect: 'read',
+      params: {
+        properties: {
+          port: { type: 'number', description: 'Which exposed port. Default: the only one.' },
+          sessionId: { type: 'string', description: "Another of your sessions' environment." },
+        },
+      },
+    },
+    async (a, ctx) => {
+      const session = await kit.ownSession(a.sessionId, ctx)
+      const env = envOf(session)
+      if (!env) return fail('this session has no environment: call env.up with expose first')
+      const ports = exposedOf(env)
+      if (!ports.length) return fail('the environment exposes no ports: env.down, then env.up with expose')
+      const port = a.port ?? (ports.length === 1 ? ports[0] : undefined)
+      if (port === undefined) return fail('which port? the environment exposes several', { ports })
+      if (!ports.includes(port)) return fail(`port ${port} is not exposed`, { ports })
+      const info = await runtime.getEnv(env.id)
+      if (!info) return fail('the environment is gone: call env.up again')
+      return ok({ url: previewLink(session.id, port), port, envId: env.id, ports, status: info.status })
     },
   )
 

@@ -7,6 +7,7 @@ export interface DockerLike {
   getNetwork(id: string): {
     remove(opts?: Record<string, any>): Promise<unknown>
     connect(opts: Record<string, any>): Promise<unknown>
+    disconnect(opts: Record<string, any>): Promise<unknown>
   }
   createContainer(opts: Record<string, any>): Promise<ContainerLike>
   getContainer(id: string): ContainerLike
@@ -40,6 +41,7 @@ export interface ContainerInspectLike {
   Created: string
   State: { Running: boolean; Status?: string }
   Config: { Labels: Record<string, string> | null }
+  NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> }
 }
 
 export interface ContainerSummaryLike {

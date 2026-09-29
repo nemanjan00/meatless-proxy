@@ -11,6 +11,11 @@ The containers port (L1): isolated project environments and commands run in them
   `*.github.com` doesn't match `github.com`), and an entry without a port allows every port. IP literals, `localhost` and
   private/loopback/link-local addresses are reachable only through an exact entry, never a wildcard. Network modes:
   `egress` set -> proxy only; neither -> no network at all; `allowInternet: true` -> unrestricted (excludes `egress`).
+- `EnvSpec.expose?: number[]`: ports the main container serves (a dev server on 5173), for live previews. Nothing is
+  published on the host. `invalidExpose(list)` names the problems (integers 1-65535, distinct, at most
+  `MAX_EXPOSED_PORTS` = 16).
+- `previewTarget?(envId, port)` (optional on `ContainerRuntime`): `PreviewTarget` `{ host, port }`, where the harness
+  process connects to reach an exposed port. `NotFoundError` when the environment is gone or doesn't expose the port.
 - `egressLog?(envId)` (optional on `ContainerRuntime`): the proxy's log, `EgressLogEntry[]` (`{ at, method, host, port,
   allowed, reason? }`).
 - Allowlist helpers: `checkEgress(allow, host, port)` (the decision, before DNS), `parseEgressEntry`,
@@ -23,11 +28,13 @@ The containers port (L1): isolated project environments and commands run in them
   `(call, env) => response`. Responses can set `delayMs`, `hang`, `chunks` (streamed via `onOutput`), or `error`.
   Also `appendLog`, `stop`, `failNextCreate`, `envs()`, `created`. `egressAllowed(envId, host, port)` answers what the real
   runtime would allow (allowlist with `egress`, anything with `allowInternet`, else nothing) and adds proxied decisions to
-  `egressLog(envId)`.
+  `egressLog(envId)`. `previewTarget` points exposed ports at `127.0.0.1:<port>` (or the `previewTarget` option's
+  answer), and `servePreview(envId, port, target)` points one at a local test server.
 
 ## Tests
 
-`test/fake.test.ts` covers the fake, `test/egress.test.ts` the allowlist logic and the fake's egress. Adapters (e.g. `@mp/containers-docker`) have their own tests.
+`test/fake.test.ts` covers the fake, `test/egress.test.ts` the allowlist logic and the fake's egress, `test/preview.test.ts`
+`invalidExpose` and the fake's previews. Adapters (e.g. `@mp/containers-docker`) have their own tests.
 
 ## Replacing it
 

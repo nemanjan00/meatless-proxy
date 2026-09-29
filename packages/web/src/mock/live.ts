@@ -14,7 +14,7 @@ import {
   type RunData,
   type SessionData,
 } from '@mp/api'
-import { CHN, CON, EMP, type MockDb, RUN, SES, mockId } from './data.ts'
+import { advancePreviewCommit, CHN, CON, EMP, type MockDb, RUN, SES, mockId } from './data.ts'
 
 /** An in-memory `LiveSource`: `emit` delivers to subscribers on the channels the server would use. */
 export interface MockLive extends LiveSource {
@@ -339,6 +339,11 @@ export function startSimulation(db: MockDb, live: MockLive, opts: SimulationOpti
       const rec = { kind: 'event', id, version: 1, key: null, data, createdAt: iso(), updatedAt: iso() }
       db.records.get('event')!.set(id, rec)
       live.emit('event.ingested', { event: rec })
+    },
+    () => {
+      // The employee commits: the demo preview reloads on the new commit.
+      const c = advancePreviewCommit(db, SES.pay123)
+      if (c) live.emit('preview.commit', c)
     },
   ]
   let bg = 0

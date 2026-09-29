@@ -46,7 +46,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
-| `env.*` | up, exec, logs, down |
+| `env.*` | up (with `expose` ports for live previews), exec, logs, preview, down |
 
 Notes on behaviour:
 
@@ -90,7 +90,12 @@ Notes on behaviour:
   allowlist is the `egress` of the checkout's project (else the session's first
   linked project); the tool's `egress` argument can only narrow it (every entry
   must be covered by the project list, `egressEntryCovered`). No project list
-  means no network.
+  means no network. `expose: [5173]` lists ports the app serves as live
+  previews: they go to the runtime (`EnvSpec.expose`) and the session meta
+  (`meta.env.expose`). `env.preview { port? }` returns the harness UI link to
+  the session's Preview tab (`previewLink(sessionId, port)`,
+  `/sessions/<id>?tab=preview&port=<port>`), never a token: the UI mints tokens
+  for whoever signed in opens it.
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
   escapes with `nodeWorktreeFs`).
 - **Policies.** The docs policy looks at the run's own entries (after

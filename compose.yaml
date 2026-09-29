@@ -20,9 +20,12 @@ services:
       DATA_DIR: /data
       HOST: 0.0.0.0
       PORT: "3000"
+      # Live previews are served on their own origin: this port, or PREVIEW_DOMAIN (see packages/server/README.md).
+      PREVIEW_PORT: "3001"
       NODE_ENV: production
     ports:
       - "${APP_PORT:-3000}:3000"
+      - "${PREVIEW_HOST_PORT:-3001}:3001"
     volumes:
       - data:/data
       # Full Docker socket access (an accepted risk, see docs/execution.md#deployment):

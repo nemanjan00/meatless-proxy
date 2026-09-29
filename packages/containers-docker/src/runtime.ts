@@ -6,12 +6,14 @@ import {
   ExecAbortedError,
   TIMEOUT_EXIT_CODE,
   invalidEgressEntries,
+  invalidExpose,
   type ContainerRuntime,
   type EgressLogEntry,
   type EnvInfo,
   type EnvSpec,
   type ExecOptions,
   type ExecResult,
+  type PreviewTarget,
 } from '@mp/containers'
 import {
   ConflictError,
@@ -28,6 +30,7 @@ import {
 import Docker from 'dockerode'
 import type { ContainerInspectLike, ContainerSummaryLike, DockerLike } from './docker-like.ts'
 import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
+import { PREVIEW_FORWARDER_SOURCE, PREVIEW_READY_MARKER } from './preview-forwarder.ts'
 
 export interface DockerRuntimeOptions {
   /** A dockerode instance (or anything shaped like one). Default: `new Docker({ socketPath })`. */
@@ -46,8 +49,15 @@ export interface DockerRuntimeOptions {
   pidsLimit?: number
   /** Output kept per stream and exec; the rest is dropped with a marker. Default 10 MiB. */
   maxOutputBytes?: number
-  /** Image for the egress proxy sidecar: anything with `node` on the PATH. Default `DEFAULT_PROXY_IMAGE`. */
+  /** Image for the egress proxy and preview forwarder sidecars: anything with `node` on the PATH. Default `DEFAULT_PROXY_IMAGE`. */
   proxyImage?: string
+  /**
+   * The container the harness itself runs in, when it runs in Docker (id or name). `previewTarget`
+   * connects it to an environment's preview network, which holds only the preview forwarder, so the
+   * harness can reach exposed ports. Unset when the harness runs on the host: the host reaches the
+   * forwarder's address on the bridge directly.
+   */
+  selfContainer?: string
 }
 
 export const DEFAULT_PROXY_IMAGE = 'node:26-alpine'
@@ -65,6 +75,10 @@ export const LABEL_ENV = 'mp.env'
 export const LABEL_MANAGED = 'mp.managed'
 export const LABEL_ROLE = 'mp.role'
 export const LABEL_SERVICE = 'mp.service'
+/** On the main container: the exposed ports, comma-separated. */
+export const LABEL_EXPOSE = 'mp.expose'
+/** The preview forwarder's name suffix (container and network), and the service name it takes. */
+export const PREVIEW_SUFFIX = 'preview'
 
 /** The requested feature isn't implemented by this adapter. */
 export class NotImplementedError extends MpError {
@@ -92,6 +106,9 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const pidsLimit = opts.pidsLimit ?? 4096
   const maxOutput = opts.maxOutputBytes ?? 10 * 1024 * 1024
   const proxyImage = opts.proxyImage ?? DEFAULT_PROXY_IMAGE
+  const self = opts.selfContainer
+  /** Preview networks the harness container is already connected to. */
+  const attached = new Set<string>()
 
   const envName = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
   const mainName = (name: string) => `${prefix}${name}`
@@ -99,6 +116,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const networkName = (name: string) => `${prefix}${name}`
   const egressNetworkName = (name: string) => `${prefix}${name}-egress`
   const proxyName = (name: string) => `${prefix}${name}-proxy`
+  const previewName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
+  const previewNetworkName = (name: string) => `${prefix}${name}-${PREVIEW_SUFFIX}`
 
   const hardening = {
     Privileged: false,
@@ -209,24 +228,76 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
    * Waits until the proxy logs that it's listening, so the environment's first request
    * doesn't race the proxy's start-up. Fails if the proxy exits or doesn't come up in time.
    */
-  async function waitForProxy(name: string): Promise<void> {
+  async function waitForProxy(name: string, marker = PROXY_READY_MARKER, what = 'egress proxy'): Promise<void> {
     const deadline = clock.now() + PROXY_READY_TIMEOUT_MS
     for (;;) {
       const container = docker.getContainer(name)
       const res = await container.logs({ stdout: true, stderr: true, follow: false })
       const text = demuxBuffer(Buffer.isBuffer(res) ? res : await readAll(res))
-      if (text.includes(PROXY_READY_MARKER)) return
+      if (text.includes(marker)) return
       const state = (await container.inspect()).State
-      if (state && state.Running === false) throw new UnavailableError(`egress proxy ${name} exited: ${text.slice(-500)}`)
-      if (clock.now() > deadline) throw new UnavailableError(`egress proxy ${name} didn't start listening in time`)
+      if (state && state.Running === false) throw new UnavailableError(`${what} ${name} exited: ${text.slice(-500)}`)
+      if (clock.now() > deadline) throw new UnavailableError(`${what} ${name} didn't start listening in time`)
       await new Promise((r) => setTimeout(r, PROXY_READY_POLL_MS))
     }
+  }
+
+  /**
+   * The live preview forwarder: on the environment's network, where it reaches the main container
+   * as `main`, and on a preview network of its own (internal, nothing else on it but the harness
+   * container when there is one). It forwards each exposed port to the same port of `main`, and
+   * nothing else, so a project container that reaches it only gets back to itself.
+   */
+  async function createForwarder(spec: EnvSpec, net: string, labels: Record<string, string>): Promise<void> {
+    const previewNet = previewNetworkName(spec.name)
+    await docker.createNetwork({
+      Name: previewNet,
+      Driver: 'bridge',
+      Internal: true,
+      CheckDuplicate: true,
+      Labels: { ...labels, [LABEL_ROLE]: PREVIEW_SUFFIX },
+    })
+    const name = previewName(spec.name)
+    const c = await docker.createContainer({
+      name,
+      Image: proxyImage,
+      Cmd: ['node', '-e', PREVIEW_FORWARDER_SOURCE],
+      Env: envList({
+        TARGET: 'main',
+        FORWARDS: JSON.stringify((spec.expose ?? []).map((port) => ({ listen: port, port }))),
+      }),
+      User: '65534:65534',
+      Labels: { ...labels, [LABEL_ROLE]: PREVIEW_SUFFIX },
+      HostConfig: {
+        ...hardening,
+        NetworkMode: net,
+        ReadonlyRootfs: true,
+        Memory: 128 * 1024 * 1024,
+        MemorySwap: 128 * 1024 * 1024,
+      },
+    })
+    await docker.getNetwork(previewNet).connect({ Container: name })
+    await c.start()
+    await waitForProxy(name, PREVIEW_READY_MARKER, 'preview forwarder')
+  }
+
+  /** Connects the harness container to a preview network, once. Already being connected is fine. */
+  async function attachSelf(previewNet: string): Promise<void> {
+    if (!self || attached.has(previewNet)) return
+    try {
+      await docker.getNetwork(previewNet).connect({ Container: self })
+    } catch (e) {
+      const status = statusOf(e)
+      if (!(status === 403 || status === 409 || /already (exists|attached|connected)/i.test(errorMessage(e))))
+        throw mapError(e, `preview network ${previewNet}`)
+    }
+    attached.add(previewNet)
   }
 
   async function create(spec: EnvSpec, labels: Record<string, string>): Promise<void> {
     const image = await ensureImage(spec)
     for (const svc of spec.services ?? []) await pullIfMissing(svc.image)
-    if (spec.egress) await pullIfMissing(proxyImage)
+    if (spec.egress || spec.expose?.length) await pullIfMissing(proxyImage)
     const net = networkName(spec.name)
     await docker.createNetwork({
       Name: net,
@@ -254,7 +325,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Cmd: spec.command ?? ['sleep', 'infinity'],
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
       Env: envList({ ...spec.env, ...viaProxy }),
-      Labels: { ...labels, [LABEL_ROLE]: 'main' },
+      Labels: { ...labels, [LABEL_ROLE]: 'main', ...(spec.expose?.length ? { [LABEL_EXPOSE]: spec.expose.join(',') } : {}) },
       HostConfig: {
         ...hardening,
         NetworkMode: net,
@@ -264,6 +335,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: ['main'] } } },
     })
     await main.start()
+    if (spec.expose?.length) await createForwarder(spec, net, labels)
   }
 
   async function removeAll(name: string): Promise<void> {
@@ -278,7 +350,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     }
     const ids = new Set(containers.map((c) => c.Id))
     // The main container and the proxy are also removed by name, in case a listing missed them.
-    const targets = [...ids, mainName(name), proxyName(name)]
+    const targets = [...ids, mainName(name), proxyName(name), previewName(name)]
     for (const id of targets) {
       try {
         await docker.getContainer(id).remove({ force: true, v: true })
@@ -286,7 +358,15 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         if (statusOf(e) !== 404) throw mapError(e, `container ${id}`)
       }
     }
-    for (const net of [networkName(name), egressNetworkName(name)]) {
+    if (self) {
+      // The harness container may be on the preview network: a network with endpoints can't be removed.
+      await docker
+        .getNetwork(previewNetworkName(name))
+        .disconnect({ Container: self, Force: true })
+        .catch(() => undefined)
+      attached.delete(previewNetworkName(name))
+    }
+    for (const net of [networkName(name), egressNetworkName(name), previewNetworkName(name)]) {
       try {
         await docker.getNetwork(net).remove()
       } catch (e) {
@@ -441,6 +521,33 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       return parseEgressLog(demuxBuffer(buf))
     },
 
+    async previewTarget(envId, port): Promise<PreviewTarget> {
+      const name = envName(envId)
+      let main: ContainerInspectLike
+      try {
+        main = await docker.getContainer(mainName(name)).inspect()
+      } catch (e) {
+        if (statusOf(e) === 404) throw new NotFoundError('environment', envId)
+        throw mapError(e, `environment ${envId}`)
+      }
+      const labels = main.Config.Labels ?? {}
+      if (labels[LABEL_MANAGED] !== 'true' || labels[LABEL_ROLE] !== 'main') throw new NotFoundError('environment', envId)
+      const exposed = (labels[LABEL_EXPOSE] ?? '').split(',').filter(Boolean).map(Number)
+      if (!exposed.includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
+      const previewNet = previewNetworkName(name)
+      await attachSelf(previewNet)
+      let fwd: ContainerInspectLike
+      try {
+        fwd = await docker.getContainer(previewName(name)).inspect()
+      } catch (e) {
+        if (statusOf(e) === 404) throw new UnavailableError(`the preview forwarder of ${envId} is gone`)
+        throw mapError(e, `preview forwarder of ${envId}`)
+      }
+      const ip = fwd.NetworkSettings?.Networks?.[previewNet]?.IPAddress
+      if (!fwd.State.Running || !ip) throw new UnavailableError(`the preview forwarder of ${envId} is not running`)
+      return { host: ip, port }
+    },
+
     async destroyEnv(envId) {
       const name = envName(envId)
       await removeAll(name)
@@ -461,7 +568,10 @@ function validate(spec: EnvSpec) {
   for (const svc of spec.services ?? []) {
     if (!NAME_RE.test(svc.name) || svc.name === 'main') issues.push(`bad service name: ${svc.name}`)
     if (spec.egress && svc.name === PROXY_ALIAS) issues.push(`service name ${PROXY_ALIAS} is taken by the egress proxy`)
+    if (spec.expose?.length && svc.name === PREVIEW_SUFFIX)
+      issues.push(`service name ${PREVIEW_SUFFIX} is taken by the preview forwarder`)
   }
+  issues.push(...invalidExpose(spec.expose))
   if (spec.egress) {
     if (spec.allowInternet) issues.push('egress and allowInternet exclude each other')
     if (!Array.isArray(spec.egress.allow)) issues.push('egress.allow must be a list')

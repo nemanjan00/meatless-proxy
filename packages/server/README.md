@@ -56,7 +56,9 @@ first by a small built-in loader; variables already set win.
 | `ADMIN_EMAIL` | none | Email of the admin contact the first start creates (or the existing contact made admin) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL` | none | Optional sign-in with an identity provider: all four or none. The redirect URL is `<PUBLIC_URL>/auth/oidc/callback` |
 | `METRICS_TOKEN` | none | A bearer token (16+ characters) that may read `/metrics`, besides admins |
-| `PREVIEW_DOMAIN` | none | Live previews' domain: the UI may frame `https://*.<PREVIEW_DOMAIN>` and nothing else |
+| `PREVIEW_DOMAIN` | none | Live previews' domain: each preview is `<env>-<port>.<PREVIEW_DOMAIN>` (needs `PUBLIC_URL`, wildcard DNS and a wildcard certificate), and the UI may frame `https://*.<PREVIEW_DOMAIN>` and nothing else. See [Live previews](#live-previews) |
+| `PREVIEW_PORT` | `3001` | The preview listener. Without `PREVIEW_DOMAIN` it is the previews' origin (the harness's host on this port); with it, the reverse proxy sends `*.<PREVIEW_DOMAIN>` here. `0` turns previews off |
+| `SELF_CONTAINER` | the host name in Docker | The container the harness runs in, so it can join environments' preview networks |
 | `NODE_ENV` | | `production` disables `.env` loading |
 | `DOTENV_PATH` | `.env` | Where the development `.env` is |
 
@@ -85,6 +87,7 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
 - `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
 - `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
 - `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
+- `GET /api/sessions/:id/preview` and `POST /api/previews/token` are `@mp/api` routes, served by `src/previews` (see [Live previews](#live-previews)).
 
 Errors are `{ error: { code, message, details? } }`: not found 404, validation
 422 (issues in `details.issues`), malformed request 400, conflict 409 (the
@@ -159,7 +162,11 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   same-origin` on everything; on HTML also `X-Frame-Options: DENY` and a CSP:
   `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'`,
   `font-src 'self' data:` (the fonts are bundled), `frame-ancestors 'none'`, and
-  `frame-src` `'none'` or `https://*.<PREVIEW_DOMAIN>`.
+  `frame-src`: the preview origins only (`https://*.<PREVIEW_DOMAIN>`, or the
+  harness's host on `PREVIEW_PORT`), `'none'` with previews off.
+- **Preview origins** are refused first of all: any request whose `Host` or
+  `Origin` is a preview origin gets 403, on every path (`/api`, `/ws`, `/mcp`,
+  `/auth`, the UI), whatever credentials it carries.
 
 Tests sign in with `test/auth-helpers.ts`: `t.req` is the bootstrap admin by
 default, `await t.as(contactId)` returns headers for someone else (a bearer
@@ -167,6 +174,64 @@ token; `member` unless they have an access), `signIn(app, id, { via: 'cookie' })
 goes through a real link and returns the cookie and CSRF headers. As a shortcut,
 `t.req(…, { 'x-mp-contact': id })` means `t.as(id)`: the helper translates it,
 the server ignores the header.
+
+## Live previews
+
+`src/previews` (docs/spec.md "Live previews"). An environment started with
+`env.up { expose: [5173] }` can be watched live in the UI. The preview is
+**never** served on the harness's origin, because it runs code the employee
+just wrote or installed.
+
+- **Where**: with `PREVIEW_DOMAIN`, each preview has its own origin,
+  `<env id>-<port>.<PREVIEW_DOMAIN>` (e.g. `mp-billing-bot-fix-5173.preview.example.com`).
+  Point a wildcard DNS record at the host, get a wildcard certificate, and have
+  the reverse proxy send `*.<PREVIEW_DOMAIN>` to `PREVIEW_PORT`. `PUBLIC_URL` is
+  required then (it's the only origin allowed to frame previews). Without a
+  domain, previews are served on `PREVIEW_PORT` of the harness's host (e.g.
+  `http://localhost:3001`): one origin for every preview, so a browser follows
+  one preview at a time there (the last one opened), and cookies of different
+  previews share that host. Use a domain in production. Publish the port
+  (`3001:3001` in compose).
+- **Tokens**: `POST /api/previews/token { envId, port }` (members; the
+  environment must belong to a session that still exposes that port) returns
+  `{ token, url, origin, expiresAt }`. The token lives 5 minutes, works once,
+  and is an HMAC under a key derived from `SECRETS_KEY`, scoped to the
+  environment, the port and the viewer. `url` is
+  `<preview origin>/__mp_preview/auth?token=…`: the UI puts it in the frame or
+  opens it full screen. `env.preview` only links the session's Preview tab
+  (`/sessions/<id>?tab=preview&port=5173`); tokens are minted for whoever opens it.
+- **The preview listener** exchanges a token for the `mp_preview` cookie
+  (httpOnly, host-only, `Path=/`, 12 hours sliding; `SameSite=None; Secure` over
+  https, `SameSite=Lax` over plain http, where browsers refuse `None`), then
+  redirects to `/`. Everything else is proxied to the environment
+  (`ContainerRuntime.previewTarget`): HTTP streamed both ways, and WebSocket
+  upgrades (hot reload) from the preview's own origin only. `Host` becomes
+  `localhost:<port>`, and a same-origin `Origin`/`Referer` is rewritten to match;
+  redirects to the inner address become paths.
+- **Stripped**: every `mp_*` cookie (the harness's session and CSRF cookies,
+  and the preview cookie itself), `Authorization` and `x-mp-csrf` never reach the
+  app. A `Set-Cookie` from the app with a `Domain` (it would reach other hosts)
+  or an `mp_*` name is dropped, on normal responses and on the WebSocket `101`.
+- **Framing**: every preview response gets `Content-Security-Policy:
+  frame-ancestors <harness origin>` (as an extra policy, so the app's own CSP
+  still applies). The UI frames previews with
+  `sandbox="allow-scripts allow-forms allow-same-origin"`, and the harness itself
+  can't be framed (`frame-ancestors 'none'`).
+- **Access** is checked again while a cookie is in use (every 30 s): a viewer
+  who lost member access loses the preview. A preview ends with its environment:
+  a token or cookie for a destroyed one gets a 404 page.
+- **Reloads**: when a session's checkout moves to another commit (`git.commit`,
+  `git.checkout`, or the commit on stop when a run ends), the server publishes
+  `preview.commit` on the session's live channel; `GET /api/sessions/:id/preview`
+  has the ports, the environment's status and the running commit.
+- **Docker**: see `@mp/containers-docker`: a forwarder sidecar per environment
+  is the only thing on both the environment's network and its preview network,
+  and it forwards only to the main container's exposed ports. The harness
+  container joins the preview network (`SELF_CONTAINER`), never the
+  environment's network, so project containers can't reach the harness.
+  Running the harness on the host instead (development): bind it to
+  `HOST=127.0.0.1`, because a process listening on all interfaces is reachable
+  from containers at their bridge's gateway address.
 
 ## Metrics
 
@@ -422,6 +487,15 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   unknown emails, bad signatures, audiences, nonces, issuers, expiry, unverified emails, forged state cookies.
 - `metrics.test.ts`: access, and every metric through a strict parser of the text format.
 - `login-link-cli.test.ts`: the CLI prints a link that works once (Postgres, when `DATABASE_URL` is set).
+- `previews-units.test.ts`: preview tokens (signing, 5-minute expiry, single use, scope and tampering, keys, token vs
+  cookie), cookies (12 hours, refresh), preview hosts and origins in both modes, `frame-src` and `frame-ancestors`,
+  cookie stripping both ways.
+- `previews.test.ts`: end to end with the fake runtime pointed at a real local HTTP and WebSocket upstream on port 0:
+  `env.up` with `expose`, a token, the exchange, proxied requests (cookies, `Authorization`, `Host`, redirects,
+  streaming, bodies, the app's CSP), WebSocket upgrades and their origin check, lost access, 502s, the harness
+  refusing preview hosts and origins with a valid cookie, domain mode, `preview.commit`, and an ended environment.
+- `previews-docker.test.ts` (`MP_DOCKER_TEST=1`): a real environment running `python3 -m http.server`, previewed
+  through the real listener; the project container can't reach the harness's API or preview ports.
 
 ## Replacing it
 

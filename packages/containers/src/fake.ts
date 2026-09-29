@@ -7,6 +7,8 @@ import {
   type EnvSpec,
   type ExecOptions,
   type ExecResult,
+  type PreviewTarget,
+  invalidExpose,
 } from './types.ts'
 import { checkEgress, invalidEgressEntries, type EgressLogEntry } from './egress.ts'
 
@@ -51,6 +53,11 @@ export interface FakeRuntimeOptions {
   clock?: Clock
   /** Answer for commands no rule matches. Default: exit 0, no output. */
   defaultResponse?: FakeResponder
+  /**
+   * Where `previewTarget` points for an exposed port. Default `127.0.0.1:<port>`, so a test can serve
+   * the "environment" with a local server. `servePreview` overrides it per environment and port.
+   */
+  previewTarget?: (env: FakeEnv, port: number) => PreviewTarget
 }
 
 export interface FakeRuntime extends ContainerRuntime {
@@ -75,6 +82,9 @@ export interface FakeRuntime extends ContainerRuntime {
    */
   egressAllowed(envId: string, host: string, port: number): boolean
   egressLog(envId: string): Promise<EgressLogEntry[]>
+  previewTarget(envId: string, port: number): Promise<PreviewTarget>
+  /** Points an exposed port of an environment at `target`, e.g. a local test server on port 0. */
+  servePreview(envId: string, port: number, target: PreviewTarget): void
 }
 
 const matches = (m: FakeMatcher, cmd: string[]) =>
@@ -88,6 +98,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
   const calls: FakeExecCall[] = []
   const created: EnvSpec[] = []
   let nextCreateError: Error | null = null
+  const previewTargets = new Map<string, PreviewTarget>()
 
   const live = (envId: string) => {
     const env = envs.get(envId)
@@ -115,6 +126,8 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         if (!Array.isArray(spec.egress.allow) || bad.length)
           throw new ValidationError('invalid egress allowlist', bad.length ? bad : undefined)
       }
+      const badExpose = invalidExpose(spec.expose)
+      if (badExpose.length) throw new ValidationError('invalid expose list', badExpose)
       if ([...envs.values()].some((e) => e.info.name === spec.name))
         throw new ConflictError(`environment ${spec.name} already exists`)
       const info: EnvInfo = {
@@ -201,6 +214,21 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
 
     async destroyEnv(envId) {
       envs.delete(envId)
+      for (const k of [...previewTargets.keys()]) if (k.startsWith(`${envId}:`)) previewTargets.delete(k)
+    },
+
+    async previewTarget(envId, port) {
+      const env = live(envId)
+      if (!(env.spec.expose ?? []).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
+      const set = previewTargets.get(`${envId}:${port}`)
+      if (set) return { ...set }
+      return opts.previewTarget ? opts.previewTarget(env, port) : { host: '127.0.0.1', port }
+    },
+
+    servePreview(envId, port, target) {
+      const env = live(envId)
+      if (!(env.spec.expose ?? []).includes(port)) throw new NotFoundError('exposed port', `${envId}:${port}`)
+      previewTargets.set(`${envId}:${port}`, { ...target })
     },
 
     on(match, response) {

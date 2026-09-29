@@ -67,6 +67,98 @@ describe.skipIf(!ENABLED)('docker runtime against a real daemon', () => {
     expect(await leftovers()).toEqual([])
   }, 180_000)
 
+  it('reaches an exposed port through the preview forwarder, with nothing published on the host', async () => {
+    const env = await runtime.createEnv({ name: 'preview', image: 'python:3-alpine', expose: [8000] })
+    created.push(env.id)
+    await runtime.exec(env.id, [
+      'sh',
+      '-c',
+      'mkdir -p /srv && echo forwarded > /srv/index.html && cd /srv && nohup python3 -m http.server 8000 >/dev/null 2>&1 &',
+    ])
+    const target = await runtime.previewTarget!(env.id, 8000)
+    expect(target.port).toBe(8000)
+    let text = ''
+    for (let i = 0; i < 50 && !text.includes('forwarded'); i++) {
+      text = await fetch(`http://${target.host}:${target.port}/`)
+        .then((r) => r.text())
+        .catch(() => '')
+      if (!text.includes('forwarded')) await new Promise((r) => setTimeout(r, 200))
+    }
+    expect(text).toContain('forwarded')
+    const ports = (await docker.listContainers())
+      .filter((c) => c.Names.some((n) => n.startsWith(`/${PREFIX}`)))
+      .flatMap((c) => c.Ports)
+    expect(ports.filter((p) => p.PublicPort)).toEqual([])
+    await expect(runtime.previewTarget!(env.id, 22)).rejects.toThrow()
+    await runtime.destroyEnv(env.id)
+    await expect(runtime.previewTarget!(env.id, 8000)).rejects.toThrow()
+    expect(await leftovers()).toEqual([])
+  }, 180_000)
+
+  it('lets a harness running in a container reach previews, and never the other way round', async () => {
+    // A stand-in for the harness container, with a "harness API" on 3000, on a network of its own.
+    const appNet = `${PREFIX}appnet`
+    await docker.createNetwork({ Name: appNet, Driver: 'bridge' })
+    const app = await docker.createContainer({
+      name: `${PREFIX}app`,
+      Image: 'node:26-alpine',
+      Cmd: ['node', '-e', "require('http').createServer((q, s) => s.end('harness api')).listen(3000)"],
+      HostConfig: { NetworkMode: appNet },
+    })
+    await app.start()
+    try {
+      const rt = dockerRuntime({ namePrefix: PREFIX, selfContainer: `${PREFIX}app` })
+      const env = await rt.createEnv({ name: 'selfprev', image: 'python:3-alpine', expose: [8000] })
+      created.push(env.id)
+      await rt.exec(env.id, [
+        'sh',
+        '-c',
+        'mkdir -p /srv && echo via-sidecar > /srv/index.html && cd /srv && nohup python3 -m http.server 8000 >/dev/null 2>&1 &',
+      ])
+      const target = await rt.previewTarget!(env.id, 8000)
+      const fromApp = async () => {
+        const e = await app.exec({
+          Cmd: ['wget', '-qO-', '-T', '3', `http://${target.host}:${target.port}/`],
+          AttachStdout: true,
+          AttachStderr: true,
+        })
+        const stream = await e.start({})
+        const chunks: Buffer[] = []
+        for await (const c of stream) chunks.push(c as Buffer)
+        return Buffer.concat(chunks).toString()
+      }
+      let text = ''
+      for (let i = 0; i < 50 && !text.includes('via-sidecar'); i++) {
+        text = await fromApp()
+        if (!text.includes('via-sidecar')) await new Promise((r) => setTimeout(r, 200))
+      }
+      expect(text).toContain('via-sidecar')
+
+      // The project container can't reach the harness container on any of its addresses.
+      const info = await app.inspect()
+      const ips = Object.values(info.NetworkSettings.Networks)
+        .map((n) => n.IPAddress)
+        .filter(Boolean)
+      expect(ips.length).toBe(2)
+      const probe = ips
+        .map((ip) => `try:\n s=socket.create_connection(('${ip}', 3000), 3); print('open')\nexcept Exception: print('closed')`)
+        .join('\n')
+      const r = await rt.exec(env.id, ['python3', '-c', `import socket\n${probe}`], { timeoutMs: 30_000 })
+      expect(r.stdout.trim().split('\n')).toEqual(['closed', 'closed'])
+
+      await rt.destroyEnv(env.id)
+      const after = await app.inspect()
+      expect(Object.keys(after.NetworkSettings.Networks)).toEqual([appNet])
+    } finally {
+      await app.remove({ force: true }).catch(() => undefined)
+      await docker
+        .getNetwork(appNet)
+        .remove()
+        .catch(() => undefined)
+    }
+    expect(await leftovers()).toEqual([])
+  }, 180_000)
+
   it('lets allowlisted hosts through the egress proxy, and nothing else', async () => {
     const env = await runtime.createEnv({
       name: 'egress',

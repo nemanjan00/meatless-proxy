@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EntryTreeView } from '@/components/entry-tree.tsx'
+import { PreviewPanel } from '@/components/preview-panel.tsx'
 import { RecentRuns } from '@/components/recent-runs.tsx'
 import { Timeline } from '@/components/history.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
@@ -53,7 +54,7 @@ import { fillRows, intervalFor } from '@/lib/usage-series.ts'
 import { sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
 
-const TABS = ['history', 'branches', 'tree', 'runs', 'checklist', 'threads', 'usage'] as const
+const TABS = ['history', 'preview', 'branches', 'tree', 'runs', 'checklist', 'threads', 'usage'] as const
 type Tab = (typeof TABS)[number]
 
 function Prop({ label, children }: { label: string; children: React.ReactNode }) {
@@ -182,7 +183,12 @@ export function SessionDetailPage() {
   const api = useApi()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
-  const tab = (TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'history') as Tab
+  const preview = useLoad((a) => a.sessionPreview(id), [id])
+  const hasPreview = (preview.data?.ports.length ?? 0) > 0
+  const asked = (TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'history') as Tab
+  // The Preview tab exists only while the session's environment exposes ports.
+  const tab: Tab = asked === 'preview' && preview.data && !hasPreview ? 'history' : asked
+  const previewPort = Number(params.get('port')) || undefined
   const [highlight, setHighlight] = useState<string | null>(null)
   const detail = useLoad((a) => a.getSession(id), [id])
   const d = detail.data
@@ -255,10 +261,12 @@ export function SessionDetailPage() {
           detail.reload()
           runs.reload()
           tree.reload()
+          // A run may have started or torn down the environment.
+          preview.reload()
           break
       }
     },
-    [history, entryTree, detail, runs, tree],
+    [history, entryTree, detail, runs, tree, preview],
   )
   useLive([`session:${id}`], onLive)
 
@@ -395,7 +403,7 @@ export function SessionDetailPage() {
             />
             <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
               <TabsList variant="line" className="h-8 w-full justify-start gap-3 overflow-x-auto overflow-y-hidden border-b pb-0">
-                {TABS.map((t) => (
+                {TABS.filter((t) => t !== 'preview' || hasPreview).map((t) => (
                   <TabsTrigger key={t} value={t} className="flex-none px-0 capitalize">
                     {t}
                     {t === 'checklist' && checklist && (
@@ -425,6 +433,22 @@ export function SessionDetailPage() {
                       <Composer sessionId={id} onSent={history.reload} />
                     </Can>
                   </>
+                ) : (
+                  <LoadingRows />
+                )}
+              </TabsContent>
+              <TabsContent value="preview" className="pt-3">
+                {preview.data && hasPreview ? (
+                  <PreviewPanel
+                    preview={preview.data}
+                    {...(previewPort ? { initialPort: previewPort } : {})}
+                    onPortChange={(p) => {
+                      const next = new URLSearchParams(params)
+                      next.set('port', String(p))
+                      setParams(next, { replace: true })
+                    }}
+                    onRefresh={preview.reload}
+                  />
                 ) : (
                   <LoadingRows />
                 )}

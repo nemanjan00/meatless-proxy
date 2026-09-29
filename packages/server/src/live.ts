@@ -111,6 +111,7 @@ export const LIVE_TOPICS = [
   'event.ingested',
   'event.routed',
   'control.changed',
+  'preview.commit',
 ] as const
 
 export interface LiveHubOptions {

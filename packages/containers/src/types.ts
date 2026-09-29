@@ -32,7 +32,36 @@ export interface EnvSpec {
    * network beyond the environment's own private network (no internet, no harness services).
    */
   allowInternet?: boolean
+  /**
+   * Ports the main container serves, e.g. a dev server on 5173, for live previews. Nothing is
+   * published on the host: the harness reaches them through `previewTarget`.
+   */
+  expose?: number[]
   labels?: Record<string, string>
+}
+
+/** Where the harness process connects to reach an exposed port of an environment. */
+export interface PreviewTarget {
+  host: string
+  port: number
+}
+
+/** The most ports one environment may expose. */
+export const MAX_EXPOSED_PORTS = 16
+
+/** Problems with an `expose` list: each port an integer 1-65535, no duplicates, at most `MAX_EXPOSED_PORTS`. */
+export function invalidExpose(expose: unknown): string[] {
+  if (expose === undefined) return []
+  if (!Array.isArray(expose)) return ['expose must be a list of ports']
+  const issues: string[] = []
+  if (expose.length > MAX_EXPOSED_PORTS) issues.push(`at most ${MAX_EXPOSED_PORTS} exposed ports`)
+  const seen = new Set<number>()
+  for (const p of expose) {
+    if (!Number.isInteger(p) || (p as number) < 1 || (p as number) > 65535) issues.push(`bad port: ${String(p)}`)
+    else if (seen.has(p as number)) issues.push(`duplicate port: ${p}`)
+    else seen.add(p as number)
+  }
+  return issues
 }
 
 export interface EnvInfo {
@@ -70,6 +99,12 @@ export interface ContainerRuntime {
   logs(envId: string, opts?: { tail?: number }): Promise<string>
   /** The egress proxy's log, oldest first. Empty for an environment without `egress`. Optional. */
   egressLog?(envId: string): Promise<EgressLogEntry[]>
+  /**
+   * Where the harness connects to reach `port` of the environment's main container, for live
+   * previews. Throws `NotFoundError` when the environment is gone or doesn't expose the port.
+   * Optional: runtimes without it have no previews.
+   */
+  previewTarget?(envId: string, port: number): Promise<PreviewTarget>
   /** Removes the environment's containers, network and volumes. Idempotent. */
   destroyEnv(envId: string): Promise<void>
 }

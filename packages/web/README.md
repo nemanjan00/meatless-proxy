@@ -23,7 +23,7 @@ and the page it opens.
 | `src/styles/globals.css` | the stylebook tokens verbatim (`:root` / `.dark`), shadcn's `@theme inline` mapping, extra Linear tokens (`text-fg-tertiary`, `bg-level-2`, status colours), the type scale (`text-tiny` … `text-title3`), 510/590/680 weights, focus, selection, motion |
 | `src/components/ui/` | shadcn/ui components (generated with `npx shadcn add`, then tuned for density: 13 px menus and buttons, 32 px buttons, 2 px accent focus ring) |
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects and references shown readably, raw JSON on edit), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
-| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
+| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
 | `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
 | `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events and chat |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
@@ -46,6 +46,19 @@ messages, edits, deletions and reactions are replaced in place, other changes tr
 debounced reload). With `VITE_MOCK=1` the same interfaces are served by `src/mock`.
 Placeholders, hints and examples come from real records (employee handles, people's
 chat handles) or are generic; nothing outside `src/mock` knows a mock name.
+
+### Live previews
+
+The session page has a **Preview** tab while the session's environment exposes ports
+(`GET /api/sessions/:id/preview`), in `src/components/preview-panel.tsx`: a port picker, the frame with
+`sandbox="allow-scripts allow-forms allow-same-origin"` (safe because previews have their own origin,
+see docs/spec.md "Live previews"), the running commit as a badge, Reload and Full screen. Every load,
+reload and full-screen tab mints its own short-lived token (`POST /api/previews/token`) and uses its
+`url`, which exchanges the token for the preview origin's cookie; the harness cookie never goes there.
+A `preview.commit` live event reloads the frame on the new commit. Viewers see a note instead of the
+frame (tokens are for members). `?tab=preview&port=5173` opens the tab on a port, which is the link
+`env.preview` gives employees. The mock serves a static `data:` page per port and moves the demo
+commit now and then.
 
 ### Chat
 

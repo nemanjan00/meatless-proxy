@@ -7,6 +7,8 @@ import type {
   AuthConfig,
   CreatedApiToken,
   LoginLink,
+  PreviewToken,
+  SessionPreview,
   ApiKindSchema,
   ApiLink,
   ApiLinkedRecord,
@@ -77,6 +79,8 @@ export const ROUTES = {
   sessionSubscriptions: ['GET', '/api/subscriptions'],
   forkSession: ['POST', '/api/sessions/:id/fork'],
   sendMessage: ['POST', '/api/sessions/:id/message'],
+  sessionPreview: ['GET', '/api/sessions/:id/preview'],
+  previewToken: ['POST', '/api/previews/token'],
   entryChildren: ['GET', '/api/entries/:id/children'],
   getRun: ['GET', '/api/runs/:id'],
   runHistory: ['GET', '/api/runs/:id/history'],
@@ -295,6 +299,13 @@ export interface ApiClient {
    * it starts a run, or goes into the active run's inbox.
    */
   sendMessage(id: string, text: string): Promise<{ event: ApiEvent; runId: string | null; inbox: boolean }>
+  /** `GET /api/sessions/:id/preview` → the ports the session's environment serves, and the commit it runs. */
+  sessionPreview(id: string): Promise<SessionPreview>
+  /**
+   * `POST /api/previews/token` body `{ envId, port }` → a preview token and the URL that opens the
+   * preview with it (members; 404 when the environment is gone or doesn't expose the port).
+   */
+  previewToken(envId: string, port: number): Promise<PreviewToken>
   /** `GET /api/entries/:id/children` → entries whose parent is this one (branches). */
   entryChildren(entryId: string): Promise<ApiEntry[]>
   /** `GET /api/runs/:id` → the run. */
@@ -528,6 +539,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     subscriptions: (q = {}) => call('sessionSubscriptions', undefined, { ...q }),
     forkSession: (id, body = {}) => call('forkSession', { id }, undefined, body),
     sendMessage: (id, text) => call('sendMessage', { id }, undefined, { text }),
+    sessionPreview: (id) => call('sessionPreview', { id }),
+    previewToken: (envId, port) => call('previewToken', undefined, undefined, { envId, port }),
     entryChildren: (id) => call('entryChildren', { id }),
     getRun: (id) => call('getRun', { id }),
     runHistory: (id) => call('runHistory', { id }),

@@ -33,6 +33,7 @@ import {
   type SessionData,
   type SessionDetail,
   type SessionListItem,
+  type SessionPreview,
   type SessionTreeNode,
   type SubscriptionData,
   type TokenTotals,
@@ -54,6 +55,15 @@ export interface MockApiOptions {
   emit?: Emit
   /** The person using the UI (posts chat messages as them): a signed-in admin by default. */
   me?: { id: string; name: string; access?: Access }
+}
+
+/** A static stand-in for a proxied dev server: the mock has no real preview origin. */
+function demoPreviewPage(port: number, sha: string | undefined, token: string): string {
+  const html = `<!doctype html><meta charset="utf-8"><title>Preview :${port}</title>
+<body style="margin:0;font:14px/1.5 system-ui,sans-serif;background:#0f1011;color:#d0d6e0;display:grid;place-items:center;height:100vh">
+<main style="text-align:center"><h1 style="font-weight:590;font-size:20px;color:#f7f8f8">Demo app on port ${port}</h1>
+<p style="color:#8a8f98">Running commit ${sha ? sha.slice(0, 7) : 'unknown'} · loaded with ${token}</p></main></body>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
 }
 
 const notFound = (what: string) => new ApiRequestError(404, 'not_found', `${what} not found`)
@@ -135,6 +145,22 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     db.revisions.set(id, revs)
     emit('record.changed', { kind, id, version: rec.version, op: prev ? 'update' : 'create', actor })
     return rec
+  }
+
+  /** What the session's environment serves, read from its meta like the server does. */
+  const previewOf = (s: ApiRecord<SessionData>): SessionPreview => {
+    const env = s.data.meta?.env as { id?: string; expose?: number[] } | undefined
+    if (!env?.id) return { sessionId: s.id, envId: null, status: 'none', ports: [], commit: null }
+    const wt = (s.data.meta?.worktrees as { key?: string; head?: string; headSubject?: string }[] | undefined)?.[0]
+    return {
+      sessionId: s.id,
+      envId: env.id,
+      status: 'running',
+      ports: env.expose ?? [],
+      commit: wt?.head
+        ? { sha: wt.head, ...(wt.headSubject ? { subject: wt.headSubject } : {}), ...(wt.key ? { repo: wt.key } : {}) }
+        : null,
+    }
   }
 
   const employeeSummary = (id: string): EmployeeSummary => {
@@ -622,6 +648,25 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       return delay(tree)
     },
     sessionRuns: (id) => delay(sessionRuns(id)),
+    sessionPreview: (id) => {
+      const s = get<SessionData>('session', id)
+      if (!s) return fail(notFound('session'))
+      return delay(previewOf(s))
+    },
+    previewToken: (envId, port) => {
+      const s = all<SessionData>('session').find((x) => previewOf(x).envId === envId)
+      if (!s || !previewOf(s).ports.includes(port)) return fail(notFound('preview'))
+      const token = `mpp_mock_${++db.seq}`
+      const commit = previewOf(s).commit
+      return delay({
+        envId,
+        port,
+        token,
+        url: demoPreviewPage(port, commit?.sha, token),
+        origin: `http://${envId}-${port}.preview.example.com`,
+        expiresAt: new Date(db.now() + 5 * 60_000).toISOString(),
+      })
+    },
     subscriptions: (q = {}) =>
       delay(all<SubscriptionData>('subscription').filter((s) => !q.sessionId || s.data.sessionId === q.sessionId)),
     forkSession: (id, body = {}) => {

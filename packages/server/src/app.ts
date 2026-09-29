@@ -15,6 +15,7 @@ import { webhookRoutes } from './http/webhooks.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
+import { createPreviews, type Previews } from './previews/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { ensureSshKey } from './ssh.ts'
 import { buildServices, type AppOverrides, type Services } from './services.ts'
@@ -29,6 +30,8 @@ export interface StartOptions {
   port?: number
   /** Start queue workers (default true). */
   workers?: boolean
+  /** Override the preview listener's port (0 picks a free one). It listens only when previews are enabled. */
+  previewPort?: number
 }
 
 export interface App {
@@ -37,8 +40,10 @@ export interface App {
   services: Services
   live: LiveHub
   mcp: HarnessMcpServer
-  /** Starts workers, rebuilds the queues from the database, and listens. Resolves with the bound port. */
-  start(opts?: StartOptions): Promise<{ port: number | null }>
+  /** Live previews: tokens, the preview listener, and the harness's refusal of preview origins. */
+  previews: Previews
+  /** Starts workers, rebuilds the queues from the database, and listens. Resolves with the bound ports. */
+  start(opts?: StartOptions): Promise<{ port: number | null; previewPort?: number | null }>
   /** Graceful shutdown: stop taking jobs, let running jobs reach a boundary, close queue, MCP and store. */
   stop(opts?: { timeoutMs?: number }): Promise<void>
 }
@@ -60,6 +65,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   const tracker = new NowTracker(services)
   const live = new LiveHub(services)
   const mcp = new HarnessMcpServer(services)
+  let boundPort: number | null = null
+  const previews = createPreviews(services, { harnessPort: () => boundPort })
 
   const app = new Hono()
   app.onError((err, c) => sendError(c, err, log))
@@ -67,7 +74,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   // Metrics count every request; then security headers and the sign-in guard (src/auth/guard.ts).
   const metrics = new Metrics(services)
   const auth = createAuth(services, overrides.auth)
-  app.use('*', metrics.middleware(), ...auth.middleware)
+  // Nothing of the harness answers on, or to, a preview origin (src/previews).
+  app.use('*', metrics.middleware(), previews.refuse, ...auth.middleware)
 
   const ws = createNodeWebSocket({ app })
   app.get(
@@ -94,6 +102,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', webhookRoutes(services))
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))
+  app.route('/', previews.routes)
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })
@@ -107,6 +116,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     services,
     live,
     mcp,
+    previews,
     async start(opts = {}) {
       if (opts.workers !== false) {
         workers = startWorkers(services)
@@ -123,8 +133,10 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
       ws.injectWebSocket(started as Server)
       const addr = started.address() as AddressInfo | null
       const bound = addr?.port ?? port
+      boundPort = bound
       log.info('listening', { host: config.HOST, port: bound })
-      return { port: bound }
+      const previewPort = await previews.listen(config.HOST, opts.previewPort)
+      return { port: bound, previewPort }
     },
     stop(opts = {}) {
       stopping ??= (async () => {
@@ -140,6 +152,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
             })
           : Promise.resolve()
         ws.wss.close()
+        await previews.close().catch((err) => log.warn('preview listener close failed', { err: errorMessage(err) }))
         await workers?.stop(opts.timeoutMs ?? 30_000)
         await closing.catch((err) => log.warn('http close failed', { err: errorMessage(err) }))
         await services.close()

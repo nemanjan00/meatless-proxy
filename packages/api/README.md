@@ -32,6 +32,7 @@ so the browser bundle stays free of Node code.
 - Usage: `GET /api/usage/totals|breakdown|series`
 - Files: `GET /api/files/:employeeId`, `GET|PUT /api/files/:employeeId/content`
 - Secrets: `GET|PUT|DELETE /api/secrets` (names and scopes only; values are write-only)
+- Live previews: `GET /api/sessions/:id/preview` (`SessionPreview`: ports, status, running commit), `POST /api/previews/token` (`{ envId, port }` → `PreviewToken`, members); live topic `preview.commit` on `session:<id>`
 - Control and health: `GET /api/control`, `POST /api/control/pause-all|resume-all`, `GET /healthz`, `GET /readyz`
 
 Additions beyond the original brief, needed by the UI: `GET /api/sessions/:id/entry-tree`,

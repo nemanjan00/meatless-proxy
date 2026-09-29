@@ -1070,7 +1070,20 @@ Webhooks are retried with exponential backoff for 24 hours. See [[session:${SES.
       depth: 1,
       created: 90,
       updated: 1,
-      meta: { createdByRun: RUN.r1, priority: 'high' },
+      meta: {
+        createdByRun: RUN.r1,
+        priority: 'high',
+        // A running environment with a dev server and an API: the Preview tab shows them.
+        env: { id: 'mp-billing-bot-pay-123-refund', name: 'billing-bot-pay-123-refund', expose: [5173, 8000] },
+        worktrees: [
+          {
+            key: 'payments-api',
+            branch: 'mp/billing-bot/pay-123-refund',
+            head: '3f9c2a71b0d4e8f15a6c9b2d7e0f4a1c8b3d5e6f',
+            headSubject: 'Refund the duplicate charge once per invoice',
+          },
+        ],
+      },
       document: `# PAY-123: refund a double charge
 
 **Requested by** [[contact:${CON.ana}|Ana Novak]] · **Project** [[project:${PRO.payments}|Payments API]]
@@ -2705,4 +2718,31 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
 
   void [bi1, bi2, rc1, p10, p11, ro1]
   return db
+}
+
+const PREVIEW_SUBJECTS = [
+  'Show the refunded amount on the invoice page',
+  'Disable the refund button while a refund is pending',
+  'Explain partial refunds in the tooltip',
+]
+
+/**
+ * Moves the demo environment's checkout to a new commit, as an employee committing would, and
+ * returns what the server would announce as `preview.commit`. Null when the session has no preview.
+ */
+export function advancePreviewCommit(
+  db: MockDb,
+  sessionId: string,
+): { sessionId: string; envId: string; sha: string; subject: string; repo: string } | null {
+  const rec = db.records.get('session')?.get(sessionId)
+  const meta = (rec?.data as { meta?: Record<string, Json> } | undefined)?.meta
+  const env = meta?.env as { id?: string } | undefined
+  const wt = (meta?.worktrees as { key: string }[] | undefined)?.[0]
+  if (!rec || !meta || !env?.id || !wt) return null
+  const n = ++db.seq
+  const sha = Array.from({ length: 40 }, (_, i) => ((n * 7 + i * 13) % 16).toString(16)).join('')
+  const subject = PREVIEW_SUBJECTS[n % PREVIEW_SUBJECTS.length]!
+  const worktrees = [{ ...wt, head: sha, headSubject: subject }]
+  rec.data = { ...rec.data, meta: { ...meta, worktrees } }
+  return { sessionId, envId: env.id, sha, subject, repo: wt.key }
 }

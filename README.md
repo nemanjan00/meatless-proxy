@@ -68,8 +68,16 @@ docker compose exec app npm run login-link -- --contact you@example.com --create
 docker compose exec app npm run login-link -- --admin
 ```
 
-Setting `ADMIN_EMAIL` in `.env` before the first start gives that admin your
-email. Admins invite everyone else from Settings → People and access.
+Setting `ADMIN_EMAIL` in `.env` makes that person an admin on the next start
+(the first-start admin gets the email, if nobody has it yet), and the log
+shows a one-time link for them until they've signed in. Signing in gives a
+session that lasts 14 days and renews with use. Admins invite everyone else
+from Settings → People and access.
+
+Live previews of what employees are building are served on their own origin:
+port 3001 by default (`PREVIEW_HOST_PORT`), or `<env>-<port>.<PREVIEW_DOMAIN>`
+with a wildcard DNS name and certificate for production. See
+[packages/server/README.md](packages/server/README.md).
 The app container manages project environments as sibling containers through
 the host's Docker socket, so run it on a host dedicated to it. On first start the harness creates a default
 AI employee, **Meatless**, with its router session, and the channels

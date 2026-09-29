@@ -73,6 +73,18 @@ export class MockDocker implements DockerLike {
     }
   }
 
+  /** A container's networks with made-up addresses: its own `NetworkMode`, and every network it was connected to. */
+  networksOf(c: MockContainer): Record<string, { IPAddress: string }> {
+    const names = [...this.networks.keys()]
+    const out: Record<string, { IPAddress: string }> = {}
+    const add = (net: string) => {
+      out[net] = { IPAddress: `172.30.${names.indexOf(net) + 1}.${[...this.containers.keys()].indexOf(c.id) + 2}` }
+    }
+    if (c.opts.HostConfig?.NetworkMode && this.networks.has(c.opts.HostConfig.NetworkMode)) add(c.opts.HostConfig.NetworkMode)
+    for (const [name, net] of this.networks) if ((net.connected ?? []).some((x: string) => x === c.name || x === c.id)) add(name)
+    return out
+  }
+
   callsTo(method: string) {
     return this.calls.filter((c) => c.method === method).map((c) => c.args)
   }
@@ -101,7 +113,16 @@ export class MockDocker implements DockerLike {
         const net = this.networks.get(id)
         if (!net) throw new HttpError(404, 'no such network')
         if (!this.find(opts.Container)) throw new HttpError(404, `no such container: ${opts.Container}`)
+        if ((net.connected ?? []).includes(opts.Container)) throw new HttpError(403, 'endpoint already exists in network')
         net.connected = [...(net.connected ?? []), opts.Container]
+        return {}
+      },
+      disconnect: async (opts: Record<string, any>) => {
+        this.record('network.disconnect', id, opts)
+        const net = this.networks.get(id)
+        if (!net) throw new HttpError(404, 'no such network')
+        if (!(net.connected ?? []).includes(opts.Container)) throw new HttpError(404, 'not connected')
+        net.connected = net.connected.filter((c: string) => c !== opts.Container)
         return {}
       },
     }
@@ -150,6 +171,7 @@ export class MockDocker implements DockerLike {
           Created: c.created,
           State: { Running: c.running },
           Config: { Labels: c.opts.Labels ?? {} },
+          NetworkSettings: { Networks: self.networksOf(c) },
         }
       },
       async remove(opts?: Record<string, any>) {

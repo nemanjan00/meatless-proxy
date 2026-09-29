@@ -447,6 +447,33 @@ describe('bootstrap', () => {
   })
 })
 
+describe('ADMIN_EMAIL set after the first start', () => {
+  it('gives the first-start admin the email, and makes an existing contact with it an admin', async () => {
+    const store = memoryStore()
+    const t1 = await make({ overrides: { store } })
+    const first = (await t1.a.services.records.query<any>('contact', { where: { access: 'admin' } })).items
+    expect(first).toHaveLength(1)
+    expect(first[0]!.data.email).toBeUndefined()
+    await t1.close()
+    apps.splice(apps.indexOf(t1), 1)
+
+    // Next start with ADMIN_EMAIL: the same admin contact gets the email (no second admin), and a link for it.
+    const logs: any[] = []
+    const t2 = await make({ env: { ADMIN_EMAIL: 'me@example.com' }, overrides: { store, logger: memoryLogger(logs) } })
+    const admins = (await t2.a.services.records.query<any>('contact', { where: { access: 'admin' } })).items
+    expect(admins.map((a) => [a.id, a.data.email])).toEqual([[first[0]!.id, 'me@example.com']])
+    const line = logs.find((l) => l.msg.startsWith('bootstrap: sign in as the admin'))
+    expect(line.fields).toMatchObject({ contactId: first[0]!.id, email: 'me@example.com' })
+    // A person who already exists becomes an admin when ADMIN_EMAIL names them; nobody is demoted.
+    const bob = await t2.a.services.directory.contacts.create({ name: 'Bob', kind: 'person', email: 'bob@example.com' })
+    await t2.close()
+    apps.splice(apps.indexOf(t2), 1)
+    const t3 = await make({ env: { ADMIN_EMAIL: 'bob@example.com' }, overrides: { store } })
+    const after = (await t3.a.services.records.query<any>('contact', { where: { access: 'admin' } })).items.map((a) => a.id)
+    expect(after.sort()).toEqual([first[0]!.id, bob.id].sort())
+  })
+})
+
 describe('security headers', () => {
   it('sends a CSP on the UI, and nosniff and a referrer policy everywhere', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mp-web-'))
@@ -468,7 +495,12 @@ describe('security headers', () => {
       expect(api.headers.get('x-content-type-options')).toBe('nosniff')
       expect(api.headers.get('content-security-policy')).toBeNull()
 
-      const noPreview = await make({ env: { MP_WEB_DIST: dir } })
+      // Without a domain, previews are on the preview port of the host the UI is served at.
+      const portMode = await make({ env: { MP_WEB_DIST: dir } })
+      expect((await portMode.a.app.request('http://mp.test:3000/')).headers.get('content-security-policy')).toContain(
+        'frame-src http://mp.test:3001;',
+      )
+      const noPreview = await make({ env: { MP_WEB_DIST: dir, PREVIEW_PORT: '0' } })
       expect((await noPreview.a.app.request('/')).headers.get('content-security-policy')).toContain("frame-src 'none'")
     } finally {
       rmSync(dir, { recursive: true, force: true })

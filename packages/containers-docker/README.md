@@ -4,11 +4,12 @@ Docker adapter (L2) for `@mp/containers`, using dockerode.
 
 ## API
 
-`dockerRuntime({ docker?, socketPath?, logger?, clock?, namePrefix = 'mp-', labels?, capDrop?, pidsLimit?, maxOutputBytes?, proxyImage? })`
+`dockerRuntime({ docker?, socketPath?, logger?, clock?, namePrefix = 'mp-', labels?, capDrop?, pidsLimit?, maxOutputBytes?, proxyImage?, selfContainer? })`
 returns a `ContainerRuntime`. Also exported: `mapError`, `demuxBuffer`, `NotImplementedError`, the `mp.*` label names and the
 `DockerLike` interface (the slice of dockerode used), `parseEgressLog`, and the egress proxy: `createEgressProxy`,
 `EGRESS_PROXY_SOURCE`, `egressProxyDecision`, `EGRESS_PROXY_PORT` (3128), `DEFAULT_PROXY_IMAGE` (`node:26-alpine`),
-`PROXY_URL`.
+`PROXY_URL`, and the preview forwarder: `createPreviewForwarder`, `PREVIEW_FORWARDER_SOURCE`, `PREVIEW_READY_MARKER`,
+`LABEL_EXPOSE`, `PREVIEW_SUFFIX`.
 
 Per environment `<name>`:
 
@@ -29,6 +30,13 @@ Per environment `<name>`:
 - exec: `container.exec` + `exec.start({ hijack: true })`, demuxed with `modem.demuxStream`. On timeout the stream is
   dropped and the result has `timedOut: true`, exit code 124. Docker can't kill an exec'd process, so it is abandoned
   (it dies with the environment). Aborting rejects with `ExecAbortedError`.
+- with `expose`: the main container is labelled `mp.expose=5173,8000` (nothing is published on the host), and a
+  **preview forwarder** sidecar `<prefix><name>-preview` (`proxyImage`, `node -e PREVIEW_FORWARDER_SOURCE`, uid 65534,
+  read-only root, 128 MiB) runs on the env network and on a network of its own, `<prefix><name>-preview` (internal). It
+  forwards TCP on each exposed port to the same port of `main`, and nowhere else. `previewTarget(envId, port)` returns
+  the forwarder's address on the preview network. With `selfContainer` (the harness's own container, when it runs in
+  Docker) that container is first connected to the preview network (once; already connected is fine) and disconnected
+  on destroy. No service may be called `preview` then.
 - destroy: removes every container labelled `mp.env=<name>` (with anonymous volumes), the proxy, and both networks. Idempotent, and
   also cleans up half-created environments. A failed `createEnv` cleans up after itself.
 
@@ -46,6 +54,16 @@ lookup?, now? })` (returns an `http.Server`, not listening yet) and inlined verb
 `ALLOW` (JSON list), `PORT` and `HOST` from the environment. Its allowlist logic is a copy of `checkEgress` in
 `@mp/containers`; a test checks that both agree.
 
+## Why a forwarder sidecar for previews
+
+The harness has to reach a port inside an environment whose network is internal. Connecting the harness container to
+the environment's network would do it, but would also put the harness (and whatever it listens on) in reach of the
+project's containers, which must never reach the harness's API, Postgres or Redis. Instead the only container on both
+sides is the forwarder: the harness shares a network with nothing but the forwarder, the project shares one with
+nothing of the harness, and the forwarder only ever connects to `main` on an exposed port. A project container that
+connects to the forwarder only gets back to itself. When the harness runs on the host, the host reaches the forwarder's
+bridge address directly and nothing is connected.
+
 ## Tests
 
 `test/docker.test.ts` runs against `test/mock-docker.ts`, a hand-written in-memory Docker (it uses the real modem's
@@ -53,7 +71,11 @@ demuxing and progress parsing, but never connects to a daemon). No real Docker i
 checks the egress networks, the sidecar, aliases, proxy variables, cleanup and `egressLog` against the mock.
 `test/egress-proxy.test.ts` runs `createEgressProxy` in-process against a local HTTP upstream and a local TCP echo target
 (forwarding, 403s, CONNECT tunnels, private addresses, globs and ports, log lines), and `EGRESS_PROXY_SOURCE` as a
-`node -e` child process.
+`node -e` child process. `test/preview-docker.test.ts` checks the forwarder, its networks, `previewTarget`,
+`selfContainer` connects and disconnects and cleanup against the mock, and runs `createPreviewForwarder` and
+`PREVIEW_FORWARDER_SOURCE` against real local servers. `test/real-docker.test.ts` (`MP_DOCKER_TEST=1`) also serves
+`python3 -m http.server` through the forwarder, once reached from the host and once from a stand-in harness container
+that the project container can't reach on any of its addresses.
 
 ## Replacing it
 

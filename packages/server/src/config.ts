@@ -182,6 +182,13 @@ export const configSchema = z.object({
   METRICS_TOKEN: optStr.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters'),
   /** Domain of live previews (`<env>-<port>.<PREVIEW_DOMAIN>`): the only origins the UI may frame. */
   PREVIEW_DOMAIN: optStr.refine((v) => v === undefined || /^[a-z0-9.-]+$/i.test(v), 'must be a domain name'),
+  /** The live preview listener's port (src/previews). Without PREVIEW_DOMAIN it is also the previews' origin. */
+  PREVIEW_PORT: z.coerce.number().int().min(0).max(65535).default(3001),
+  /**
+   * The container the harness runs in (id or name), so it can join environments' preview networks.
+   * Default: this host name when running in Docker (`/.dockerenv`), else none.
+   */
+  SELF_CONTAINER: optStr,
 })
 
 export type RawConfig = z.infer<typeof configSchema>
@@ -230,6 +237,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const oidc = ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL'] as const
   if (oidc.some((k) => c[k]) && !oidc.every((k) => c[k]))
     issues.push(`OIDC: set all of ${oidc.join(', ')}, or none (missing ${oidc.filter((k) => !c[k]).join(', ')})`)
+  if (c.PREVIEW_PORT !== 0 && c.PREVIEW_PORT === c.PORT)
+    issues.push('PREVIEW_PORT: must differ from PORT (previews need their own origin)')
   if (issues.length) throw new ConfigError(issues)
   return {
     ...c,
@@ -258,6 +267,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     publicUrl: c.PUBLIC_URL ?? null,
     oidc: c.OIDC_ISSUER ? { issuer: c.OIDC_ISSUER, clientId: c.OIDC_CLIENT_ID } : 'off',
     metricsToken: c.METRICS_TOKEN ? 'set' : 'unset',
+    previews: c.PREVIEW_DOMAIN ? { domain: c.PREVIEW_DOMAIN, port: c.PREVIEW_PORT } : { port: c.PREVIEW_PORT },
   }
 }
 
