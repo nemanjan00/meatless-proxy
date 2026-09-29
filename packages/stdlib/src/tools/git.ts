@@ -122,9 +122,11 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const path = join(deps.config.worktreesRoot, session.id, key)
       const auth = await gitAuthFor(deps, ctx.employeeId)
       await git.fetch(repo.url, auth)
+      // Without a ref, the remote's own default branch (origin/HEAD), not a guessed `main`.
+      const ref = a.ref ?? repo.defaultBranch
       const info = await git.createWorktree(repo.url, {
         path,
-        ref: a.ref ?? repo.defaultBranch ?? 'main',
+        ...(ref ? { ref } : {}),
         newBranch: branch,
         ...(auth ? { auth } : {}),
       })

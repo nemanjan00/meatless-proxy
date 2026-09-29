@@ -92,6 +92,14 @@ describe('git tools', () => {
     expect((await t.out('git.status', { repo: 'github.com/acme/web' })).clean).toBe(true)
   })
 
+  it("starts from the remote's own default branch when none is given (no guessed main)", async () => {
+    const t = await stack()
+    await t.directory.projects.update(t.project.id, { repositories: [{ url: REPO }] })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const call = t.git.calls.find((c) => c.method === 'createWorktree')!
+    expect((call.args[1] as { ref?: string }).ref).toBeUndefined()
+  })
+
   it('is not registered without a git cache', async () => {
     const t = await stack({ git: false, containers: false })
     expect(t.names.some((n) => n.startsWith('git.') || n.startsWith('env.'))).toBe(false)
