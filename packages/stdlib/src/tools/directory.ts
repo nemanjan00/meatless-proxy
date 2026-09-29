@@ -242,7 +242,7 @@ export function registerDirectoryTools(kit: Kit): void {
     {
       name: 'procedures.run',
       description:
-        "Run a procedure for a piece of work: forks the procedure's context (which already knows the steps and approvers), copies the procedure's checklist into the fork, links it to this session and starts it with your description of the work. Returns sessionId and runId (sessions.wait on it for the result).",
+        "Run a procedure for a piece of work. Always use this when a procedure applies, instead of doing its steps yourself: it forks the procedure's context (which already knows the steps and approvers), copies the procedure's checklist into the fork, links it to this session and starts it with your description of the work. Returns sessionId and runId (sessions.wait on it for the result).",
       effect: 'idempotent',
       params: {
         properties: {
