@@ -35,7 +35,7 @@ module to it:
 | links             | [Links](#links-between-contacts-and-projects) |
 | repos, runtime    | [Project code and runtime](#project-code-and-runtime) |
 | sessions          | [Sessions](#sessions)                         |
-| memory            | not yet specified                             |
+| memory            | [Memory](#memory)                             |
 
 ## Structure
 
@@ -364,6 +364,67 @@ Open questions:
 - Are forks limited, e.g. by depth or by how many children one loop can have?
 - Does `wait` take a timeout, and can the parent cancel children it no longer
   needs?
+
+### Memory
+
+The harness gives the model memory that lasts beyond a single session: things
+it learned, was told, or decided, which it can recall later in any session.
+
+#### Memory entries
+
+Each memory is one entry. It follows the same pattern as the other modules:
+structured metadata plus markdown content, with an extendable schema.
+
+| Field      | Type                   | Notes                                           |
+|------------|------------------------|-------------------------------------------------|
+| `id`       | string                 | stable, harness-assigned                        |
+| `summary`  | string                 | one line, used to decide whether it's relevant  |
+| `kind`     | string                 | e.g. fact, preference, feedback, decision       |
+| `source`   | {session id, contact id}, optional | where it came from and who said it  |
+| `created`  | timestamp              |                                                 |
+| `verified` | timestamp, optional    | when it was last confirmed to still be true     |
+
+The content is markdown, and it can link to contacts, projects, sessions and
+other memories like any other document.
+
+#### Links
+
+Memories link to contacts, projects and sessions many-to-many, with the same
+link record as elsewhere. That way, "what do I know about Ana?" or "what have I
+learned about project X?" are link queries, and linked memories can be pulled
+in automatically when a session starts working on a project or with a person.
+
+#### Behaviour
+
+- **One fact per entry.** An existing entry is updated when it covers the same
+  fact, instead of adding a duplicate.
+- **Recall.** Memories are found by summary, content, metadata or links. The
+  harness can load relevant memories into a session up front, which saves a
+  round trip.
+- **Staleness.** A memory is a claim about the past. Before acting on one that
+  names a file, a person's role or a procedure, the model checks it against the
+  current source of truth. It updates or deletes the memory if it's wrong.
+- **Scope and visibility.** A memory can be scoped to a contact, a project, or
+  the whole company. It is only recalled in sessions allowed to see it, under
+  the same confidentiality rules as the [employee](employee.md#4-boundaries).
+
+#### Tooling
+
+| Tool          | What it does                                               |
+|---------------|------------------------------------------------------------|
+| remember      | create or update a memory                                  |
+| recall        | find memories by text, metadata or links                   |
+| link / unlink | link a memory to contacts, projects, sessions or memories  |
+| forget        | delete a memory                                            |
+
+Open questions:
+
+- Is recall based on keywords, embeddings, or both?
+- Who can see and edit memories: can people review what the employee remembers
+  about them, and correct it or have it deleted?
+- When a session is forked, do memories written in one branch become visible to
+  the others right away?
+- Is there a size limit, or some process to compact and prune old memories?
 
 ## Unique features
 
