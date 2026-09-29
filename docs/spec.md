@@ -165,6 +165,12 @@ session.
 - **Accounts.** The employee has its own accounts and credentials in each
   system, scoped per [least privilege](employee.md#4-boundaries). It never uses
   a person's account.
+- **Own SSH keypair.** Each employee has its own SSH keypair (ed25519),
+  generated when the employee is created. The private key is a
+  [secret](#secrets) scoped to the employee: the model never sees it, and it's
+  injected into git commands only for their duration. The public key is shown
+  in the [web UI](#web-ui), to add to the employee's account on the git host or
+  as a deploy key. The keypair can be rotated.
 - **Always an AI.** Its name, profile and messages make clear that it's an AI,
   as the [employee rules](employee.md#being-honest-about-what-it-is) require.
 
@@ -652,13 +658,17 @@ and can run it.
 - The harness keeps a **local cache** of every linked repository, so reading
   code doesn't need a network round trip and a fresh clone isn't needed for each
   task.
-- For now the cache is **local to the harness host**. Like Go's module cache,
-  its layout comes from the remote URL. Each repository is a bare mirror under
-  `<cache root>/<host>/<path>`, for example
-  `<cache root>/github.com/acme/billing`. The same remote therefore always maps
-  to the same place, and different projects that link to one repo share it. The
-  cache root is configurable and defaults to a directory in the harness's data
-  directory.
+- For now the cache is **local to the harness host**. Each **employee has its
+  own git store**, laid out like Go's module cache by remote URL:
+  `<cache root>/<employee>/<host>/<path>`, for example
+  `<cache root>/billing-bot/github.com/acme/billing`. The same remote always
+  maps to the same place for one employee, and projects that link to the same
+  repo share it. Stores are separate per employee because an employee is a
+  [workspace](#multiple-employees), and because fetches and pushes use that
+  employee's own SSH key. The cache root is configurable and defaults to a
+  directory in the harness's data directory.
+- If disk space becomes a problem, employees' stores can share a read-only
+  object pool through git alternates, without sharing refs.
 - The cache is kept up to date by fetching: on a schedule, when a task starts,
   and when the task system or chat reports new changes (e.g. a push or a merged
   PR).
@@ -690,8 +700,17 @@ and can run it.
 - Each task gets its **own isolated environment**, with its own containers,
   network and volumes, mounted on the task's checkout. It's torn down when the
   task ends.
-- Resource limits (CPU, memory, time) apply per environment, and network access
-  from the containers is restricted to what the project needs.
+- Resource limits (CPU, memory, time) apply per environment.
+- **Names and labels.** Every container, network and volume is named
+  `mp-<employee>-<session>-…` and labelled with the employee and session, so
+  one employee's or one session's environments are easy to find and clean up.
+- **Network access through a proxy.** Project containers have no direct
+  network access. Each environment's private network has an **egress proxy**,
+  and containers get `HTTP_PROXY`/`HTTPS_PROXY` pointing at it. The proxy only
+  lets through an allowlist of destinations, set per project (e.g. the npm
+  registry, the git host, the project's own staging services), and logs every
+  request to the session's audit trail. Anything else is blocked, including
+  the harness's own Postgres and Redis.
 - Output from builds, tests and running services (logs, exit codes, artifacts)
   is captured and available to the model and in the task's
   [audit trail](employee.md#4-boundaries).
@@ -703,6 +722,8 @@ Open questions:
 - How are secrets the project needs at runtime provided to its containers?
 - Is Docker the only runtime, or should the orchestration layer also allow
   others (Podman, Kubernetes, remote runners)?
+- Is one egress proxy shared by all environments (with per-environment
+  allowlists), or does each environment get its own?
 - How long can an environment stay up, for example for someone to look at a
   running preview?
 
