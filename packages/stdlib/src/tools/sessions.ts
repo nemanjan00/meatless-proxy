@@ -126,6 +126,13 @@ export function registerSessionTools(kit: Kit): void {
   const workToolset = async (parent: Session): Promise<string[] | undefined> =>
     parent.data.meta?.role === 'router' && deps.toolsetFor ? deps.toolsetFor(parent.data.employeeId) : undefined
 
+  /**
+   * The run mode for work started from `parent`. Work a router context starts owns its subject, so it keeps
+   * its work (continuing): a requested ephemeral mode would roll back the conversation it's meant to hold.
+   */
+  const workMode = (parent: Session, mode: ReturnType<typeof checkMode>) =>
+    parent.data.meta?.role === 'router' ? undefined : mode
+
   const routerForkPoint = async (parent: Session): Promise<string | null> => {
     if (parent.data.meta?.role !== 'router') return null
     const [first] = await sessions.history(parent.id)
@@ -208,7 +215,7 @@ export function registerSessionTools(kit: Kit): void {
           ...(instruction ? { instruction } : {}),
           type: 'fork',
           note: 'create',
-          ...(mode ? { mode } : {}),
+          ...(workMode(caller, mode) ? { mode: workMode(caller, mode) } : {}),
         })
         return { sessionId: s.id, slug: s.data.slug, title: s.data.title, runId: run.id }
       })
@@ -253,7 +260,8 @@ export function registerSessionTools(kit: Kit): void {
         })
         await copyLinks(parent, fork, ctx)
         await linkRequester(fork, ctx)
-        const run = await kit.startRun(fork.id, ctx, { instruction, type: 'fork', ...(mode ? { mode } : {}) })
+        const forkMode = workMode(parent, mode)
+        const run = await kit.startRun(fork.id, ctx, { instruction, type: 'fork', ...(forkMode ? { mode: forkMode } : {}) })
         return { sessionId: fork.id, slug: fork.data.slug, runId: run.id }
       })
       return ok(output)
@@ -351,7 +359,8 @@ export function registerSessionTools(kit: Kit): void {
           })
           await kit.patchMeta(child.id, (m) => ({ ...m, realTask: task }))
         }
-        const run = await kit.startRun(child.id, ctx, { type: 'loop', ...(mode ? { mode } : {}) })
+        const childMode = workMode(parent, mode)
+        const run = await kit.startRun(child.id, ctx, { type: 'loop', ...(childMode ? { mode: childMode } : {}) })
         out.push({ index: i, sessionId: child.id, slug: child.data.slug, runId: run.id, ...(task ? { task } : {}) })
       }
       return ok({ children: out, runIds: out.map((c: any) => c.runId) })

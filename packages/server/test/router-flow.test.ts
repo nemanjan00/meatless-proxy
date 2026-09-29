@@ -147,14 +147,16 @@ describe('follow-ups in a thread that tagged an employee', () => {
 })
 
 describe('work the router starts', () => {
-  it("gets the employee's full toolset, not the router's routing-only one", async () => {
+  it("gets the employee's full toolset and keeps its work", async () => {
     const script = Object.assign(
       (req: ModelRequest): ScriptResult => {
         const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
         const called = (name: string) =>
           req.messages.some((m) => m.tool_calls?.some((c) => c.function.name.replace(/__/g, '.') === name))
         if (router && !called('sessions.create'))
-          return callTools([{ name: 'sessions.create', args: { title: 'Script help', instruction: 'Write the script.' } }])
+          return callTools([
+            { name: 'sessions.create', args: { title: 'Script help', instruction: 'Write the script.', mode: 'ephemeral' } },
+          ])
         if (router && !called('sessions.commit'))
           return callTools([
             { name: 'sessions.commit', args: { summary: 'thread (#general): script → started @meatless#script-help' } },
@@ -173,5 +175,8 @@ describe('work the router starts', () => {
     expect(router.data.toolset).not.toContain('fs.read')
     expect(work.data.toolset).toContain('fs.read')
     expect(work.data.toolset!.length).toBeGreaterThan(router.data.toolset!.length)
+    // It owns the thread, so it keeps its work even when the router asked for an ephemeral run (Kimi did).
+    const workRuns = await s.sessions.runs({ sessionId: work.id })
+    expect(workRuns.map((r) => r.data.mode)).toEqual(['continuing'])
   })
 })
