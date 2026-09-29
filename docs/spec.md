@@ -23,7 +23,32 @@ and the features unique to meatless-proxy follow later.
 
 ## Common features
 
-_None specified yet._
+### MCP
+
+The harness is an MCP (Model Context Protocol) client. It reaches outside
+systems through MCP servers, not through integrations built into the harness.
+
+It uses MCP for two kinds of systems:
+
+- **Chat**: Slack, Telegram, Teams, email and the like. The harness reads and
+  sends messages, follows threads and DMs, and looks up who is who.
+- **Task systems**: Linear, Jira, GitLab/GitHub issues and the like. The harness
+  creates, reads, updates, assigns and comments on tasks.
+
+Requirements:
+
+- Several MCP servers can be connected at the same time. Adding a new chat or
+  task system means configuring a server, not changing harness code.
+- The harness supports both directions. It acts on a system (MCP tool calls),
+  and it also finds out when something happens there: a new message, a mention,
+  a task assigned to it. How it receives those events is still open (see below).
+
+Open questions:
+
+- How are inbound events delivered: MCP notifications, polling, or webhooks
+  bridged into MCP?
+- Which transports are supported: stdio, streamable HTTP, or both?
+- How are credentials for each server stored and scoped?
 
 ## Unique features
 
