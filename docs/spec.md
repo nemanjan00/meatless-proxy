@@ -102,8 +102,8 @@ everything in [Sessions](#sessions) applies to it.
 
 ## Structure
 
-This document is written incrementally. Common harness features come first,
-and the features unique to meatless-proxy follow later.
+Common harness features come first. The features that make meatless-proxy
+different are summarised at the end, in [Unique features](#unique-features).
 
 How it all runs is in [execution.md](execution.md), the execution model (a
 draft for review).
@@ -1362,4 +1362,76 @@ Open questions:
 
 ## Unique features
 
-_None specified yet._
+Most of the sections above are what any serious harness needs. These are the
+parts that make meatless-proxy different. Each one is specified in detail in
+the section it links to.
+
+### Context that is never lost
+
+- **History is a tree, not a transcript.** Every entry a session ever saw is
+  kept, content-addressed and immutable. A session is just a pointer into the
+  tree ([execution model](execution.md#history-as-an-entry-tree)).
+- **Rewind instead of compaction.** When a context gets heavy, the session
+  jumps back to an earlier point and appends a summary of what it did after it.
+  The detail stays one lookup away, and the prefix up to the rewind point stays
+  cached ([context management](#context-management-rewind-not-compaction)).
+- **Offload to documentation.** A message in the history can be replaced by a
+  pointer to a chapter in a docs file, written first if needed. The knowledge
+  ends up in the project's docs instead of dying with the session.
+- **Real compaction only as a last resort**, recorded, and still reversible
+  from the stored history.
+
+### Work that forks, fans out and folds back
+
+- **Fork anywhere, loop over anything.** Any session can fork at any point, or
+  split into *n* children, one per item. The parent waits for them or doesn't
+  ([sessions](#sessions)).
+- **Ephemeral or committed runs.** A long-lived context handles each event in
+  a run that's discarded afterwards, and only commits what's worth keeping, so
+  it stays small for years ([runs](#runs-ephemeral-or-committed)).
+- **Procedures as warm contexts.** Each procedure has a context that already
+  knows it. Every instance runs in a fork of it: nothing to re-read, and the
+  provider's prompt cache is shared ([procedures](#procedures)).
+- **Real forks become tasks.** A fork that is real work shows up in the task
+  system, where people track work ([runaway protection](#real-forks-go-through-the-task-system)).
+
+### Routing without a person in the middle
+
+- **Triggers to contexts, not to new sessions.** New work goes to the context
+  assigned to that kind of work ([triggers](#triggers)).
+- **Subscriptions skip routing.** A session working on a ticket, a PR or a
+  thread subscribes to it, and replies reach it directly, filtered with JSON
+  queries ([subscriptions](#subscriptions)).
+- **Harness chat as a routing fabric.** Channels map to contexts, threads to
+  sessions, and `@employee#session` tags address one exact session
+  ([harness chat](#harness-chat)).
+- **Trust follows the route.** Expected input (a subscription, a tag) is
+  trusted; anything else is treated critically, the way a person would treat
+  an unexpected email ([untrusted input](#untrusted-input)).
+
+### Employees, not agents
+
+- **No single operator.** The harness talks to the whole company. Anyone can
+  reach it, and it reaches out to whoever ownership says
+  ([principles](#no-single-operator)).
+- **Employees as workspaces.** Several AI employees split the company between
+  them to keep contexts small. Each has its own identity, SSH key, git store,
+  filesystem, memories and personality, and they chat with each other
+  ([identity](#multiple-employees)).
+- **AI-to-AI, directly.** Other agents, such as a person's own Claude Code or
+  another company's harness, connect over MCP and are notified when something
+  happens for them ([the harness as an MCP server](#the-harness-as-an-mcp-server)).
+- **A self-scripting engine.** The model orchestrates its own work with a
+  standard library for a person, plus memory ([self-scripting](#a-self-scripting-engine)).
+
+### Safety that doesn't depend on the model
+
+- **Hard limits outside the model.** No merging or deploying, only PRs.
+  Secrets are injected at call time and never shown to it. Containers can only
+  reach allowlisted destinations through a proxy.
+- **Policies as hooks.** Checklist evidence, docs maintenance, commit on stop,
+  budgets and AI-to-AI streak limits are enforced by the harness, not
+  requested in the prompt ([policy hooks](#policy-hooks)).
+- **Crash safety for the outside world.** A run that crashes resumes from its
+  journal and never blindly repeats a Slack post or ticket creation
+  ([side effects](execution.md#side-effects)).
