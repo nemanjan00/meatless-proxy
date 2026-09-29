@@ -426,6 +426,55 @@ Open questions:
   the others right away?
 - Is there a size limit, or some process to compact and prune old memories?
 
+### Web UI
+
+The harness has a web UI where people can see what it is doing, what it has
+done, and what it costs, and where they can explore and edit what it knows.
+
+#### Activity
+
+- **Now.** Live view of running sessions: what each one is working on, its
+  latest messages and tool calls, and what it's waiting on (a child, a person,
+  a container). Updates stream in without a page reload.
+- **History.** Everything it has done, searchable and filterable by project,
+  contact, status, template and time. Every session can be opened and read in
+  full: messages, tool calls with their inputs and outputs, container logs, and
+  git changes.
+- **Session trees.** Forks and loops are shown as a tree. You can navigate from
+  a session to its parent, its children, and linked sessions, and see at a
+  glance which branches are running, waiting, done or failed.
+
+#### Usage
+
+- Token usage is recorded for every model call: input, output and cached
+  tokens, and the model used.
+- The UI shows usage per session, rolled up per session tree, per project, per
+  contact (who requested the work), per template and over time. Cost is shown
+  next to the token counts.
+- Usage can be broken down to find what's expensive: which sessions, tools or
+  steps used the most tokens.
+
+#### Knowledge
+
+- **Browse** contacts, projects, links, templates and memories, and follow the
+  links between them, e.g. from a project to its people, sessions, memories and
+  docs.
+- **Read and edit docs.** The markdown documents of projects, sessions and
+  memories can be read rendered and edited in place, with links to contacts,
+  projects and sessions resolved and clickable.
+- **Edit structured data.** Contacts, projects, links and memories can be
+  edited through forms generated from their schema, including extension fields.
+- **History of changes.** Every edit records who made it (a person or a
+  session) and when, and can be reviewed and reverted.
+
+Open questions:
+
+- How do people sign in, and how does what they can see map to the
+  [confidentiality rules](employee.md#4-boundaries)?
+- Can people act on sessions from the UI (stop, fork, resume, reply), or is it
+  view-only apart from docs and data?
+- Where is edit history stored: git, the harness database, or both?
+
 ## Unique features
 
 _None specified yet._
