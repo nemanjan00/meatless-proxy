@@ -12,7 +12,12 @@ export interface JobOptions {
   attempts?: number
   /** Delay before each retry, doubled every time. Default 1000. */
   backoffMs?: number
-  /** Repeat every this many milliseconds, until `removeRepeatable`. */
+  /**
+   * Repeat every this many milliseconds, until `removeRepeatable`. Needs `jobId`,
+   * which names the repeatable. The first run is right away (or after `delayMs`).
+   * Adding a repeatable whose `jobId` is already registered does nothing. An
+   * iteration may be skipped or postponed while the previous one is still waiting or active.
+   */
   repeatEveryMs?: number
 }
 
@@ -45,9 +50,22 @@ export interface QueueCounts {
 
 /** Bus topics published by queue implementations that were given a bus. */
 export const QueueTopics = {
+  /** A job failed its last attempt (it won't be retried). Payload: `QueueJobEvent` with `error`. */
   failed: 'queue.failed',
+  /** A job's handler succeeded. Payload: `QueueJobEvent`. */
   completed: 'queue.completed',
 } as const
+
+/** Payload of `QueueTopics.completed` and `QueueTopics.failed`. */
+export interface QueueJobEvent<T = unknown> {
+  queue: string
+  id: string
+  /** The attempt that finished (1 for the first). */
+  attempt: number
+  data: T
+  /** The error message, for `failed`. */
+  error?: string
+}
 
 export interface Queue {
   /** Adds a job to a named queue and returns its id. */

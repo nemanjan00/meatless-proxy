@@ -1,0 +1,16 @@
+{
+  "name": "@mp/queue-bullmq",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BullMQ (Redis) adapter for the @mp/queue port.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/queue": "0.0.0",
+    "bullmq": "^6.3.9",
+    "ioredis": "^6.0.0"
+  }
+}
