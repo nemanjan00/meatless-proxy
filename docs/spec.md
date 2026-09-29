@@ -536,8 +536,11 @@ what's new into events.
 
 #### Integrations
 
-Worked, tested examples for the systems most companies use, in
-[docs/integrations.md](integrations.md):
+Everything outside is reached through MCP servers, for maximum flexibility:
+a new system means a new MCP server, never new harness code. Worked, tested
+examples for the systems most companies use will live in
+[docs/integrations.md](integrations.md) (planned, to be set up together with
+real accounts):
 
 - **Linear** (task system): the MCP server config, mapping notifications to
   `task.*` events with the issue as subject, a trigger for new assigned
@@ -786,6 +789,8 @@ Open questions:
   allowlists), or does each environment get its own?
 - How long can an environment stay up, for example for someone to look at a
   running preview?
+- Housekeeping (TTLs for idle environments, pruning worktrees and unused
+  mirrors, dropping old ephemeral run entries) is left for later.
 
 ### Sessions
 
@@ -1099,22 +1104,6 @@ weekly summary".
   period.
 - Schedules are created and edited in the UI, and by employees themselves
   through `triggers.*` tools.
-
-### Housekeeping
-
-Nothing accumulates without bound:
-
-- **Environments** idle longer than their TTL (default 2 hours) are torn
-  down, and so are environments of ended sessions.
-- **Worktrees** of ended sessions are removed after their changes are
-  committed. `git worktree prune` runs on every mirror.
-- **Git mirrors** nobody has used for a long time (default 30 days) are
-  removed.
-- **Ephemeral runs** keep their record and usage forever, but their entries
-  can be dropped after a retention period (default 90 days, off by default).
-  Committed history is never dropped.
-- Housekeeping runs as a scheduled job and reports what it did to the log and
-  the web UI.
 
 ### Observability
 
