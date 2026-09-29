@@ -79,12 +79,43 @@ name) plus optional:
 Every server tool is registered as `mcp.<server>.<tool>`; every notification
 becomes an event with source `mcp:<server>`, routed like any other.
 
+### MCP servers added at runtime (`src/mcp-servers`)
+
+`mcp_server` records (http only), global or for one employee, managed by
+`McpServers` (`services.mcpServers`) over the same `ManagedMcpHub` as
+`MCP_SERVERS` (the hub knows them by record id):
+
+- A record change (`record.changed`, or the API directly) adds, reconnects or
+  removes the server, one change at a time per server; a failed connect is
+  tried again every minute. `start()` loads them all (in the background at
+  startup).
+- Tools are `mcp.<name>.<tool>`. `hiddenFor(employeeId)` is added to the
+  employee's deny list by `toolListsFor`, so other employees' servers' tools
+  are neither listed nor callable; the handler also throws `DeniedError`.
+  Newly registered tools are added to the router contexts of the employees
+  that may use them.
+- Token auth: the token is the secret `MCP_<NAME>_TOKEN` (or a named one),
+  scoped to the employee or global, sent as `<header>: <prefix><token>`.
+  OAuth: `StoredOAuthProvider` (`@mp/mcp-sdk`) over the secret store
+  (`MCP_<NAME>_OAUTH_CLIENT|TOKENS|VERIFIER|DISCOVERY`, same scope); states
+  are `mcp_oauth_state` records keyed by the state's sha256 (10 minutes,
+  single-use, bound to the server and the admin). The redirect URI is
+  `PUBLIC_URL` (else the request's origin) + `/oauth/mcp/callback`.
+- Status changes are published on the bus as `mcp.server.status`; `needs_auth`
+  also posts an alert in `#alerts` (`wireMcpAlerts`, started with the workers).
+
 ## HTTP API
 
 Exactly the routes of `@mp/api` (`ROUTES`), plus:
 
 - `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
 - `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
+- The employee page's routes (`@mp/api` `SETUP_ROUTES`, served by `src/setup`, see [Employees and guided
+  setup](#employees-and-guided-setup)): `POST /api/employees`, `GET /api/employees/:id/ssh-key`,
+  `GET /api/employees/:id/integrations`, `POST /api/employees/:id/integrations/:name/secrets` and `/actions/:action`,
+  `GET /api/employees/:id/integrations/slack/manifest`.
+- `GET /oauth/mcp/callback`: the end of an MCP server's OAuth sign-in (`src/http/mcp-servers.ts`); it checks the
+  signed-in admin against the state itself and redirects back to the UI with `mcp_oauth=connected|error`.
 - `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
 - `GET /api/integrations/status` → per employee, which integrations are set up (token and webhook secret, from secret
   metadata only) and its GitLab webhooks with their status and error, plus whether provisioning is on (admins; see
@@ -102,8 +133,9 @@ is authored by them. Nothing else says who you are: there is no `x-mp-contact`
 header and no default user any more. Routing results are stored on each event
 (`data.routing`), which is what event details, trigger statistics and lineage
 read. Secrets are write-only: the API only ever returns names and scopes.
-`secret`, `mcp_token`, `login_link` and `auth_session` records are hidden from
-the generic records API.
+`secret`, `mcp_token`, `login_link`, `auth_session`, `mcp_server` and
+`mcp_oauth_state` records are hidden from the generic records API (MCP servers
+have their own admin routes, `/api/mcp-servers`).
 
 ## Sign-in and access
 
@@ -298,8 +330,8 @@ claude mcp add --transport http meatless http://localhost:3000/mcp --header "Aut
   `queue-bullmq` or the memory queue; `model-openai` or `overrides.model`;
   `secrets-store` over the store, keyed by `SECRETS_KEY`; one `git-cli` store per
   employee (`src/git-store.ts`, chosen by the run's employee); `containers-docker`
-  when `DOCKER_ENABLED`; the `mcp-sdk` hub from `MCP_SERVERS`, resolving secrets
-  from the secret store. Tests replace any of them with `overrides`.
+  when `DOCKER_ENABLED`; the `mcp-sdk` hub from `MCP_SERVERS` plus the runtime
+  servers (`src/mcp-servers`), resolving secrets from the secret store. Tests replace any of them with `overrides`.
 - Services: records, docs, directory, memory, skills, files, events, sessions,
   checklists, chat, the tool registry (stdlib and MCP tools), usage, router
   (default router, procedure contexts, chat channel members as recipients),
@@ -332,6 +364,30 @@ instances fire a slot once. A firing whose trigger was disabled or removed
 before routing is dropped rather than sent to the fallback router. Schedule
 triggers are created in the API or by employees with `triggers.create`
 (`schedule: { cron, timezone?, graceSeconds? }`).
+
+## Employees and guided setup
+
+`src/provision.ts` gives an employee everything it needs to take work: `provisionEmployee(s, employeeId, actor,
+{ requestsChannel?, channels? })` makes sure of its SSH keypair, its router session (the router instructions and the
+routing toolset), membership of #general, its requests channel (`#requests-<handle>`; the default employee's is
+`#requests`) and the trigger routing new messages there to the router. It's idempotent and serialized per employee,
+so concurrent calls give one router session. `createEmployee(s, input, actor)` creates the employee (a taken handle
+is a `ConflictError`; two creates with the same handle at once give one) and provisions it: that's
+`POST /api/employees` (admins). `bootstrap()` provisions the default employee the same way.
+
+`src/setup` is the employee page's guided integration setup (docs/spec.md#guided-setup):
+
+- `setup/slack.ts`, `setup/gitlab.ts`, `setup/linear.ts`: one `IntegrationSetupModule` each: its secret fields, a
+  `check(ctx)` returning the steps, `validate(ctx, values)` before secrets are stored (a rejected token or a missing
+  scope is a 422 and nothing is stored), and actions (`add-trigger`, `add-ssh-key`, `register-webhooks`,
+  `create-webhook`). Every external call goes through the injected `fetch` (the integrations' `fetch` and base URL
+  overrides apply), with a 10 s timeout; secret values are masked in every message, never returned and never logged.
+- `setup/index.ts`: `createSetup(s, { integrations, provisioning })` runs the checks, cached per employee for 30 s
+  (`?refresh=1` runs them again; a changed secret or trigger drops the cache), and `setupRoutes(s, setup)` serves the
+  routes. Reads are for everyone signed in, writes for admins (`GUARD_RULES`).
+- `setup/activity.ts`: a middleware in front of `/webhooks/*` that records every webhook the integration accepted
+  (2xx, so only valid signatures), per employee (or `deployment`) and integration, and per project for GitLab. It's
+  kept in memory and written to the setting `webhook.activity:<owner>:<integration>` at most every 30 s.
 
 ## GitLab webhooks
 
@@ -406,10 +462,11 @@ kind, id, content snippet). The fork keeps the context's cached prefix.
 
 When `MP_BOOTSTRAP` is on and the store has no employee, `src/bootstrap.ts`
 creates the employee "Meatless" (AI contact, a personality, `toolAllow: ['**']`,
-`env.*` denied without Docker), its router session (system prompt from the
-stdlib's `employeePrompt`), the channels #general and #requests, a trigger
-routing new top-level messages in #requests to the router, the default router
-setting. Every step is idempotent (`npm run seed`).
+`env.*` denied without Docker) and provisions it with `provisionEmployee`: its
+router session (system prompt from the stdlib's `employeePrompt`), the channels
+#general and #requests, a trigger routing new top-level messages in #requests to
+the router. Then it sets the default router setting. Every step is idempotent
+(`npm run seed`).
 
 With `MP_BOOTSTRAP` on, every start also makes sure there is an admin
 (`src/auth/bootstrap-admin.ts`): if no person has `access: admin`, the contact
@@ -515,6 +572,12 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   hook, a duplicate, a changed secret), the provisioning token preferred, a 403 recorded with its message, off without
   `PUBLIC_URL`, repository and link changes, the only employee, a webhook signed with the generated secret accepted
   end to end, and the admin-only status.
+- `setup.test.ts`: creating employees (everything the first one gets, a taken handle, a double click, concurrent
+  provisioning), the SSH key endpoint, and the guided setup against fake Slack, GitLab and Linear APIs: bad tokens and
+  missing scopes refused and not stored, values never returned or logged, signed webhooks recorded (unsigned ones
+  not), idempotent triggers and SSH keys, a key already on another account, a rotated key replaced, Maintainer and
+  unprotected branch warnings, an expiring token, the Linear webhook, members read-only, the 30 s cache. On memory,
+  and on Postgres and BullMQ when configured.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.
 - `auth.test.ts`: nothing without sign-in (`x-mp-contact` ignored), the guard table covers every route, sign-in

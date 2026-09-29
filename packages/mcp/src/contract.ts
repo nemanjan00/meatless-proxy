@@ -8,9 +8,16 @@
  * - `fail`: a result with `isError: true`
  * and a `notify(method, params)` that makes the `demo` server send a notification.
  */
-import { NotFoundError } from '@mp/core'
+import { ConflictError, NotFoundError } from '@mp/core'
 import { afterEach, describe, expect, it } from 'vitest'
-import { resultText, type McpHub, type McpNotification } from './types.ts'
+import {
+  resultText,
+  type ManagedMcpHub,
+  type McpHub,
+  type McpNotification,
+  type McpServerConfig,
+  type McpServerStatus,
+} from './types.ts'
 
 export interface McpContractHub {
   hub: McpHub
@@ -87,6 +94,81 @@ export function mcpHubContract(name: string, make: () => Promise<McpContractHub>
       await hub.listTools()
       await hub.close()
       await expect(hub.callTool('demo', 'echo', { text: 'x' })).rejects.toThrow()
+    })
+  })
+}
+
+export interface ManagedMcpContractHub {
+  /** A hub with no servers. */
+  hub: ManagedMcpHub
+  /** A config the hub can connect to: a server named `demo` with the tools `echo` and `fail` (as above). */
+  demo: McpServerConfig
+  cleanup?(): Promise<void>
+}
+
+/**
+ * The runtime-management part of the contract, for hubs that implement `ManagedMcpHub`:
+ *
+ *   managedMcpHubContract('sdk', async () => ({ hub, demo }))
+ */
+export function managedMcpHubContract(name: string, make: () => Promise<ManagedMcpContractHub>) {
+  describe(`ManagedMcpHub contract: ${name}`, () => {
+    let current: ManagedMcpContractHub | undefined
+    const setup = async () => (current = await make())
+    afterEach(async () => {
+      await current?.hub.close()
+      await current?.cleanup?.()
+      current = undefined
+    })
+
+    it('adds a server at runtime and uses it', async () => {
+      const { hub, demo } = await setup()
+      expect(hub.servers()).toEqual([])
+      hub.addServer(demo)
+      expect(hub.servers()).toEqual(['demo'])
+      expect((await hub.listTools('demo')).map((t) => t.name).sort()).toEqual(['echo', 'fail'])
+      expect(resultText(await hub.callTool('demo', 'echo', { text: 'hi' }))).toBe('hi')
+      expect(hub.status('demo')).toMatchObject({ state: 'connected' })
+    })
+
+    it('refuses a duplicate name with ConflictError', async () => {
+      const { hub, demo } = await setup()
+      hub.addServer(demo)
+      expect(() => hub.addServer(demo)).toThrow(ConflictError)
+    })
+
+    it('removes a server: its tools and calls are gone, and it can be added again', async () => {
+      const { hub, demo } = await setup()
+      hub.addServer(demo)
+      await hub.listTools('demo')
+      expect(await hub.removeServer('demo')).toBe(true)
+      expect(await hub.removeServer('demo')).toBe(false)
+      expect(hub.servers()).toEqual([])
+      await expect(hub.callTool('demo', 'echo', { text: 'x' })).rejects.toBeInstanceOf(NotFoundError)
+      expect(() => hub.status('demo')).toThrow(NotFoundError)
+      hub.addServer(demo)
+      expect(resultText(await hub.callTool('demo', 'echo', { text: 'again' }))).toBe('again')
+    })
+
+    it('reconnects, and reports status changes', async () => {
+      const { hub, demo } = await setup()
+      const seen: [string, McpServerStatus][] = []
+      const off = hub.onStatus((server, status) => seen.push([server, status]))
+      hub.addServer(demo)
+      const status = await hub.reconnect('demo')
+      expect(status.state).toBe('connected')
+      expect(seen.some(([server, st]) => server === 'demo' && st.state === 'connected')).toBe(true)
+      expect(resultText(await hub.callTool('demo', 'echo', { text: 'after' }))).toBe('after')
+      off()
+      const before = seen.length
+      await hub.reconnect('demo')
+      expect(seen.length).toBe(before)
+    })
+
+    it('rejects unknown servers with NotFoundError', async () => {
+      const { hub } = await setup()
+      expect(() => hub.status('nope')).toThrow(NotFoundError)
+      await expect(hub.reconnect('nope')).rejects.toBeInstanceOf(NotFoundError)
     })
   })
 }

@@ -55,6 +55,11 @@ export interface McpInboundDeps {
   directory: Directory
   servers: McpServerEntry[]
   logger: Logger
+  /**
+   * Servers added at runtime (src/mcp-servers): the hub knows them by record id. Returns the
+   * server's name (for the event source), its event mapping and its employee, or undefined.
+   */
+  runtime?: (hubName: string) => { name: string; events?: McpEventMapping[]; employeeId?: string } | undefined
 }
 
 /**
@@ -69,9 +74,13 @@ export function wireMcpNotifications(deps: McpInboundDeps): () => void {
     if (!employees.has(name)) employees.set(name, (await deps.directory.employees.byHandle(name))?.id ?? null)
     return employees.get(name) ?? undefined
   }
-  return deps.hub.onNotification((n) => {
+  return deps.hub.onNotification((raw) => {
     void (async () => {
-      const entry = byName.get(n.server)
+      const rt = deps.runtime?.(raw.server)
+      const n = rt ? { ...raw, server: rt.name } : raw
+      const entry: Pick<McpServerEntry, 'events' | 'employee'> | undefined = rt
+        ? { ...(rt.events ? { events: rt.events } : {}) }
+        : byName.get(n.server)
       const input = notificationToEvent(n, entry)
       const mapping = entry?.events?.find((m) => m.method === n.method || globMatch(m.method, n.method))
       if (mapping?.actorFrom) {
@@ -81,12 +90,16 @@ export function wireMcpNotifications(deps: McpInboundDeps): () => void {
           if (c) input.actorContactId = c.id
         }
       }
-      const emp = await employeeId(entry?.employee)
+      const emp = rt ? rt.employeeId : await employeeId(entry?.employee)
       if (emp) input.employeeId = emp
       const { event, created } = await deps.events.ingest(input)
       deps.logger.debug('mcp notification ingested', { server: n.server, method: n.method, eventId: event.id, created })
     })().catch((err) =>
-      deps.logger.error('mcp notification could not be ingested', { server: n.server, method: n.method, err: errorMessage(err) }),
+      deps.logger.error('mcp notification could not be ingested', {
+        server: raw.server,
+        method: raw.method,
+        err: errorMessage(err),
+      }),
     )
   })
 }

@@ -83,6 +83,39 @@ the host's Docker socket, so run it on a host dedicated to it. On first start th
 AI employee, **Meatless**, with its router session, and the channels
 `#general` and `#requests`. Post in `#requests` and it answers in the thread.
 
+### Adding an employee
+
+Admins press **New employee** in Settings → Employees, or on any employee's
+page. Give it a name (its `@handle` follows from it, and can be changed), a
+role and what it does; personality, instructions, model, projects and
+channels are optional. It gets what Meatless got: a router session, its own
+`#requests-<handle>` channel with a trigger to the router, a place in
+`#general`, and an SSH keypair. `POST /api/employees` does the same.
+
+### Connecting Slack, GitLab and Linear
+
+Each employee's page (`/employees/<id>`) has a guided setup per integration.
+Every step says what to do, gives the exact values to copy, and is ticked
+only when the harness has checked it for real:
+
+- **Slack:** "Create Slack app" opens Slack with the employee's own manifest
+  (name, scopes, events, request URL). Paste its bot token and signing
+  secret, and the page shows the bot, the channels it's in, whether events
+  arrive, and offers the recommended trigger.
+- **GitLab:** paste the service account's token (checked for the `api` scope
+  and its expiry). "Add it for me" puts the employee's SSH key on the
+  account. The page warns about Maintainer access and unprotected default
+  branches, and shows the webhooks the harness registered.
+- **Linear:** paste the API key, then create the webhook from the page (or
+  by hand) and add the trigger.
+
+Tokens are stored as secrets scoped to the employee and never shown again.
+Webhook URLs use `PUBLIC_URL`, so set it to the address the systems can
+reach. The manual steps are in each integration's README
+([Slack](packages/integration-slack/README.md#setup),
+[GitLab](packages/integration-gitlab/README.md#setup-on-gitlab),
+[Linear](packages/integration-linear/README.md#setup-on-the-linear-side)).
+
 ### Talk to it from your own AI
 
 The harness is also an MCP server. Your own Claude Code can talk to the
@@ -93,6 +126,22 @@ npm run token -- --contact <your contact id>     # prints a token once
 claude mcp add --transport http meatless http://localhost:3000/mcp \
   --header "Authorization: Bearer <token>"
 ```
+
+### Connecting MCP servers
+
+Employees reach outside systems through MCP servers. Admins add them in
+**Settings → MCP servers** (for every employee) or on an employee's page (for
+that employee only), with no restart:
+
+- a streamable HTTP URL, and a name: the tools become `mcp.<name>.<tool>`;
+- no auth, a **token** (stored as a secret, sent as `Authorization: Bearer …`
+  or a header you choose, never shown again), or **OAuth**: press **Connect**
+  and sign in; the harness registers itself, keeps the tokens as secrets and
+  refreshes them. OAuth needs `PUBLIC_URL`, the address the sign-in comes
+  back to (`<PUBLIC_URL>/oauth/mcp/callback`).
+
+stdio servers, which run a command on the host, can only be set in the
+`MCP_SERVERS` config. See [docs/spec.md](docs/spec.md#connecting-mcp-servers).
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`

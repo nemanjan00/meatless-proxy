@@ -12,12 +12,14 @@ import { apiRoutes } from './http/api.ts'
 import { Metrics, metricsRoutes } from './http/metrics.ts'
 import { defaultWebDist, serveWeb } from './http/static.ts'
 import { webhookRoutes } from './http/webhooks.ts'
+import { mcpServerRoutes } from './http/mcp-servers.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
+import { createSetup, type Setup, setupRoutes } from './setup/index.ts'
 import { ensureSshKey } from './ssh.ts'
 import { buildServices, type AppOverrides, type Services } from './services.ts'
 import { recoverQueues, startWorkers, type Workers } from './workers.ts'
@@ -45,6 +47,8 @@ export interface App {
   previews: Previews
   /** GitLab webhook self-provisioning (src/integrations/provisioning.ts), null when GitLab is disabled. It starts with the workers. */
   hookProvisioning: HookProvisioning | null
+  /** Guided integration setup (src/setup): cached checks and webhook activity. */
+  setup: Setup
   /** Starts workers, rebuilds the queues from the database, and listens. Resolves with the bound ports. */
   start(opts?: StartOptions): Promise<{ port: number | null; previewPort?: number | null }>
   /** Graceful shutdown: stop taking jobs, let running jobs reach a boundary, close queue, MCP and store. */
@@ -65,6 +69,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
   const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)
+  // Guided integration setup and new employees (src/setup): the employee page.
+  const setup = createSetup(services, { integrations: overrides.integrations, provisioning: () => hookProvisioning })
 
   const tracker = new NowTracker(services)
   const live = new LiveHub(services)
@@ -103,6 +109,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     if (!services.pool) return true
     return (await pendingMigrations({ pool: services.pool, schema: config.DATABASE_SCHEMA ?? 'public' })).length === 0
   }
+  app.route('/', setupRoutes(services, setup)) // before the webhooks: it records their activity
   app.route('/', webhookRoutes(services))
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))
@@ -111,6 +118,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     '/',
     integrationStatusRoutes(services, () => hookProvisioning),
   )
+  app.route('/', mcpServerRoutes(services))
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })
@@ -126,6 +134,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     mcp,
     previews,
     hookProvisioning,
+    setup,
     async start(opts = {}) {
       if (opts.workers !== false) {
         workers = startWorkers(services)
@@ -165,6 +174,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
         await previews.close().catch((err) => log.warn('preview listener close failed', { err: errorMessage(err) }))
         await workers?.stop(opts.timeoutMs ?? 30_000)
         await hookProvisioning?.close()
+        setup.close()
+        await setup.activity.idle()
         await closing.catch((err) => log.warn('http close failed', { err: errorMessage(err) }))
         await services.close()
         log.info('stopped')

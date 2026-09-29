@@ -1,6 +1,6 @@
 import { NotFoundError, UnavailableError } from '@mp/core'
 import { describe, expect, it } from 'vitest'
-import { mcpHubContract } from '../src/contract.ts'
+import { managedMcpHubContract, mcpHubContract } from '../src/contract.ts'
 import { fakeMcpHub, resultText, type McpNotification } from '../src/index.ts'
 
 mcpHubContract('fake', async () => {
@@ -17,6 +17,20 @@ mcpHubContract('fake', async () => {
     },
   })
   return { hub, notify: (method, params) => hub.notify('demo', method, params) }
+})
+
+managedMcpHubContract('fake', async () => {
+  const hub = fakeMcpHub({
+    servers: {},
+    definitions: {
+      demo: {
+        tools: [{ name: 'echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }, { name: 'fail' }],
+        call: (tool, args) =>
+          tool === 'fail' ? { content: [{ type: 'text', text: 'failed' }], isError: true } : String(args.text),
+      },
+    },
+  })
+  return { hub, demo: { name: 'demo', transport: 'http', url: 'http://demo.invalid/mcp' } }
 })
 
 describe('fakeMcpHub', () => {

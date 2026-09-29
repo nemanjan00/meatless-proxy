@@ -113,6 +113,11 @@ url, branches, labels, reviewers, note body and discussion id, pipeline and job 
 
 ## Setup on GitLab
 
+**Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → GitLab). It checks the token
+(scopes, expiry), adds the employee's SSH key to the account for you ("Add it for me"), lists its projects with a
+warning for Maintainer access or an unprotected default branch, shows the webhooks the harness registered, and adds
+the recommended trigger (`packages/server/src/setup/gitlab.ts`). The steps below are the manual fallback.
+
 Each employee has **its own GitLab identity**: a service account with its own token and SSH key, so its branches,
 merge requests and comments show who did them, and its access can be limited and revoked on its own. The server
 (`packages/server/src/integrations`) builds one instance per employee from that employee's secrets, and **registers
@@ -125,9 +130,9 @@ the webhooks itself** (see [Webhooks](#webhooks)).
    from merging into protected branches.
 2. **Its token.** A personal access token for that account with the **`api`** scope. It doesn't need
    `write_repository`: the harness pushes over SSH. Set an expiry and rotate it.
-3. **Its SSH key.** The harness generates an ed25519 keypair per employee and shows the public key in the web UI
-   (*Settings → Employees*). Add it to the service account (*User settings → SSH Keys*, or through the API for a
-   service account). Pushes then go through that key.
+3. **Its SSH key.** The harness generates an ed25519 keypair per employee and shows the public key, with its fingerprint,
+   on the employee's page. "Add it for me" there adds it to the account with the token; by hand, add it under *User
+   settings → SSH Keys* (or through the API for a service account). Pushes then go through that key.
 4. **Protected branches.** Protect `main` (and release branches): *Allowed to merge* and *Allowed to push and merge*
    set to Maintainers, or to named people, never the service accounts. Leave *Allowed to force push* off. If you use
    merge request approvals, don't count the service accounts as eligible approvers. The harness also refuses to push to
@@ -167,7 +172,8 @@ changes, when a repository is linked or the employee joins a project, and every 
 verification, the token), never creates duplicates, and removes the hook of a repository that is no longer linked.
 
 *Settings → Integrations* in the web UI (and `GET /api/integrations/status`) shows, per employee, which integrations are
-set up and each hook's status. The usual error is a 403: "the token needs Maintainer on <project> to register
+set up, and the Webhooks step of the employee's guided setup shows each hook's status and when its project last sent
+an event, with "Register webhooks now". The usual error is a 403: "the token needs Maintainer on <project> to register
 webhooks; set GITLAB_HOOKS_TOKEN (a Maintainer or group Owner) or give the service account Maintainer".
 
 The model never gets a tool to manage webhooks.
@@ -203,7 +209,8 @@ Network → Outbound requests*). If the instance uses a private CA, the harness'
 New issues assigned to the employee start work through a trigger. Once a session is working on something, it
 subscribes to it, so what happens next comes straight back to it and not to the intake context.
 
-Triggers are not created automatically. A trigger (`CreateTriggerInput` in `@mp/events`, e.g. created by the employee
+Triggers are not created automatically (the guided setup's "Add recommended trigger" adds one routing issues assigned to
+the account to the router context). A trigger (`CreateTriggerInput` in `@mp/events`, e.g. created by the employee
 with its `triggers.create` tool) for open issues assigned to the employee, routed to its intake context:
 
 ```json

@@ -37,6 +37,8 @@ describe('routes', () => {
         kind: 'contact',
         id: 'con_00000000000000000000000000',
         employeeId: 'emp_00000000000000000000000000',
+        name: 'slack',
+        action: 'add-trigger',
       })
       const res = await t.a.app.request(url, {
         method,

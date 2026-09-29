@@ -11,7 +11,7 @@ as extendable records on top of `@mp/records`.
 
 - `contacts`: `create` (kind defaults to `person`; handles must be unique), `get`, `require`, `update`, `list`, `search(text)`,
   `byHandle(system, id)` (identity resolution; `mp` handles match slugs, so `@Ana` finds `ana`), `byEmail`.
-- `employees`: `create` (also creates the AI contact with handle `{system: 'mp', id: <slug>}` and links employee -> contact with role
+- `employees`: `create` (also creates the AI contact with handle `{system: 'mp', id: <slug>}`, the slug of `handle` when given, else of `name`, and links employee -> contact with role
   `identity`; the slug is the employee's record key), `get`, `require`, `list`, `update` (renaming renames the contact and handle),
   `byContact`, `byHandle('@name')`, `contact(employeeId)`.
 - `projects`: `create`, `get`, `require`, `update`, `list`, `search`, `byName` (name or alias), `addMember(projectId, contactId, role)`,

@@ -33,6 +33,7 @@ so the browser bundle stays free of Node code.
 - Files: `GET /api/files/:employeeId`, `GET|PUT /api/files/:employeeId/content`
 - Secrets: `GET|PUT|DELETE /api/secrets` (names and scopes only; values are write-only)
 - Live previews: `GET /api/sessions/:id/preview` (`SessionPreview`: ports, status, running commit), `POST /api/previews/token` (`{ envId, port }` → `PreviewToken`, members); live topic `preview.commit` on `session:<id>`
+- Employees and guided setup (`src/setup.ts`, `SETUP_ROUTES`): `POST /api/employees` (`CreateEmployeeBody` → `CreatedEmployee`, admins; 409 for a taken handle), `GET|POST /api/employees/:id/ssh-key` (`SshKeyInfo`: public key, `SHA256:` fingerprint, created; POST rotates, admins), `GET /api/employees/:id/integrations?refresh=` (`EmployeeIntegrations`: per integration its state and steps `{ id, title, status: done|todo|warning|error, detail?, data? }`), `POST /api/employees/:id/integrations/:name/secrets` (`{ values }`, validated then stored scoped to the employee) and `…/actions/:action` (→ `SetupResult`, admins), `GET /api/employees/:id/integrations/slack/manifest` (admins), `GET /api/integrations/status` (`IntegrationsOverview`, admins)
 - Control and health: `GET /api/control`, `POST /api/control/pause-all|resume-all`, `GET /healthz`, `GET /readyz`
 
 Additions beyond the original brief, needed by the UI: `GET /api/sessions/:id/entry-tree`,

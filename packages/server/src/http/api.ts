@@ -29,8 +29,8 @@ import {
 } from './views.ts'
 import type { NowTracker } from '../live.ts'
 
-/** Kinds the generic records API never exposes: secrets and credentials. */
-const HIDDEN_KINDS = new Set<string>(['secret', ...AUTH_KINDS])
+/** Kinds the generic records API never exposes: secrets and credentials, and MCP servers (their own admin API). */
+const HIDDEN_KINDS = new Set<string>(['secret', ...AUTH_KINDS, 'mcp_server', 'mcp_oauth_state'])
 /** Kinds whose records can belong to a DM (and are then visible to its members only). */
 const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 

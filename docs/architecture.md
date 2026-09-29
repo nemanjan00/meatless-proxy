@@ -60,7 +60,7 @@ touching the rest.
 | L1 | `@mp/store` | `RecordStore`, `LinkStore`, `EntryStore` + in-memory implementation + contract tests |
 | L1 | `@mp/queue` | `Queue` (jobs, delays, priorities, repeat) + in-memory implementation + contract tests |
 | L1 | `@mp/model` | `ModelClient` (OpenAI-compatible chat completions shape) + scripted fake |
-| L1 | `@mp/mcp` | `McpHub` (servers, tools, calls, notifications) + fake |
+| L1 | `@mp/mcp` | `McpHub` (servers, tools, calls, notifications), `ManagedMcpHub` (servers added, removed and reconnected at runtime, with a status each) + fake + contract suites |
 | L1 | `@mp/containers` | `ContainerRuntime` (environments, jobs, logs) + fake |
 | L1 | `@mp/git` | `GitCache` (mirrors, fetch, worktrees, push) + protected-branch guard + fake |
 | L1 | `@mp/secrets` | `SecretStore`, injection and redaction helpers + in-memory implementation |
@@ -68,7 +68,7 @@ touching the rest.
 | L2 | `@mp/store-postgres` | Postgres adapter for `@mp/store`, with SQL migrations |
 | L2 | `@mp/queue-bullmq` | BullMQ adapter for `@mp/queue` |
 | L2 | `@mp/model-openai` | OpenAI-compatible HTTP adapter for `@mp/model` (Kimi first) |
-| L2 | `@mp/mcp-sdk` | MCP adapter using the official MCP SDK |
+| L2 | `@mp/mcp-sdk` | MCP adapter using the official MCP SDK: stdio and streamable HTTP, runtime servers, OAuth (a provider over any storage, sign-in helpers) |
 | L2 | `@mp/containers-docker` | Docker adapter (dockerode) for `@mp/containers`, including the allowlisting egress proxy sidecar |
 | L2 | `@mp/git-cli` | git CLI adapter for `@mp/git` |
 | L2 | `@mp/secrets-store` | encrypted secrets stored through `@mp/store` |

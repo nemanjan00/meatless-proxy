@@ -45,6 +45,8 @@ import {
   type UsageRow,
 } from '@mp/api'
 import { type MockDb, mockId } from './data.ts'
+import { createMockSetupApi } from './setup.ts'
+import { createMockMcpApi } from './mcp.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -1207,6 +1209,12 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     },
     health: () => delay({ ok: true, version: 'mock' }),
     ready: () => delay({ ok: true, checks: { database: true, queue: true, migrations: true } }),
+
+    // Employees, SSH keys and guided integration setup (./setup.ts).
+    ...createMockSetupApi({ db, iso, delay, write, get, all }),
+
+    // MCP servers, global and per employee (./mcp.ts).
+    ...createMockMcpApi({ db, iso, delay }),
   }
   return api
 }

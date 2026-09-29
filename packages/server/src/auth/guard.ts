@@ -107,6 +107,10 @@ export const GUARD_RULES: GuardRule[] = [
   // Admin: secrets (even their names), employees, the kill switch, import and export.
   { method: '*', path: '/api/secrets', need: 'admin' },
   { method: '*', path: '/api/secrets/*', need: 'admin' },
+  // The employee page: everyone signed in sees an employee's SSH key and setup status; changes are for admins (src/setup).
+  { method: 'GET', path: '/api/employees/:id/ssh-key', need: 'viewer' },
+  { method: 'GET', path: '/api/employees/:id/integrations', need: 'viewer' },
+  { method: 'POST', path: '/api/employees', need: 'admin' },
   { method: '*', path: '/api/employees/*', need: 'admin' },
   { method: 'POST', path: '/api/control/*', need: 'admin' },
   { method: '*', path: '/api/import', need: 'admin' },
@@ -116,6 +120,11 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/events', need: 'admin' },
   // Integration setup and webhook provisioning status (src/integrations/status.ts).
   { method: 'GET', path: '/api/integrations/status', need: 'admin' },
+  // MCP servers (src/mcp-servers), reading included: their URLs and secret names are for admins.
+  { method: '*', path: '/api/mcp-servers', need: 'admin' },
+  { method: '*', path: '/api/mcp-servers/*', need: 'admin' },
+  // The MCP OAuth callback checks the sign-in itself: its state is bound to the admin who started it.
+  { method: 'GET', path: '/oauth/mcp/callback', need: 'public' },
 
   // Knowledge edits: members for knowledge kinds; employees, triggers, limits, settings: admins.
   // A session's document and title are knowledge too (its other fields, e.g. its tools, are not: see api.ts).

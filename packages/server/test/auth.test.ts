@@ -81,7 +81,11 @@ describe('nobody is trusted on their word', () => {
       const hit = matchRule(compiled, method, concrete)
       expect(hit, name).not.toBeNull()
       const need = typeof hit!.rule.need === 'function' ? hit!.rule.need(hit!.params) : hit!.rule.need
-      if (method === 'GET' && !['listSecrets'].includes(name)) expect(['viewer', 'public'], name).toContain(need)
+      if (
+        method === 'GET' &&
+        !['listSecrets', 'listMcpServers', 'mcpServerTools', 'slackManifest', 'integrationsStatus'].includes(name)
+      )
+        expect(['viewer', 'public'], name).toContain(need)
       if (['health', 'ready', 'authConfig'].includes(name)) expect(need, name).toBe('public')
     }
     const unknown = matchRule(compiled, 'POST', '/api/something-new')

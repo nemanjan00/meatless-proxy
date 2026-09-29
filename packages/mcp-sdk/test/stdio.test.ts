@@ -42,7 +42,8 @@ describe.skipIf(!canSpawn)('createMcpHub over stdio', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(['echo', 'env', 'ping_me'])
     expect(resultText(await hub.callTool('fixture', 'echo', { text: 'over stdio' }))).toBe('over stdio')
     expect(resultText(await hub.callTool('fixture', 'env', { name: 'PLAIN_VAR' }))).toBe('plain')
-    expect(resultText(await hub.callTool('fixture', 'env', { name: 'DEMO_TOKEN' }))).toBe('sk-test-stdio-secret')
+    // The secret reached the server's environment; echoed back, it is masked.
+    expect(resultText(await hub.callTool('fixture', 'env', { name: 'DEMO_TOKEN' }))).toBe('[redacted]')
     // Only safe variables are inherited from the parent environment.
     expect(resultText(await hub.callTool('fixture', 'env', { name: 'MP_UNLIKELY_PARENT_VAR' }))).toBe('')
 

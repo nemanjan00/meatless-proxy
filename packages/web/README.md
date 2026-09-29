@@ -23,7 +23,7 @@ and the page it opens.
 | `src/styles/globals.css` | the stylebook tokens verbatim (`:root` / `.dark`), shadcn's `@theme inline` mapping, extra Linear tokens (`text-fg-tertiary`, `bg-level-2`, status colours), the type scale (`text-tiny` … `text-title3`), 510/590/680 weights, focus, selection, motion |
 | `src/components/ui/` | shadcn/ui components (generated with `npx shadcn add`, then tuned for density: 13 px menus and buttons, 32 px buttons, 2 px accent focus ring) |
 | `src/components/` | app shell (sidebar, employee switcher, ⌘K command menu that also finds chat messages, `G`-then-key shortcuts), status icons, history timeline, recent ephemeral runs, session tree graph, entry tree, links graph, schema-generated properties form (lists of objects and references shown readably, raw JSON on edit), markdown document editor, charts, chat composer (`@` autocomplete) and chat message (reactions, edit, delete), split view (stacks on phones) |
-| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
+| `src/pages/` | Login (a sign-in link, or single sign-on when the server has OIDC), Inbox, Now, Sessions, Session detail (History, Preview, Branches, Tree, Runs, Checklist, Threads, Usage), Lineage, Triggers, Events, Chat, Employee (profile, SSH key, guided integration setup, its MCP servers), Projects / Contacts / Procedures / Skills / Memory (with a record's docs), Files, Usage, Settings. Every page is its own chunk (`React.lazy` in `src/app.tsx`) |
 | `src/lib/` | pure logic: `tree-layout.ts` (tidy tree), `lineage.ts` (lineage columns), `entry-tree.ts` (entry tree lanes), `schema-form.ts` (forms from kind schemas), `usage-series.ts` (bucket parsing, labels, empty buckets filled with 0), `auth.tsx` (the signed-in person, `RequireAuth`, `Can`, the CSRF cookie), `routing.ts` (matched / unmatched / not delivered), `chat.ts` (DM labels, tag suggestions, reactions, search grouping), `names.ts` (titles of referenced records), `doclinks.ts`, `status.ts`, `format.ts`; `api.tsx` (data provider, `useLoad`, `useLive`) |
 | `src/mock/` | a complete in-memory `ApiClient` with fake data and a simulator that streams model output, tool calls, entries, usage, events and chat |
 | `scripts/seed-demo.ts` | seeds a small fake company into a running server through the API (no model calls) |
@@ -37,8 +37,30 @@ along by itself, and the data layer echoes the `mp_csrf` cookie in `x-mp-csrf`. 
 shows who you are and your access, with API tokens and Sign out. Actions your access doesn't allow
 are hidden (the server refuses them anyway): viewers get no message boxes, no "New" buttons and
 read-only forms; only admins see the kill switch and the admin settings (employees, secrets,
-triggers, limits, people and access with sign-in links). Settings → API tokens creates a token
+triggers, limits, people and access with sign-in links, MCP servers). Settings → API tokens creates a token
 (shown once), lists and revokes yours. The mock (`VITE_MOCK=1`) is signed in as an admin.
+
+`src/components/mcp-servers.tsx` is `<McpServers employeeId? />`: the MCP servers of an employee, or
+the global ones without `employeeId` (Settings → MCP servers mounts that one), for admins only. It
+shows each server's status, auth and tools, connects OAuth (the server's callback comes back with
+`?mcp_oauth=connected|error`, shown as a toast), and adds or edits servers; token and client secret
+values are write-only, never pre-filled. The mock (`src/mock/mcp.ts`) has a config server, a global
+token server and an employee's OAuth server that needs a sign-in; its Connect signs in at once.
+
+### Employees and guided setup
+
+`src/pages/employee.tsx` is `/employees/:id`, linked from the employee switcher and Settings →
+Employees: the profile, the SSH public key (copy, fingerprint, created, Rotate with a confirmation),
+the Integrations section and `<McpServers employeeId>`. `src/components/integration-setup.tsx` has a
+card per integration (Not set up / Needs attention / Connected, from the server's checks) that opens a
+step-by-step panel: each step's status, what the server found, the documentation from
+`src/lib/setup-docs.ts`, values to copy (`src/components/copy.tsx`), a secret form (write-only,
+validated by the server) and the step's action. `?setup=<integration>` opens a panel. Members see it
+read-only. `src/components/new-employee-dialog.tsx` is the **New employee** button and dialog (admins):
+the handle follows the name until edited, a taken handle is shown on the field, and a created employee
+opens its page with `?new=1`. Settings → Integrations is an overview linking to each employee's setup.
+The mock (`src/mock/setup.ts`) has Slack connected, GitLab needing attention and Linear not set up for
+the demo employee.
 
 Data comes from `@mp/api`'s `createApiClient` and `createLiveClient`; pages load over
 HTTP and apply live events from `/ws` (streamed deltas are applied in place, chat
@@ -113,6 +135,9 @@ Lineage, Triggers, Chat posting, Usage, a project's generated form, Secrets, Inb
 `polish.test.tsx`: usage buckets and labels, routing outcomes, recent-run summaries, chat
 helpers (tag suggestions, DM labels, reactions, search grouping), label and link helpers,
 and the chat page's autocomplete, search, reactions, edit, delete, new DM and unread badges.
+`employee.test.tsx`: the employee page (profile, SSH key, card states), the GitLab panel and "Add it for me", the
+secret form (a refused token, a stored one never shown again), members read-only, rotating the key, the new
+employee dialog (derived handle, a taken handle, a missing name), and the Settings → Integrations overview links.
 `auth.test.tsx`: signed-out people land on the login page (and a later 401 sends them there),
 login errors and the single sign-on button, the sidebar's user menu and sign-out, what viewers,
 members and admins see (kill switch, settings sections, chat message box), and the tokens page.

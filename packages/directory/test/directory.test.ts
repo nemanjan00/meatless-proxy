@@ -140,6 +140,15 @@ describe('employees', () => {
     expect((await dir.contacts.list()).total).toBe(2)
   })
 
+  it('takes an explicit handle, and refuses one that is taken', async () => {
+    const e = await dir.employees.create({ name: 'Billing Bot', handle: '@Billing' })
+    expect(e.key).toBe('billing')
+    expect((await dir.employees.contact(e.id)).data.handles).toEqual([{ system: 'mp', id: 'billing' }])
+    expect((await dir.employees.byHandle('@billing'))?.id).toBe(e.id)
+    await expect(dir.employees.create({ name: 'Other', handle: 'billing' })).rejects.toThrow(ConflictError)
+    await expect(dir.employees.create({ name: 'Other', handle: '!!' })).rejects.toThrow(ValidationError)
+  })
+
   it('renames an employee together with its contact and handle', async () => {
     const e = await dir.employees.create({ name: 'Ada', contact: { handles: [{ system: 'slack', id: 'U9' }] } })
     await dir.employees.create({ name: 'Bea' })

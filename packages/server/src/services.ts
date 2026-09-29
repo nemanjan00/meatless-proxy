@@ -19,7 +19,7 @@ import { createDirectory, type Directory, type Employee } from '@mp/directory'
 import { createEvents, type Events } from '@mp/events'
 import { createFiles, type FilesService } from '@mp/files'
 import type { GitCache } from '@mp/git'
-import type { McpHub } from '@mp/mcp'
+import { isManagedHub, type McpHub } from '@mp/mcp'
 import { createMcpHub } from '@mp/mcp-sdk'
 import { createMemory, type MemoryService } from '@mp/memory'
 import { emptyUsage, type ModelClient } from '@mp/model'
@@ -50,6 +50,7 @@ import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
+import { McpServers } from './mcp-servers/index.ts'
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -109,8 +110,10 @@ export interface Services {
   runner: Runner
   /** The stdlib module, when it is available and enabled. */
   stdlib: StdlibModule | null
-  /** Tool names registered from MCP servers. */
+  /** Tool names registered from `MCP_SERVERS` servers. */
   mcpTools: string[]
+  /** MCP servers added at runtime (src/mcp-servers), null when the hub can't add servers. */
+  mcpServers: McpServers | null
   /** The first-party integrations (Slack, Linear, GitLab), null when none is enabled. */
   integrations: Integrations | null
   /** Postgres pool, when the store is Postgres. */
@@ -251,9 +254,16 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     return typeof def === 'string' ? def : null
   }
 
-  const toolListsFor = async (employeeId: string): Promise<ToolLists> => {
+  const baseToolLists = async (employeeId: string): Promise<ToolLists> => {
     const e = await employee(employeeId)
     return { allow: e?.data.toolAllow ?? [], deny: e?.data.toolDeny ?? [] }
+  }
+  // Another employee's MCP servers' tools are denied (src/mcp-servers).
+  let mcpServers: McpServers | null = null
+  const toolListsFor = async (employeeId: string): Promise<ToolLists> => {
+    const lists = await baseToolLists(employeeId)
+    const hidden = mcpServers?.hiddenFor(employeeId) ?? []
+    return hidden.length ? { ...lists, deny: [...lists.deny, ...hidden] } : lists
   }
 
   const projectOf = async (session: Session): Promise<string | undefined> => {
@@ -322,9 +332,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     enqueueRun: (runId, priority) => runner.enqueue(runId, priority !== undefined ? { priority } : {}),
   })
 
-  // ── MCP hub ──────────────────────────────────────────────────────────────
+  // ── MCP hub: MCP_SERVERS, and servers added at runtime (src/mcp-servers) ──
   let mcpHub: McpHub | null = o.mcpHub ?? null
-  if (!mcpHub && config.MCP_SERVERS.length) {
+  if (!mcpHub) {
     mcpHub = createMcpHub({
       servers: config.MCP_SERVERS.map((s) => ({
         name: s.name,
@@ -335,8 +345,11 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         ...(s.env ? { env: s.env } : {}),
         ...(s.secrets ? { secrets: s.secrets } : {}),
       })),
-      resolveSecrets: (names) => secrets.resolve(names, {}),
+      resolveSecrets: (names, server) =>
+        mcpServers?.isRuntime(server.name) ? mcpServers.resolveSecrets(names, server) : secrets.resolve(names, {}),
+      authProviderFor: (server) => mcpServers?.authProviderFor(server),
       logger: logger.child({ component: 'mcp' }),
+      clock,
       clientInfo: { name: 'meatless-proxy', version: '0.0.0' },
     })
   }
@@ -374,6 +387,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     runner,
     stdlib: null,
     mcpTools: [],
+    mcpServers: null,
     integrations: null,
     pool,
     routerSessionFor,
@@ -381,6 +395,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     async close() {
       await queue.close().catch((e) => logger.warn('queue close failed', { err: errorMessage(e) }))
       await services.integrations?.close().catch((e) => logger.warn('integrations close failed', { err: errorMessage(e) }))
+      await mcpServers?.close().catch((e) => logger.warn('mcp servers close failed', { err: errorMessage(e) }))
       await mcpHub?.close().catch((e) => logger.warn('mcp close failed', { err: errorMessage(e) }))
       await bus.idle().catch(() => {})
       gitStores?.close()
@@ -463,6 +478,16 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       directory,
       servers: config.MCP_SERVERS,
       logger: logger.child({ component: 'mcp' }),
+      runtime: (hubName) => {
+        const r = mcpServers?.recordOf(hubName)
+        return r
+          ? {
+              name: r.data.name,
+              ...(r.data.events ? { events: r.data.events } : {}),
+              ...(r.data.employeeId ? { employeeId: r.data.employeeId } : {}),
+            }
+          : undefined
+      },
     })
     if ('start' in mcpHub && typeof (mcpHub as { start?: unknown }).start === 'function') {
       const results = await (mcpHub as { start(): Promise<{ server: string; ok: boolean; error?: string }[]> }).start()
@@ -479,6 +504,29 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         logger.warn('mcp tools could not be listed', { server, err: errorMessage(err) })
       }
     }
+  }
+  if (isManagedHub(mcpHub)) {
+    const hub = mcpHub
+    mcpServers = new McpServers({
+      records,
+      secrets,
+      tools,
+      hub,
+      directory,
+      sessions,
+      bus,
+      clock,
+      logger,
+      configServers: config.MCP_SERVERS,
+      configStatus: (name) => (hub.servers().includes(name) ? hub.status(name) : null),
+      configTools: () => services.mcpTools,
+      reservedNames: () => Object.keys(services.integrations?.specs ?? {}),
+      baseToolLists,
+      ...(config.PUBLIC_URL ? { publicUrl: config.PUBLIC_URL } : {}),
+    })
+    services.mcpServers = mcpServers
+    // Connects in the background: a slow server doesn't hold up the start (await `mcpServers.start()` to wait).
+    mcpServers.start().catch((err) => logger.error('mcp servers could not be loaded', { err: errorMessage(err) }))
   }
 
   // Every employee gets its own SSH keypair when it is created, however it is created.

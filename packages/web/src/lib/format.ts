@@ -48,6 +48,14 @@ export function timeAgo(iso: string | null | undefined, now: number = Date.now()
   return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+/** `timeAgo` as a phrase: "just now", "5m ago", "on Sep 3". */
+export function agoPhrase(iso: string | null | undefined, now: number = Date.now()): string {
+  const t = timeAgo(iso, now)
+  if (t === 'now') return 'just now'
+  if (/^\d+[smhd]$/.test(t)) return `${t} ago`
+  return t === '—' ? t : `on ${t}`
+}
+
 /** Duration between two timestamps, e.g. `1m 20s`. */
 export function duration(fromIso: string | undefined, toIso?: string, now: number = Date.now()): string {
   if (!fromIso) return '—'

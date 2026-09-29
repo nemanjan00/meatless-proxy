@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "McpHub adapter over the official MCP TypeScript SDK (stdio and streamable HTTP).",
+  "description": "McpHub adapter over the official MCP TypeScript SDK (stdio and streamable HTTP, runtime servers, OAuth).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@mp/core": "0.0.0",

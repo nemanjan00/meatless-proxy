@@ -111,6 +111,11 @@ email (cached per user).
 
 ## Setup on the Linear side
 
+**Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → Linear). It checks the API key
+with `viewer`, creates the webhook with a generated signing secret (with a Linear admin's key; otherwise it shows
+the URL to paste), and adds the recommended trigger (`packages/server/src/setup/linear.ts`). The steps below are the
+manual fallback.
+
 Each employee acts in Linear as **its own member**, with its own API key, so its issues and comments show who did them.
 The server (`packages/server/src/integrations`) builds one instance per employee from that employee's secrets.
 
@@ -151,7 +156,7 @@ The server (`packages/server/src/integrations`) builds one instance per employee
 
 ## Recommended trigger
 
-Triggers are not created automatically: add this one per employee, e.g. by asking the employee in harness chat to
+Triggers are not created automatically: add this one per employee with "Add recommended trigger" in the guided setup, or e.g. by asking the employee in harness chat to
 create it with its `triggers.create` tool. A new issue assigned to the employee then goes to its router context
 ([the router context](../../docs/spec.md#the-router-context)): it checks its log of decisions, starts a session for the
 issue (which then owns it), and keeps a one-line decision. `<kai-linear-id>` is the `id` that `viewer` returns for the employee's key:

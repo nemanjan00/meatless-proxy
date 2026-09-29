@@ -169,8 +169,12 @@ session.
   generated when the employee is created. The private key is a
   [secret](#secrets) scoped to the employee: the model never sees it, and it's
   injected into git commands only for their duration. The public key is shown
-  in the [web UI](#web-ui), to add to the employee's account on the git host or
-  as a deploy key. The keypair can be rotated.
+  on the employee's page in the [web UI](#web-ui), with its `SHA256:`
+  fingerprint and when it was made, to add to the employee's account on the
+  git host or as a deploy key. The GitLab
+  [guided setup](#guided-setup) adds it to the employee's account itself.
+  Admins can rotate the keypair; the old key stops working at once and has to
+  be replaced wherever it was added.
 - **Always an AI.** Its name, profile and messages make clear that it's an AI,
   as the [employee rules](employee.md#being-honest-about-what-it-is) require.
 
@@ -205,6 +209,18 @@ context bloat.
   the database. Each employee sees the part of them its scope covers.
 - **Own identity.** Each employee has its own contact record, handles, git
   identity and personality, as described above.
+- **Adding an employee.** Admins add one from the web UI (**New employee**,
+  in Settings and on every employee's page) or `POST /api/employees`: a
+  name, its `@handle` (derived from the name, editable, unique), a role and a
+  description, and optionally a personality, instructions, a model, projects
+  in its scope and harness chat channels to join. It's **provisioned** like
+  the first employee: its SSH keypair, its router context (with the router
+  instructions and the routing toolset), membership of `#general`, its own
+  `#requests-<handle>` channel, and a trigger routing new messages there to
+  its router context. Provisioning is idempotent and serialized per
+  employee, so a retry or a double click never makes a second router
+  context, and a taken handle is refused. The page then continues with the
+  employee's integrations.
 - **Chatting with each other.** Employees are contacts, so they chat with each
   other like colleagues do: they ask questions, hand over work and follow up.
   That's the AI-to-AI path from the [goals](#goals), with no person relaying.
@@ -389,13 +405,15 @@ standard library tools and every tool of every connected MCP server.
 - The lists work alongside the hard limits: no tool can give an employee
   production access, because its credentials don't allow it
   ([no production access](#no-production-access)).
+- A new tool from an MCP server is on for an employee when a whitelist
+  pattern already covers it (e.g. `mcp.wiki.*` or `**`), and off otherwise.
+  An employee's own MCP servers' tools are never on for anyone else
+  ([connecting MCP servers](#connecting-mcp-servers)).
 
 Open questions:
 
 - Can templates and procedures narrow an employee's tool set further for their
   sessions (never widen it)?
-- Is a new tool from an MCP server off until someone whitelists it, or on if a
-  pattern already covers it?
 
 ### Harness chat
 
@@ -522,11 +540,87 @@ It uses MCP for two kinds of systems:
 Requirements:
 
 - Several MCP servers can be connected at the same time. Adding a new chat or
-  task system means configuring a server, not changing harness code.
+  task system means connecting a server, not changing harness code (see
+  [Connecting MCP servers](#connecting-mcp-servers)).
 - The harness supports both directions. It acts on a system (MCP tool calls),
   and it also finds out when something happens there: a new message, a mention,
   a task assigned to it. Those events are routed by [triggers](#triggers). How
   they are delivered from the MCP server is still open (see below).
+
+#### Connecting MCP servers
+
+MCP servers are connected in two ways:
+
+- **At runtime, from the web UI or the API** (admins only): Settings → MCP
+  servers for **global** servers, and the employee page for an **employee's
+  own** servers. Each one is an `mcp_server` record: a `name` (a slug), a
+  streamable HTTP `url`, optional non-secret `headers`, `enabled`, the
+  `effect`/`effects` of its tools and an optional `events` mapping (both as
+  in the config), and how it authenticates (`auth`, see below). Adding,
+  changing, disabling or deleting one takes effect at once: the harness
+  connects, reconnects or disconnects it and registers or removes its tools,
+  without a restart.
+- **In the config** (`MCP_SERVERS`): read-only global servers, listed next to
+  the others with `source: config`. This is the **only place stdio servers
+  can be declared**: a stdio server is a command the harness runs on its own
+  host, and the API never runs commands, so it refuses `transport: stdio`
+  (an admin token must not be a way to run code on the host).
+
+Names and scopes:
+
+- Tools are `mcp.<name>.<tool>`, whatever the scope.
+- A **global** server's tools are for every employee. An **employee's**
+  server's tools are only for that employee: they're left out of every other
+  employee's tool set, and a call from another employee's session is refused
+  (`DeniedError`), not only hidden.
+- Global names are unique, and no employee server may use a global name (or
+  the other way round). Employee server names are unique per employee, so
+  two employees may each have a `wiki`; each one's calls go to its own.
+  Config names and the first-party integrations' names are taken.
+- New tools reach **new sessions**: the harness adds them to the router
+  contexts of the employees that may use them, and sessions started from
+  there get them. Running sessions keep the tool set they started with
+  ([whitelist and blacklist](#whitelist-and-blacklist-per-employee)). The
+  employee's allow and deny lists still apply.
+- Each server shows its **status**: `connected`, `connecting`, `needs_auth`
+  (it needs a new sign-in, or its token was refused), `error` (with the
+  message; it's tried again every minute) or `disabled`, with its tool count
+  and last error.
+
+Authentication, one of:
+
+- **None.**
+- **Token:** a header (default `Authorization`) with a prefix (default
+  `Bearer `) and the token from a [secret](#secrets). The token given in the
+  UI or API is written to the secret store, scoped to the employee for an
+  employee's server and global otherwise, as `MCP_<NAME>_TOKEN` (or into an
+  existing secret the admin names). It's injected as the header when the
+  harness connects, masked in tool outputs like every secret, and never
+  returned by the API, logged, or shown to the model. Editing a server
+  without a token keeps the current one.
+- **OAuth** (http only), with the MCP authorization spec: the harness
+  discovers the authorization server from the server's protected-resource
+  metadata (or uses one the admin names), registers itself as a client when
+  no client id is given (dynamic client registration), and signs in with the
+  authorization code flow and PKCE. Optional scopes, client id and client
+  secret.
+  1. An admin presses **Connect**. The harness makes a random `state`, bound
+     to the server and to that admin, single-use and valid for 10 minutes,
+     and sends the admin to the authorization server.
+  2. The authorization server sends the admin back to
+     `<PUBLIC_URL>/oauth/mcp/callback`. The callback is a plain GET on the
+     harness origin (refused from preview origins, like the rest of the
+     harness). It checks the state (unknown, expired, used, or started by
+     someone else: refused), exchanges the code, stores the tokens,
+     reconnects the server, and returns the admin to the page they came from
+     with the outcome.
+  3. Access tokens are refreshed by themselves. When a refresh fails, the
+     server becomes `needs_auth`, its tools are removed, and an alert is
+     posted in `#alerts`: an admin connects it again.
+  - The client registration, the tokens and the PKCE verifier are
+    [secrets](#secrets) scoped like the server, never plain records.
+    Disconnecting deletes them; deleting the server deletes every secret the
+    harness generated for it.
 
 #### Notifications in
 
@@ -605,6 +699,41 @@ Each integration has three parts:
     then be protected so only named people can merge.
   - The model never gets a tool to manage webhooks: it's the harness's job.
 
+##### Guided setup
+
+Each employee's page in the web UI sets its integrations up step by step.
+The documentation is on the page itself: each step says what to do in the
+other system, gives the exact values to copy, and shows what the harness
+found. **Steps are ticked by real checks, never by the admin saying so.**
+
+- **Status.** Each integration is *Not set up* (no token), *Needs
+  attention* (a step is open or has a warning) or *Connected* (every step
+  done). A step is `done`, `todo`, `warning` or `error`, with a short detail.
+- **Checks** call the system's API with the employee's own credentials and
+  are cached per employee for about 30 seconds; **Re-check** runs them again.
+  A step that can't be checked (the system is unreachable) is a warning, not
+  a failure of the page.
+- **Secrets** pasted in a step are validated first (a token the system
+  rejects, or one without the needed scope, is refused and not stored),
+  then stored as [secrets](#secrets) scoped to the employee. Values are never
+  returned or logged. Where a check learns the employee's account (its Slack
+  bot user, GitLab username, Linear user), the handle is added to its
+  contact.
+- **Webhooks arriving** are recorded per employee and integration (and per
+  project for GitLab), counting only requests whose signature checked out.
+- **Actions** do what the step needs through the system's API, idempotently:
+  adding the recommended trigger, adding the SSH key, registering webhooks.
+- Everyone signed in can see the status; only admins can change anything.
+
+| | Steps |
+|---|---|
+| Slack | **Create the app** from a manifest generated for the employee (its name, bot scopes, events, and the request URL `<PUBLIC_URL>/webhooks/slack/<employee id>`), with a one-click link that opens Slack with it filled in · **Tokens**: the bot token and signing secret, checked with `auth.test` (bot user, workspace, missing scopes) · **Events** reached the harness with a valid signature · **Channels** the bot is in (`users.conversations`), with the `/invite` command · **Routing**: a trigger for its mentions and DMs, or "Add recommended trigger" (router context, ephemeral) |
+| GitLab | **Instance** (`GITLAB_BASE_URL`, or a secret) · **Service account** (a service account on Premium or Ultimate, else a dedicated user; never an administrator) · **Token** with the `api` scope, checked with `/user` and `/personal_access_tokens/self`, with a warning under 30 days to expiry · **SSH key** on the account, found by fingerprint in `/user/keys`; "Add it for me" adds it (and removes the key it replaced after a rotation), and a key that's already on another account is reported as such · **Projects** it's a member of, with a warning for Maintainer or higher and for an unprotected default branch · **Webhooks**: the hooks the harness registered, their errors and when each project last sent an event, with "Register webhooks now" · **Routing**: issues assigned to its username |
+| Linear | **API key**, checked with the `viewer` query · **Webhook**: created with `webhookCreate` and a generated signing secret (Linear admins only), or by hand with the URL shown · **Routing**: issues assigned to it |
+
+Settings → Integrations is an overview of every employee's integrations that
+links to these pages; there's no second setup UI.
+
 #### The harness as an MCP server
 
 The harness is also an **MCP server**, so other AI agents can reach the
@@ -628,8 +757,6 @@ Open questions:
 
 - How are inbound events delivered: MCP notifications, polling, or webhooks
   bridged into MCP? (Proposal: all three, see [Notifications in](#notifications-in).)
-- Which transports are supported: stdio, streamable HTTP, or both?
-- How are credentials for each server stored and scoped?
 
 ### Contacts
 
@@ -1634,6 +1761,19 @@ All of these update live over the WebSocket.
   next to the token counts.
 - Usage can be broken down to find what's expensive: which sessions, tools or
   steps used the most tokens.
+
+#### Employees
+
+- **Employee page** (`/employees/<id>`, linked from the employee switcher and
+  Settings → Employees): its profile (handle, role, model, router context,
+  its accounts in each system), its **SSH public key** with a copy button,
+  fingerprint, creation date and **Rotate** (with a confirmation that the
+  old key stops working), the [guided setup](#guided-setup) of its
+  integrations under a short "how integrations work", and its own MCP
+  servers.
+- **New employee** (admins), in Settings → Employees and on every employee
+  page: a short dialog, then straight to the new employee's page with its
+  integrations as the next step. See [adding an employee](#multiple-employees).
 
 #### Knowledge
 

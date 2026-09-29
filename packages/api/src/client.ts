@@ -50,6 +50,8 @@ import type {
   UsageGroupBy,
   UsageSeries,
 } from './resources.ts'
+import type { McpOAuthStart, McpServerCreate, McpServerInfo, McpServerPatch, McpServerTool } from './mcp-servers.ts'
+import { SETUP_ROUTES, type SetupApi, setupMethods } from './setup.ts'
 
 /**
  * Every endpoint of the HTTP API, as `[method, path]`. Path parameters are
@@ -128,6 +130,15 @@ export const ROUTES = {
   readFile: ['GET', '/api/files/:employeeId/content'],
   writeFile: ['PUT', '/api/files/:employeeId/content'],
 
+  listMcpServers: ['GET', '/api/mcp-servers'],
+  createMcpServer: ['POST', '/api/mcp-servers'],
+  updateMcpServer: ['PATCH', '/api/mcp-servers/:id'],
+  deleteMcpServer: ['DELETE', '/api/mcp-servers/:id'],
+  reconnectMcpServer: ['POST', '/api/mcp-servers/:id/reconnect'],
+  mcpServerTools: ['GET', '/api/mcp-servers/:id/tools'],
+  startMcpOAuth: ['POST', '/api/mcp-servers/:id/oauth/start'],
+  disconnectMcpOAuth: ['POST', '/api/mcp-servers/:id/oauth/disconnect'],
+
   listSecrets: ['GET', '/api/secrets'],
   putSecret: ['PUT', '/api/secrets'],
   deleteSecret: ['DELETE', '/api/secrets'],
@@ -137,6 +148,8 @@ export const ROUTES = {
   resumeAll: ['POST', '/api/control/resume-all'],
   health: ['GET', '/healthz'],
   ready: ['GET', '/readyz'],
+
+  ...SETUP_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -224,7 +237,7 @@ export interface ApiClientOptions {
  * (and its mock) code against this interface. Errors are thrown as
  * `ApiRequestError` (see errors.ts for the error body and status codes).
  */
-export interface ApiClient {
+export interface ApiClient extends SetupApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -426,6 +439,29 @@ export interface ApiClient {
   /** `PUT /api/files/:employeeId/content?path=` body `{ content, version? }` → the file. 409 on a version mismatch. */
   writeFile(employeeId: string, path: string, content: string, version?: number): Promise<FileContent>
 
+  // ── MCP servers (admins) ─────────────────────────────────────────────────
+
+  /**
+   * `GET /api/mcp-servers?employeeId=` → servers with their status. Without `employeeId`: every server;
+   * with `employeeId=global` (or an empty value): the global ones, config servers included; with an id: that
+   * employee's own. Config servers (`source: 'config'`) are read-only.
+   */
+  mcpServers(q?: { employeeId?: string }): Promise<McpServerInfo[]>
+  /** `POST /api/mcp-servers` → the new server. A token in `auth.token` goes to the secret store. */
+  createMcpServer(body: McpServerCreate): Promise<McpServerInfo>
+  /** `PATCH /api/mcp-servers/:id` → the updated server (reconnected). */
+  updateMcpServer(id: string, patch: McpServerPatch): Promise<McpServerInfo>
+  /** `DELETE /api/mcp-servers/:id` → 204. Also deletes the secrets the harness generated for it. */
+  deleteMcpServer(id: string): Promise<void>
+  /** `POST /api/mcp-servers/:id/reconnect` → the server, after trying to connect. */
+  reconnectMcpServer(id: string): Promise<McpServerInfo>
+  /** `GET /api/mcp-servers/:id/tools` → its registered tools. */
+  mcpServerTools(id: string): Promise<McpServerTool[]>
+  /** `POST /api/mcp-servers/:id/oauth/start` body `{ returnTo? }` → the authorization URL to open. */
+  startMcpOAuth(id: string, body?: { returnTo?: string }): Promise<McpOAuthStart>
+  /** `POST /api/mcp-servers/:id/oauth/disconnect` → the server, with its OAuth tokens deleted. */
+  disconnectMcpOAuth(id: string): Promise<McpServerInfo>
+
   // ── Secrets ──────────────────────────────────────────────────────────────
 
   /** `GET /api/secrets` → names and scopes only, never values. */
@@ -588,6 +624,15 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     readFile: (employeeId, path) => call('readFile', { employeeId }, { path }),
     writeFile: (employeeId, path, content, version) => call('writeFile', { employeeId }, { path }, { content, version }),
 
+    mcpServers: (q = {}) => call('listMcpServers', undefined, { ...q }),
+    createMcpServer: (body) => call('createMcpServer', undefined, undefined, body),
+    updateMcpServer: (id, patch) => call('updateMcpServer', { id }, undefined, patch),
+    deleteMcpServer: (id) => call('deleteMcpServer', { id }),
+    reconnectMcpServer: (id) => call('reconnectMcpServer', { id }, undefined, {}),
+    mcpServerTools: (id) => call('mcpServerTools', { id }),
+    startMcpOAuth: (id, body = {}) => call('startMcpOAuth', { id }, undefined, body),
+    disconnectMcpOAuth: (id) => call('disconnectMcpOAuth', { id }, undefined, {}),
+
     secrets: () => call('listSecrets'),
     putSecret: (name, value, scope) => call('putSecret', undefined, undefined, { name, value, scope }),
     deleteSecret: (name, scope) => call('deleteSecret', undefined, { name, scopeType: scope.type, scopeId: scope.id }),
@@ -597,6 +642,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     resumeAll: () => call('resumeAll', undefined, undefined, {}),
     health: () => call('health'),
     ready: () => call('ready'),
+
+    ...setupMethods(call),
   }
 }
 

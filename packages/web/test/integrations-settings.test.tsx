@@ -5,7 +5,7 @@ import { App } from '../src/app.tsx'
 import { createMockDataLayer } from '../src/mock/index.ts'
 
 describe('Settings → Integrations', () => {
-  it('shows per employee which integrations are set up and each GitLab webhook with its error', async () => {
+  it('shows per employee which integrations are set up and failed GitLab webhooks, linking to the guided setup', async () => {
     const data = createMockDataLayer({ now: Date.now() })
     const [employee] = (await data.api.listRecords<{ name: string }>('employee')).items
     await data.api.putSecret('GITLAB_TOKEN', 'glpat-test', { type: 'employee', id: employee!.id })
@@ -21,12 +21,17 @@ describe('Settings → Integrations', () => {
         <App data={data} />
       </MemoryRouter>,
     )
-    const root = await screen.findByTestId('integrations')
-    const section = await within(root).findByRole('region', { name: employee!.data.name })
-    expect(within(section).getByText('GitLab')).toBeInTheDocument()
-    expect(within(section).getByText('acme/billing')).toBeInTheDocument()
-    expect(within(section).getByText(/needs Maintainer on acme\/billing/)).toBeInTheDocument()
-    expect(within(section).getAllByText(/token set/).length).toBeGreaterThanOrEqual(1)
+    const root = await screen.findByTestId('integrations-overview')
+    const row = (await within(root).findAllByTestId('integrations-row')).find((r) => within(r).queryByText(employee!.data.name))!
+    expect(
+      within(row).getByText(/1 GitLab webhook failed: acme\/billing: the token needs Maintainer on acme\/billing/),
+    ).toBeInTheDocument()
+    const gitlab = within(row)
+      .getAllByRole('link')
+      .find((a) => a.getAttribute('href') === `/employees/${employee!.id}?setup=gitlab`)!
+    expect(gitlab.getAttribute('title')).toMatch(/token set/)
+    // The overview links to the employee's guided setup instead of setting anything up itself.
+    expect(within(row).getByRole('link', { name: 'Set up' }).getAttribute('href')).toBe(`/employees/${employee!.id}`)
     expect(root.textContent).not.toContain('glpat-test')
   })
 })

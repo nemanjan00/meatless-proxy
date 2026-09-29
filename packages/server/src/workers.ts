@@ -3,6 +3,7 @@ import type { WorkerHandle } from '@mp/queue'
 import type { RouteResult } from '@mp/router'
 import { startAlerts } from './alerts.ts'
 import { asEmployee } from './git-store.ts'
+import { wireMcpAlerts } from './mcp-servers/index.ts'
 import { startScheduler } from './scheduler.ts'
 import { QUEUES, activeJobs, enqueueEvent } from './queues.ts'
 import type { Services } from './services.ts'
@@ -70,6 +71,11 @@ export function startWorkers(s: Services): Workers {
   const handles: WorkerHandle[] = []
   const alerts = s.config.ALERTS_ENABLED ? startAlerts(s) : null
   handles.push(startScheduler(s), ...(alerts ? [alerts] : []))
+  // A runtime MCP server that needs a new sign-in is an alert too (src/mcp-servers/alerts.ts).
+  if (alerts) {
+    const off = wireMcpAlerts(s, alerts)
+    handles.push({ close: async () => off() })
+  }
   handles.push(
     s.queue.process<{ eventId: string }>(
       QUEUES.events,

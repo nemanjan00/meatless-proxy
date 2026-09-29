@@ -13,6 +13,7 @@ const page = <M extends Record<K, ComponentType<any>>, K extends keyof M>(load: 
   lazy(() => load().then((m) => ({ default: m[name] })))
 
 const ChatPage = page(() => import('@/pages/chat.tsx'), 'ChatPage')
+const EmployeePage = page(() => import('@/pages/employee.tsx'), 'EmployeePage')
 const EventsPage = page(() => import('@/pages/events.tsx'), 'EventsPage')
 const FilesPage = page(() => import('@/pages/files.tsx'), 'FilesPage')
 const InboxPage = page(() => import('@/pages/inbox.tsx'), 'InboxPage')
@@ -78,6 +79,7 @@ export function AppRoutes() {
           />
         ))}
         <Route path="records/:kind/:id" element={<RecordDetailPage />} />
+        <Route path="employees/:id" element={<EmployeePage />} />
         <Route path="files" element={<FilesPage />} />
         <Route path="usage" element={<UsagePage />} />
         <Route path="settings" element={<SettingsPage />} />

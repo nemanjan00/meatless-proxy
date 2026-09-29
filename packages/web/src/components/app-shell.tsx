@@ -7,6 +7,7 @@ import {
   ChevronsUpDown,
   FileText,
   FolderKanban,
+  IdCard,
   Inbox,
   KeyRound,
   Layers,
@@ -145,8 +146,16 @@ function EmployeeSwitcher() {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        {current && (
+          <DropdownMenuItem asChild>
+            <NavLink to={`/employees/${current.id}`}>
+              <IdCard className="size-4" />
+              {current.data.name}’s page
+            </NavLink>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem asChild>
-          <NavLink to="/settings">
+          <NavLink to="/settings/employees">
             <Settings className="size-4" />
             Manage employees
           </NavLink>

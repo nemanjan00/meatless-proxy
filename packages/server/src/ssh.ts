@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { KindSchema } from '@mp/core'
 import { generateSshKeypair } from '@mp/git'
 import type { Services } from './services.ts'
@@ -108,4 +109,16 @@ export function rotateSshKey(
 export async function sshPrivateKey(s: Pick<Services, 'secrets'>, employeeId: string): Promise<string | null> {
   const v = await s.secrets.resolve([SSH_KEY_SECRET], { employeeId })
   return v[SSH_KEY_SECRET] ?? null
+}
+
+/**
+ * The `SHA256:…` fingerprint of an OpenSSH public key line (`ssh-ed25519 AAAA… comment`), as
+ * `ssh-keygen -lf` and git hosts show it. Null when the line isn't a public key.
+ */
+export function sshFingerprint(publicKey: string): string | null {
+  const blob = publicKey.trim().split(/\s+/)[1]
+  if (!blob || !/^[A-Za-z0-9+/]+=*$/.test(blob)) return null
+  const bytes = Buffer.from(blob, 'base64')
+  if (bytes.length < 16) return null
+  return `SHA256:${createHash('sha256').update(bytes).digest('base64').replace(/=+$/, '')}`
 }

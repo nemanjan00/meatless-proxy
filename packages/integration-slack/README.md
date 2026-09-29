@@ -122,6 +122,11 @@ Notes:
 
 ## Setup
 
+**Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → Slack). It generates this
+employee's manifest with a one-click "Create Slack app" link, stores the tokens after checking them with `auth.test`,
+shows when signed events arrive and which channels the bot is in, and adds the recommended trigger. Every step is
+checked by the server (`packages/server/src/setup/slack.ts`). The steps below are the manual fallback.
+
 Each employee is its **own Slack bot**: one Slack app per employee, with its own name, bot token and signing secret, so
 people see who they're talking to and every message is posted as the employee that wrote it. Repeat these steps for
 every employee that should be on Slack.
@@ -233,7 +238,7 @@ the app work without an invite.
 
 ### Recommended triggers
 
-Triggers are not created automatically: add them per employee, e.g. by asking the employee in harness chat to create
+Triggers are not created automatically: add them per employee with "Add recommended trigger" in the guided setup, or e.g. by asking the employee in harness chat to create
 this one with its `triggers.create` tool (`CreateTriggerInput` in `@mp/events`). This one routes the
 employee's mentions and DMs to its router context ([the router context](../../docs/spec.md#the-router-context)), which
 answers directly or starts a session that then owns the thread, and keeps a one-line decision:

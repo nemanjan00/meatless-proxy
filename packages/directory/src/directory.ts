@@ -40,6 +40,8 @@ export type ContactInput = Without<ContactData, 'kind'> & { kind?: ContactData['
 export type EmployeeInput = Without<EmployeeData, 'contactId'> & {
   /** Extra fields for the employee's contact (e.g. more handles, email, role, bio). */
   contact?: Partial<Without<ContactData, 'kind' | 'name'>>
+  /** Its `@handle` and record key. Default: the slug of `name`. */
+  handle?: string
 }
 
 export interface Scored<T> {
@@ -61,7 +63,7 @@ export interface Contacts {
 }
 
 export interface Employees {
-  /** Creates the employee and its AI contact (handle `{mp, <slug of name>}`), linked with role `identity`. */
+  /** Creates the employee and its AI contact (handle `{mp, <slug of handle or name>}`), linked with role `identity`. */
   create(data: EmployeeInput, opts?: WriteOpts): Promise<Employee>
   get(id: string): Promise<Employee | null>
   require(id: string): Promise<Employee>
@@ -231,9 +233,9 @@ export function createDirectory({ records }: DirectoryDeps): Directory {
 
   const employees: Employees = {
     async create(input, opts) {
-      const { contact: extra, ...data } = input
-      const slug = slugify(data.name ?? '')
-      if (!slug) throw new ValidationError('employee name must contain letters or digits')
+      const { contact: extra, handle, ...data } = input
+      const slug = slugify(handle?.replace(/^@/, '') || data.name || '')
+      if (!slug) throw new ValidationError(`employee ${handle ? 'handle' : 'name'} must contain letters or digits`)
       validateRecord(records.kinds.get('employee'), { ...data, contactId: 'con_pending' })
       if (await records.getByKey('employee', slug)) throw new ConflictError(`an employee named ${slug} already exists`)
       const handles = [
