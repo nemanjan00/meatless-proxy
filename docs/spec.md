@@ -766,6 +766,7 @@ The model has tools for working with sessions:
 | fork           | fork a session at a given point                               |
 | loop           | split a session into *n* children, one per item               |
 | look up        | find sessions by id, title, status, any metadata field, link, or text in their document |
+| search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before |
 | tree           | get a session's parent, children, or whole tree               |
 | save metadata  | set or update metadata fields and the session's document      |
 | link / unlink  | add or remove links to contacts, projects and other sessions  |

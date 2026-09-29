@@ -269,6 +269,41 @@ export function storeContract(name: string, make: (ctx: ContractContext) => Prom
         expect(await store.entries.blob('0'.repeat(64))).toBeNull()
       })
 
+      it('searches entry content by text, kinds and meta', async () => {
+        const a = await store.entries.append({
+          parent: null,
+          kind: 'user',
+          content: { text: 'Deploy the Billing service' },
+          meta: { sessionId: 'ses_a' },
+        })
+        const b = await store.entries.append({
+          parent: a.id,
+          kind: 'assistant',
+          content: { text: 'billing deploy started' },
+          meta: { sessionId: 'ses_a' },
+        })
+        await store.entries.append({
+          parent: null,
+          kind: 'user',
+          content: { text: 'billing question' },
+          meta: { sessionId: 'ses_b' },
+        })
+        await store.entries.append({ parent: null, kind: 'user', content: { text: 'unrelated' }, meta: { sessionId: 'ses_b' } })
+        const all = await store.entries.search({ text: 'BILLING' })
+        expect(all.total).toBe(3)
+        expect(all.items[0]!.content).toEqual({ text: 'billing question' })
+        expect((await store.entries.search({ text: 'billing', meta: { sessionId: 'ses_a' } })).items.map((e) => e.id)).toEqual([
+          b.id,
+          a.id,
+        ])
+        expect((await store.entries.search({ text: 'billing', kinds: ['assistant'] })).items.map((e) => e.id)).toEqual([b.id])
+        expect((await store.entries.search({ text: 'billing', meta: { sessionId: ['ses_b', 'ses_x'] } })).total).toBe(1)
+        const page = await store.entries.search({ text: 'billing', limit: 1, offset: 1 })
+        expect(page.items).toHaveLength(1)
+        expect(page.total).toBe(3)
+        expect((await store.entries.search({ text: 'nothing matches this' })).total).toBe(0)
+      })
+
       it('refuses a missing parent', async () => {
         await expect(store.entries.append({ parent: 'ent_nope', kind: 'user', content: 'x' })).rejects.toBeInstanceOf(
           NotFoundError,

@@ -187,6 +187,21 @@ export interface EntryStore {
   children<C = Json>(id: string): Promise<Entry<C>[]>
   /** Content stored under a hash, if any. */
   blob<C = Json>(hash: string): Promise<C | null>
+  /**
+   * Full-text search over entry content: case-insensitive substring match on the
+   * entry's JSON content, newest first. Filters by kinds and by meta fields
+   * (e.g. `{ sessionId: 'ses_…' }` or `{ employeeId: 'emp_…' }`).
+   */
+  search<C = Json>(q: EntrySearch): Promise<{ items: Entry<C>[]; total: number }>
+}
+
+export interface EntrySearch {
+  text: string
+  kinds?: string[]
+  /** Every listed meta field must equal the given value; an array value means "any of". */
+  meta?: Record<string, Json | Json[]>
+  limit?: number
+  offset?: number
 }
 
 export interface Store {

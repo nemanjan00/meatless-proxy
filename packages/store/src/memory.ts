@@ -359,6 +359,24 @@ export function memoryStore(opts: StoreOptions = {}): Store {
           })
         },
 
+        async search(q) {
+          const s = getState()
+          const text = q.text.toLowerCase()
+          const metaOk = (meta: Record<string, Json>) =>
+            Object.entries(q.meta ?? {}).every(([k, v]) =>
+              Array.isArray(v)
+                ? v.some((x) => JSON.stringify(x) === JSON.stringify(meta[k]))
+                : JSON.stringify(v) === JSON.stringify(meta[k]),
+            )
+          const all = [...s.entries.values()]
+            .filter((e) => (!q.kinds || q.kinds.includes(e.kind)) && metaOk(e.meta))
+            .filter((e) => JSON.stringify(s.blobs.get(e.hash)).toLowerCase().includes(text))
+            .sort((a, b) => (a.id < b.id ? 1 : -1))
+          const offset = q.offset ?? 0
+          const page = all.slice(offset, q.limit === undefined ? undefined : offset + q.limit)
+          return { items: page.map((e) => ({ ...clone(e), content: clone(s.blobs.get(e.hash)) }) as any), total: all.length }
+        },
+
         async blob(hash) {
           const b = getState().blobs.get(hash)
           return b === undefined ? null : (clone(b) as any)
