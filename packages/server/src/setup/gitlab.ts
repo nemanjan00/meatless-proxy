@@ -90,15 +90,19 @@ export interface GitlabProject {
 }
 
 /** One GitLab API call as the token's account. */
+/** How long the projects listing may take (GitLab is slow for accounts in many groups). */
+const PROJECTS_TIMEOUT_MS = 30_000
+
 async function api(
   ctx: SetupContext,
   token: string,
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  init: { method?: string; body?: unknown; timeoutMs?: number } = {},
 ): Promise<HttpResult> {
   const base = gitlabBase(ctx).url
   const r = await http(ctx.deps, `${base}/api/v4${path}`, {
     method: init.method ?? 'GET',
+    ...(init.timeoutMs !== undefined ? { timeoutMs: init.timeoutMs } : {}),
     headers: {
       'private-token': token,
       ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -304,7 +308,11 @@ export const gitlabSetup: IntegrationSetupModule = {
     if (!user || !token) steps.push(step('projects', 'Give it access to projects', 'todo', 'Needs a working token.'))
     else {
       try {
-        const r = await api(ctx, token, '/projects?membership=true&archived=false&per_page=100&order_by=last_activity_at')
+        // Listing an account's projects with their access levels is GitLab's slowest call here (several
+        // seconds for an account in many groups), so it gets more time and a smaller page than the rest.
+        const r = await api(ctx, token, '/projects?membership=true&archived=false&per_page=50&order_by=last_activity_at', {
+          timeoutMs: Math.max(ctx.deps.timeoutMs, PROJECTS_TIMEOUT_MS),
+        })
         if (!r.ok) throw new UnavailableError(`GitLab answered GET /projects with HTTP ${r.status}`)
         const projects = (r.json ?? []) as GitlabProject[]
         // Which of them the harness already has as a project, and whether the employee is on it.

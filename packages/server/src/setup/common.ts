@@ -132,7 +132,7 @@ export interface HttpResult {
 export async function http(
   deps: SetupDeps,
   url: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
 ): Promise<HttpResult> {
   let res: Response
   try {
@@ -140,7 +140,7 @@ export async function http(
       method: init.method ?? 'GET',
       headers: { accept: 'application/json', ...init.headers },
       ...(init.body !== undefined ? { body: init.body } : {}),
-      signal: AbortSignal.timeout(deps.timeoutMs),
+      signal: AbortSignal.timeout(init.timeoutMs ?? deps.timeoutMs),
     })
   } catch (err) {
     throw new UnavailableError(`couldn't reach ${new URL(url).host}: ${errorMessage(err)}`)
