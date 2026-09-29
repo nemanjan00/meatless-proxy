@@ -322,6 +322,12 @@ function setupSuite(backend: Backend) {
       const m = await t.req('GET', `/api/employees/${emp}/integrations/slack/manifest`)
       expect(m.body.manifest.settings.event_subscriptions.request_url).toBe(`${PUBLIC_URL}/webhooks/slack/${emp}`)
       expect(m.body.manifest.oauth_config.scopes.bot).toEqual(SLACK_BOT_SCOPES)
+      expect(m.body.manifest.settings.interactivity).toEqual({
+        is_enabled: true,
+        request_url: `${PUBLIC_URL}/webhooks/slack/${emp}/interactive`,
+      })
+      expect(m.body.interactivityUrl).toBe(`${PUBLIC_URL}/webhooks/slack/${emp}/interactive`)
+      expect(stepOf(slack, 'interactivity')).toMatchObject({ status: 'todo', data: { optional: true } })
       expect(m.body.manifest.display_information.name).toMatch(/^Billing \d+$/)
       expect(decodeURIComponent(m.body.createUrl.split('manifest_json=')[1])).toBe(JSON.stringify(m.body.manifest))
     })
@@ -376,6 +382,25 @@ function setupSuite(backend: Backend) {
       expect(signed.status).toBe(200)
       expect(await signed.text()).toBe('c-123')
       expect(stepOf(await status('slack'), 'events')).toMatchObject({ status: 'done' })
+      expect(stepOf(await status('slack'), 'interactivity').status).toBe('todo')
+
+      // A signed interactive request (a button click) shows interactivity works; it isn't counted as events.
+      const form = `payload=${encodeURIComponent(JSON.stringify({ type: 'block_actions', user: { id: 'U1' }, actions: [] }))}`
+      const interactive = await t.a.app.request(`/webhooks/slack/${emp}/interactive`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-slack-request-timestamp': ts,
+          'x-slack-signature': signSlackRequest(SIGNING, ts, form),
+        },
+        body: form,
+      })
+      expect(interactive.status).toBe(200)
+      expect(await interactive.text()).toBe('')
+      expect(stepOf(await status('slack'), 'interactivity')).toMatchObject({
+        status: 'done',
+        data: { lastAt: expect.any(String) },
+      })
 
       const added = await act('slack', 'add-trigger')
       expect(added.status).toBe(200)

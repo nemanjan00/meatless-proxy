@@ -325,7 +325,7 @@ export interface Sessions {
   query(q: SessionQuery): Promise<{ items: Session[]; total: number }>
   update(
     id: string,
-    patch: Partial<Pick<SessionData, 'title' | 'status' | 'document' | 'meta' | 'model'>>,
+    patch: Partial<Pick<SessionData, 'title' | 'status' | 'document' | 'meta' | 'model' | 'toolset'>>,
     actor?: Actor,
   ): Promise<Session>
   /** The session's committed history, root to head. */

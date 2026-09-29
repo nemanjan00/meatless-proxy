@@ -115,8 +115,9 @@ url, branches, labels, reviewers, note body and discussion id, pipeline and job 
 ## Setup on GitLab
 
 **Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → GitLab). It checks the token
-(scopes, expiry), adds the employee's SSH key to the account for you ("Add it for me"), lists its projects with a
-warning for Maintainer access or an unprotected default branch, shows the webhooks the harness registered, and adds
+(scopes, expiry), adds the employee's SSH key to the account for you ("Add it for me"), lists its projects (searched
+and paged by GitLab, so accounts with hundreds of projects work) with a warning for Maintainer access or an
+unprotected default branch, adds them as harness projects ("Add as project", "Add selected"), shows the webhooks the harness registered, and adds
 the recommended trigger (`packages/server/src/setup/gitlab.ts`). The steps below are the manual fallback.
 
 Each employee has **its own GitLab identity**: a service account with its own token and SSH key, so its branches,

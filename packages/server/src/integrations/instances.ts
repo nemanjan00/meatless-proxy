@@ -4,7 +4,7 @@ import type { Integration } from '@mp/mcp'
 import type { SecretStore } from '@mp/secrets'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { type IntegrationSpec, secretNamesOf } from './specs.ts'
+import { type IntegrationFactoryDeps, type IntegrationSpec, secretNamesOf } from './specs.ts'
 
 /** How long resolved secrets are reused before they're read again (another instance may have changed them). */
 export const DEFAULT_SECRETS_TTL_MS = 60_000
@@ -37,7 +37,7 @@ export interface InstanceCacheOptions {
   clock: Clock
   logger: Logger
   /** Builds the factory deps for a spec (fetch and base URL overrides). */
-  factoryDeps(spec: IntegrationSpec): { fetch?: typeof fetch; baseUrl?: string }
+  factoryDeps(spec: IntegrationSpec): Omit<IntegrationFactoryDeps, 'clock' | 'logger' | 'employeeId'>
   secretsTtlMs?: number
 }
 
@@ -124,10 +124,10 @@ export function createInstance(
   spec: IntegrationSpec,
   employeeId: string | undefined,
   values: Record<string, string>,
-  deps: { clock: Clock; logger: Logger; fetch?: typeof fetch; baseUrl?: string },
+  deps: Omit<IntegrationFactoryDeps, 'employeeId'>,
 ): IntegrationInstance {
   const logger = deps.logger.child({ integration: spec.name, ...(employeeId ? { employeeId } : {}) })
-  const integration = spec.create(values, { ...deps, logger })
+  const integration = spec.create(values, { ...deps, logger, ...(employeeId ? { employeeId } : {}) })
   const baseUrl = (spec.baseUrlSecret && values[spec.baseUrlSecret]) || deps.baseUrl
   let client: Promise<Client> | null = null
   let closed = false

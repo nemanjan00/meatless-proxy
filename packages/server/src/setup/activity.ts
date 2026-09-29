@@ -4,6 +4,8 @@ import type { Services } from '../services.ts'
 
 /** The setting holding the last signed webhook of an employee (or `deployment`) in an integration. */
 export const activitySetting = (owner: string, integration: string) => `webhook.activity:${owner}:${integration}`
+/** The activity key of an integration's interactivity requests: `slack.interactive`. */
+export const interactiveActivity = (integration: string) => `${integration}.interactive`
 /** Activity is written to the database at most this often per employee and integration (a new project writes at once). */
 export const ACTIVITY_PERSIST_MS = 30_000
 /** Projects remembered per employee and integration. */
@@ -88,11 +90,18 @@ export function createWebhookActivity(s: Pick<Services, 'settings' | 'directory'
   const middleware: MiddlewareHandler = async (c, next) => {
     await next()
     if (c.res.status < 200 || c.res.status >= 300) return
-    const parts = c.req.path.split('/').filter(Boolean) // webhooks, integration, employee?
-    if (parts[0] !== 'webhooks' || !parts[1] || parts.length > 3) return
+    const parts = c.req.path.split('/').filter(Boolean) // webhooks, integration, employee?, interactive?
+    if (parts[0] !== 'webhooks' || !parts[1]) return
+    if (parts.length > 4 || (parts.length === 4 && parts[3] !== 'interactive')) return
     try {
       const owner = await ownerOf(parts[2] ? decodeURIComponent(parts[2]) : undefined)
       if (!owner) return
+      // Interactivity (form-encoded payloads, e.g. Slack's buttons) is tracked apart from events.
+      const form = (c.req.header('content-type') ?? '').startsWith('application/x-www-form-urlencoded')
+      if (parts[3] === 'interactive' || (parts[1] === 'slack' && form)) {
+        await record(owner, interactiveActivity(parts[1]))
+        return
+      }
       let project: string | undefined
       if (parts[1] === 'gitlab') {
         // The handler has read the body already; hono caches it.

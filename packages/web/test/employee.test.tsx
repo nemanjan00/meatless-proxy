@@ -51,7 +51,7 @@ describe('employee page', () => {
     expect(within(panel).getByText('GitLab for Billing Bot')).toBeInTheDocument()
     expect(panelStep('token').dataset.status).toBe('warning')
     expect(within(panelStep('token')).getByText(/expires in 12 days/)).toBeInTheDocument()
-    expect(within(panelStep('projects')).getByText(/Developer is recommended/)).toBeInTheDocument()
+    expect((await within(panelStep('projects')).findAllByText(/Developer is recommended/)).length).toBeGreaterThan(0)
     expect(panelStep('ssh-key').dataset.status).toBe('todo')
     await user.click(within(panelStep('ssh-key')).getByRole('button', { name: 'Add it for me' }))
     await waitFor(() => expect(panelStep('ssh-key').dataset.status).toBe('done'))

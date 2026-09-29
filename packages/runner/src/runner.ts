@@ -98,6 +98,18 @@ export interface RunnerOptions {
    * or its bytes changed (the model then sees "[image no longer available]").
    */
   loadImage?: (ref: ImageRef) => Promise<LoadedImage | null>
+  /**
+   * The tool names a session should have now, read when a run starts; undefined keeps its toolset as it
+   * is (a deliberately narrowed one). A session's toolset is fixed when it is created, so tools added
+   * since would never reach it: the runner brings it up to date and tells the model what changed, since
+   * its history may say a tool is missing.
+   */
+  currentToolset?: (session: Session) => Promise<string[] | undefined>
+  /**
+   * The current text of a session's first entry (the employee prompt it was created with), read when a
+   * run starts; undefined keeps it. The model sees the current text in place of the stored one.
+   */
+  currentPrompt?: (session: Session, stored: string) => Promise<string | undefined>
 }
 
 /** Limits of one run. Missing fields fall back to the runner's options. */
@@ -250,6 +262,51 @@ export function createRunner(opts: RunnerOptions): Runner {
       return t && !blind(t.def) && tools.isAllowed(n, lists)
     })
     return { specs: names.length ? tools.specs(names) : [], names }
+  }
+
+  /**
+   * Brings a session up to date as a run starts: tools added or taken away since its toolset was fixed
+   * (with a note to the model, since its history may say otherwise), and the current employee prompt.
+   * Not while tool calls are open: a note between a call and its result would break the history.
+   */
+  const refreshSession = async (run: Run, session: Session, logger: Logger): Promise<{ session: Session; prompt?: string }> => {
+    if (!opts.currentToolset && !opts.currentPrompt) return { session }
+    try {
+      const history = await sessions.runHistory(run.id)
+      let out: { session: Session; prompt?: string } = { session }
+      const first = history[0]
+      if (opts.currentPrompt && first?.kind === 'system') {
+        const stored = String((first.content as { text?: unknown } | null)?.text ?? '')
+        const current = await opts.currentPrompt(session, stored)
+        if (current !== undefined && current !== stored) out = { ...out, prompt: current }
+      }
+      if (!opts.currentToolset || pendingCalls(history).length) return out
+      const want = await opts.currentToolset(session)
+      if (!want) return out
+      const known = (n: string) => {
+        const t = tools.get(n)
+        return !!t && !blind(t.def)
+      }
+      const have = new Set(session.data.toolset)
+      const wanted = new Set(want)
+      const added = want.filter((n) => !have.has(n) && known(n))
+      // Only tools the model was offered before count as taken away (not ones it never saw).
+      const removed = session.data.toolset.filter((n) => !wanted.has(n) && known(n))
+      if (!added.length && !removed.length) return out
+      const updated = await sessions.update(session.id, { toolset: [...want] })
+      const lines = ['[tools changed since earlier in this conversation]']
+      if (added.length)
+        lines.push(
+          `Now available: ${added.join(', ')}. Anything said earlier about these tools not existing is out of date; use them.`,
+        )
+      if (removed.length) lines.push(`No longer available: ${removed.join(', ')}.`)
+      await sessions.append(run.id, { kind: 'system', content: { text: lines.join('\n') }, meta: { toolsetChanged: true } })
+      logger.info('session toolset brought up to date', { sessionId: session.id, added, removed })
+      return { ...out, session: updated }
+    } catch (err) {
+      logger.warn('could not bring the session up to date', { sessionId: session.id, err: errorMessage(err) })
+      return { session }
+    }
   }
 
   const applyControl = async (run: Run, signals: ControlSignal[]): Promise<{ suspend?: WaitCondition; end?: RunResult }> => {
@@ -443,8 +500,11 @@ export function createRunner(opts: RunnerOptions): Runner {
       return { status: 'skipped', runId, reason: `run is ${run.data.state}` }
     }
 
-    const session = await sessions.require(run.data.sessionId)
+    let session = await sessions.require(run.data.sessionId)
     let finishBlocks = 0
+    const fresh = await refreshSession(run, session, logger)
+    session = fresh.session
+    const prompt = fresh.prompt
 
     // Resuming after a wait: tell the model what it was waiting for.
     if (run.data.wait && !resumed) {
@@ -550,6 +610,8 @@ export function createRunner(opts: RunnerOptions): Runner {
         }
 
         const messages = renderMessages(history)
+        if (prompt !== undefined && history[0]?.kind === 'system' && messages[0]?.role === 'system')
+          messages[0] = { ...messages[0], content: prompt }
         const pause = await hooks.decide(beforeModelCall, { run, session, messages, step: run.data.steps })
         if (pause) {
           await sessions.transition(runId, 'running', 'paused', { pauseReason: pause.pause, activeMs: activeMs(run) })

@@ -66,6 +66,13 @@ const isSelf = (m: SlackMessage | undefined, self: SelfIdentity) =>
 
 const clip = (s: string) => (s.length > SLACK_MAX_TEXT ? `${s.slice(0, SLACK_MAX_TEXT)}…` : s)
 
+/** Files of a message, as the model reads them: `[file: name, slack file F…]`, so it knows to call get_file. */
+export const filesText = (files: SlackMessage['files']) =>
+  (files ?? [])
+    .filter((f) => f.id)
+    .map((f) => ` [file: ${(f.name ?? f.id)!.replace(/[\]\n]/g, ' ')}, slack file ${f.id}]`)
+    .join('')
+
 const mentionsApp = (text: string | undefined, self: SelfIdentity) =>
   !!text && [...self.userIds].some((id) => text.includes(`<@${id}>`))
 
@@ -163,7 +170,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
         type,
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${who}: ${clip(ev.text ?? '')}`,
+        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${who}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
         pick({
           ...(await common()),
           user: ev.user,
@@ -186,7 +193,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
         'message.mentioned',
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${ev.user ?? 'someone'}: ${clip(ev.text ?? '')}`,
+        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${ev.user ?? 'someone'}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
         pick({
           ...(await common()),
           user: ev.user,
@@ -195,6 +202,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           thread_ts: ev.thread_ts,
           is_reply: reply,
           mentions_app: true,
+          files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
         }),
         messageKey(channel, ev.ts),
       )

@@ -44,9 +44,12 @@ describe('slack MCP tools', () => {
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
+        'ask',
+        'get_file',
         'list_channels',
         'lookup_user',
         'open_dm',
+        'post_blocks',
         'post_message',
         'react',
         'read_channel',

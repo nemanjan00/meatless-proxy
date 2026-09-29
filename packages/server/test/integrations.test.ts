@@ -6,6 +6,7 @@
  */
 import { createHmac } from 'node:crypto'
 import { type Json, silentLogger, systemClock } from '@mp/core'
+import { solidPng } from '@mp/files'
 import { callTools, type ModelRequest, reply, type ScriptResult } from '@mp/model'
 import type { ToolContext } from '@mp/tools'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -35,6 +36,7 @@ function fakeApis() {
     new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
   const slackUsers: Record<string, { id: string; real_name: string; profile: { email?: string } }> = {}
   const gitlabUsers: Record<string, { id: number; username: string; name: string; public_email?: string }> = {}
+  const slackFiles: Record<string, { name: string; mimetype: string; bytes: Uint8Array }> = {}
   let ts = 1_700_000_100
 
   const fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -45,6 +47,12 @@ function fakeApis() {
     const body = type.includes('json') && raw ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw))
     const method = (init.method ?? 'GET').toUpperCase()
 
+    if (url.origin === new URL(SLACK_API).origin && url.pathname.startsWith('/files-pri/')) {
+      calls.push({ system: 'slack', method, path: url.pathname, token: headers.get('authorization'), body: null })
+      const f = slackFiles[url.pathname.split('/')[2]!.replace('T1-', '')]
+      if (!f) return new Response('not found', { status: 404 })
+      return new Response(Buffer.from(f.bytes), { status: 200, headers: { 'content-type': f.mimetype } })
+    }
     if (url.origin === new URL(SLACK_API).origin) {
       const name = url.pathname.replace(/^\/api\//, '')
       calls.push({ system: 'slack', method, path: name, token: headers.get('authorization'), body })
@@ -60,7 +68,26 @@ function fakeApis() {
         case 'chat.postMessage':
           return json({ ok: true, channel: body.channel, ts: `${ts++}.000100` })
         case 'reactions.add':
-          return json({ ok: true })
+        case 'chat.update':
+          return json({ ok: true, channel: body.channel, ts: body.ts })
+        case 'files.info': {
+          const f = slackFiles[body.file]
+          if (!f) return json({ ok: false, error: 'file_not_found' })
+          const download = `${new URL(SLACK_API).origin}/files-pri/T1-${body.file}/download/${encodeURIComponent(f.name)}`
+          return json({
+            ok: true,
+            file: {
+              id: body.file,
+              name: f.name,
+              mimetype: f.mimetype,
+              size: f.bytes.byteLength,
+              mode: 'hosted',
+              url_private_download: download,
+            },
+          })
+        }
+        case 'chat.postEphemeral':
+          return json({ ok: true, message_ts: `${ts++}.000200` })
         default:
           return json({ ok: false, error: 'unknown_method' })
       }
@@ -117,7 +144,7 @@ function fakeApis() {
     throw new Error(`unexpected fetch ${url.href}`)
   }) as typeof globalThis.fetch
 
-  return { fetch, calls, slackUsers, gitlabUsers, reset: () => calls.splice(0) }
+  return { fetch, calls, slackUsers, gitlabUsers, slackFiles, reset: () => calls.splice(0) }
 }
 
 // ─── Webhook helpers ─────────────────────────────────────────────────────────
@@ -136,6 +163,20 @@ function slackRequest(secret: string, envelope: unknown, badSignature = false) {
       'content-type': 'application/json',
       'x-slack-request-timestamp': String(ts),
       'x-slack-signature': badSignature ? `v0=${'0'.repeat(64)}` : sig,
+    },
+  }
+}
+
+/** An interactivity request: form-encoded `payload=`, signed like the Events API. */
+function slackForm(secret: string, payload: unknown) {
+  const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`
+  const ts = Math.floor(Date.now() / 1000)
+  return {
+    body,
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-slack-request-timestamp': String(ts),
+      'x-slack-signature': `v0=${createHmac('sha256', secret).update(`v0:${ts}:${body}`).digest('hex')}`,
     },
   }
 }
@@ -203,9 +244,31 @@ const lastToolName = (req: ModelRequest): string | undefined => {
   return undefined
 }
 
+const ASK_ARGS = {
+  channel: 'C1',
+  thread_ts: '1700000050.000100',
+  text: 'Which environment?',
+  fields: [
+    {
+      id: 'env',
+      label: 'Environment',
+      type: 'select',
+      options: [
+        { value: 'prod', label: 'Production' },
+        { value: 'stg', label: 'Staging' },
+      ],
+    },
+    { id: 'note', label: 'Note', type: 'text', optional: true },
+  ],
+}
+
 /** The scripted employee: acts on each integration's event with that integration's tools. */
 const script = async (req: ModelRequest): Promise<ScriptResult> => {
   const tool = lastToolName(req)
+  // Asks with a form, then waits in the same run for the answer.
+  if (tool === 'mcp.slack.ask') return callTools([{ name: 'sessions.wait', args: { delivery: true } }])
+  if (!tool && lastUser(req).includes('interaction.answered')) return reply('Deploying to Production.')
+  if (!tool && lastUser(req).includes('please ask')) return callTools([{ name: 'mcp.slack.ask', args: ASK_ARGS }])
   if (tool === 'mcp.slack.react') return reply('Hello Ana, looking into it.')
   if (tool === 'mcp.linear.viewer') return reply('Took PAY-1.')
   if (tool === 'mcp.gitlab.create_merge_request') return reply('Opened the MR.')
@@ -397,6 +460,131 @@ function integrationSuite(backend: Backend) {
     expect(r.status).toBe(200)
     await settle()
     expect(api.calls.filter((c) => c.path === 'chat.postMessage')).toEqual([])
+  })
+
+  it('slack ask: a question with inputs, answered in Slack, wakes the session that asked', async () => {
+    const s = t.a.services
+    api.reset()
+    const root = ASK_ARGS.thread_ts
+    const r = await post(
+      '/webhooks/slack/meatless',
+      slackRequest(SLACK_SECRET_A, mention('Ev-ask', 'U_ANA', '<@UBOT> please ask', root)),
+    )
+    expect(r.status).toBe(200)
+    await settle()
+
+    // Posted with blocks; the model got an interaction id, not the question back.
+    const posted = api.calls.find((c) => c.path === 'chat.postMessage' && c.body.blocks)!
+    expect(posted.body.blocks.map((b: any) => b.type)).toEqual(['section', 'input', 'input', 'actions'])
+    const [itr] = (await s.records.query<any>('interaction', { where: { channel: 'C1' } })).items
+    expect(itr!.data).toMatchObject({
+      employeeId: meatless,
+      channel: 'C1',
+      ts: expect.any(String),
+      threadTs: root,
+      status: 'open',
+    })
+    const waiting = await until(async () => {
+      const [run] = await s.sessions.runs({ state: ['suspended'] })
+      return run?.data.wait?.type === 'delivery' ? run : undefined
+    }, 'the run waiting for the answer')
+    expect(itr!.data.sessionId).toBe(waiting.data.sessionId)
+    const history = await s.sessions.runHistory(waiting.id)
+    const askResult = history.find((e) => e.kind === 'tool_result' && (e.content as any).name === 'mcp.slack.ask')!
+    expect((askResult.content as any).output).toMatchObject({
+      interactionId: itr!.id,
+      ts: itr!.data.ts,
+      subject: `slack:C1/${root}`,
+    })
+    expect((askResult.content as any).output.ask).toBeUndefined()
+    // The session follows the thread.
+    const subs = await s.events.subscriptions.forSubject({ system: 'slack', id: `C1/${root}` })
+    expect(subs.map((x) => x.data.sessionId)).toContain(waiting.data.sessionId)
+
+    // Ana picks Production and presses Submit.
+    const click = (user: string) => ({
+      type: 'block_actions',
+      api_app_id: 'AAPP',
+      user: { id: user },
+      container: { type: 'message', message_ts: itr!.data.ts, channel_id: 'C1', is_ephemeral: false },
+      channel: { id: 'C1', name: 'general' },
+      message: { ts: itr!.data.ts, thread_ts: root },
+      state: {
+        values: {
+          'mp_field:env': { env: { type: 'static_select', selected_option: { value: 'prod' } } },
+          'mp_field:note': { note: { type: 'plain_text_input', value: 'ship it' } },
+        },
+      },
+      actions: [{ action_id: 'mp_button:submit', block_id: 'mp_actions', type: 'button', value: 'submit', action_ts: '1.2' }],
+    })
+    const answer = await post('/webhooks/slack/meatless/interactive', slackForm(SLACK_SECRET_A, click('U_ANA')))
+    expect(answer).toEqual({ status: 200, text: '' })
+    await settle()
+
+    const update = api.calls.find((c) => c.path === 'chat.update')!
+    expect(update.token).toBe('Bearer xoxb-meatless')
+    expect(update.body).toMatchObject({ channel: 'C1', ts: itr!.data.ts })
+    expect(JSON.stringify(update.body.blocks)).toContain('Answered by <@U_ANA>')
+    const [event] = await s.rawEvents.query({ source: 'integration:slack', type: 'interaction.answered' })
+    expect(event!.data).toMatchObject({
+      employeeId: meatless,
+      actorContactId: ana,
+      subject: { system: 'slack', id: `C1/${root}` },
+      payload: { interactionId: itr!.id, values: { env: 'prod', note: 'ship it' }, button: 'submit', answeredBy: 'U_ANA' },
+    })
+    const stored = (await s.records.get<any>('interaction', itr!.id))!.data
+    expect(stored).toMatchObject({ status: 'answered', answeredBy: 'U_ANA', answeredByContactId: ana, eventId: event!.id })
+    // The waiting run woke with the answer, and finished.
+    const done = await until(async () => {
+      const run = await s.sessions.getRun(waiting.id)
+      return run?.data.state === 'completed' ? run : undefined
+    }, 'the woken run')
+    expect(done.data.result?.output).toBe('Deploying to Production.')
+    const after = await s.sessions.runHistory(waiting.id)
+    const delivered = after.find((e) => e.kind === 'event' && (e.content as any).type === 'interaction.answered')!
+    expect((delivered.content as any).expectedToAct).toBe(true)
+    expect((delivered.content as any).text).toContain('Environment: Production [prod]')
+
+    // A second click changes nothing; a click on another message and a bad signature neither.
+    api.reset()
+    expect((await post('/webhooks/slack/meatless/interactive', slackForm(SLACK_SECRET_A, click('U_ANA')))).status).toBe(200)
+    const other = { ...click('U_ANA'), container: { type: 'message', message_ts: '1699999999.000100', channel_id: 'C1' } }
+    expect((await post('/webhooks/slack/meatless/interactive', slackForm(SLACK_SECRET_A, other))).status).toBe(200)
+    expect((await post('/webhooks/slack/meatless/interactive', slackForm('not-the-secret', click('U_ANA')))).status).toBe(401)
+    await settle()
+    expect(api.calls.filter((c) => c.path === 'chat.update')).toEqual([])
+    expect(await s.rawEvents.query({ source: 'integration:slack', type: 'interaction.answered' })).toHaveLength(1)
+  })
+
+  it('slack get_file: the server downloads the file into the employee’s files; the model gets the path', async () => {
+    const s = t.a.services
+    api.reset()
+    api.slackFiles.F9 = { name: 'q3 report.csv', mimetype: 'text/csv', bytes: new TextEncoder().encode('a,b\n1,2\n') }
+    api.slackFiles.F10 = { name: 'shot.png', mimetype: 'image/png', bytes: solidPng(2, 2, [255, 0, 0, 255]) }
+    const r = await s.tools.execute('mcp.slack.get_file', { file_id: 'F9' }, toolCtx(meatless))
+    expect(r.isError).toBeFalsy()
+    expect(r.output).toEqual({
+      path: '/slack/F9-q3_report.csv',
+      name: 'q3 report.csv',
+      mime: 'text/csv',
+      size: 8,
+      text: 'a,b\n1,2\n',
+    })
+    const saved = await s.files.read(meatless, '/slack/F9-q3_report.csv')
+    expect(saved.content).toBe('a,b\n1,2\n')
+    const download = api.calls.find((c) => c.path.startsWith('/files-pri/'))!
+    expect(download.token).toBe('Bearer xoxb-meatless')
+
+    const img = await s.tools.execute('mcp.slack.get_file', { file_id: 'F10' }, toolCtx(meatless))
+    expect(img.output).toMatchObject({ path: '/slack/F10-shot.png', mime: 'image/png' })
+    expect((img.output as any).text).toBeUndefined()
+    expect((await s.files.read(meatless, '/slack/F10-shot.png')).encoding).toBe('base64')
+
+    const missing = await s.tools.execute('mcp.slack.get_file', { file_id: 'F404' }, toolCtx(meatless))
+    expect(missing).toMatchObject({ isError: true, output: { error: 'not_found' } })
+    // Kai has no Slack token.
+    const none = await s.tools.execute('mcp.slack.get_file', { file_id: 'F9' }, toolCtx(kai))
+    expect(none.isError).toBe(true)
   })
 
   it('a bad signature gets 401 and nothing is ingested', async () => {

@@ -17,8 +17,12 @@ export const DOCS_PATH = /(^|\/)docs\/|\.mdx?$/i
 
 /** What the model ends with when it decides a message needs no answer. */
 export const NO_REPLY = 'NO_REPLY'
-/** `NO_REPLY`, alone or followed by a reason (`NO_REPLY: just a thanks`). */
-export const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::.*)?$/is
+/**
+ * `NO_REPLY`, alone or followed by a reason (`NO_REPLY: just a thanks`), at the start of the final text
+ * or as its last line: models often think aloud first ("Nothing needed from me here…\n\nNO_REPLY: …"),
+ * and that text must not be posted. "No reply from the vendor yet" is still a reply.
+ */
+export const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?no[_ -]?reply\]?\s*(?::[^\n]*)?\s*$/i
 
 /** Tools that answer in chat: a run that used one has already replied somewhere. */
 export const CHAT_ANSWER_TOOLS = ['chat.post', 'chat.reply', 'chat.invite']

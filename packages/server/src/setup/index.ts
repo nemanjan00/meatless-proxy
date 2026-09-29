@@ -5,7 +5,7 @@ import type { Actor } from '@mp/store'
 import { type Context, Hono } from 'hono'
 import { principalOf } from '../auth/guard.ts'
 import { actorOf } from '../http/views.ts'
-import { BadRequestError, boolParam, jsonBody, requireString } from '../http/util.ts'
+import { BadRequestError, boolParam, intParam, jsonBody, requireString } from '../http/util.ts'
 import type { HookProvisioning, IntegrationsOptions } from '../integrations/index.ts'
 import { createEmployee } from '../provision.ts'
 import type { Services } from '../services.ts'
@@ -13,6 +13,13 @@ import { sshFingerprint } from '../ssh.ts'
 import { createWebhookActivity, type WebhookActivity } from './activity.ts'
 import { type IntegrationSetupModule, SETUP_HTTP_TIMEOUT_MS, type SetupContext, type SetupDeps, stateOf, step } from './common.ts'
 import { gitlabSetup } from './gitlab.ts'
+import {
+  GITLAB_PAGE_DEFAULT,
+  GITLAB_PAGE_MAX,
+  type GitlabListQuery,
+  gitlabBranchProtection,
+  listGitlabProjects,
+} from './gitlab-listing.ts'
 import { linearSetup } from './linear.ts'
 import { manifestFor, slackSetup } from './slack.ts'
 
@@ -54,6 +61,14 @@ export interface Setup {
     o: { origin: string; actor: Actor; input?: Record<string, unknown> },
   ): Promise<Api.SetupResult>
   slackManifest(employeeId: string, o: { origin: string; actor: Actor }): Promise<Api.SlackManifest>
+  /** One page of the GitLab projects the employee's account reaches, searched by GitLab (not cached). */
+  gitlabProjects(employeeId: string, q: GitlabListQuery, o: { origin: string; actor: Actor }): Promise<Api.GitlabProjectsPage>
+  /** Whether one GitLab project's default branch is protected. */
+  gitlabProjectProtection(
+    employeeId: string,
+    projectId: number,
+    o: { origin: string; actor: Actor },
+  ): Promise<Api.GitlabBranchProtection>
   /** Drops cached checks (one employee, or all). */
   invalidate(employeeId?: string): void
   close(): void
@@ -215,6 +230,18 @@ export function createSetup(s: Services, opts: SetupOptions = {}): Setup {
       return manifestFor(await contextFor(employee, slackSetup, o.origin, o.actor))
     },
 
+    async gitlabProjects(employeeId, q, o) {
+      if (!enabled(gitlabSetup)) throw new NotFoundError('integration', 'gitlab')
+      const employee = await s.directory.employees.require(employeeId)
+      return listGitlabProjects(await contextFor(employee, gitlabSetup, o.origin, o.actor), q)
+    },
+
+    async gitlabProjectProtection(employeeId, projectId, o) {
+      if (!enabled(gitlabSetup)) throw new NotFoundError('integration', 'gitlab')
+      const employee = await s.directory.employees.require(employeeId)
+      return gitlabBranchProtection(await contextFor(employee, gitlabSetup, o.origin, o.actor), projectId)
+    },
+
     invalidate(employeeId) {
       if (employeeId) cache.delete(employeeId)
       else cache.clear()
@@ -298,6 +325,31 @@ export function setupRoutes(s: Services, setup: Setup): Hono {
 
   app.get('/api/employees/:id/integrations/slack/manifest', async (c) =>
     c.json(await setup.slackManifest(c.req.param('id'), ctxOf(c))),
+  )
+
+  // Admins only: the rows name every project the account reaches (the `/api/employees/*` guard rule).
+  app.get('/api/employees/:id/integrations/gitlab/projects', async (c) =>
+    c.json(
+      await setup.gitlabProjects(
+        c.req.param('id'),
+        {
+          search: c.req.query('search') ?? '',
+          page: intParam(c.req.query('page'), 'page', 1, 100_000, 1),
+          perPage: intParam(c.req.query('perPage'), 'perPage', GITLAB_PAGE_DEFAULT, GITLAB_PAGE_MAX, 1),
+        },
+        ctxOf(c),
+      ),
+    ),
+  )
+
+  app.get('/api/employees/:id/integrations/gitlab/projects/:projectId/protection', async (c) =>
+    c.json(
+      await setup.gitlabProjectProtection(
+        c.req.param('id'),
+        intParam(c.req.param('projectId'), 'projectId', 0, Number.MAX_SAFE_INTEGER, 1),
+        ctxOf(c),
+      ),
+    ),
   )
 
   app.post('/api/employees/:id/integrations/:name/secrets', async (c) => {

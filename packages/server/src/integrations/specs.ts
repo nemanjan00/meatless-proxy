@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Clock, Logger } from '@mp/core'
 import { createGitlabIntegration } from '@mp/integration-gitlab'
 import { createLinearIntegration } from '@mp/integration-linear'
-import { createSlackIntegration } from '@mp/integration-slack'
+import { createSlackIntegration, type SlackInteractionStore } from '@mp/integration-slack'
 import type { Integration } from '@mp/mcp'
 import type { EffectClass } from '@mp/tools'
 import { gitlabIdentity, type IdentityLookup, linearIdentity, slackIdentity } from './identity-lookups.ts'
@@ -15,6 +15,10 @@ export interface IntegrationFactoryDeps {
   fetch?: typeof fetch
   /** API base URL override (tests, self-hosted instances). */
   baseUrl?: string
+  /** The employee the instance is for; undefined for the deployment-wide one. */
+  employeeId?: string
+  /** Questions asked with Slack's `ask`, for the instance of an employee (or the deployment). */
+  slackInteractions?: (employeeId: string | undefined) => SlackInteractionStore
 }
 
 /**
@@ -65,8 +69,11 @@ export const slackSpec: IntegrationSpec = {
     open_dm: 'idempotent',
     list_channels: 'read',
     update_message: 'idempotent',
+    ask: 'non_idempotent',
+    get_file: 'idempotent',
+    post_blocks: 'non_idempotent',
   },
-  answerTools: ['post_message', 'reply', 'update_message'],
+  answerTools: ['post_message', 'reply', 'update_message', 'ask', 'post_blocks'],
   identity: slackIdentity,
   create: (v, d) =>
     createSlackIntegration({
@@ -75,6 +82,7 @@ export const slackSpec: IntegrationSpec = {
       logger: d.logger,
       ...(d.fetch ? { fetch: d.fetch } : {}),
       ...(d.baseUrl ? { baseUrl: d.baseUrl } : {}),
+      ...(d.slackInteractions ? { interactions: d.slackInteractions(d.employeeId) } : {}),
     }),
 }
 

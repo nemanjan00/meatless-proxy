@@ -331,3 +331,45 @@ describe('backfilling private work', () => {
     expect(await backfillPrivateWork(s)).toEqual({ runs: 0, sessions: 0 })
   })
 })
+
+describe('work sessions started before a change', () => {
+  it('see the current employee prompt and get tools added since, keeping when they started', async () => {
+    const requests: ModelRequest[] = []
+    const app = await testApp({
+      script: (req) => {
+        requests.push(req)
+        return reply('ok')
+      },
+    })
+    t = app
+    const s = app.a.services
+    const employee = (await s.directory.employees.byHandle('meatless'))!
+    const routerFirst = (await s.sessions.history(employee.data.routerSessionId!))[0]!
+    const stored = String((routerFirst.content as { text: string }).text)
+    const full = s.tools.allowed(await s.toolListsFor(employee.id)).map((x) => x.name)
+    expect(full).toContain('git.edit_file')
+    // A work session from before git.edit_file existed, with the prompt of that time.
+    const work = await s.sessions.create({
+      employeeId: employee.id,
+      title: 'Older work',
+      toolset: full.filter((n) => n !== 'git.edit_file'),
+      entries: [{ kind: 'system', content: { text: stored } }],
+    })
+    await s.directory.employees.update(employee.id, { personality: 'Cheerful and thorough.' })
+
+    const r = await app.req('POST', `/api/sessions/${work.id}/message`, { text: 'go on' })
+    expect(r.status).toBe(200)
+    await until(async () => {
+      await app.settle()
+      return requests.some((q) => q.messages.some((m) => String(m.content).includes('go on')))
+    }, 'the run')
+    const req = requests.find((q) => q.messages.some((m) => String(m.content).includes('go on')))!
+    const system = String(req.messages[0]!.content)
+    expect(system).toContain('Cheerful and thorough.')
+    expect(system).toContain(stored.match(/Session started: [^\n]*/)![0])
+    expect(req.tools?.map((x) => x.function.name)).toContain('git__edit_file')
+    expect(req.messages.some((m) => String(m.content).includes('Now available: git.edit_file'))).toBe(true)
+    // The stored history keeps what it was.
+    expect((await s.sessions.history(work.id))[0]!.content).toEqual({ text: stored })
+  })
+})

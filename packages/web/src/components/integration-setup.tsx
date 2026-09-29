@@ -145,6 +145,17 @@ function StepExtras({ integration, step, all }: { integration: string; step: Set
           {str(d.requestUrl) && step.status !== 'done' && <CopyField value={d.requestUrl} label="Copy request URL" />}
         </div>
       )
+    case 'slack.interactivity':
+      return (
+        <div className="flex flex-col gap-2">
+          {str(d.lastAt) && <Facts rows={[['Last request', agoPhrase(d.lastAt)]]} />}
+          {str(d.interactivityUrl) && step.status !== 'done' && (
+            <Labeled label="Interactivity Request URL">
+              <CopyField value={d.interactivityUrl} label="Copy interactivity request URL" />
+            </Labeled>
+          )}
+        </div>
+      )
     case 'slack.channels':
       return (
         <div className="flex flex-col gap-2">

@@ -336,7 +336,10 @@ stays the same across calls, runs and forks:
 1. **Employee prompt**: identity, personality and interaction rules. This is
    the same for every session of that employee.
 2. **Tool definitions**, in a fixed order. The tool set is fixed when the
-   session is created, because changing it in the middle breaks the cache.
+   session is created, because changing it in the middle breaks the cache;
+   it is brought up to date only as a run starts, with a note in the history
+   (see the spec's whitelist section). The employee prompt is likewise the
+   current one, swapped in for the stored first entry.
 3. **Session history**, from the root to `base`. It's shared with every fork
    and every earlier run.
 4. **Run entries**, from `base` to `tip`.

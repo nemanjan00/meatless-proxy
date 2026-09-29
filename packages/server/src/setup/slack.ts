@@ -13,6 +13,7 @@ import {
   step,
   webhookUrl,
 } from './common.ts'
+import { interactiveActivity } from './activity.ts'
 
 export const SLACK_API_URL = 'https://slack.com/api'
 /** Bot scopes the Slack tools and events need (packages/integration-slack/README.md). */
@@ -21,6 +22,7 @@ export const SLACK_BOT_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
+  'files:read',
   'groups:history',
   'groups:read',
   'im:history',
@@ -44,8 +46,17 @@ export const SLACK_BOT_EVENTS = [
 /** Errors from `auth.test` that mean the token itself is bad. */
 const BAD_TOKEN = new Set(['invalid_auth', 'not_authed', 'account_inactive', 'token_revoked', 'token_expired', 'no_permission'])
 
-/** The Slack app manifest for one employee: its name, bot user, scopes, events and request URL. */
-export function slackManifest(name: string, handle: string, requestUrl: string): Record<string, Json> {
+/**
+ * The Slack app manifest for one employee: its name, bot user, scopes, events, and the request URLs
+ * of the Events API and of interactivity (buttons and inputs of `mcp.slack.ask`). Manifest fields:
+ * https://docs.slack.dev/reference/app-manifest/
+ */
+export function slackManifest(
+  name: string,
+  handle: string,
+  requestUrl: string,
+  interactivityUrl = `${requestUrl}/interactive`,
+): Record<string, Json> {
   return {
     display_information: {
       name: name.slice(0, 35),
@@ -65,7 +76,7 @@ export function slackManifest(name: string, handle: string, requestUrl: string):
     oauth_config: { scopes: { bot: SLACK_BOT_SCOPES } },
     settings: {
       event_subscriptions: { request_url: requestUrl, bot_events: SLACK_BOT_EVENTS },
-      interactivity: { is_enabled: false },
+      interactivity: { is_enabled: true, request_url: interactivityUrl },
       org_deploy_enabled: false,
       socket_mode_enabled: false,
       token_rotation_enabled: false,
@@ -79,8 +90,9 @@ export const slackCreateUrl = (manifest: Json) =>
 
 export function manifestFor(ctx: SetupContext) {
   const requestUrl = webhookUrl(ctx, 'slack')
-  const manifest = slackManifest(ctx.employee.data.name, ctx.handle, requestUrl)
-  return { manifest, createUrl: slackCreateUrl(manifest), requestUrl }
+  const interactivityUrl = `${requestUrl}/interactive`
+  const manifest = slackManifest(ctx.employee.data.name, ctx.handle, requestUrl, interactivityUrl)
+  return { manifest, createUrl: slackCreateUrl(manifest), requestUrl, interactivityUrl }
 }
 
 interface AuthTest {
@@ -136,8 +148,9 @@ export const slackSetup: IntegrationSetupModule = {
     const token = ctx.values.SLACK_BOT_TOKEN
     const tokenState = secretState(ctx.metas, 'SLACK_BOT_TOKEN', id)
     const signing = secretState(ctx.metas, 'SLACK_SIGNING_SECRET', id)
-    const { requestUrl, createUrl } = manifestFor(ctx)
+    const { requestUrl, createUrl, interactivityUrl } = manifestFor(ctx)
     const activity = await ctx.deps.activity.get(id, 'slack')
+    const interactive = await ctx.deps.activity.get(id, interactiveActivity('slack'))
     const steps: SetupStep[] = []
 
     // (a) The app, from the generated manifest.
@@ -241,6 +254,28 @@ export const slackSetup: IntegrationSetupModule = {
             ? 'No signed request from Slack yet. Under Event Subscriptions, retry the request URL.'
             : 'Paste the signing secret first: Slack verifies the request URL with it.',
           { requestUrl },
+        ),
+      )
+
+    // (c2) Interactivity: answers to questions asked with mcp.slack.ask. Optional: the rest works without it.
+    if (interactive)
+      steps.push(
+        step(
+          'interactivity',
+          'Buttons and forms reach the harness',
+          'done',
+          `The last signed interactive request from Slack arrived ${ago(interactive.lastAt, ctx.s.clock.now())}.`,
+          { lastAt: interactive.lastAt, interactivityUrl, optional: true },
+        ),
+      )
+    else
+      steps.push(
+        step(
+          'interactivity',
+          'Buttons and forms reach the harness',
+          'todo',
+          `Optional: needed for questions with inputs and buttons (mcp.slack.ask). Apps created from this manifest have it; for an existing app, turn on Interactivity & Shortcuts and set the Request URL to ${interactivityUrl}. This shows as done after the first answer.`,
+          { interactivityUrl, optional: true },
         ),
       )
 

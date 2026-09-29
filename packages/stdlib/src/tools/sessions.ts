@@ -371,18 +371,37 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.wait',
       description:
-        'Wait until the given runs finish (mode all, or any), optionally with a timeout: this run is suspended and resumes with their outputs (if they are already done, you get the results right away). Nothing is lost while you wait; replies and events are delivered afterwards.',
+        'Wait until the given runs finish (mode all, or any), optionally with a timeout: this run is suspended and resumes with their outputs (if they are already done, you get the results right away). Or, with delivery: true instead of runIds, wait for the next reply or event delivered to this session (e.g. the answer to a question asked with mcp.slack.ask); anything that already arrived answers at once. Nothing is lost while you wait; replies and events are delivered afterwards.',
       effect: 'read',
       params: {
         properties: {
           runIds: { type: 'array', items: { type: 'string' } },
           mode: { type: 'string', enum: ['all', 'any'], description: 'Default all.' },
+          delivery: {
+            type: 'boolean',
+            description: 'Wait for the next delivery to this session (a reply, an answer, a subscribed event) instead of runs.',
+          },
           timeoutSeconds: { type: 'number', description: 'Resume anyway after this long.' },
         },
-        required: ['runIds'],
       },
     },
     async (a, ctx) => {
+      if (a.delivery === true) {
+        if (a.runIds?.length) return fail('pass runIds or delivery, not both')
+        let timeoutAt: string | undefined
+        if (a.timeoutSeconds !== undefined) {
+          if (!(a.timeoutSeconds > 0)) return fail('timeoutSeconds must be positive')
+          timeoutAt = new Date(deps.clock.now() + a.timeoutSeconds * 1000).toISOString()
+        }
+        const run = await sessions.getRun(ctx.runId)
+        if (run?.data.mode !== 'continuing')
+          return fail('only a continuing run can wait for a delivery: end your turn instead, and the delivery starts a new run')
+        return {
+          output: { waitingFor: 'delivery', ...(timeoutAt ? { timeoutAt } : {}) },
+          control: [{ type: 'suspend', wait: { type: 'delivery', ...(timeoutAt ? { timeoutAt } : {}) } }],
+        }
+      }
+      if (!Array.isArray(a.runIds)) return fail('pass runIds, or delivery: true')
       const runIds = [...new Set((a.runIds as unknown[]).filter((x): x is string => typeof x === 'string'))]
       if (!runIds.length) return fail('runIds is empty')
       if (runIds.includes(ctx.runId)) return fail("a run can't wait for itself")

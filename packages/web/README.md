@@ -72,10 +72,14 @@ owner, preset to the page's employee) over `POST /api/projects`; the Projects li
 instead of the generic record form. A project's page shows `ProjectPeopleSection`
 (`src/components/project-people.tsx`): the employees and people on it, owners first, with the same add and remove.
 In GitLab's setup, the projects step (`src/components/gitlab-projects.tsx`) shows which GitLab projects are already
-harness projects of the employee, with **Add as project** per row and **Add selected** (`add-projects`).
+harness projects of the employee, with **Add as project** per row and **Add selected** (`add-projects`). Admins get
+the whole list from `gitlabProjects` (a debounced server-side search, **Load more** with the total, an All / Not added
+/ Added filter, and a selection kept across pages and searches, added in batches of 50); each row's default branch is
+checked through `gitlabProjectProtection`, four at a time. Members see the status check's first page, read-only.
 `RecordPicker` takes a `filter`, so AI contacts aren't offered twice next to employees. The mock
 (`src/mock/projects.ts`) keeps assignments as links like the server, and its GitLab account reaches
-`acme/payments-api` (already the Payments project), `acme/invoices` and `acme/infra`.
+`acme/payments-api` (already the Payments project), `acme/invoices` and `acme/infra`, then 150 more
+(`src/mock/gitlab-projects.ts`, some Maintainer or Owner, some with an unprotected or no default branch).
 
 ### Procedures
 

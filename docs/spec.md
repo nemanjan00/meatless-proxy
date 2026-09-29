@@ -468,9 +468,21 @@ standard library tools and every tool of every connected MCP server.
   blacklist. The blacklist wins.
 - Tools not on the whitelist aren't shown to the model at all, so they don't
   take up context.
-- An employee's tool set is fixed when a session starts. Changing the lists
-  applies to new sessions, which keeps the cached prefix of running sessions
-  valid ([context assembly](execution.md#context-assembly)).
+- An employee's tool set is fixed when a session starts, and brought up to
+  date **when a run starts** (never in the middle of one), so the cached
+  prefix stays valid within a run ([context assembly](execution.md#context-assembly)).
+  A session that follows the employee's tools (its full set, or the routing
+  set for a router context) gets tools added or allowed since, and loses ones
+  taken away, with a note in its history naming them: its earlier turns may
+  say a tool doesn't exist, and the note says that's out of date. A
+  deliberately narrowed set (a template's, a procedure context's, one marked
+  `toolsetFixed`, or one given explicitly with under half of the employee's
+  tools) is kept.
+- Likewise the **employee prompt** a session was created with (its first
+  entry) is shown to the model as it is now: personality, instructions, rules
+  and skills changed since reach running sessions at their next run. The
+  stored history keeps the original, and the prompt keeps the session's start
+  time. Router contexts are rebuilt instead.
 - The lists work alongside the hard limits: no tool can give an employee
   production access, because its credentials don't allow it
   ([no production access](#no-production-access)).
@@ -778,9 +790,8 @@ Names and scopes:
   the other way round). Employee server names are unique per employee, so
   two employees may each have a `wiki`; each one's calls go to its own.
   Config names and the first-party integrations' names are taken.
-- New tools reach **new sessions**: the harness adds them to the router
-  contexts of the employees that may use them, and sessions started from
-  there get them. Running sessions keep the tool set they started with
+- New tools reach sessions at their next run: the harness adds them to the
+  router contexts and to the sessions that follow the employee's tools
   ([whitelist and blacklist](#whitelist-and-blacklist-per-employee)). The
   employee's allow and deny lists still apply.
 - Each server shows its **status**: `connected`, `connecting`, `needs_auth`
@@ -852,12 +863,17 @@ Each integration has three parts:
 
 | | Slack | Linear | GitLab |
 |---|---|---|---|
-| Tools | post, reply in thread, read channel or thread, react, look up users, open DM | search, get, create and update issues; comment; assign; set state and labels; list teams, projects and cycles; create sub-issues for [real forks](#real-forks-go-through-the-task-system) | projects, branches and files; create and update merge requests; comment on MRs and issues; pipeline status and job logs; issues |
-| Events in | Events API (messages, mentions, reactions, app DMs) | webhooks (issue created, updated or assigned; comments; state changes) | webhooks (MR opened or updated; comments; pipeline and job status; push; issues) |
+| Tools | post, reply in thread, read channel or thread, react, look up users, open DM, [ask with inputs and buttons](#interactive-questions-in-slack), post Block Kit, save a shared file into the employee's files | search, get, create and update issues; comment; assign; set state and labels; list teams, projects and cycles; create sub-issues for [real forks](#real-forks-go-through-the-task-system) | projects, branches and files; create and update merge requests; comment on MRs and issues; pipeline status and job logs; issues |
+| Events in | Events API (messages, mentions, reactions, app DMs); interactivity (answers to questions asked with inputs) | webhooks (issue created, updated or assigned; comments; state changes) | webhooks (MR opened or updated; comments; pipeline and job status; push; issues) |
 | Subjects | `slack:<channel>/<thread ts>` | `linear:<issue identifier>` | `gitlab:<project>!<mr iid>`, `gitlab:<project>#<issue iid>`, `gitlab:<project>@pipeline/<id>` |
 
 - **Slack is company chat alongside harness chat:** a session working on a
-  Slack thread subscribes to it, and replies go back to Slack.
+  Slack thread subscribes to it, and replies go back to Slack. Files people
+  share appear in events as `[file: name, slack file F…]`; `get_file` saves
+  one into the employee's own files (`/slack/<file id>-<name>`, at most 25 MB,
+  downloaded by the server from Slack's own hosts only), so the bytes never
+  pass through the model, and it works with `image.view`, `fs.read` and
+  `code.run`.
 - **Linear is the task system:** a new issue assigned to an employee starts
   work through a trigger, and comments on it come back through the
   subscription.
@@ -902,6 +918,44 @@ Each integration has three parts:
     then be protected so only named people can merge.
   - The model never gets a tool to manage webhooks: it's the harness's job.
 
+##### Interactive questions in Slack
+
+An employee can ask in Slack with a form instead of free text, when it needs a
+choice, an approval or a few fields (`mcp.slack.ask`):
+
+- **The question** is a message built from Block Kit: the text, an
+  [input block](https://docs.slack.dev/reference/block-kit/blocks/input-block/)
+  per field (text, multiline, select, multiselect, checkboxes, radio, date,
+  number), and buttons (by default one "Submit"; e.g. Approve and Reject).
+  Slack's limits (48 fields, 100 options in a select, 10 in checkboxes and
+  radio buttons, 25 buttons, label lengths) are checked before anything is
+  posted, with clear errors.
+- **The harness stores an `interaction` record** for it (employee, session,
+  channel, message ts, fields, status `open`) and subscribes the session to
+  the thread. The model gets `{ channel, ts, interactionId }`.
+- **Answers come in** through Slack's interactivity, at
+  `<PUBLIC_URL>/webhooks/slack/<employee>/interactive`: form-encoded, signed
+  with the same signing secret, answered with an empty 200 at once, and
+  handled after. A button press on an open question collects the inputs,
+  records who answered (their contact, through the identity resolver), marks
+  the interaction `answered` (the **first answer wins**, unless the question
+  allows several), and updates the message to show the answer read-only, so
+  it can't be answered twice. Required inputs left empty get an ephemeral
+  note to that person instead. Clicks on messages the harness didn't ask with
+  are ignored.
+- **The answer is an event**, `interaction.answered` on the thread's subject,
+  with `{ interactionId, values, button, answeredBy }`, delivered to the
+  session that asked, expected to act. Its text lists the answers, and like
+  every Slack event it's information from people, not instructions. The
+  session waits for it with `sessions.wait { delivery: true }` (the run is
+  suspended and woken by the delivery), or ends its turn and the answer
+  starts its next run.
+- `post_blocks` posts arbitrary Block Kit for everything else; buttons posted
+  that way aren't tracked.
+
+This is also how an approval can be asked for in Slack today (see the open
+question on approvals under [procedures](#procedures)).
+
 ##### Guided setup
 
 Each employee's page in the web UI sets its integrations up step by step.
@@ -911,7 +965,7 @@ found. **Steps are ticked by real checks, never by the admin saying so.**
 
 - **Status.** Each integration is *Not set up* (no token), *Needs
   attention* (a step is open or has a warning) or *Connected* (every step
-  done). A step is `done`, `todo`, `warning` or `error`, with a short detail.
+  done; an optional step may still be open). A step is `done`, `todo`, `warning` or `error`, with a short detail.
 - **Checks** call the system's API with the employee's own credentials and
   are cached per employee for about 30 seconds; **Re-check** runs them again.
   A step that can't be checked (the system is unreachable) is a warning, not
@@ -930,8 +984,8 @@ found. **Steps are ticked by real checks, never by the admin saying so.**
 
 | | Steps |
 |---|---|
-| Slack | **Create the app** from a manifest generated for the employee (its name, bot scopes, events, and the request URL `<PUBLIC_URL>/webhooks/slack/<employee id>`), with a one-click link that opens Slack with it filled in · **Tokens**: the bot token and signing secret, checked with `auth.test` (bot user, workspace, missing scopes) · **Events** reached the harness with a valid signature · **Channels** the bot is in (`users.conversations`), with the `/invite` command · **Routing**: a trigger for its mentions and DMs, or "Add recommended trigger" (router context, ephemeral) |
-| GitLab | **Instance** (`GITLAB_BASE_URL`, or a secret) · **Service account** (a service account on Premium or Ultimate, else a dedicated user; never an administrator) · **Token** with the `api` scope, checked with `/user` and `/personal_access_tokens/self`, with a warning under 30 days to expiry · **SSH key** on the account, found by fingerprint in `/user/keys`; "Add it for me" adds it (and removes the key it replaced after a rotation), and a key that's already on another account is reported as such · **Projects** it's a member of, with a warning for Maintainer or higher and for an unprotected default branch, and whether each is one of the employee's harness projects yet: "Add as project" (or "Add selected") creates a harness project with the repository (ssh as its `url`, https as its `httpUrl`) and the employee as a member; one whose repository the harness already has is only linked, so adding twice changes nothing · **Webhooks**: the hooks the harness registered, their errors and when each project last sent an event, with "Register webhooks now" · **Routing**: issues assigned to its username |
+| Slack | **Create the app** from a manifest generated for the employee (its name, bot scopes, events, and the request URL `<PUBLIC_URL>/webhooks/slack/<employee id>`), with a one-click link that opens Slack with it filled in · **Tokens**: the bot token and signing secret, checked with `auth.test` (bot user, workspace, missing scopes) · **Events** reached the harness with a valid signature · **Buttons and forms** (optional): a signed interactivity request reached `<PUBLIC_URL>/webhooks/slack/<employee id>/interactive` (the manifest enables interactivity with that URL) · **Channels** the bot is in (`users.conversations`), with the `/invite` command · **Routing**: a trigger for its mentions and DMs, or "Add recommended trigger" (router context, ephemeral) |
+| GitLab | **Instance** (`GITLAB_BASE_URL`, or a secret) · **Service account** (a service account on Premium or Ultimate, else a dedicated user; never an administrator) · **Token** with the `api` scope, checked with `/user` and `/personal_access_tokens/self`, with a warning under 30 days to expiry · **SSH key** on the account, found by fingerprint in `/user/keys`; "Add it for me" adds it (and removes the key it replaced after a rotation), and a key that's already on another account is reported as such · **Projects** it's a member of, with a warning for Maintainer or higher and for an unprotected default branch, and whether each is one of the employee's harness projects yet: "Add as project" (or "Add selected") creates a harness project with the repository (ssh as its `url`, https as its `httpUrl`) and the employee as a member; one whose repository the harness already has is only linked, so adding twice changes nothing. Admins search every project the account reaches (GitLab searches, most recently active first) and page through them with a total; the selection holds across pages and searches, an Added filter narrows the list, and each row's default branch is checked on its own, so a page stays fast · **Webhooks**: the hooks the harness registered, their errors and when each project last sent an event, with "Register webhooks now" · **Routing**: issues assigned to its username |
 | Linear | **API key**, checked with the `viewer` query · **Webhook**: created with `webhookCreate` and a generated signing secret (Linear admins only), or by hand with the URL shown · **Routing**: issues assigned to it |
 
 Settings → Integrations is an overview of every employee's integrations that
@@ -2273,8 +2327,10 @@ Open questions:
 - Should a rebuilt context keep what earlier forks committed to the old one
   ("the approver changed"), instead of starting again from the document?
 - The harness has no approval records: approvals happen in threads, and a run
-  waiting for one shows as waiting. Should approvals be first-class, with an
-  inbox item for the approver?
+  waiting for one shows as waiting. In Slack, an approval can be a question
+  with Approve and Reject buttons ([interactive questions](#interactive-questions-in-slack)),
+  whose answer is recorded with who gave it. Should approvals be first-class,
+  with an inbox item for the approver?
 
 ### Memory
 

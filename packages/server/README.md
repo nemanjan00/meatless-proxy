@@ -555,9 +555,20 @@ is a `ConflictError`; two creates with the same handle at once give one) and pro
   (ssh `url`, https `httpUrl`, default branch, description; named by its full path when the short name is taken) with
   the employee as a `member`, or only links the employee when the harness has the repository. Serialized in the
   process, so a double click can't create a project twice.
+- `setup/gitlab-listing.ts`: the projects step's own listing, apart from the cached check (which keeps its first 50
+  rows, with `total` from `x-total`). `GET /api/employees/:id/integrations/gitlab/projects?search=&page=&perPage=`
+  (admins; perPage 50, at most 100) lists `membership=true&archived=false&simple=true&order_by=last_activity_at`
+  with the search (and `search_namespaces`) passed to GitLab, 30 s timeout; the simple listing has no permissions,
+  so each row's access level comes from `GET /projects/:id`, 8 at a time. Paging is GitLab's `x-next-page` and
+  `x-total` (`nextPage`, `total`: null over 10,000). Rows: `{ id, path, name, webUrl, accessLevel, role,
+  defaultBranch, protected: null, warnings, added }`. `GET …/gitlab/projects/:projectId/protection` checks one
+  default branch (`{ protected, warning }`). A rejected token is a 422, GitLab failing a 503, messages redacted.
 - `setup/activity.ts`: a middleware in front of `/webhooks/*` that records every webhook the integration accepted
   (2xx, so only valid signatures), per employee (or `deployment`) and integration, and per project for GitLab. It's
-  kept in memory and written to the setting `webhook.activity:<owner>:<integration>` at most every 30 s.
+  kept in memory and written to the setting `webhook.activity:<owner>:<integration>` at most every 30 s. Interactivity
+  (`/webhooks/<integration>/<employee>/interactive`, or a form-encoded Slack request) is recorded apart, as
+  `<integration>.interactive`: Slack's optional "Buttons and forms" step shows it. A step with `data.optional` may stay
+  `todo` and the integration is still *Connected*.
 
 ## GitLab webhooks
 
@@ -625,6 +636,29 @@ and the users mentioned in the text are resolved, `actorContactId` and
   { system, id, ignored? }`. Both drop the cached outcome.
 - **Options:** `IntegrationsOptions.identityTimeoutMs`, and
   `identityLookups: { <integration>: IdentityLookup }` to replace a lookup.
+
+## Slack questions and files
+
+- **Webhook routes** (`src/http/webhooks.ts`): besides `/webhooks/:integration` and `/webhooks/:integration/:employee`,
+  `/webhooks/:integration/:employee/interactive` is Slack's Interactivity Request URL. An integration's `WebhookResult`
+  may carry `after()`: the response goes out at once, and the events `after()` returns are ingested in the background
+  (tracked by `integrations.idle()`).
+- **Interactions** (`src/integrations/interactions.ts`): the `interaction` kind (`itr_`, key `slack:<channel>/<ts>`:
+  employee, asking session and run, channel, ts, thread, text, fields, buttons, `allowMultiple`, status, answers, who
+  answered first as a Slack id and as a contact, the event). An `afterToolCall` transform on `mcp.slack.ask` creates it
+  from the tool's result, subscribes the session to the thread (not a router context, whose answers are routed like
+  any Slack event), and gives the model `{ channel, ts, thread_ts?, interactionId, subject, waiting }` instead of the
+  question. `interactionStore(records, employeeId)` is the `SlackInteractionStore` each Slack instance gets
+  (`IntegrationFactoryDeps.slackInteractions`): it finds questions by key (only the employee's own, any for the
+  deployment-wide app) and records answers by compare-and-swap, so the first one wins. After an
+  `interaction.answered` event is ingested, the record gets its event id and the answering contact.
+- **Waiting for the answer**: the event names the asking session in `payload.tags`, so the router delivers it there,
+  expected to act. A run that called `sessions.wait { delivery: true }` is woken by it; otherwise it starts the
+  session's next run.
+- **Files** (`src/integrations/slack-files.ts`): `mcp.slack.get_file` is done by the server, not the MCP server: the
+  instance's `downloadFile` fetches the file (Slack hosts only, 25 MB), and it's written to the employee's files at
+  `/slack/<file id>-<safe name>` (`safeFileName`) with its sniffed type. The model gets `{ path, name, mime, size }`,
+  the text of text files up to 64 KB (capped at 16 000 characters), and for images a hint to use `image.view`.
 
 ## Alerts
 
@@ -944,6 +978,11 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   email and handles, idempotency, deactivation ending cookie sessions, tokens and links and reactivation, the last
   admin, access changes for admins only, filters, sign-ins and tokens for admins and the person only). In memory, and
   on Postgres + Redis when configured.
+- `integrations.test.ts`: the integrations through the composition root with a fake `fetch` (per-employee instances and
+  secrets, webhooks, actor mapping, policies), Slack's `ask` end to end (blocks posted, the `interaction` record, the
+  session subscribed and suspended in `sessions.wait { delivery: true }`, a signed interactive answer: empty 200,
+  `chat.update`, `interaction.answered` with the contact, the run woken; a second answer, an unknown message and a bad
+  signature change nothing), and `get_file` saving text and images into the employee's files.
 - `identity.test.ts`: identity from integrations with a fake lookup (email match, a created contact that can't sign
   in, name-only suggestions, bots, caching, failures, timeouts, concurrent events, ignored users, mention rendering) and
   through signed Slack webhooks (the `payload.author` trigger fires for a Slack user, the admin-only routes, link, move

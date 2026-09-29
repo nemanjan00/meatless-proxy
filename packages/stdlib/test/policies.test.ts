@@ -331,5 +331,14 @@ describe('answer where asked: the agent may decide not to answer', async () => {
       expect(needsAutoReply([ev], out), out).toBe(false)
     expect(needsAutoReply([ev], 'No reply is needed, but here is the answer: 42')).toBe(true)
     expect(NO_REPLY_RE.test('Reply sent.')).toBe(false)
+    // Thinking aloud before deciding: the decision is the last line, and nothing is posted.
+    expect(
+      NO_REPLY_RE.test(
+        'The person asked @vegan, not me. Nothing needed from me here.\n\nNO_REPLY: question directed at @vegan; another session is re-counting.',
+      ),
+    ).toBe(true)
+    expect(NO_REPLY_RE.test('NO_REPLY\nit was only a thanks')).toBe(true)
+    expect(NO_REPLY_RE.test('No reply from the vendor yet, so I will check again tomorrow.')).toBe(false)
+    expect(NO_REPLY_RE.test('The vendor sent no reply yet.')).toBe(false)
   })
 })

@@ -1,7 +1,9 @@
 import { type Clock, errorMessage, type Logger, silentLogger, systemClock } from '@mp/core'
 import type { ExternalUser, Integration, IntegrationEvent, WebhookRequest, WebhookResult } from '@mp/mcp'
-import { createSlackClient, type RetryOptions, slackErrorCode } from './client.ts'
+import { createSlackClient, DEFAULT_BASE_URL, type RetryOptions, slackErrorCode } from './client.ts'
+import { type DownloadOptions, downloadSlackFile, type SlackDownload } from './files.ts'
 import { mapSlackEvent, type SelfIdentity, type SlackEnvelope, SLACK_SYSTEM } from './events.ts'
+import { type BlockActionsPayload, handleBlockActions, type SlackInteractionStore } from './interactions.ts'
 import { verifySlackSignature } from './signature.ts'
 import { createSlackMcpServer } from './tools.ts'
 
@@ -24,6 +26,11 @@ export interface SlackIntegrationOptions {
   sleep?: (ms: number) => Promise<void>
   /** How long a channel name stays cached. Default 1 hour. */
   channelNameTtlMs?: number
+  /**
+   * The questions the harness asked with `ask`, so answers from Slack's interactivity can be
+   * matched to them. Without it, interactive requests are acknowledged and ignored.
+   */
+  interactions?: SlackInteractionStore
 }
 
 /** Most channel names cached at once. */
@@ -38,11 +45,24 @@ const json = (status: number, body: unknown, events: IntegrationEvent[] = []): W
   events,
 })
 
+/** Whether a request is an interactivity payload (form-encoded `payload=`) rather than an Events API envelope. */
+const isInteractive = (req: WebhookRequest) =>
+  (req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded') || req.body.startsWith('payload=')
+
+/** The Slack integration, with what the harness does beside the MCP tools. */
+export interface SlackIntegration extends Integration {
+  /**
+   * Downloads a file shared in Slack (files.info, then its private URL with the bot token), for
+   * the harness to save into the employee's files: the bytes never go through the model.
+   */
+  downloadFile(fileId: string, opts?: DownloadOptions): Promise<SlackDownload>
+}
+
 /**
  * The Slack integration: tools over the Web API as the app's bot, Events API
  * webhooks turned into events, and user lookup for contact matching.
  */
-export function createSlackIntegration(opts: SlackIntegrationOptions): Integration {
+export function createSlackIntegration(opts: SlackIntegrationOptions): SlackIntegration {
   const clock = opts.clock ?? systemClock
   const logger = (opts.logger ?? silentLogger).child({ integration: 'slack' })
   const client = createSlackClient({
@@ -138,6 +158,9 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): Integrati
       logger.warn('slack webhook rejected', { reason: check.reason })
       return json(401, { error: `invalid_signature: ${check.reason}` })
     }
+    // Interactivity (buttons, inputs) comes form-encoded as `payload=<json>`, signed the same way:
+    // https://docs.slack.dev/interactivity/handling-user-interaction/
+    if (isInteractive(req)) return interactive(req.body)
     let env: SlackEnvelope
     try {
       env = JSON.parse(req.body) as SlackEnvelope
@@ -172,6 +195,33 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): Integrati
     return { status: 200, events: event ? [event] : [] }
   }
 
+  /** Slack wants a 200 within 3 s, empty: the answer is handled after (`after`). */
+  const interactive = (body: string): WebhookResult => {
+    let payload: { type?: unknown }
+    try {
+      payload = JSON.parse(new URLSearchParams(body).get('payload') ?? '') as { type?: unknown }
+      if (!payload || typeof payload !== 'object' || typeof payload.type !== 'string') throw new Error('no payload type')
+    } catch {
+      return json(400, { error: 'invalid_payload' })
+    }
+    logger.debug('slack interactive request', { type: payload.type })
+    const store = opts.interactions
+    if (payload.type !== 'block_actions' || !store) return { status: 200, body: '', events: [] }
+    return {
+      status: 200,
+      body: '',
+      events: [],
+      after: () =>
+        handleBlockActions(payload as BlockActionsPayload, {
+          store,
+          client,
+          channelName,
+          logger,
+          now: () => new Date(clock.now()).toISOString(),
+        }),
+    }
+  }
+
   const resolveUser = async (externalId: string): Promise<ExternalUser | null> => {
     try {
       const r = await client.call('users.info', { user: externalId }, {})
@@ -201,10 +251,25 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): Integrati
     }
   }
 
+  // A Web API base other than Slack's (tests, a proxy) serves files too.
+  const apiHost = opts.baseUrl && opts.baseUrl !== DEFAULT_BASE_URL ? new URL(opts.baseUrl).host : undefined
+  const downloadFile: SlackIntegration['downloadFile'] = (fileId, o) =>
+    downloadSlackFile(
+      {
+        client,
+        token: opts.secrets.botToken,
+        ...(opts.fetch ? { fetch: opts.fetch } : {}),
+        ...(apiHost ? { allowHost: (host: string) => host === apiHost } : {}),
+      },
+      fileId,
+      o,
+    )
+
   return {
     name: 'slack',
     createMcpServer: () => createSlackMcpServer(client, logger),
     handleWebhook,
     resolveUser,
+    downloadFile,
   }
 }

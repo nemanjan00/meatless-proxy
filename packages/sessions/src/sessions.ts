@@ -427,7 +427,7 @@ export function createSessions(opts: SessionsOptions): Sessions {
     },
 
     async update(id, patch, actor) {
-      const allowed = ['title', 'status', 'document', 'meta', 'model'] as const
+      const allowed = ['title', 'status', 'document', 'meta', 'model', 'toolset'] as const
       const clean: Partial<SessionData> = {}
       for (const k of allowed) if (k in patch) (clean as any)[k] = patch[k]
       if ('title' in clean && !clean.title?.trim()) throw new ValidationError('title is required')

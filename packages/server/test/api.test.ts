@@ -41,6 +41,7 @@ describe('routes', () => {
         action: 'add-trigger',
         contactId: 'con_00000000000000000000000000',
         triggerId: 'trg_00000000000000000000000000',
+        projectId: '1',
       })
       const res = await t.a.app.request(url, {
         method,

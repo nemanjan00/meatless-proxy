@@ -120,7 +120,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       },
       employee.version,
     )
-    toast(`${d.name} saved`, { description: 'Tool changes apply to new sessions; running sessions keep their tool set.' })
+    toast(`${d.name} saved`, { description: 'Tool and prompt changes reach running sessions at their next run.' })
     onSaved()
   }
   const allowed = probe.trim() ? toolAllowed(probe.trim(), lines(allow), lines(deny)) : null

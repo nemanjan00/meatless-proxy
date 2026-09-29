@@ -244,6 +244,29 @@ describe('sessions.wait', () => {
   })
 })
 
+describe('sessions.wait for a delivery', () => {
+  it('suspends until the next delivery, with an optional timeout', async () => {
+    const t = await stack()
+    expect(t.run.data.mode).toBe('continuing')
+    const r = await t.call('sessions.wait', { delivery: true, timeoutSeconds: 600 })
+    expect(r.output).toMatchObject({ waitingFor: 'delivery', timeoutAt: '2026-09-29T09:10:00.000Z' })
+    expect(r.control).toEqual([{ type: 'suspend', wait: { type: 'delivery', timeoutAt: '2026-09-29T09:10:00.000Z' } }])
+    expect((await t.call('sessions.wait', { delivery: true })).control).toEqual([{ type: 'suspend', wait: { type: 'delivery' } }])
+  })
+
+  it('refuses runIds with delivery, a bad timeout, and an ephemeral run', async () => {
+    const t = await stack()
+    const o = await t.out('sessions.fork', { instruction: 'x' })
+    expect((await t.call('sessions.wait', { delivery: true, runIds: [o.runId] })).isError).toBe(true)
+    expect((await t.call('sessions.wait', { delivery: true, timeoutSeconds: 0 })).isError).toBe(true)
+    expect((await t.call('sessions.wait', {})).isError).toBe(true)
+    const eph = await t.sessions.createRun({ sessionId: t.session.id, mode: 'ephemeral', cause: { type: 'manual' } })
+    const r = await t.call('sessions.wait', { delivery: true }, t.ctx({ runId: eph.id }))
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r.output)).toMatch(/end your turn/)
+  })
+})
+
 describe('finding sessions', () => {
   it('look_up, list, search, tree and get', async () => {
     const t = await stack()

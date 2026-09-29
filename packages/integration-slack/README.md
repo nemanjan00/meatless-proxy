@@ -3,8 +3,9 @@
 The first-party Slack integration ([spec](../../docs/spec.md#integrations)). It has three parts:
 
 - An MCP server with Slack tools. They act as the app's bot, over the Slack Web API.
-- Events API webhooks, which it turns into events.
-- User lookup, for matching Slack users to contacts.
+- Events API webhooks, which it turns into events, and interactivity (answers to [questions with
+  inputs](#questions-with-inputs)).
+- User lookup, for matching Slack users to contacts, and file downloads for the harness.
 
 It implements `Integration` from `@mp/mcp`. The server (`packages/server/src/integrations`) builds one instance per
 employee from that employee's secrets, connects its MCP server in-process, and mounts the webhooks at
@@ -12,11 +13,14 @@ employee from that employee's secrets, connects its MCP server in-process, and m
 
 ## API
 
-`createSlackIntegration({ secrets: { botToken, signingSecret }, fetch?, baseUrl?, clock?, logger?, retry?, sleep?, channelNameTtlMs? })`
-returns an `Integration` named `slack`:
+`createSlackIntegration({ secrets: { botToken, signingSecret }, fetch?, baseUrl?, clock?, logger?, retry?, sleep?, channelNameTtlMs?, interactions? })`
+returns a `SlackIntegration` (an `Integration` named `slack`):
 
 - `createMcpServer()`: a fresh SDK `McpServer` with the [tools](#tools). The tools are `mcp.slack.<tool>`.
-- `handleWebhook(req)`: verifies the signature and returns `{ status, body?, headers?, events }`. See [events](#events-in).
+- `handleWebhook(req)`: verifies the signature and returns `{ status, body?, headers?, events, after? }`. See
+  [events](#events-in) and [interactivity](#interactivity-in).
+- `downloadFile(fileId, { maxBytes?, signal? })`: `files.info`, then the file's `url_private_download` with the bot
+  token. Returns `{ id, name, mime?, size, bytes, … }`. See [files](#files).
 - `resolveUser(userId)`: calls `users.info` and returns `{ handle: { system: 'slack', id }, email?, name?, displayName?,
   bot? }`. The name is the user's `real_name`, `displayName` the profile's display name when it differs, and `bot` is
   set for bot users and Slackbot. An unknown user returns `null`. Any other failure throws. The server uses it to link
@@ -30,6 +34,11 @@ The package also exports these building blocks:
 - `mapSlackEvent(envelope, ctx)`.
 - `createSlackMcpServer(client, logger)`.
 - `parseRetryAfter`, `slackErrorCode`, `compactMessage` and `compactUser`.
+- Questions (`src/blocks.ts`): `validateAsk`, `buildAskBlocks`, `readAnswer`, `answeredMessage`, `parseBlocks`, and the
+  limits (`MAX_FIELDS`, …).
+- Interactions (`src/interactions.ts`): the `SlackInteractionStore` port, `memoryInteractionStore()`, and
+  `handleBlockActions(payload, deps)`.
+- Files (`src/files.ts`): `fileInfo`, `downloadSlackFile`, `isSlackHost`, `SLACK_FILE_MAX_BYTES`.
 
 ### Web API client
 
@@ -62,8 +71,38 @@ Results are compact JSON. Failures are `isError` results of the form `{ error, m
 | `open_dm` | `conversations.open` | `user` or `users` (up to 8, for a group DM) | `{ channel }` |
 | `list_channels` | `conversations.list` (public and private, not archived) | `member_only?` (default true), `limit?` (200), `cursor?` | `{ channels: [{ id, name, is_private?, is_member, topic?, purpose?, members? }], next_cursor }` |
 | `update_message` | `chat.update` | `channel`, `ts`, `text` | `{ channel, ts }`. The app can only edit its own messages (`cant_update_message`). |
+| `ask` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text`, `fields`, `buttons?`, `allow_multiple?` | `{ channel, ts, thread_ts?, ask }`; in the harness `{ channel, ts, thread_ts?, interactionId, subject }`. See [questions with inputs](#questions-with-inputs). |
+| `post_blocks` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text` (the fallback), `blocks` (a JSON array of 1-50 blocks, or its JSON text) | `{ channel, ts, thread_ts? }`. Slack's `invalid_blocks` comes with a hint. |
+| `get_file` | `files.info` | `file_id` | Outside the harness, the file's metadata `{ id, name, mime, filetype, size, title, mode }`. In the harness, the server downloads it into the employee's files: `{ path, name, mime, size, text? }`. See [files](#files). |
 
-A message looks like `{ ts, user?, bot_id?, subtype?, text, thread_ts?, reply_count?, reactions?: [{ name, count }], files?: [name], edited? }`.
+A message looks like `{ ts, user?, bot_id?, subtype?, text, thread_ts?, reply_count?, reactions?: [{ name, count }], files?: [{ id, name }], edited? }`.
+
+### Questions with inputs
+
+`ask` posts a question as Block Kit
+([input block](https://docs.slack.dev/reference/block-kit/blocks/input-block/),
+[actions block](https://docs.slack.dev/reference/block-kit/blocks/actions-block/)): a section with `text`, one input
+block per field (`dispatch_action: false`, so typing sends nothing), and an actions block with the buttons.
+
+| Field `type` | Element | Answer value |
+|--------------|---------|--------------|
+| `text` | `plain_text_input` | string, or null |
+| `multiline` | `plain_text_input` with `multiline` | string, or null |
+| `select` | `static_select` (up to 100 options) | the option's value, or null |
+| `multiselect` | `multi_static_select` (up to 100 options) | option values (`[]` when none) |
+| `checkboxes` | `checkboxes` (up to 10 options) | option values (`[]` when none) |
+| `radio` | `radio_buttons` (up to 10 options) | the option's value, or null |
+| `date` | `datepicker` | `YYYY-MM-DD`, or null |
+| `number` | `number_input` (decimals allowed) | a number, or null |
+
+A field is `{ id, label, type, options?: [{ value, label }], optional?, placeholder?, initial? }`. Buttons are
+`[{ id, label, style?: 'primary' | 'danger' }]`, by default one "Submit". The limits are Slack's, checked before
+posting: text up to 3000 characters, at most 48 fields (a message has 50 blocks), labels up to 2000, placeholders up to
+150, option labels up to 75 and values up to 150, unique ids (`[A-Za-z0-9_-]`, up to 64), at most 25 buttons with labels up
+to 75. `initial` must fit the type (an option value, a list of them, `YYYY-MM-DD`, a number). Every problem is listed in
+one `validation` error.
+
+Block ids are `mp_field:<field id>` and `mp_actions`; action ids are the field id and `mp_button:<button id>`.
 
 With `member_only`, `list_channels` filters the page client-side, so a page may come back short or even empty while
 `next_cursor` is still set.
@@ -123,6 +162,65 @@ Notes:
 - `reaction.added` uses the reacted message's own `ts`. For a reply in a thread, that isn't the thread root, because the
   event doesn't say which thread the message is in.
 
+## Interactivity in
+
+Slack sends button presses to the app's **Interactivity Request URL**, `POST /webhooks/slack/<employee>/interactive`
+(the Events URL takes them too: the body tells them apart). They are form-encoded, `payload=<json>`, and signed with the
+same signing secret ([handling user interaction](https://docs.slack.dev/interactivity/handling-user-interaction/)).
+
+1. The signature and timestamp are checked as for events: `401` otherwise. A body without a JSON `payload` is `400`.
+2. The answer is an empty `200` at once (Slack wants one within 3 seconds). A `block_actions` payload is handled after,
+   through `after()`, when an `interactions` store is set. Other payload types are acknowledged and ignored.
+3. A press of one of our buttons on a message in the store
+   ([block_actions](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/)):
+   - `state.values` are read into `{ fieldId: value }` (the table above). Slack doesn't enforce required inputs in
+     messages, so when one is empty the person gets an ephemeral note (`chat.postEphemeral`) and nothing is recorded.
+   - The store records the answer. The first one wins (atomically, also when two arrive at once), unless the question
+     has `allowMultiple`. A later press gets an ephemeral "answered already".
+   - `chat.update` replaces the message with the question, the answers read-only (option labels, mrkdwn-escaped) and
+     "Answered by <@U…>" ([chat.update](https://docs.slack.dev/reference/methods/chat.update/)). With `allowMultiple`, the
+     form stays and each person gets an ephemeral thanks.
+   - One event is returned (below).
+4. Presses on messages the store doesn't know, on other buttons, and on ephemeral messages return no events.
+
+| Event type | Subject | Payload |
+|------------|---------|---------|
+| `interaction.answered` | `slack:<channel>/<thread ts, or the question's ts>` | `interactionId, channel, channel_name?, ts, thread_ts?, values, button, button_label, answeredBy, answeredAt, tags?` |
+
+Its `actor` is the Slack user, its dedupe key `slack:interaction:<id>` (with `allowMultiple`, one per person and press),
+and its text lists the answers:
+
+```
+Slack #general U123 answered your question (interaction itr_…):
+Question: Which environment?
+- Environment: Production [prod]
+- Note: ship it
+```
+
+`tags` names the asking session (`{ type: 'session', sessionId }`), so the router delivers the answer to it, expected to
+act. The harness implements `SlackInteractionStore` over `interaction` records (packages/server,
+`src/integrations/interactions.ts`), creates them after `ask`, and notes who answered as a contact.
+
+## Files
+
+Slack events list a message's files in the payload (`files: [{ id, name }]`) and in the text, as
+`[file: name, slack file F…]`, so the model knows to call `get_file`.
+
+`downloadFile` (and so `get_file` in the harness) reads `files.info` and downloads `url_private_download` with the bot
+token (bot scope `files:read`):
+
+- Only Slack's own hosts are contacted: `slack.com`, `slack-edge.com` and `slack-files.com` and their subdomains, over
+  https, also for every redirect (at most 5). The token goes nowhere else. A configured `baseUrl` other than Slack's is
+  allowed too (tests).
+- At most 25 MB: a larger `size` in `files.info` fails before the download, and a body that grows past it is cut off
+  (`LimitError`).
+- External files (Google Drive and the like) and deleted ones can't be downloaded. Without `files:read`, Slack answers the
+  download with its sign-in page; that's reported as the missing scope.
+
+In the harness, the file is written to the employee's files at `/slack/<file id>-<safe name>` with its sniffed type, and
+the model gets `{ path, name, mime, size }`, plus the text for text files up to 64 KB. Images then work with
+`image.view { path }`, everything with `fs.read`, and `code.run` sees `/work/files/slack/…`.
+
 ## Setup
 
 **Use the guided setup on the employee's page** (`/employees/<id>` → Integrations → Slack). It generates this
@@ -161,6 +259,7 @@ oauth_config:
       - channels:history
       - channels:read
       - chat:write
+      - files:read
       - groups:history
       - groups:read
       - im:history
@@ -182,7 +281,8 @@ settings:
       - message.mpim
       - reaction_added
   interactivity:
-    is_enabled: false
+    is_enabled: true
+    request_url: https://harness.example.com/webhooks/slack/meatless/interactive
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
@@ -192,13 +292,18 @@ What the scopes are for:
 
 | Scope | Needed for |
 |-------|------------|
-| `chat:write` | `post_message`, `reply`, `update_message` |
+| `chat:write` | `post_message`, `reply`, `update_message`, `ask`, `post_blocks`, and updating an answered question (`chat.update`, `chat.postEphemeral`) |
+| `files:read` | `get_file` (`files.info` and the download) |
 | `channels:history`, `groups:history`, `im:history`, `mpim:history` | `read_channel` and `read_thread`, and the `message.*` events |
 | `channels:read`, `groups:read` | `list_channels`, and channel names in events |
 | `im:write`, `mpim:write` | `open_dm`. `mpim:write` is only needed for group DMs. |
 | `reactions:read`, `reactions:write` | `reaction_added` events, `react`, `unreact` |
 | `users:read`, `users:read.email` | `lookup_user`, `resolveUser`, and contact matching by email |
 | `app_mentions:read` | `app_mention` events |
+
+Interactivity needs no scope of its own, only the Request URL (**Interactivity & Shortcuts**). For an app created
+before, turn it on there and set the Request URL to `https://harness.example.com/webhooks/slack/meatless/interactive`,
+and add the `files:read` scope under **OAuth & Permissions** (then reinstall the app).
 
 Slack verifies the request URL when you save the manifest, so the harness must already be running with the signing
 secret set. If it isn't, save the manifest anyway, then retry the URL under **Event Subscriptions** once the harness is up.
@@ -258,7 +363,7 @@ answers directly or starts a session that then owns the thread, and keeps a one-
 ```
 
 **Answers go back to Slack.** When a run caused by a Slack event it was expected to act on ends with a final answer (not
-`NO_REPLY`), without posting in Slack itself (`post_message`, `reply`, `update_message`) and without handing the work to
+`NO_REPLY`), without posting in Slack itself (`post_message`, `reply`, `update_message`, `ask`, `post_blocks`) and without handing the work to
 another session, the server posts that answer in the event's thread with the employee's bot. A working session is then
 subscribed to the thread, so follow-ups come back to it; the router context never subscribes (follow-ups come back
 through its trigger, and it decides again).
@@ -280,7 +385,8 @@ To act on every new top-level message in one channel (e.g. `#access-requests`), 
 ```
 
 A session working on a thread subscribes to its subject, e.g. `{ system: 'slack', id: 'C0123ABCD/1712345678.123456' }`
-with types `["message.replied", "message.mentioned", "message.edited"]`, and answers with `mcp.slack.reply`.
+with types `["message.replied", "message.mentioned", "message.edited"]`, and answers with `mcp.slack.reply`. A session
+that asked with `ask` is subscribed to the thread, and the answer is delivered to it through the event's session tag.
 
 ## Tests
 
@@ -292,9 +398,15 @@ tests cover:
   and token redaction.
 - Every tool, through a real MCP client over `InMemoryTransport`.
 - Signature verification, including Slack's documented example, bad and stale signatures, and replays.
-- Every event mapping.
+- Every event mapping, and files in the event text.
 - Channel-name caching.
 - `resolveUser`.
+- Questions (`test/interactive.test.ts`): the blocks for every field type and every limit, reading each element's
+  answer, the read-only message, the `ask` and `post_blocks` tools, and the interactive webhook: form-encoded and signed,
+  401 for a bad or stale signature, the answer recorded, first answer wins under concurrency, `allowMultiple`, empty
+  required inputs, `chat.update` failing, unknown messages and buttons ignored.
+- Files (`test/files.test.ts`): the download with the token, redirects to other hosts refused, the size limit (declared
+  and actual), the missing scope, external and unknown files.
 
 The live smoke test is opt-in. It makes one read call (`list_channels`):
 

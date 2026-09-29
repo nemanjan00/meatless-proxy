@@ -40,6 +40,12 @@ export interface WebhookResult {
   body?: string
   headers?: Record<string, string>
   events: IntegrationEvent[]
+  /**
+   * Work to do after the response is sent, for platforms that want a quick acknowledgement
+   * (Slack's interactivity: 200 within 3 s). The harness answers at once, runs it in the
+   * background, and ingests the events it returns like `events`.
+   */
+  after?: () => Promise<IntegrationEvent[]>
 }
 
 export interface IntegrationEvent {

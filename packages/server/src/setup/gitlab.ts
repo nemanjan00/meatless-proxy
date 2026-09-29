@@ -89,11 +89,11 @@ export interface GitlabProject {
   }
 }
 
-/** One GitLab API call as the token's account. */
-/** How long the projects listing may take (GitLab is slow for accounts in many groups). */
-const PROJECTS_TIMEOUT_MS = 30_000
+/** How long a projects listing may take (GitLab is slow for accounts in many groups). */
+export const PROJECTS_TIMEOUT_MS = 30_000
 
-async function api(
+/** One GitLab API call as the token's account. Rate limits and 5xx become `UnavailableError`. */
+export async function gitlabApi(
   ctx: SetupContext,
   token: string,
   path: string,
@@ -116,27 +116,46 @@ async function api(
 
 /** `GET /user`, or why not. */
 async function currentUser(ctx: SetupContext, token: string): Promise<{ user: GitlabUser } | { status: number }> {
-  const r = await api(ctx, token, '/user')
+  const r = await gitlabApi(ctx, token, '/user')
   if (r.ok && r.json?.username) return { user: r.json as GitlabUser }
   return { status: r.status }
+}
+
+/** GitLab's `x-total` header (absent for very large result sets), or null. */
+export function totalOf(r: HttpResult): number | null {
+  const v = r.headers.get('x-total')
+  const n = v ? Number(v) : Number.NaN
+  return Number.isInteger(n) && n >= 0 ? n : null
 }
 
 const days = (iso: string, now: number) => Math.floor((Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) - now) / 86_400_000)
 
 /** The token's scopes and expiry; null when the instance can't say (older GitLab). */
 async function tokenSelf(ctx: SetupContext, token: string): Promise<TokenSelf | null> {
-  const r = await api(ctx, token, '/personal_access_tokens/self')
+  const r = await gitlabApi(ctx, token, '/personal_access_tokens/self')
   return r.ok && r.json ? (r.json as TokenSelf) : null
 }
 
 async function listKeys(ctx: SetupContext, token: string): Promise<GitlabKey[]> {
-  const r = await api(ctx, token, '/user/keys?per_page=100')
+  const r = await gitlabApi(ctx, token, '/user/keys?per_page=100')
   if (!r.ok) throw new UnavailableError(`GitLab answered GET /user/keys with HTTP ${r.status}`)
   return (r.json ?? []) as GitlabKey[]
 }
 
-const accessOf = (p: GitlabProject) =>
+/** The account's access level on a project (its own or through a group, whichever is higher). */
+export const accessOf = (p: GitlabProject) =>
   Math.max(p.permissions?.project_access?.access_level ?? 0, p.permissions?.group_access?.access_level ?? 0)
+
+/** The warning for an access level that could merge or push to protected branches, or null. */
+export function accessWarning(ctx: SetupContext, level: number): string | null {
+  if (level < ACCESS.maintainer) return null
+  return ctx.values.GITLAB_HOOKS_TOKEN
+    ? `${roleName(level)}: it could merge or push to protected branches. Set it to Developer: webhooks use the provisioning token.`
+    : `${roleName(level)}: it could merge or push to protected branches. Add a webhook provisioning token, then set this account to Developer.`
+}
+
+/** The warning for a default branch that isn't protected. */
+export const unprotectedWarning = (branch: string) => `${branch} isn’t protected: protect it so only people can merge.`
 
 /** Whether a branch is covered by one of the protected branch names (which may be wildcards like `release/*`). */
 export const isProtected = (branch: string, names: string[]) =>
@@ -315,7 +334,7 @@ export const gitlabSetup: IntegrationSetupModule = {
       try {
         // Listing an account's projects with their access levels is GitLab's slowest call here (several
         // seconds for an account in many groups), so it gets more time and a smaller page than the rest.
-        const r = await api(ctx, token, '/projects?membership=true&archived=false&per_page=50&order_by=last_activity_at', {
+        const r = await gitlabApi(ctx, token, '/projects?membership=true&archived=false&per_page=50&order_by=last_activity_at', {
           timeoutMs: Math.max(ctx.deps.timeoutMs, PROJECTS_TIMEOUT_MS),
         })
         if (!r.ok) throw new UnavailableError(`GitLab answered GET /projects with HTTP ${r.status}`)
@@ -326,21 +345,17 @@ export const gitlabSetup: IntegrationSetupModule = {
           projects.map(async (p, i) => {
             const level = accessOf(p)
             const warnings: string[] = []
-            if (level >= ACCESS.maintainer)
-              warnings.push(
-                ctx.values.GITLAB_HOOKS_TOKEN
-                  ? `${roleName(level)}: it could merge or push to protected branches. Set it to Developer: webhooks use the provisioning token.`
-                  : `${roleName(level)}: it could merge or push to protected branches. Add a webhook provisioning token, then set this account to Developer.`,
-              )
+            const access = accessWarning(ctx, level)
+            if (access) warnings.push(access)
             let protectedDefault: boolean | null = null
             if (p.default_branch && i < MAX_CHECKED_PROJECTS) {
-              const b = await api(ctx, token, `/projects/${p.id}/protected_branches?per_page=100`).catch(() => null)
+              const b = await gitlabApi(ctx, token, `/projects/${p.id}/protected_branches?per_page=100`).catch(() => null)
               if (b?.ok) {
                 protectedDefault = isProtected(
                   p.default_branch,
                   ((b.json ?? []) as { name: string }[]).map((x) => x.name),
                 )
-                if (!protectedDefault) warnings.push(`${p.default_branch} isn’t protected: protect it so only people can merge.`)
+                if (!protectedDefault) warnings.push(unprotectedWarning(p.default_branch))
               }
             }
             const added = known(p)
@@ -372,7 +387,7 @@ export const gitlabSetup: IntegrationSetupModule = {
               : warned.length
                 ? `${warned.length} of ${checked.length} project${checked.length === 1 ? '' : 's'} need attention.${addNote}`
                 : `Developer on ${checked.length} project${checked.length === 1 ? '' : 's'}, with protected default branches.${addNote}`,
-            { projects: checked as unknown as Json, notAdded },
+            { projects: checked as unknown as Json, notAdded, total: totalOf(r) ?? checked.length },
           ),
         )
       } catch (err) {
@@ -543,12 +558,12 @@ export const gitlabSetup: IntegrationSetupModule = {
       const keys = await listKeys(ctx, token)
       const stale = keys.filter((k) => k.title === title && sshFingerprint(k.key) !== fingerprint)
       const removeStale = async () => {
-        for (const k of stale) await api(ctx, token, `/user/keys/${k.id}`, { method: 'DELETE' }).catch(() => null)
+        for (const k of stale) await gitlabApi(ctx, token, `/user/keys/${k.id}`, { method: 'DELETE' }).catch(() => null)
         return stale.length ? ` Removed the old key “${title}”.` : ''
       }
       if (keys.some((k) => sshFingerprint(k.key) === fingerprint))
         return `The key is already on @${u.user.username}.${await removeStale()}`
-      const r = await api(ctx, token, '/user/keys', { method: 'POST', body: { title, key: publicKey.trim() } })
+      const r = await gitlabApi(ctx, token, '/user/keys', { method: 'POST', body: { title, key: publicKey.trim() } })
       if (r.status === 201 || r.ok) return `Added the key to @${u.user.username} as “${title}”.${await removeStale()}`
       const message = JSON.stringify(r.json?.message ?? r.json?.error ?? '')
       if (r.status === 400 && /taken/i.test(message))
@@ -568,7 +583,7 @@ export const gitlabSetup: IntegrationSetupModule = {
       if (!Array.isArray(ids) || !ids.length || ids.some((x) => typeof x !== 'number' && typeof x !== 'string'))
         throw new ValidationError('Pick the GitLab projects to add.')
       const fetchProject = async (projectId: number | string) => {
-        const r = await api(ctx, token, `/projects/${encodeURIComponent(String(projectId))}`)
+        const r = await gitlabApi(ctx, token, `/projects/${encodeURIComponent(String(projectId))}`)
         if (r.status === 404 || r.status === 403) return null
         if (!r.ok) throw new UnavailableError(`GitLab answered GET /projects/${projectId} with HTTP ${r.status}`)
         return r.json as GitlabProject

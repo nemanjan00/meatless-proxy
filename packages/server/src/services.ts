@@ -8,6 +8,7 @@ import {
   createEventBus,
   createHooks,
   errorMessage,
+  globMatch,
   jsonLogger,
   systemClock,
   type Clock,
@@ -431,6 +432,32 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     modelName: config.IMAGE_DESCRIBE_MODEL,
     vision,
   })
+  /** The employee prompt a session should see now; set once the stdlib is registered. */
+  let sessionPrompt: ((session: Session, stored: string) => Promise<string | undefined>) | undefined
+  /**
+   * The toolset a session should have now, so sessions started before a tool existed (or was allowed)
+   * get it: the employee's full toolset, or its routing one for a router context. Undefined keeps a
+   * deliberately narrowed toolset: a template's, a procedure context's, one marked `toolsetFixed`, or
+   * one given explicitly that holds under half of what the employee has (a full one from before a few
+   * tools were added still holds most of them).
+   */
+  const currentToolset = async (session: Session): Promise<string[] | undefined> => {
+    if (!services.stdlib) return undefined
+    const fixed = (x: Session) => !!(x.data.meta?.toolsetFixed || x.data.meta?.procedureContext)
+    if (fixed(session) || session.data.meta?.role === 'router-retired') return undefined
+    const root = session.data.rootId && session.data.rootId !== session.id ? await sessions.get(session.data.rootId) : session
+    if (root && fixed(root)) return undefined
+    for (const x of new Set([session, root])) {
+      const tpl = x?.data.template ? await sessions.getTemplate(x.data.template.id) : null
+      if (tpl?.data.toolset?.length) return undefined
+    }
+    const allowed = tools.allowed(await toolListsFor(session.data.employeeId)).map((t) => t.name)
+    const excluded = services.stdlib.ROUTER_EXCLUDED_TOOLS
+    const want =
+      session.data.meta?.role === 'router' ? allowed.filter((n) => !excluded.some((pattern) => globMatch(pattern, n))) : allowed
+    const have = new Set(session.data.toolset)
+    return want.filter((n) => have.has(n)).length * 2 >= want.length ? want : undefined
+  }
   const runner = createRunner({
     sessions,
     tools,
@@ -444,6 +471,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     clock,
     logger: logger.child({ component: 'runner' }),
     toolListsFor: offeredToolListsFor,
+    currentToolset,
+    currentPrompt: async (session, stored) => (sessionPrompt ? sessionPrompt(session, stored) : undefined),
     projectOf,
     maxSteps: config.MAX_STEPS,
     limitsFor: runLimitsFor(usage),
@@ -584,6 +613,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     stdlib.registerUsagePolicies(hooks, deps)
     stdlib.registerRouterPolicies(hooks, deps)
     services.stdlib = stdlib
+    sessionPrompt = (session, stored) => stdlib.currentSessionPrompt(deps, session, stored)
     services.procedureContexts = stdlib.createProcedureContexts(tools, deps)
     logger.debug('stdlib registered', { tools: names.length })
   } else {
@@ -611,7 +641,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   if (config.INTEGRATIONS.length) {
     const baseUrls = { ...(config.GITLAB_BASE_URL ? { gitlab: config.GITLAB_BASE_URL } : {}), ...o.integrations?.baseUrls }
     services.integrations = await createIntegrations(
-      { tools, hooks, bus, secrets, events, sessions, directory, records, clock, logger },
+      { tools, hooks, bus, secrets, events, sessions, directory, records, files, clock, logger },
       { enabled: config.INTEGRATIONS, ...o.integrations, baseUrls },
     )
     integrationsForTools = services.integrations

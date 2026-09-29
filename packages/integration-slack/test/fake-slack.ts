@@ -21,6 +21,7 @@ export interface FakeMessage {
   reply_count?: number
   reactions?: { name: string; users: string[]; count: number }[]
   edited?: { user: string; ts: string }
+  blocks?: unknown[]
 }
 export interface FakeChannel {
   id: string
@@ -38,6 +39,19 @@ export interface FakeUser {
   email?: string
   is_bot?: boolean
   tz?: string
+}
+/** A file shared in the fake workspace; `url` overrides its download URL. */
+export interface FakeFile {
+  id: string
+  name: string
+  mimetype: string
+  bytes: Uint8Array
+  mode?: string
+  url?: string
+  /** Serve it as Slack serves a download without files:read: its sign-in page. */
+  asSignInPage?: boolean
+  /** Claimed size in files.info (default: the real one). */
+  size?: number
 }
 export interface ScriptedResponse {
   status: number
@@ -58,6 +72,9 @@ export interface FakeSlack {
   calls: RecordedCall[]
   channels: Map<string, FakeChannel>
   users: Map<string, FakeUser>
+  files: Map<string, FakeFile>
+  /** Download requests: path and the token they carried. */
+  downloads: { path: string; auth: string | undefined }[]
   /** Queues raw responses for a method, used before the method's normal handler. */
   script(method: string, ...responses: ScriptedResponse[]): void
   /** Makes a method answer `{ ok: false, error }`. */
@@ -91,6 +108,9 @@ export async function startFakeSlack(): Promise<FakeSlack> {
   const calls: RecordedCall[] = []
   const scripted = new Map<string, ScriptedResponse[]>()
   const failures = new Map<string, { error: string; times: number }>()
+  const files = new Map<string, FakeFile>()
+  const downloads: { path: string; auth: string | undefined }[] = []
+  let origin = ''
 
   users.set('U1', { id: 'U1', name: 'ana', real_name: 'Ana Example', email: 'ana@example.com', tz: 'Europe/Belgrade' })
   users.set('U2', { id: 'U2', name: 'bo', real_name: 'Bo Example', email: 'bo@example.com' })
@@ -144,12 +164,14 @@ export async function startFakeSlack(): Promise<FakeSlack> {
         root.thread_ts = thread
         root.reply_count = (root.reply_count ?? 0) + 1
       }
+      if (p.blocks !== undefined && (!Array.isArray(p.blocks) || p.blocks.length > 50)) return err('invalid_blocks')
       const msg: FakeMessage = {
         ts: nextTs(),
         user: BOT_USER,
         bot_id: BOT_ID,
         text: String(p.text),
         ...(thread ? { thread_ts: thread } : {}),
+        ...(Array.isArray(p.blocks) ? { blocks: p.blocks } : {}),
       }
       c.messages.unshift(msg)
       return { ok: true, channel: c.id, ts: msg.ts, message: { type: 'message', ...msg } }
@@ -161,8 +183,35 @@ export async function startFakeSlack(): Promise<FakeSlack> {
       if (!m) return err('message_not_found')
       if (m.user !== BOT_USER) return err('cant_update_message')
       m.text = String(p.text)
+      if (Array.isArray(p.blocks)) m.blocks = p.blocks
+      else delete m.blocks
       m.edited = { user: BOT_USER, ts: nextTs() }
       return { ok: true, channel: c.id, ts: m.ts, text: m.text, message: { ...m } }
+    },
+    'chat.postEphemeral': (p) => {
+      const c = findChannel(p.channel)
+      if (!c) return err('channel_not_found')
+      if (!p.user) return err('user_not_found')
+      return { ok: true, message_ts: nextTs() }
+    },
+    'files.info': (p) => {
+      const f = files.get(String(p.file))
+      if (!f) return err('file_not_found')
+      const url = f.url ?? `${origin}/files-pri/T1-${f.id}/download/${encodeURIComponent(f.name)}`
+      return {
+        ok: true,
+        file: {
+          id: f.id,
+          name: f.name,
+          title: f.name,
+          mimetype: f.mimetype,
+          filetype: f.name.split('.').pop(),
+          size: f.size ?? f.bytes.byteLength,
+          mode: f.mode ?? 'hosted',
+          url_private: url.replace('/download/', '/'),
+          url_private_download: url,
+        },
+      }
     },
     'conversations.history': (p) => {
       const c = findChannel(p.channel)
@@ -265,6 +314,28 @@ export async function startFakeSlack(): Promise<FakeSlack> {
   }
 
   const server: Server = createServer(async (req, res) => {
+    // File downloads: /files-pri/T1-<id>/download/<name>, and /redirect?to=<url> (a 302).
+    const path = (req.url ?? '').split('?')[0] ?? ''
+    if (path.startsWith('/redirect')) {
+      const to = new URL(req.url ?? '', 'http://x').searchParams.get('to') ?? ''
+      res.writeHead(302, { location: to })
+      return res.end()
+    }
+    const dl = /^\/files-pri\/T1-([A-Z0-9]+)\//.exec(path)
+    if (dl) {
+      downloads.push({ path, auth: req.headers.authorization })
+      const f = files.get(dl[1]!)
+      if (!f) {
+        res.writeHead(404)
+        return res.end()
+      }
+      if (f.asSignInPage || req.headers.authorization !== `Bearer ${TOKEN}`) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        return res.end('<html>Sign in to Slack</html>')
+      }
+      res.writeHead(200, { 'content-type': f.mimetype, 'content-length': String(f.bytes.byteLength) })
+      return res.end(Buffer.from(f.bytes))
+    }
     const method = (req.url ?? '').replace(/^\/api\//, '').split('?')[0] ?? ''
     const raw = await readBody(req)
     const contentType = String(req.headers['content-type'] ?? '')
@@ -294,12 +365,15 @@ export async function startFakeSlack(): Promise<FakeSlack> {
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   const port = (server.address() as AddressInfo).port
+  origin = `http://127.0.0.1:${port}`
 
   return {
     url: `http://127.0.0.1:${port}/api`,
     calls,
     channels,
     users,
+    files,
+    downloads,
     script: (method, ...responses) => scripted.set(method, [...(scripted.get(method) ?? []), ...responses]),
     failWith: (method, error, times = Number.POSITIVE_INFINITY) => failures.set(method, { error, times }),
     callsTo: (method) => calls.filter((c) => c.method === method),

@@ -116,6 +116,57 @@ export interface SlackManifest {
   createUrl: string
   /** The Events API request URL in the manifest. */
   requestUrl: string
+  /** The interactivity request URL in the manifest (buttons and inputs). */
+  interactivityUrl: string
+}
+
+/** Whether a GitLab project is already a harness project, and whether the employee is on it. */
+export interface GitlabProjectAdded {
+  projectId: string
+  name: string
+  linked: boolean
+}
+
+/** One GitLab project the employee's account reaches, as the setup lists it. Never carries the token. */
+export interface GitlabProjectRow {
+  id: number
+  /** `group/project`. */
+  path: string
+  name: string
+  webUrl: string | null
+  /** The account's access level (10 Guest … 50 Owner); null when GitLab didn't say. */
+  accessLevel: number | null
+  /** `Developer`, `Maintainer`, …; null when the level is unknown. */
+  role: string | null
+  defaultBranch: string | null
+  /** Whether the default branch is protected: null until checked (`gitlabProjectProtection`). */
+  protected: boolean | null
+  /** E.g. Maintainer access, an unprotected default branch. */
+  warnings: string[]
+  /** The harness project with its repository, or null when there is none. */
+  added: GitlabProjectAdded | null
+}
+
+/** `GET /api/employees/:id/integrations/gitlab/projects?search=&page=&perPage=` (admins): one page, most recently active first. */
+export interface GitlabProjectsPage {
+  projects: GitlabProjectRow[]
+  search: string
+  page: number
+  perPage: number
+  /** The next page, or null on the last one. */
+  nextPage: number | null
+  /** Every match, or null when GitLab doesn't count (over 10,000). */
+  total: number | null
+}
+
+/** `GET /api/employees/:id/integrations/gitlab/projects/:projectId/protection` (admins): the default branch check. */
+export interface GitlabBranchProtection {
+  projectId: number
+  defaultBranch: string | null
+  /** Null when the project has no default branch or GitLab couldn't say. */
+  protected: boolean | null
+  /** Set when the default branch isn't protected. */
+  warning: string | null
 }
 
 /** `GET /api/integrations/status` (admins): which integrations each employee has, and the GitLab hooks the harness registered. */
@@ -150,6 +201,8 @@ export const SETUP_ROUTES = {
   setIntegrationSecrets: ['POST', '/api/employees/:id/integrations/:name/secrets'],
   integrationAction: ['POST', '/api/employees/:id/integrations/:name/actions/:action'],
   slackManifest: ['GET', '/api/employees/:id/integrations/slack/manifest'],
+  gitlabProjects: ['GET', '/api/employees/:id/integrations/gitlab/projects'],
+  gitlabProjectProtection: ['GET', '/api/employees/:id/integrations/gitlab/projects/:projectId/protection'],
   integrationsStatus: ['GET', '/api/integrations/status'],
 } as const
 
@@ -178,6 +231,13 @@ export interface SetupApi {
   integrationAction(id: string, name: string, action: string, input?: Record<string, Json>): Promise<SetupResult>
   /** `GET /api/employees/:id/integrations/slack/manifest` (admins). */
   slackManifest(id: string): Promise<SlackManifest>
+  /**
+   * `GET /api/employees/:id/integrations/gitlab/projects?search=&page=&perPage=` (admins): the GitLab projects the
+   * employee's account is a member of, searched and paged by GitLab (perPage default 50, at most 100).
+   */
+  gitlabProjects(id: string, q?: { search?: string; page?: number; perPage?: number }): Promise<GitlabProjectsPage>
+  /** `GET /api/employees/:id/integrations/gitlab/projects/:projectId/protection` (admins). */
+  gitlabProjectProtection(id: string, projectId: number): Promise<GitlabBranchProtection>
   /** `GET /api/integrations/status` (admins). */
   integrationsStatus(): Promise<IntegrationsOverview>
 }
@@ -199,6 +259,9 @@ export function setupMethods(call: Call): SetupApi {
     setIntegrationSecrets: (id, name, values) => call('setIntegrationSecrets', { id, name }, undefined, { values }),
     integrationAction: (id, name, action, input) => call('integrationAction', { id, name, action }, undefined, input ?? {}),
     slackManifest: (id) => call('slackManifest', { id }),
+    gitlabProjects: (id, q = {}) =>
+      call('gitlabProjects', { id }, { search: q.search || undefined, page: q.page, perPage: q.perPage }),
+    gitlabProjectProtection: (id, projectId) => call('gitlabProjectProtection', { id, projectId: String(projectId) }),
     integrationsStatus: () => call('integrationsStatus'),
   }
 }

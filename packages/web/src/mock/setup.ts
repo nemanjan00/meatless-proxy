@@ -16,6 +16,7 @@ import {
   type TriggerData,
 } from '@mp/api'
 import { EMP, type MockDb, mockId } from './data.ts'
+import { type MockGitlabProject, mockGitlabPage, mockGitlabProtection, moreGitlabProjects } from './gitlab-projects.ts'
 import { mockRepoKey } from './projects.ts'
 
 /** What the setup mock borrows from the mock API. */
@@ -30,8 +31,11 @@ export interface MockSetupHelpers {
 
 const MOCK_PUBLIC_URL = 'https://mp.example.com'
 
-/** What the demo GitLab account can reach. payments-api is the Payments project's repository already. */
-const GITLAB_PROJECTS = [
+/**
+ * What the demo GitLab account can reach: payments-api (the Payments project's repository already), invoices and
+ * infra, then 150 more for the setup's search and paging.
+ */
+const GITLAB_PROJECTS: MockGitlabProject[] = [
   {
     id: 1,
     path: 'acme/payments-api',
@@ -59,7 +63,10 @@ const GITLAB_PROJECTS = [
     http: 'https://git.example.com/acme/infra.git',
     ssh: 'git@git.example.com:acme/infra.git',
   },
-] as const
+  ...moreGitlabProjects(),
+]
+/** The three the setup status step shows. */
+const FIRST_GITLAB_PROJECTS = GITLAB_PROJECTS.slice(0, 3)
 const SCOPES = 'app_mentions:read, channels:history, channels:read, chat:write, im:history, reactions:write, users:read'
 
 /** A fake, stable public key per employee (never a real key). */
@@ -184,7 +191,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
   const hookUrl = (name: string, id: string) => `${MOCK_PUBLIC_URL}/webhooks/${name}/${id}`
 
   /** The harness project with a repository of this GitLab project, and whether the employee is on it. */
-  const addedOf = (employeeId: string, g: (typeof GITLAB_PROJECTS)[number]) => {
+  const addedOf = (employeeId: string, g: MockGitlabProject) => {
     const keys = new Set([g.ssh, g.http].map(mockRepoKey))
     const p = h
       .all<ProjectData>('project')
@@ -197,7 +204,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
   }
   /** The GitLab projects the demo account reaches, with their access and whether each is a harness project yet. */
   const gitlabProjects = (employeeId: string, warn: boolean) =>
-    GITLAB_PROJECTS.map((g) => {
+    FIRST_GITLAB_PROJECTS.map((g) => {
       const maintainer = warn && g.id === 3
       return {
         id: g.id,
@@ -659,7 +666,27 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
         manifest,
         createUrl: `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(manifest))}`,
         requestUrl: hookUrl('slack', id),
+        interactivityUrl: `${hookUrl('slack', id)}/interactive`,
       })
+    },
+
+    async gitlabProjects(id, q = {}) {
+      const st = stageOf(id).gitlab!
+      if (st.token === 'todo') return reject(422, 'validation', 'Paste the account’s token first.')
+      const warn = st.projects === 'warning'
+      return h.delay(
+        mockGitlabPage(
+          GITLAB_PROJECTS,
+          q,
+          (g) => addedOf(id, g),
+          (g) => (warn && g.id === 3 ? 40 : (g.level ?? 30)),
+        ),
+      )
+    },
+
+    async gitlabProjectProtection(id, projectId) {
+      employee(id)
+      return h.delay(mockGitlabProtection(GITLAB_PROJECTS, projectId))
     },
 
     async integrationsStatus() {

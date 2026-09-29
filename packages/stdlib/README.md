@@ -155,7 +155,11 @@ Notes on behaviour:
   `config.defaults`. Runs working at once aren't refused at fork time: the
   runner holds extra runs in the queue.
 - **`sessions.wait`** answers right away when the runs are already done;
-  otherwise it returns a `suspend` control signal.
+  otherwise it returns a `suspend` control signal. With `delivery: true`
+  (instead of `runIds`) it suspends on a `delivery` wait: the next reply or
+  event delivered to the session wakes the run (e.g. the answer to
+  `mcp.slack.ask`), or the optional timeout. Only a continuing run can; an
+  ephemeral one is told to end its turn instead.
 - **Real forks** (`sessions.loop` with `realTasks`) call the tool named in
   `employee.taskSystem` (`tool`, or `server` + `createTool`) once per item,
   then subscribe each child to its task. Without that config it's an error.

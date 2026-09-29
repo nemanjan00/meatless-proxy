@@ -46,6 +46,17 @@ export interface EnvMeta {
   networkKey?: string
   /** The project whose allowlist it started with. */
   projectId?: string
+  /** Ports exposed as live previews. */
+  expose?: number[]
+  /** The image it runs (`build`: built from the checkout's Dockerfile), and the profile it came from. */
+  image?: string
+  profile?: string
+  /** Whether it has a desktop. */
+  desktop?: boolean
+  /** Its checkouts: `/workspace` and `/repos/<name>`. */
+  checkouts?: { key: string; path: string }[]
+  /** Its service containers' names. */
+  services?: string[]
 }
 
 export interface ParamSpec {
@@ -153,6 +164,34 @@ export function pathValue(obj: unknown, path: string): unknown {
   return cur
 }
 
+/** The projects an employee works on: its contact's project links, then any older `scope.projects`. */
+export async function assignedProjectsOf(deps: Pick<StdlibDeps, 'directory'>, employee: Employee): Promise<string[]> {
+  return [
+    ...new Set([
+      ...(await deps.directory.projects.forContact(employee.data.contactId)).map((m) => m.project.id),
+      ...(employee.data.scope?.projects ?? []),
+    ]),
+  ]
+}
+
+/** The employee prompt as it would be written now, with the skills of its projects and `projectIds`. */
+export async function promptForEmployee(
+  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock'>,
+  employeeId: string,
+  projectIds: string[] = [],
+): Promise<string> {
+  const { directory } = deps
+  const employee = await directory.employees.require(employeeId)
+  const contact = await directory.contacts.require(employee.data.contactId)
+  const scope = employee.data.scope ?? {}
+  const pids = [...new Set([...(await assignedProjectsOf(deps, employee)), ...projectIds])]
+  const procedures = (await Promise.all((scope.procedures ?? []).map((p) => directory.procedures.get(p)))).filter(
+    (p) => p !== null,
+  )
+  const skills = await deps.skills.available({ projectIds: pids })
+  return employeePrompt({ employee, contact, procedures, skills, now: deps.clock.iso() })
+}
+
 export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
   const { records, sessions, directory } = deps
   if (!records.kinds.has(ONCE_KIND))
@@ -195,13 +234,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     })
   }
 
-  /** The projects an employee works on: its contact's project links, then any older `scope.projects`. */
-  const assignedProjects = async (employee: Employee): Promise<string[]> => [
-    ...new Set([
-      ...(await directory.projects.forContact(employee.data.contactId)).map((m) => m.project.id),
-      ...(employee.data.scope?.projects ?? []),
-    ]),
-  ]
+  const assignedProjects = (employee: Employee) => assignedProjectsOf(deps, employee)
 
   const kit: Kit = {
     deps,
@@ -264,17 +297,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
 
     employee: (id) => directory.employees.require(id),
 
-    async promptFor(employeeId, projectIds = []) {
-      const employee = await directory.employees.require(employeeId)
-      const contact = await directory.contacts.require(employee.data.contactId)
-      const scope = employee.data.scope ?? {}
-      const pids = [...new Set([...(await assignedProjects(employee)), ...projectIds])]
-      const procedures = (await Promise.all((scope.procedures ?? []).map((p) => directory.procedures.get(p)))).filter(
-        (p) => p !== null,
-      )
-      const skills = await deps.skills.available({ projectIds: pids })
-      return employeePrompt({ employee, contact, procedures, skills, now: deps.clock.iso() })
-    },
+    promptFor: (employeeId, projectIds = []) => promptForEmployee(deps, employeeId, projectIds),
 
     async projectsOf(session) {
       const linked = await records.linked({ kind: 'session', id: session.id }, { direction: 'out', kind: 'project' })

@@ -1,16 +1,19 @@
 import { type Clock, errorMessage, type EventBus, type Hooks, type Logger, sleep } from '@mp/core'
 import type { Directory } from '@mp/directory'
 import type { Events, IngestInput } from '@mp/events'
+import type { FilesService } from '@mp/files'
 import type { IntegrationEvent, WebhookRequest } from '@mp/mcp'
 import type { Records } from '@mp/records'
 import type { SecretStore } from '@mp/secrets'
 import type { Sessions } from '@mp/sessions'
-import type { ToolRegistry } from '@mp/tools'
+import type { ToolHandler, ToolRegistry } from '@mp/tools'
 import { createIdentityResolver, defineIdentityKinds, type IdentityResolver } from './identity.ts'
 import type { IdentityLookup } from './identity-lookups.ts'
 import { createInstance, InstanceCache, type IntegrationInstance } from './instances.ts'
+import { defineInteractionKind, interactionStore, noteAnswerEvent, registerAskPolicy } from './interactions.ts'
 import { registerIntegrationPolicies } from './policies.ts'
 import type { ProvisioningOptions } from './provisioning.ts'
+import { slackGetFileHandler } from './slack-files.ts'
 import { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
 
 export { closingReason, mergeRequestSubject, needsExternalReply } from './policies.ts'
@@ -26,6 +29,7 @@ export {
   type HookProvisioning,
   type ProvisioningOptions,
 } from './provisioning.ts'
+export { INTERACTION_KIND, type InteractionData } from './interactions.ts'
 export { integrationStatusRoutes, integrationsStatus, type IntegrationsStatus } from './status.ts'
 
 /** How long a webhook response waits for its events to be ingested before answering anyway. */
@@ -63,6 +67,8 @@ export interface IntegrationsDeps {
   directory: Directory
   /** Holds `identity_link` records: integration users and the contacts they are. */
   records: Records
+  /** Employees' files: Slack's get_file saves into them. Without it, get_file only reads a file's metadata. */
+  files?: FilesService
   clock: Clock
   logger: Logger
 }
@@ -127,9 +133,11 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     if (spec) specs[name] = spec
     else logger.warn('unknown integration, ignored', { integration: name })
   }
+  defineInteractionKind(deps.records)
   const factoryDeps = (spec: IntegrationSpec) => ({
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     ...(opts.baseUrls?.[spec.name] ? { baseUrl: opts.baseUrls[spec.name] } : {}),
+    slackInteractions: (employeeId: string | undefined) => interactionStore(deps.records, employeeId),
   })
   const cache = new InstanceCache({
     secrets: deps.secrets,
@@ -151,6 +159,14 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
 
   // ── Tools: definitions from an instance with placeholder secrets, calls to the caller's instance ──
   const toolNames: string[] = []
+  /** Tools the server does itself instead of the MCP server: Slack's get_file writes into the employee's files. */
+  const serverHandlers: Record<string, ToolHandler> = {}
+  if (specs.slack && deps.files)
+    serverHandlers[`mcp.${specs.slack.name}.get_file`] = slackGetFileHandler({
+      instanceFor: (employeeId) => instanceFor(specs.slack!, employeeId),
+      files: deps.files,
+      logger,
+    })
   for (const spec of Object.values(specs)) {
     const definitions = createInstance(spec, undefined, {}, { clock: deps.clock, logger, ...factoryDeps(spec) })
     try {
@@ -167,16 +183,17 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
             // Declared so the runner redacts the values from outputs and records their use.
             secrets: [spec.tokenSecret],
           },
-          async (args, ctx) => {
-            const instance = await instanceFor(spec, ctx.employeeId)
-            if (!instance.hasToken)
-              return {
-                output: { error: `${spec.label} isn't set up for this employee: set the ${spec.tokenSecret} secret` },
-                isError: true,
-              }
-            const r = await instance.callTool(t.name, (args ?? {}) as Record<string, unknown>, ctx.signal)
-            return r.isError ? { output: r.output, isError: true } : { output: r.output }
-          },
+          serverHandlers[name] ??
+            (async (args, ctx) => {
+              const instance = await instanceFor(spec, ctx.employeeId)
+              if (!instance.hasToken)
+                return {
+                  output: { error: `${spec.label} isn't set up for this employee: set the ${spec.tokenSecret} secret` },
+                  isError: true,
+                }
+              const r = await instance.callTool(t.name, (args ?? {}) as Record<string, unknown>, ctx.signal)
+              return r.isError ? { output: r.output, isError: true } : { output: r.output }
+            }),
           { replace: true },
         )
         toolNames.push(name)
@@ -207,6 +224,16 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     instanceFor: (spec, employeeId) => instanceFor(spec, employeeId),
   })
 
+  const offAsk = specs.slack
+    ? registerAskPolicy({
+        hooks: deps.hooks,
+        records: deps.records,
+        events: deps.events,
+        logger,
+        toolName: `mcp.${specs.slack.name}.ask`,
+      })
+    : () => {}
+
   // ── Webhooks ──────────────────────────────────────────────────────────────
   const pending = new Set<Promise<void>>()
 
@@ -230,6 +257,8 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
       try {
         const { event, created } = await deps.events.ingest(input)
         logger.debug('webhook event ingested', { integration: instance.spec.name, type: e.type, eventId: event.id, created })
+        if (created && e.type === 'interaction.answered')
+          await noteAnswerEvent(deps.records, e.payload, event.id, who.contactId, logger)
         return
       } catch (err) {
         if (attempt >= INGEST_ATTEMPTS) throw err
@@ -258,7 +287,17 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
       body: result.body ?? '',
       headers: result.headers ?? {},
     }
-    if (result.status >= 300 || !result.events.length) return response
+    if (result.status >= 300) return response
+    // Work the integration does after answering (Slack's interactivity wants a 200 within 3 s).
+    const after = result.after
+    if (after) {
+      const later = (async () => {
+        for (const e of await after()) await ingestOne(instance, e, employeeId)
+      })().catch((err) => logger.error('webhook follow-up failed', { integration: name, employeeId, err: errorMessage(err) }))
+      pending.add(later)
+      void later.finally(() => pending.delete(later))
+    }
+    if (!result.events.length) return response
 
     // Ingest after verifying. Answer once it's done, or when the budget runs out (Slack wants an
     // answer within 3 s), in which case the ingest finishes in the background.
@@ -306,6 +345,7 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     async close() {
       offSecrets()
       offPolicies()
+      offAsk()
       await Promise.all([...pending])
       await identity.idle()
       await cache.close()

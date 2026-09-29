@@ -48,6 +48,8 @@ function clientIp(c: Context): string {
  * - `POST /webhooks/:integration`: deployment-wide hooks, verified with the deployment-wide secrets.
  * - `POST /webhooks/:integration/:employee` (an employee id or handle): hooks of one employee's
  *   identity, verified with that employee's secrets, and its events belong to that employee.
+ * - `POST /webhooks/:integration/:employee/interactive`: the same, for interactivity (Slack's
+ *   buttons and inputs), kept apart so the setup can tell whether it's configured.
  *
  * Bodies are limited to 1 MB, and each client address to `WEBHOOK_RATE_LIMIT` requests a minute.
  */
@@ -78,5 +80,7 @@ export function webhookRoutes(s: Services): Hono {
 
   app.all('/webhooks/:integration', handle)
   app.all('/webhooks/:integration/:employee', handle)
+  // Slack's Interactivity Request URL (buttons and inputs): the integration tells the payload from an Events API one.
+  app.all('/webhooks/:integration/:employee/interactive', handle)
   return app
 }

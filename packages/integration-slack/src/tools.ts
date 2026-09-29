@@ -2,7 +2,18 @@ import { errorMessage, isMpError, type Logger } from '@mp/core'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import {
+  ASK_FIELD_TYPES,
+  type AskButton,
+  type AskField,
+  type AskFieldType,
+  buildAskBlocks,
+  MAX_FIELDS,
+  parseBlocks,
+  validateAsk,
+} from './blocks.ts'
 import { type SlackClient, type SlackResponse, slackErrorCode } from './client.ts'
+import { fileInfo } from './files.ts'
 
 type Obj = Record<string, unknown>
 
@@ -15,7 +26,9 @@ export function compactMessage(m: Obj) {
   const reactions = Array.isArray(m.reactions)
     ? (m.reactions as Obj[]).map((r) => ({ name: str(r.name), count: num(r.count) }))
     : undefined
-  const files = Array.isArray(m.files) ? (m.files as Obj[]).map((f) => str(f.name) ?? str(f.id)).filter(Boolean) : undefined
+  const files = Array.isArray(m.files)
+    ? (m.files as Obj[]).filter((f) => str(f.id)).map((f) => compact({ id: str(f.id), name: str(f.name) }))
+    : undefined
   return compact({
     ts: str(m.ts),
     user: str(m.user),
@@ -73,6 +86,8 @@ const HINTS: Record<string, string> = {
   is_archived: 'the channel is archived',
   msg_too_long: 'the text is too long; split it into several messages',
   invalid_name: 'unknown emoji name',
+  invalid_blocks: 'Slack rejected the blocks: check each against the Block Kit reference (https://docs.slack.dev/block-kit/)',
+  invalid_blocks_format: 'blocks must be a JSON array of block objects',
 }
 
 const fail = (err: unknown): CallToolResult => {
@@ -255,6 +270,107 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
       const memberOnly = a.member_only ?? true
       const channels = ((r.channels as Obj[]) ?? []).filter((c) => !memberOnly || c.is_member === true).map(compactChannel)
       return { channels, next_cursor: nextCursor(r) }
+    },
+  )
+  tool(
+    'ask',
+    'Ask a question with inputs in Slack: a message with a form (text, multiline, select, multiselect, checkboxes, radio, date, number) and buttons (default one "Submit"). Use it when you need structured answers or a choice (e.g. an approval with Approve / Reject buttons). The first person to press a button answers: the message turns read-only, and the answer comes back to this session as an interaction.answered event with { values: { fieldId: value }, button, answeredBy }. To wait for it in this run, call sessions.wait with delivery: true (and a timeoutSeconds); otherwise end your turn and the answer starts your next run here. Returns { channel, ts, interactionId }.',
+    {
+      channel,
+      thread_ts: ts.optional().describe('Thread root ts, to ask inside a thread'),
+      text: z.string().min(1).describe('The question (mrkdwn), also the notification fallback. At most 3000 characters.'),
+      fields: z
+        .array(
+          z.object({
+            id: z.string().describe('Key of the value in the answer: letters, digits, _ or -'),
+            label: z.string().describe('Shown above the input'),
+            type: z.enum(ASK_FIELD_TYPES as [AskFieldType, ...AskFieldType[]]),
+            options: z
+              .array(z.object({ value: z.string(), label: z.string() }))
+              .optional()
+              .describe(
+                'For select, multiselect (at most 100), checkboxes and radio (at most 10). Labels at most 75 characters.',
+              ),
+            optional: z.boolean().optional().describe('May be left empty (default: required)'),
+            placeholder: z.string().optional().describe('Hint inside the input, at most 150 characters'),
+            initial: z
+              .union([z.string(), z.number(), z.array(z.string())])
+              .optional()
+              .describe('Pre-filled value: text, an option value, option values, YYYY-MM-DD, or a number'),
+          }),
+        )
+        .min(1)
+        .describe(`The inputs, at most ${MAX_FIELDS}`),
+      buttons: z
+        .array(
+          z.object({
+            id: z.string().describe('Reported as `button` in the answer'),
+            label: z.string(),
+            style: z.enum(['primary', 'danger']).optional(),
+          }),
+        )
+        .optional()
+        .describe('Default: one "Submit" button. At most 25.'),
+      allow_multiple: z
+        .boolean()
+        .optional()
+        .describe('Collect an answer from everyone who submits (the form stays), instead of the first one only'),
+    },
+    WRITE,
+    async (a) => {
+      const spec = validateAsk({ text: a.text, fields: a.fields as AskField[], buttons: a.buttons as AskButton[] | undefined })
+      const r = await client.call(
+        'chat.postMessage',
+        { channel: a.channel, text: spec.text, blocks: buildAskBlocks(spec), thread_ts: a.thread_ts, mrkdwn: true },
+        { write: true, json: true },
+      )
+      const posted = str(r.ts)
+      const at = str(r.channel) ?? a.channel
+      // `ask` is what the harness stores the interaction from (it adds `interactionId` and drops this part).
+      return compact({
+        channel: at,
+        ts: posted,
+        thread_ts: a.thread_ts,
+        ask: {
+          text: spec.text,
+          fields: spec.fields,
+          buttons: spec.buttons,
+          ...(a.allow_multiple ? { allowMultiple: true } : {}),
+        },
+      })
+    },
+  )
+  tool(
+    'post_blocks',
+    'Post a message built from Slack Block Kit blocks (https://docs.slack.dev/block-kit/): an array of 1 to 50 block objects, e.g. sections, dividers, context, images. text is the notification fallback. Buttons posted this way are not tracked: for questions, use ask. Returns the new message ts.',
+    {
+      channel,
+      thread_ts: ts.optional().describe('Thread root ts, to post inside a thread'),
+      text: z.string().min(1).describe('Fallback text for notifications and screen readers (mrkdwn)'),
+      blocks: z
+        .union([z.array(z.record(z.string(), z.unknown())), z.string()])
+        .describe('The blocks, as a JSON array (or its JSON text)'),
+    },
+    WRITE,
+    async (a) => {
+      const blocks = parseBlocks(a.blocks)
+      const r = await client.call(
+        'chat.postMessage',
+        { channel: a.channel, text: a.text, blocks, thread_ts: a.thread_ts, mrkdwn: true },
+        { write: true, json: true },
+      )
+      return compact({ channel: str(r.channel), ts: str(r.ts), thread_ts: a.thread_ts })
+    },
+  )
+  tool(
+    'get_file',
+    'Save a file someone shared in Slack into your own files, at /slack/<file id>-<name>. Slack events and messages list files as [file: name, slack file F…]. Returns { path, name, mime, size }, plus the text itself for small text files. Then use image.view { path } for images, fs.read, or code.run (/work/files/slack/…). At most 25 MB.',
+    { file_id: z.string().min(1).describe('The Slack file id, e.g. F0123ABCD') },
+    READ,
+    // Called directly (outside the harness), it only reads the file's metadata: the harness does the download.
+    async (a) => {
+      const { url: _url, ...info } = await fileInfo(client, a.file_id)
+      return info
     },
   )
   tool(

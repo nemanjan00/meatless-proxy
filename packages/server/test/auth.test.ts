@@ -83,9 +83,16 @@ describe('nobody is trusted on their word', () => {
       const need = typeof hit!.rule.need === 'function' ? hit!.rule.need(hit!.params) : hit!.rule.need
       if (
         method === 'GET' &&
-        !['listSecrets', 'listMcpServers', 'mcpServerTools', 'slackManifest', 'integrationsStatus', 'identityLinks'].includes(
-          name,
-        )
+        ![
+          'listSecrets',
+          'listMcpServers',
+          'mcpServerTools',
+          'slackManifest',
+          'gitlabProjects',
+          'gitlabProjectProtection',
+          'integrationsStatus',
+          'identityLinks',
+        ].includes(name)
       )
         expect(['viewer', 'public'], name).toContain(need)
       if (['health', 'ready', 'authConfig'].includes(name)) expect(need, name).toBe('public')

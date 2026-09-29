@@ -7,7 +7,7 @@ import type { IntegrationInstance } from './instances.ts'
 import type { IntegrationSpec } from './specs.ts'
 
 /** What the model ends with when it decides a message needs no answer (the stdlib's convention). */
-const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::.*)?$/is
+const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?no[_ -]?reply\]?\s*(?::[^\n]*)?\s*$/i
 /** Tools that hand the work to another session: that session answers, not this run. */
 const HANDOFF_TOOLS = ['sessions.fork', 'sessions.loop', 'sessions.create', 'sessions.message', 'procedures.run']
 
@@ -95,7 +95,7 @@ function lastAssistantText(entries: Entry[]): string | undefined {
 }
 
 /** Subscribes a session to a subject, unless it already is. Router contexts never hold conversations. */
-async function subscribeOnce(events: Events, session: Session, subject: Subject, primary: boolean) {
+export async function subscribeOnce(events: Events, session: Session, subject: Subject, primary: boolean) {
   if (session.data.meta?.role === 'router') return false
   const subs = await events.subscriptions.forSubject(subject)
   if (subs.some((s) => s.data.sessionId === session.id)) return false

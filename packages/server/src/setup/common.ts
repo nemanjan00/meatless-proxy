@@ -91,10 +91,12 @@ export const step = (
   ...(data ? { data } : {}),
 })
 
-/** Overall state: no token → not set up; every step done → connected; else needs attention. */
+/** Overall state: no token → not set up; every step done (optional ones, `data.optional`, may be todo) → connected; else needs attention. */
 export function stateOf(steps: SetupStep[], tokenSet: boolean): IntegrationSetupStatus['state'] {
   if (!tokenSet) return 'not_set_up'
-  return steps.every((s) => s.status === 'done') ? 'connected' : 'needs_attention'
+  return steps.every((s) => s.status === 'done' || (s.status === 'todo' && s.data?.optional === true))
+    ? 'connected'
+    : 'needs_attention'
 }
 
 /** Whether the employee has its own value for a secret, or only a global one. */

@@ -418,3 +418,55 @@ describe('wake race', () => {
     expect((await h.sessions.requireRun(run.id)).data.result?.output).toBe('parent resumed')
   })
 })
+
+describe('sessions started before their tools and prompt changed', () => {
+  it('get the tools added since, with a note that earlier claims of a missing tool are out of date', async () => {
+    const h = harness([reply('first'), reply('second')], {
+      currentToolset: async (s) => (s.data.meta?.toolsetFixed ? undefined : ['math.add', 'slack.get_file']),
+    })
+    h.tool({ name: 'math.add' }, async () => ({ output: 1 }))
+    h.tool({ name: 'slack.get_file' }, async () => ({ output: 'bytes' }))
+    h.tool({ name: 'old.tool' }, async () => ({ output: 'gone' }))
+    const s = await h.session(['math.add', 'old.tool'])
+    await h.runner.execute((await h.start(s.id)).id)
+    expect((await h.sessions.require(s.id)).data.toolset).toEqual(['math.add', 'slack.get_file'])
+    expect(h.model.calls[0]!.tools?.map((t) => t.function.name)).toEqual(['math__add', 'slack__get_file'])
+    const note = h.model.calls[0]!.messages.find((m) => m.role === 'system' && String(m.content).includes('tools changed'))
+    expect(String(note?.content)).toContain('Now available: slack.get_file')
+    expect(String(note?.content)).toContain('No longer available: old.tool')
+
+    // Up to date: no second note.
+    await h.runner.execute((await h.start(s.id)).id)
+    const notes = (await h.sessions.history(s.id)).filter((e) => e.meta?.toolsetChanged)
+    expect(notes).toHaveLength(1)
+  })
+
+  it('keep a toolset the host says is fixed', async () => {
+    const h = harness([reply('ok')], { currentToolset: async () => undefined })
+    h.tool({ name: 'math.add' }, async () => ({ output: 1 }))
+    const s = await h.session(['math.add'])
+    await h.runner.execute((await h.start(s.id)).id)
+    expect((await h.sessions.require(s.id)).data.toolset).toEqual(['math.add'])
+    expect(kinds(await h.sessions.history(s.id))).toEqual(['system', 'user', 'assistant'])
+  })
+
+  it('see the current prompt in place of the one stored, without rewriting history', async () => {
+    const h = harness([reply('ok')], {
+      currentPrompt: async (_s, stored) => (stored === 'You are a test employee.' ? 'You are a test employee, v2.' : undefined),
+    })
+    const s = await h.session()
+    await h.runner.execute((await h.start(s.id)).id)
+    expect(h.model.calls[0]!.messages[0]).toMatchObject({ role: 'system', content: 'You are a test employee, v2.' })
+    expect((await h.sessions.history(s.id))[0]!.content).toEqual({ text: 'You are a test employee.' })
+  })
+
+  it('run anyway when bringing the session up to date fails', async () => {
+    const h = harness([reply('ok')], {
+      currentToolset: async () => {
+        throw new Error('directory down')
+      },
+    })
+    const s = await h.session()
+    expect((await h.runner.execute((await h.start(s.id)).id)).status).toBe('completed')
+  })
+})
