@@ -229,8 +229,8 @@ describe('messages', () => {
 })
 
 describe('everyday chat features', () => {
-  const A = () => ({ kind: 'contact', id: ana })
-  const S = () => ({ kind: 'session', id: ses })
+  const A = () => ({ kind: 'contact' as const, id: ana })
+  const S = () => ({ kind: 'session' as const, id: ses })
   const setupThread = async () => {
     const ch = await chat.createChannel({ name: 'general', createdBy: A() })
     const root = await chat.post({ channelId: ch.id, author: A(), text: 'Deploy today? @billing-bot' })
