@@ -69,6 +69,7 @@ module to it:
 
 | Module            | Section                                       |
 |-------------------|-----------------------------------------------|
+| identity          | [Identity](#identity)                         |
 | chat, tasks       | [MCP](#mcp)                                   |
 | contacts          | [Contacts](#contacts)                         |
 | projects, docs    | [Projects](#projects)                         |
@@ -119,6 +120,48 @@ Open questions:
   context caching), and how is that reported in `usage`? This needs checking
   against their docs.
 - Rate limits, retries and fallback to another provider when one is down.
+
+### Identity
+
+The employee acts in its own name: it commits code, comments on tickets and
+sends messages. So it needs an identity of its own, which it keeps across every
+session.
+
+- **It is a contact.** The employee has a [contact](#contacts) record like
+  everyone else, marked as an AI, with a name and handles in every connected
+  system (chat, task system, git host, email). Links, ownership and routing
+  work for it the same way they do for people.
+- **Git identity.** Commits are authored under the employee's own name and
+  email, optionally signed with its own key. Every commit is traceable to the
+  session that made it and to the contact who asked for the work, e.g. through
+  commit trailers.
+- **Accounts.** The employee has its own accounts and credentials in each
+  system, scoped per [least privilege](employee.md#4-boundaries). It never uses
+  a person's account.
+- **Always an AI.** Its name, profile and messages make clear that it's an AI,
+  as the [employee rules](employee.md#being-honest-about-what-it-is) require.
+
+#### Personality
+
+The employee can have a personality: a few quirks that make it recognisable and
+nicer to deal with, e.g. a sign-off, a favourite phrase, dry humour, or a
+fondness for tidy commit messages.
+
+- The personality is part of the identity record, written in plain words, and
+  editable from the [web UI](#web-ui).
+- It shapes tone only. It never overrides the interaction rules: answers stay
+  short, correct and to the point, and the personality doesn't get in the way of
+  a serious conversation (incidents, HR, customers).
+- Every session, fork and procedure context uses the same identity and
+  personality, so the company is always dealing with one recognisable colleague.
+
+Open questions:
+
+- One employee per company, or several with different identities and roles
+  (e.g. one per team)?
+- Which trailer format links a commit to its session and requester?
+- Can people tune the personality for themselves, e.g. "less chatty with me",
+  through their contact preferences?
 
 ### MCP
 
