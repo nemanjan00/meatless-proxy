@@ -71,6 +71,7 @@ module to it:
 |-------------------|-----------------------------------------------|
 | identity          | [Identity](#identity)                         |
 | permissions       | [Permissions](#permissions)                   |
+| untrusted input   | [Untrusted input](#untrusted-input)           |
 | harness chat      | [Harness chat](#harness-chat)                 |
 | chat, tasks       | [MCP](#mcp)                                   |
 | contacts          | [Contacts](#contacts)                         |
@@ -242,6 +243,40 @@ Open questions:
   structured permissions (e.g. per project, per procedure) that the model reads?
 - Which requests always need a person's approval, whatever the requester's
   permissions are?
+
+### Untrusted input
+
+Tickets, chat messages, emails, PR comments, docs and repo contents all end up
+in the model's context, and any of them can contain instructions meant to steer
+it (prompt injection). The employee handles this **the way a careful person
+would**: it judges what it receives by where it came from and whether it
+expected it.
+
+- **Expected input goes to a context that knows what it's getting.** An event
+  delivered through a [subscription](#subscriptions) arrives at a session that
+  asked for it, and that session knows what it should look like (a CI result for
+  its own PR, a reply in its own thread, a comment on its own ticket). Anything
+  that doesn't fit, such as a CI log asking it to change credentials, stands
+  out, and the session treats it as suspicious.
+- **Unexpected input goes to a router that treats it critically.** Anything not
+  covered by a subscription goes through [triggers](#triggers) to a router
+  session. The router treats the content as untrusted: it checks who sent it
+  against [contacts](#contacts) and [permissions](#permissions), and decides
+  where the work goes. It doesn't follow instructions just because they're in
+  the message.
+- **Content isn't a requester.** Instructions count only when they come from a
+  contact who may ask for that thing. Text inside a ticket, file or log is
+  information, not an order, whoever wrote it.
+- **Hard limits still apply.** Whatever the model is convinced of,
+  [no production access](#no-production-access) and least-privilege
+  credentials are enforced outside the model.
+- Suspicious input is flagged to the [supervisor](#supervisor) and recorded in
+  the audit trail.
+
+Open questions:
+
+- Should the router pass on a cleaned-up description of the work instead of
+  the raw content, so that downstream sessions never see the original text?
 
 ### Harness chat
 
