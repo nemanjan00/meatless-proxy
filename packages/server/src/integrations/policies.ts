@@ -6,6 +6,10 @@ import type { Entry } from '@mp/store'
 import type { IntegrationInstance } from './instances.ts'
 import type { IntegrationSpec } from './specs.ts'
 
+/** A router's decision log, not an answer (the stdlib's ROUTER_LOG_RE; this package doesn't depend on it). */
+const ROUTER_LOG_RE =
+  /(→|->)\s*(NO_REPLY|started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*(logged|noted|recorded|decision (recorded|logged)|done|committed)\.?\s*$/i
+
 /** What the model ends with when it decides a message needs no answer (the stdlib's convention). */
 const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?no[_ -]?reply\]?\s*(?::[^\n]*)?\s*$/i
 /** Tools that hand the work to another session: that session answers, not this run. */
@@ -183,9 +187,6 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
     offs.push(
       deps.hooks.on(afterRun, async ({ run, session, result }) => {
         if (result.status !== 'completed') return undefined
-        // A router's final text is its routing decision ("Routed to …", "Logged."), never an answer: it
-        // hands work to a session, which answers. Live, "Logged." and a reaction's NO_REPLY note were posted.
-        if (isRouter(session)) return undefined
         const eventId = run.data.cause.eventId
         if (!eventId) return undefined
         try {
@@ -194,6 +195,8 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
           if (event?.data.source !== source || event.data.subject?.system !== 'slack') return undefined
           const entries = await runEntries(deps.sessions, run)
           const output = result.output ?? lastAssistantText(entries)
+          // A router's decision log ("Logged.", "… → NO_REPLY (…)") isn't an answer: live, both were posted.
+          if (isRouter(session) && output && ROUTER_LOG_RE.test(output)) return undefined
           const answerTools = (slack.answerTools ?? []).map((t) => `mcp.${slack.name}.${t}`)
           if (!needsExternalReply(entries, output, source, answerTools)) return undefined
           const [channel, threadTs] = event.data.subject.id.split('/')

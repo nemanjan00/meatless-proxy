@@ -121,6 +121,12 @@ export interface RouterOptions {
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
   isHuman?: (event: MpEvent) => Promise<boolean>
   /**
+   * Whether an employee gets its own copy of every event of a source (its own webhook, e.g. its own Slack
+   * app). Its subscribed sessions then skip other employees' copies of the same message: two apps in one
+   * thread each deliver it, and a session got every message twice.
+   */
+  hasOwnCopies?: (source: string, employeeId: string) => Promise<boolean>
+  /**
    * Brings an event up to date just before it is rendered for a session, e.g. adds the saved
    * descriptions of a chat message's images to its text. The stored event is left alone. Errors are
    * logged, and the event is rendered as stored.
@@ -167,9 +173,11 @@ export function renderEvent(event: MpEvent, maxChars = 4000): string {
       ? '; from another AI session'
       : author?.contactKind === 'agent'
         ? `; from another AI agent (${author.name ?? author.id}${author.onBehalfOf ? `, on behalf of ${author.onBehalfOf}` : ''})`
-        : author?.kind === 'contact'
-          ? '; from a person'
-          : ''
+        : author?.contactKind === 'ai'
+          ? `; from AI employee ${author.name ?? author.id}`
+          : author?.kind === 'contact'
+            ? '; from a person'
+            : ''
   // When it arrived, so the session knows what time it is (new content only: the cached prefix is untouched).
   const at = eventTime(d.receivedAt)
   const head = `[${d.source} ${d.type}${subject}${from}${at ? `; ${at}` : ''}]`
@@ -238,6 +246,14 @@ export function createRouter(opts: RouterOptions): Router {
       for (const s of subs) {
         const session = await opts.sessions.get(s.data.sessionId)
         if (!session) continue
+        const copyFor = event.data.employeeId
+        if (
+          copyFor &&
+          copyFor !== session.data.employeeId &&
+          opts.hasOwnCopies &&
+          (await opts.hasOwnCopies(event.data.source, session.data.employeeId))
+        )
+          continue
         const tagged = tags.employees.includes(session.data.employeeId)
         add({
           sessionId: s.data.sessionId,

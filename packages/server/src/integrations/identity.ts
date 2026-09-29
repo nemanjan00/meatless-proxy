@@ -353,8 +353,19 @@ export function createIdentityResolver(deps: IdentityResolverDeps, opts: Identit
       })
       const text = lookup?.render && names.size && e.text ? lookup.render(e.text, names, actor?.id) : e.text
       let payload = e.payload
-      if (who?.contactId && payload && typeof payload === 'object' && !Array.isArray(payload) && !('author' in payload))
-        payload = { ...payload, author: { kind: 'contact', id: who.contactId } }
+      if (who?.contactId && payload && typeof payload === 'object' && !Array.isArray(payload) && !('author' in payload)) {
+        // The kind says whether a person or an AI wrote it: another employee's bot isn't "a person".
+        const contact = await directory.contacts.get(who.contactId).catch(() => null)
+        payload = {
+          ...payload,
+          author: {
+            kind: 'contact',
+            id: who.contactId,
+            ...(contact?.data.kind ? { contactKind: contact.data.kind } : {}),
+            ...(contact?.data.name ? { name: contact.data.name } : {}),
+          },
+        }
+      }
       return { ...(who?.contactId ? { contactId: who.contactId } : {}), text, payload }
     },
     forget(system, id) {

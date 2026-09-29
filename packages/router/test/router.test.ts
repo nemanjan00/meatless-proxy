@@ -12,6 +12,7 @@ async function setup(
     resolvers?: RecipientResolver[]
     participantsOf?: (e: any) => Promise<string[]>
     prepareEvent?: (e: MpEvent) => Promise<MpEvent>
+    hasOwnCopies?: (source: string, employeeId: string) => Promise<boolean>
   } = {},
 ) {
   const bus = createEventBus()
@@ -38,6 +39,7 @@ async function setup(
     ...(opts.resolvers ? { resolvers: opts.resolvers } : {}),
     ...(opts.participantsOf ? { participantsOf: opts.participantsOf } : {}),
     ...(opts.prepareEvent ? { prepareEvent: opts.prepareEvent } : {}),
+    ...(opts.hasOwnCopies ? { hasOwnCopies: opts.hasOwnCopies } : {}),
   })
   const queued: string[] = []
   queue.process<{ runId: string }>('runs', async (j) => void queued.push(j.data.runId))
@@ -104,6 +106,33 @@ describe('router', () => {
     expect(fork.data.parent?.sessionId).toBe(t.procedureCtx.id)
     expect(run.data.mode).toBe('ephemeral')
     expect((await t.events.triggers.list())[0]!.data.fired).toBe(1)
+  })
+
+  it("a subscribed session skips another employee's copy of a message when its employee gets its own", async () => {
+    // Two employees' Slack apps in one thread: each delivers the message, as emp_a's and as emp_b's copy.
+    const t = await setup({
+      hasOwnCopies: async (source, employeeId) => source === 'integration:slack' && employeeId === 'emp_a',
+    })
+    const work = await t.mk('thread work') // emp_a's
+    const subject = { system: 'slack', id: 'C1/1.1' }
+    await t.events.subscriptions.subscribe(work.id, subject, { primary: true })
+    const copy = (employeeId: string, key: string) =>
+      t.ingest({ source: 'integration:slack', type: 'message.replied', subject, employeeId, dedupeKey: key, text: 'hi' })
+    expect((await t.router.plan(await copy('emp_a', 'k@a'))).map((d) => d.sessionId)).toEqual([work.id])
+    expect((await t.router.plan(await copy('emp_b', 'k@b'))).map((d) => d.sessionId)).not.toContain(work.id)
+    // Without its own copies (no app of its own there), it still hears the other employee's.
+    const u = await setup({ hasOwnCopies: async () => false })
+    const w2 = await u.mk('thread work')
+    await u.events.subscriptions.subscribe(w2.id, subject, { primary: true })
+    const other = await u.ingest({
+      source: 'integration:slack',
+      type: 'message.replied',
+      subject,
+      employeeId: 'emp_b',
+      dedupeKey: 'x@b',
+      text: 'hi',
+    })
+    expect((await u.router.plan(other)).map((d) => d.sessionId)).toContain(w2.id)
   })
 
   it('does not fall back for a message addressed to someone else, or for a reaction', async () => {
@@ -324,6 +353,12 @@ describe('router', () => {
     const { event } = await events.ingest({ source: 'chat', type: 'message.posted', text: 'what time is it?' })
     expect(event.data.receivedAt).toBe('2026-09-29T12:07:31.000Z')
     expect(renderEvent(event)).toBe('[chat message.posted; Tue 2026-09-29 12:07 UTC]\nwhat time is it?')
+    // Another employee's bot is an AI employee, not "a person".
+    const byAi = {
+      ...event,
+      data: { ...event.data, payload: { author: { kind: 'contact', id: 'con_v', contactKind: 'ai', name: 'Vegan' } } },
+    }
+    expect(renderEvent(byAi as MpEvent)).toContain('; from AI employee Vegan;')
     // Each event carries its own arrival time.
     clock.advance(5 * 24 * 3600_000)
     const later = (await events.ingest({ source: 'chat', type: 'message.posted', text: 'and now?' })).event

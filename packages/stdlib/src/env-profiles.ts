@@ -32,7 +32,9 @@ export const DEFAULT_ENV_PROFILES: readonly EnvProfile[] = [
   {
     name: 'scraper',
     image: 'nemanjan00/dev:scraper',
-    description: 'web scraping with a stealth Chromium (Playwright/Puppeteer compatible)',
+    // Found live: no Chromium binary and no browsers for Playwright in the image; cloakbrowser is installed.
+    description:
+      'web scraping: cloakbrowser (a stealth Chromium) is installed; Playwright/Puppeteer need their browser installed first (e.g. npx playwright install chromium, with network)',
   },
   {
     name: 'reversing',

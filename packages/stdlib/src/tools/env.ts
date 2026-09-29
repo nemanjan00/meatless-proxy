@@ -28,7 +28,13 @@ const FILES_NOTE =
 
 /** Told with every environment: what it holds, and what it doesn't. */
 const ENV_NOTE =
-  'The checkout is at /workspace (and every checkout of this session at /repos/<name>): files only. Run git through the git.* tools (status, diff, log, commit, push), not inside the environment: its .git points outside it. Without network nothing can be installed, so pick an image that already has the tools you need.'
+  'The checkout is at /workspace (and every checkout of this session at /repos/<name>): files only. Run git through the git.* tools (status, diff, log, commit, push), not inside the environment: its .git points outside it.'
+
+/** Added to env.up's note when the environment has no network. */
+const NO_NETWORK_NOTE = 'It has no network: nothing can be installed, so pick an image that already has the tools you need.'
+/** Added when it has one. */
+const NETWORK_NOTE =
+  'It has network: install what the work needs (npm install, pip install), tools outside the checkout (e.g. in /tmp).'
 
 import { DIRECT_NOTE, PROXY_NOTE, directNetworkName, networkFor, type NetworkDecision } from '../network.ts'
 import { worktreeFor } from './git.ts'
@@ -350,7 +356,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
         ...(desktop ? { desktop: desktopOf(session.id) } : {}),
         ...(ownFiles ? { files: FILES_MOUNT } : {}),
-        note: ownFiles ? `${ENV_NOTE} ${FILES_NOTE}` : ENV_NOTE,
+        note: [ENV_NOTE, net.direct || net.allow.length ? NETWORK_NOTE : NO_NETWORK_NOTE, ...(ownFiles ? [FILES_NOTE] : [])].join(
+          ' ',
+        ),
       })
     }),
   )

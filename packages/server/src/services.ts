@@ -61,6 +61,9 @@ import { McpServers } from './mcp-servers/index.ts'
 import { privateEvents, privateSessions, watchDmLinks } from './private-work.ts'
 import { createLocalProjectForEmployee } from './local-projects/index.ts'
 
+/** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
+const OWN_COPY_SECRETS: Record<string, string> = { 'integration:slack': 'SLACK_SIGNING_SECRET' }
+
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
   store?: Store
@@ -398,6 +401,13 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
     resolvers: [channelMembers],
+    // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
+    // every event there, so its sessions skip other employees' copies.
+    hasOwnCopies: async (source, employeeId) => {
+      const name = OWN_COPY_SECRETS[source]
+      if (!name) return false
+      return (await secrets.list()).some((m) => m.name === name && m.scope.type === 'employee' && m.scope.id === employeeId)
+    },
     // Chat events show the saved descriptions of their images (made after the event was stored).
     prepareEvent: describedEvent(attachments),
     // Employees in a chat thread (their sessions posted in it, or it tagged them, e.g. an alert) hear a person's

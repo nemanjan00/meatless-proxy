@@ -284,7 +284,12 @@ describe('identity resolver', () => {
       'Slack #general Ana (slack U1): @Meatless (slack UBOT) ask @Bo Example (slack U2) and @CI (slack UB), not <@U404>. @Bo Example (slack U2) again',
     )
     // The raw text stays in the payload; the author is the contact.
-    expect(out.payload).toEqual({ user: 'U1', text: '<@UBOT> ask <@U2|bo>', author: { kind: 'contact', id: ana.id } })
+    // The author says whether a person or an AI wrote it (another employee's bot isn't "a person").
+    expect(out.payload).toEqual({
+      user: 'U1',
+      text: '<@UBOT> ask <@U2|bo>',
+      author: { kind: 'contact', id: ana.id, contactKind: 'person', name: 'Ana' },
+    })
     // The mentioned person is linked the same way (created here); the employee's own bot isn't looked up.
     expect(await w.directory.contacts.byHandle('slack', 'U2')).toBeTruthy()
     expect(f.calls).not.toContain('UBOT')
@@ -434,7 +439,7 @@ function identitySuite(backend: Backend) {
     const ana = (await s.directory.contacts.byEmail('ana@example.com'))!
     const event = await eventOf('1700000001.000100')
     expect(event.data.actorContactId).toBe(ana.id)
-    expect((event.data.payload as any).author).toEqual({ kind: 'contact', id: ana.id })
+    expect((event.data.payload as any).author).toMatchObject({ kind: 'contact', id: ana.id, contactKind: 'person' })
     expect(event.data.text).toBe('Slack #general Ana Example (slack UANA1): please look at @Ivo Example (slack UIVO1)')
     const run = await until(() => runFor(event.id), 'the requests trigger')
     // The requester is known, so its permissions and personal memory apply.

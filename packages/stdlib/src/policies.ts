@@ -24,6 +24,21 @@ export const NO_REPLY = 'NO_REPLY'
  */
 export const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?no[_ -]?reply\]?\s*(?::[^\n]*)?\s*$/i
 
+/**
+ * A router context's final text that is its decision log, not an answer: a decision line in the commit
+ * format ("slack:C1/… (#vegan, from Ana): … → NO_REPLY (…)", "… → started @x#y") or a bare
+ * acknowledgement ("Logged.", "Decision recorded."). Live, both were posted as replies. A router's plain
+ * answer to a quick question is still posted, so the person isn't left without one.
+ */
+export const ROUTER_LOG_RE =
+  /(→|->)\s*(NO_REPLY|started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*(logged|noted|recorded|decision (recorded|logged)|done|committed)\.?\s*$/i
+
+/** Whether a session's final text shouldn't be posted as a reply because it's its routing decision. */
+export function isRouterLog(session: { data: { meta?: Record<string, unknown> } }, output: string | undefined): boolean {
+  const role = session.data.meta?.role
+  return (role === 'router' || role === 'router-retired') && !!output && ROUTER_LOG_RE.test(output)
+}
+
 /** Tools that answer in chat: a run that used one has already replied somewhere. */
 export const CHAT_ANSWER_TOOLS = ['chat.post', 'chat.reply', 'chat.invite']
 /** Tools that hand the work to another session: that session answers, not this run. */
@@ -188,9 +203,8 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
     offs.push(
       hooks.on(afterRun, async ({ run, session, result }) => {
         if (result.status !== 'completed') return undefined
-        // A router's final text is its routing decision, never an answer: the session it starts replies.
-        const role = session.data.meta?.role
-        if (role === 'router' || role === 'router-retired') return undefined
+        // A router's decision log isn't an answer (a plain answer to a quick question still is).
+        if (isRouterLog(session, result.output)) return undefined
         const eventId = run.data.cause.eventId
         if (!eventId) return undefined
         try {

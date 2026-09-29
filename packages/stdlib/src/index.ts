@@ -23,7 +23,7 @@ export { ONCE_KIND, RESERVED_META, Roles, type WorktreeMeta, type EnvMeta } from
 export * from './agent-instructions.ts'
 export * from './router-prompt.ts'
 export * from './subscription-presets.ts'
-export { HANDOFF_TOOLS, NO_REPLY, NO_REPLY_RE, needsAutoReply } from './policies.ts'
+export { HANDOFF_TOOLS, NO_REPLY, NO_REPLY_RE, ROUTER_LOG_RE, isRouterLog, needsAutoReply } from './policies.ts'
 export { ROUTER_MARK, routerAwareScript } from './testing/router-aware.ts'
 export { DIRECT_NOTE, directNetworkName, networkFor, PROXY_NOTE, type NetworkDecision } from './network.ts'
 export * from './procedure-context.ts'

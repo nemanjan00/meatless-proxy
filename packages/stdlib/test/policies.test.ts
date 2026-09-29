@@ -353,3 +353,19 @@ describe('answer where asked: the agent may decide not to answer', async () => {
     expect(NO_REPLY_RE.test('The vendor sent no reply yet.')).toBe(false)
   })
 })
+
+describe('router decision logs', async () => {
+  const { isRouterLog } = await import('../src/policies.ts')
+  const router = { data: { meta: { role: 'router' } } }
+  it("are not posted as replies; a router's plain answer and any work session's text are", () => {
+    for (const out of [
+      'Logged.',
+      'Decision recorded.',
+      'slack:C0C4UQLN71V/1790710610.513439 (#vegan, from a person): :eyes: reaction → NO_REPLY (acknowledgment reaction, nothing needed)',
+      'thread msg_1 (#requests, from Bob): capital of Serbia → started @meatless#capital-of-serbia (ses_1)',
+    ])
+      expect(isRouterLog(router, out), out).toBe(true)
+    expect(isRouterLog(router, "I'm Meatless, an AI employee.")).toBe(false)
+    expect(isRouterLog({ data: { meta: {} } }, 'Logged.')).toBe(false)
+  })
+})
