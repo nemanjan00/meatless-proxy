@@ -413,14 +413,13 @@ stays the same across calls, runs and forks:
 - It ships as one `compose.yaml`.
 
 **Development doesn't need Docker.** The app runs directly with Node, against
-a local Postgres and Redis. Docker is only needed to work on the Docker
+a local Postgres and Redis installed through **asdf** and pinned in
+`.tool-versions` (see the [README](../README.md#development)). Docker is only needed to work on the Docker
 orchestration itself, and for the deployed setup. Tests for every other part
 run without it.
 
 Open questions:
 
-- How are Postgres and Redis provided in development without Docker: native
-  installs, or in-process substitutes for tests (e.g. PGlite)?
 
 ## Not covered here yet
 
