@@ -10,8 +10,10 @@ projects exist and who owns them, and how things are done. They take work from
 chat and task systems, do it, and answer like a person would: briefly, and
 correctly.
 
-> **Status: early and experimental.** The design is written down in `docs/`,
-> and the implementation is being built against it. Expect breaking changes.
+> **Status: early and experimental.** Everything in `docs/` is implemented at
+> least once, and the whole thing runs end to end against a real model, but
+> expect breaking changes. Components are built to be thrown away and
+> rewritten.
 
 ## What makes it different
 
@@ -55,7 +57,20 @@ cp .env.example .env    # then set OPENAI_API_KEY and SECRETS_KEY
 docker compose up
 ```
 
-Then open <http://localhost:3000>.
+Then open <http://localhost:3000>. On first start the harness creates a default
+AI employee, **Meatless**, with its router session, and the channels
+`#general` and `#requests`. Post in `#requests` and it answers in the thread.
+
+### Talk to it from your own AI
+
+The harness is also an MCP server. Your own Claude Code can talk to the
+company's AI employees directly, and gets notified when they reply:
+
+```sh
+npm run token -- --contact <your contact id>     # prints a token once
+claude mcp add --transport http meatless http://localhost:3000/mcp \
+  --header "Authorization: Bearer <token>"
+```
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
@@ -101,6 +116,14 @@ npm run check          # all of the above
 ```
 
 CI runs all of these on every push, with Postgres and Redis.
+
+## Screenshots
+
+| Now | Session tree |
+|-----|--------------|
+| ![Now](packages/web/docs/screenshots/now-dark.png) | ![Session tree](packages/web/docs/screenshots/session-tree-dark.png) |
+| **Lineage** | **Chat** |
+| ![Lineage](packages/web/docs/screenshots/lineage-dark.png) | ![Chat](packages/web/docs/screenshots/chat-dark.png) |
 
 ## Repository layout
 
