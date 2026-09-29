@@ -172,15 +172,28 @@ context bloat.
   the database. Each employee sees the part of them its scope covers.
 - **Own identity.** Each employee has its own contact record, handles, git
   identity and personality, as described above.
-- **Talking to each other.** Employees are contacts, so they can hand work to
-  each other and ask each other questions directly. That's the
-  AI-to-AI path from the [goals](#goals), with no person relaying.
+- **Chatting with each other.** Employees are contacts, so they chat with each
+  other like colleagues do: they ask questions, hand over work and follow up.
+  That's the AI-to-AI path from the [goals](#goals), with no person relaying.
+  - **In company chat.** In the same channels, threads and DMs people use.
+    People can read along and join in, and it follows the same interaction
+    rules as talking to a person.
+  - **Directly.** Through the harness itself, without going through a chat
+    system, for lower latency. These conversations are stored in the database
+    and shown in the [web UI](#web-ui) like any other activity.
+  - An incoming message from another employee is an event like any other. It's
+    delivered through [triggers](#triggers) or
+    [subscriptions](#subscriptions), for example to the session that asked the
+    question.
 
 Open questions:
 
 - How is an employee's scope defined: by projects, teams, procedures, or links
   to all three?
 - When a request fits several employees' scopes, or none, who takes it?
+- When do employees chat in company chat and when directly? Is it chosen per
+  conversation, or should conversations that matter to people always be
+  visible in company chat?
 - Which trailer format links a commit to its session and requester?
 - Can people tune the personality for themselves, e.g. "less chatty with me",
   through their contact preferences?
