@@ -25,6 +25,7 @@ import { EmptyState, LoadingRows } from '@/components/empty.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { StatusIcon } from '@/components/status-icon.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
+import { NetworkSetting } from '@/components/network-setting.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
 import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
@@ -132,7 +133,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           <div className="font-mono text-micro text-fg-quaternary">{employee.id}</div>
         </div>
         <Button asChild size="sm" variant="outline" className="ml-auto">
-          <NavLink to={`/employees/${employee.id}`}>Integrations and SSH key</NavLink>
+          <NavLink to={`/employees/${employee.id}`}>Integrations, SSH key and activity</NavLink>
         </Button>
       </div>
       <Field id="emp-personality" label="Personality" hint="Tone only; never overrides the rules">
@@ -149,6 +150,9 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           placeholder="The deployment default"
           className="font-mono text-micro"
         />
+      </Field>
+      <Field id="emp-network" label="Network" hint="What its sandbox and environments can reach">
+        <NetworkSetting employee={employee} admin onSaved={onSaved} />
       </Field>
       <Field id="emp-allow" label="Allow list" hint="Names or patterns, one per line">
         <Textarea

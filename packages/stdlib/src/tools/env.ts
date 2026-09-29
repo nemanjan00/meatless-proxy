@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Json } from '@mp/core'
 import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import type { Session } from '@mp/sessions'
-import type { ToolContext } from '@mp/tools'
+import type { ToolContext, ToolHandler } from '@mp/tools'
 import { DEFAULT_ENV_PROFILES, describeProfiles, envProfile } from '../env-profiles.ts'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
 import { nodeWorktreeFs } from '../worktree-fs.ts'
@@ -89,6 +89,8 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     return { net, emp, projectId: pid, project }
   }
 
+  /** env.up's handler, so env.exec can start the default environment by itself. */
+  let upEnv: ToolHandler = async () => fail('env.up is not ready')
   kit.tool(
     {
       name: 'env.up',
@@ -135,7 +137,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         },
       },
     },
-    async (a, ctx) => {
+    (upEnv = async (a, ctx) => {
       const session = await kit.ownSession(undefined, ctx)
       const current = envOf(session)
       if (current) {
@@ -273,14 +275,14 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
         note: ENV_NOTE,
       })
-    },
+    }),
   )
 
   kit.tool(
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment (start it with env.up first), in /workspace. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
+        'Run a command in this session\'s environment, in /workspace. Without one it starts the default environment first (your checkout, in the project\'s profile, its Dockerfile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
       effect: 'non_idempotent',
       params: {
         properties: {
@@ -292,13 +294,26 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       },
     },
     async (a, ctx) => {
-      const session = await kit.ownSession(undefined, ctx)
-      const env = envOf(session)
-      if (!env) return fail('no environment yet: call env.up first')
+      let session = await kit.ownSession(undefined, ctx)
+      let env = envOf(session)
+      // No environment yet, or it stopped: start the default one (the checkout, with the project's
+      // profile, its Dockerfile or the default profile), as env.up with no arguments would.
+      const running = env ? (await runtime.getEnv(env.id))?.status === 'running' : false
+      let started: Json | undefined
+      if (!running) {
+        const up = await upEnv({}, ctx)
+        if (up.isError) return up
+        started = up.output as Json
+        session = await kit.ownSession(undefined, ctx)
+        env = envOf(session)
+        if (!env) return fail('the environment could not be started')
+      }
+      if (!env) return fail('the environment could not be started')
+      const envId = env.id
       const cmd = (a.cmd as unknown[]).map(String)
       if (!cmd.length) return fail('cmd is empty')
       const timeoutMs = Math.min(Math.max(1, a.timeoutSeconds ?? 300), 3600) * 1000
-      const r = await runtime.exec(env.id, cmd, {
+      const r = await runtime.exec(envId, cmd, {
         timeoutMs,
         signal: ctx.signal,
         ...(str(a.workdir) ? { workdir: a.workdir } : {}),
@@ -310,6 +325,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           durationMs: r.durationMs,
           stdout: tail(r.stdout),
           stderr: tail(r.stderr, 4000),
+          ...(started ? { started } : {}),
         },
         ...(r.exitCode !== 0 ? { isError: true } : {}),
       }

@@ -172,7 +172,18 @@ describe('env tools', () => {
     await t.out('env.down', {})
     expect(t.containers.envs()).toHaveLength(0)
     expect((await t.out('env.down', {})).note).toContain('no environment')
-    expect((await t.call('env.exec', { cmd: ['ls'] })).isError).toBe(true)
+    // exec without a running environment starts the default one first, and says so.
+    t.containers.on('ls', { exitCode: 0, stdout: 'package.json' })
+    const again = await t.out('env.exec', { cmd: ['ls'] })
+    expect(again).toMatchObject({ exitCode: 0, stdout: 'package.json', started: { status: 'running', profile: 'default' } })
+    expect(t.containers.created).toHaveLength(2)
+  })
+
+  it('exec with nothing to start from fails with what env.up said', async () => {
+    const t = await stack()
+    const r = await t.call('env.exec', { cmd: ['ls'] })
+    expect(r.isError).toBe(true)
+    expect(t.containers.created).toHaveLength(0)
   })
 
   it('can run a plain image without a checkout', async () => {
