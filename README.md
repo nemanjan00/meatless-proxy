@@ -268,7 +268,9 @@ says "no pricing configured". See
 
 The model provider is any OpenAI-compatible Chat Completions API. Kimi is the
 first one it's tested with. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `MODEL`
-in `.env`.
+in `.env`. Web search is the model's own: pick a model that has it (e.g. one of
+OpenAI's search-preview models, which search on their own) and it just works —
+there is nothing to configure.
 
 ## Development
 
