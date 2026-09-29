@@ -141,6 +141,57 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const maxOutput = opts.maxOutputBytes ?? 10 * 1024 * 1024
   const proxyImage = opts.proxyImage ?? DEFAULT_PROXY_IMAGE
   const self = opts.selfContainer
+  /**
+   * The harness container's own mounts, read once: a path in it (a worktree under DATA_DIR) is not
+   * a host path, so a bind mount of it would give an empty directory. Null when the harness runs on
+   * the host, or its container can't be inspected (paths are then used as they are).
+   */
+  let ownMounts: Promise<{ Type?: string; Name?: string; Source?: string; Destination?: string }[] | null> | null = null
+  const selfMounts = () =>
+    (ownMounts ??= (async () => {
+      if (!self) return null
+      try {
+        const info = (await docker.getContainer(self).inspect()) as unknown as {
+          Mounts?: { Type?: string; Name?: string; Source?: string; Destination?: string }[]
+        }
+        return info.Mounts ?? []
+      } catch (err) {
+        log.warn('could not inspect the harness container: mounts are used as host paths', {
+          container: self,
+          err: errorMessage(err),
+        })
+        return null
+      }
+    })())
+  /** A mount of a path as the harness sees it, as Docker sees it: the host path, or the volume and subpath behind it. */
+  const hostMount = async (m: { hostPath: string; containerPath: string; readOnly?: boolean }) => {
+    const bindOf = (path: string) => ({ bind: `${path}:${m.containerPath}${m.readOnly ? ':ro' : ''}` })
+    const own = await selfMounts()
+    const hit = (own ?? [])
+      .filter(
+        (x) => x.Destination && (m.hostPath === x.Destination || m.hostPath.startsWith(`${x.Destination.replace(/\/$/, '')}/`)),
+      )
+      .sort((a, b) => b.Destination!.length - a.Destination!.length)[0]
+    if (!hit) return bindOf(m.hostPath)
+    const rest = m.hostPath.slice(hit.Destination!.length).replace(/^\/+/, '')
+    if (hit.Type === 'bind' && hit.Source) return bindOf(rest ? `${hit.Source.replace(/\/$/, '')}/${rest}` : hit.Source)
+    if (hit.Type === 'volume' && hit.Name) {
+      if (rest && !(await runtime.features!()).volumeSubpath)
+        throw new ValidationError(
+          `mounting ${m.hostPath} needs a volume subpath: Docker Engine 26 (API ${VOLUME_SUBPATH_API}) or later`,
+        )
+      return {
+        volume: {
+          Type: 'volume',
+          Source: hit.Name,
+          Target: m.containerPath,
+          ReadOnly: m.readOnly === true,
+          VolumeOptions: { NoCopy: true, ...(rest ? { Subpath: rest } : {}) },
+        },
+      }
+    }
+    return bindOf(m.hostPath)
+  }
   /** Preview networks the harness container is already connected to. */
   const attached = new Set<string>()
   let features: Promise<RuntimeFeatures> | null = null
@@ -396,6 +447,9 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       if (direct) await docker.getNetwork(direct).connect({ Container: serviceName(spec.name, svc.name) })
       await c.start()
     }
+    const translated = await Promise.all((spec.mounts ?? []).map(hostMount))
+    const binds = translated.flatMap((t) => ('bind' in t ? [t.bind] : []))
+    const ownVolumes = translated.flatMap((t) => ('volume' in t ? [t.volume] : []))
     const main = await docker.createContainer({
       name: mainName(spec.name),
       Image: image,
@@ -407,10 +461,12 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       HostConfig: {
         ...hardening,
         NetworkMode: net,
-        Binds: (spec.mounts ?? []).map((m) => `${m.hostPath}:${m.containerPath}${m.readOnly ? ':ro' : ''}`),
-        ...(spec.volumes?.length || spec.volumeMounts?.length
+        Binds: binds,
+        ...(spec.volumes?.length || spec.volumeMounts?.length || ownVolumes.length
           ? {
               Mounts: [
+                // Paths inside the harness container's own volumes (its worktrees), at their subpath.
+                ...ownVolumes,
                 // Fresh anonymous volumes, labelled, removed with the container.
                 ...(spec.volumes ?? []).map((v) => ({ Type: 'volume', Target: v, VolumeOptions: { Labels: labels } })),
                 ...(spec.volumeMounts ?? []).map((m) => ({
