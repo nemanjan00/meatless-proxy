@@ -49,12 +49,36 @@ describe.skipIf(!DATABASE_URL)('npm run login-link (Postgres)', () => {
     expect(refused.code).toBe(1)
     expect(refused.stderr).toContain("can't sign in")
   }, 60_000)
+
+  it('creates the person with --create, signs in as the first admin with --admin, and explains what to do otherwise', async () => {
+    const env = { DATABASE_URL: DATABASE_URL!, DATABASE_SCHEMA: schema, SECRETS_KEY: 'test-secrets-key-0123456789' }
+    t ??= await testApp({ workers: false, env })
+    const missing = await run(['--contact', 'nobody@example.com'], env)
+    expect(missing.code).toBe(1)
+    expect(missing.stderr).toContain('--create --access admin')
+    expect(missing.stderr).toContain('--admin')
+
+    const made = await run(['--contact', 'boss@example.com', '--create', '--access', 'admin', '--name', 'Boss'], env)
+    expect(made.code).toBe(0)
+    expect(made.stderr).toContain('created boss@example.com (admin)')
+    const boss = await t.a.services.directory.contacts.byEmail('boss@example.com')
+    expect(boss?.data).toMatchObject({ name: 'Boss', kind: 'person', access: 'admin' })
+    const res = await t.a.app.request(`/auth/login${new URL(made.stdout.trim()).search}`)
+    expect(res.headers.get('location')).toBe('/')
+
+    // Running it again finds the person instead of creating a second one.
+    expect((await run(['--contact', 'boss@example.com', '--create'], env)).stderr).not.toContain('created')
+    const admin = await run(['--admin'], env)
+    expect(admin.code).toBe(0)
+    expect(new URL(admin.stdout.trim()).pathname).toBe('/auth/login')
+    expect((await run(['--contact', 'x@example.com', '--create', '--access', 'root'], env)).code).toBe(2)
+  })
 })
 
 describe('npm run login-link', () => {
   it('prints its usage without --contact', async () => {
     const r = await run([], {})
     expect(r.code).toBe(2)
-    expect(r.stderr).toContain('usage: npm run login-link -- --contact')
+    expect(r.stderr).toContain('npm run login-link -- --contact')
   }, 30_000)
 })

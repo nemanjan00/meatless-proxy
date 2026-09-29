@@ -59,6 +59,17 @@ docker compose up
 ```
 
 Then open <http://localhost:3000>. Set `APP_PORT` to serve on another port.
+
+To sign in the first time, get a one-time link (valid 15 minutes):
+
+```sh
+docker compose exec app npm run login-link -- --contact you@example.com --create --access admin
+# or, as the admin the first start created:
+docker compose exec app npm run login-link -- --admin
+```
+
+Setting `ADMIN_EMAIL` in `.env` before the first start gives that admin your
+email. Admins invite everyone else from Settings → People and access.
 The app container manages project environments as sibling containers through
 the host's Docker socket, so run it on a host dedicated to it. On first start the harness creates a default
 AI employee, **Meatless**, with its router session, and the channels
