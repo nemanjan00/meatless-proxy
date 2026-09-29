@@ -50,7 +50,7 @@ first by a small built-in loader; variables already set win.
 | `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |
 | `ALERT_UNAVAILABLE_COUNT` | `3` | Alert when a dependency had this many `unavailable` errors… |
 | `ALERT_UNAVAILABLE_MINUTES` | `10` | …within this many minutes |
-| `PUBLIC_URL` | none | The URL people open, e.g. `https://mp.example.com`: sign-in links, the CSRF origin check, `Secure` cookies, the CSP's `connect-src` |
+| `PUBLIC_URL` | none | The URL people open, e.g. `https://mp.example.com`: sign-in links, the CSRF origin check, `Secure` cookies, the CSP's `connect-src`, and the address GitLab webhooks are registered at (without it [webhook provisioning](#gitlab-webhooks) is off) |
 | `COOKIE_SECURE` | `auto` | `Secure` on the session cookie: `auto` (when `PUBLIC_URL` or the request is https), `true` or `false` |
 | `TRUST_PROXY` | `false` | Trust `x-forwarded-for` (rate limits) and `x-forwarded-proto` (cookies) from a reverse proxy |
 | `ADMIN_EMAIL` | none | Email of the admin contact the first start creates (or the existing contact made admin) |
@@ -86,6 +86,9 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
 - `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
 - `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
 - `GET /metrics`: Prometheus metrics (see [Metrics](#metrics)).
+- `GET /api/integrations/status` → per employee, which integrations are set up (token and webhook secret, from secret
+  metadata only) and its GitLab webhooks with their status and error, plus whether provisioning is on (admins; see
+  [GitLab webhooks](#gitlab-webhooks)).
 - `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
 - `GET /api/sessions/:id/preview` and `POST /api/previews/token` are `@mp/api` routes, served by `src/previews` (see [Live previews](#live-previews)).
 
@@ -289,7 +292,7 @@ claude mcp add --transport http meatless http://localhost:3000/mcp --header "Aut
 
 ## Composition
 
-`createApp(config, overrides?)` (`src/app.ts`) returns `{ app, services, live, mcp, start(), stop() }`.
+`createApp(config, overrides?)` (`src/app.ts`) returns `{ app, services, live, mcp, previews, hookProvisioning, start(), stop() }`.
 
 - Adapters: `store-postgres` (migrations at startup) or the memory store;
   `queue-bullmq` or the memory queue; `model-openai` or `overrides.model`;
@@ -329,6 +332,40 @@ instances fire a slot once. A firing whose trigger was disabled or removed
 before routing is dropped rather than sent to the fallback router. Schedule
 triggers are created in the API or by employees with `triggers.create`
 (`schedule: { cron, timezone?, graceSeconds? }`).
+
+## GitLab webhooks
+
+`src/integrations/provisioning.ts` registers GitLab project webhooks by itself (docs/spec.md#integrations, "Webhooks
+set themselves up"). Nobody adds them by hand.
+
+- **Who:** every employee whose `GITLAB_TOKEN` resolves (its own, or the global one).
+- **Which repositories:** the repositories of every project the employee's AI contact is linked to (any role), and of
+  every project one of its sessions is linked to with `works_on`. When it is the deployment's only employee, every
+  project. A repository counts when its `url` is on the employee's GitLab (`GITLAB_BASE_URL`, or gitlab.com): https,
+  `git@host:group/repo.git` and `ssh://` URLs all work, and GitHub or other hosts are skipped.
+- **The hook:** `<PUBLIC_URL>/webhooks/gitlab/<employee id>`, with push (no branch filter), comments, issues, merge
+  requests, jobs and pipelines, and SSL verification on unless `PUBLIC_URL` is `http:`. Its secret is the employee's
+  own `GITLAB_WEBHOOK_SECRET`, generated (32 random bytes) and stored when missing. The per-employee webhook route
+  verifies it.
+- **The token:** the global secret `GITLAB_HOOKS_TOKEN` (a Maintainer or group Owner) when it's set, else the
+  employee's `GITLAB_TOKEN`, which then needs Maintainer. That's why the recommended setup is a provisioning token: the
+  service accounts stay Developer.
+- **Repair, never duplicate:** the hook is found by its URL. Wrong events, SSL verification or a branch filter are
+  fixed, extra hooks with the same URL are removed, and a deleted hook is created again. GitLab never returns a
+  hook's token, so the `gitlab_hook` record keeps a short hash of the secret last set (`tokenVersion`) and the hook id:
+  when the secret changes, or the hook isn't the one we set it on, the token is set again. Repositories that drop out
+  of the set lose their hook. A changed `PUBLIC_URL` moves the hook.
+- **When:** at start (after bootstrap, with the workers); when a GitLab secret changes (`GITLAB_TOKEN`,
+  `GITLAB_HOOKS_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `GITLAB_BASE_URL`); when a project's repositories change; when the
+  employee is linked to or unlinked from a project, or a session of it gets a `works_on` link; when employees are added
+  or removed; and every 6 hours to repair drift. Changes are debounced (2 s) and passes are serialized per employee.
+  Several instances may each run a pass; the next pass removes any duplicate a race left.
+- **Status:** one `gitlab_hook` record per employee and GitLab project (key `<employee id>:<project path>`): `status`
+  (`ok` or `error`), `error`, `lastAction`, `lastAttemptAt`, `lastOkAt`, `hookId`, `url`. A 403 says what to do: "the
+  token needs Maintainer on <project> to register webhooks; set GITLAB_HOOKS_TOKEN (a Maintainer or group Owner) or give
+  the service account Maintainer". It's in `GET /api/integrations/status` and in the web UI under *Settings →
+  Integrations*.
+- **Off** without `PUBLIC_URL` (logged once at start), or when GitLab isn't in `INTEGRATIONS`.
 
 ## Alerts
 
@@ -474,6 +511,10 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
 - `transfer.test.ts`: export and import: round trip into a fresh app gives the identical tree (memory, and
   Postgres when `DATABASE_URL` is set), idempotence, dry run changes nothing, doc links onto existing records with
   other ids, messy CSV rows, matching by email, handle and name, owner replacement, strict mode.
+- `gitlab-hooks.test.ts`: webhook provisioning against a fake GitLab: create, idempotence, repair (events, a deleted
+  hook, a duplicate, a changed secret), the provisioning token preferred, a 403 recorded with its message, off without
+  `PUBLIC_URL`, repository and link changes, the only employee, a webhook signed with the generated secret accepted
+  end to end, and the admin-only status.
 - `units.test.ts`: configuration, `.env`, notification mapping, SSH key format, per-employee git stores,
   bootstrap idempotence, queue recovery.
 - `auth.test.ts`: nothing without sign-in (`x-mp-contact` ignored), the guard table covers every route, sign-in

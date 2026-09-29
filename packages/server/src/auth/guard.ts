@@ -114,6 +114,8 @@ export const GUARD_RULES: GuardRule[] = [
   { method: '*', path: '/api/export', need: 'admin' },
   { method: '*', path: '/api/export/*', need: 'admin' },
   { method: 'POST', path: '/api/events', need: 'admin' },
+  // Integration setup and webhook provisioning status (src/integrations/status.ts).
+  { method: 'GET', path: '/api/integrations/status', need: 'admin' },
 
   // Knowledge edits: members for knowledge kinds; employees, triggers, limits, settings: admins.
   // A session's document and title are knowledge too (its other fields, e.g. its tools, are not: see api.ts).

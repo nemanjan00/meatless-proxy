@@ -8,11 +8,20 @@ import type { ToolRegistry } from '@mp/tools'
 import { createActorResolver } from './identity.ts'
 import { createInstance, InstanceCache, type IntegrationInstance } from './instances.ts'
 import { registerIntegrationPolicies } from './policies.ts'
+import type { ProvisioningOptions } from './provisioning.ts'
 import { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
 
 export { closingReason, mergeRequestSubject, needsExternalReply } from './policies.ts'
 export { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
 export type { IntegrationInstance } from './instances.ts'
+export {
+  createHookProvisioning,
+  GITLAB_HOOK_KIND,
+  gitlabHookProvisioning,
+  type HookProvisioning,
+  type ProvisioningOptions,
+} from './provisioning.ts'
+export { integrationStatusRoutes, integrationsStatus, type IntegrationsStatus } from './status.ts'
 
 /** How long a webhook response waits for its events to be ingested before answering anyway. */
 export const WEBHOOK_BUDGET_MS: Record<string, number> = { slack: 2000 }
@@ -30,6 +39,8 @@ export interface IntegrationsOptions {
   baseUrls?: Record<string, string>
   /** How long resolved secrets are reused. Default 60 s; a change to a `secret` record drops them at once. */
   secretsTtlMs?: number
+  /** GitLab webhook provisioning timing (src/integrations/provisioning.ts). */
+  provisioning?: ProvisioningOptions
 }
 
 export interface IntegrationsDeps {

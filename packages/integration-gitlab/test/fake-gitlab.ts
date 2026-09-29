@@ -286,9 +286,16 @@ export function seed() {
     ],
     'mr:12': [],
   }
+  /** Accepted tokens and their role; managing hooks needs `maintainer`. */
+  const tokens: Record<string, 'developer' | 'maintainer'> = { [TOKEN]: 'maintainer' }
+  /** Project hooks, with the token GitLab keeps (and never returns). */
+  const hooks: { id: number; project_id: number; token: string; [field: string]: unknown }[] = []
   return {
     users,
     project,
+    otherProjects: [] as (typeof project)[],
+    tokens,
+    hooks,
     branches,
     files,
     tree,
@@ -353,9 +360,10 @@ export async function startFakeGitlab(opts: { prefix?: string } = {}): Promise<F
       res.writeHead(inj.status, { 'content-type': 'application/json', ...inj.headers })
       return res.end(inj.body ?? JSON.stringify({ message: `${inj.status} injected` }))
     }
-    if (req.headers['private-token'] !== TOKEN) return send(res, 401, { message: '401 Unauthorized' })
+    const token = String(req.headers['private-token'] ?? '')
+    if (!state.tokens[token]) return send(res, 401, { message: '401 Unauthorized' })
     try {
-      route(state, req.method ?? 'GET', segments, url.searchParams, body, res)
+      route(state, req.method ?? 'GET', segments, url.searchParams, body, res, token)
     } catch (e) {
       send(res, 500, { message: String(e) })
     }
@@ -401,7 +409,69 @@ function paged(res: ServerResponse, q: URLSearchParams, items: any[]) {
 
 const notFound = (res: ServerResponse, what = '404 Not found') => send(res, 404, { message: what })
 
-function route(s: FakeState, method: string, seg: string[], q: URLSearchParams, body: any, res: ServerResponse) {
+/** The hook fields GitLab returns (everything but the token). */
+const HOOK_FLAGS = [
+  'push_events',
+  'tag_push_events',
+  'note_events',
+  'confidential_note_events',
+  'issues_events',
+  'confidential_issues_events',
+  'merge_requests_events',
+  'job_events',
+  'pipeline_events',
+  'wiki_page_events',
+  'deployment_events',
+  'releases_events',
+]
+const publicHook = ({ token: _, ...h }: { token: string; [k: string]: unknown }) => h
+
+function hooksRoute(
+  s: FakeState,
+  p: { id: number },
+  method: string,
+  id: string | undefined,
+  q: URLSearchParams,
+  body: any,
+  res: ServerResponse,
+) {
+  const mine = s.hooks.filter((h) => h.project_id === p.id)
+  if (!id) {
+    if (method === 'GET') return paged(res, q, mine.map(publicHook))
+    if (method === 'POST') {
+      if (!body?.url) return send(res, 400, { error: 'url is missing' })
+      const hook: FakeState['hooks'][number] = {
+        id: s.nextId++,
+        url: body.url,
+        project_id: p.id,
+        created_at: '2026-09-29T10:00:00.000Z',
+        push_events: body.push_events ?? true,
+        push_events_branch_filter: body.push_events_branch_filter ?? '',
+        enable_ssl_verification: body.enable_ssl_verification ?? true,
+        token: body.token ?? '',
+      }
+      for (const f of HOOK_FLAGS) if (f !== 'push_events') hook[f] = !!body[f]
+      s.hooks.push(hook)
+      return send(res, 201, publicHook(hook))
+    }
+  }
+  const hook = mine.find((h) => String(h.id) === id)
+  if (!hook) return notFound(res, '404 Hook Not Found')
+  if (method === 'GET') return send(res, 200, publicHook(hook))
+  if (method === 'PUT') {
+    if (!body?.url) return send(res, 400, { error: 'url is missing' })
+    for (const [k, v] of Object.entries(body)) if (k !== 'id' && k !== 'project_id') hook[k] = v
+    return send(res, 200, publicHook(hook))
+  }
+  if (method === 'DELETE') {
+    s.hooks.splice(s.hooks.indexOf(hook), 1)
+    res.writeHead(204)
+    return res.end()
+  }
+  return notFound(res)
+}
+
+function route(s: FakeState, method: string, seg: string[], q: URLSearchParams, body: any, res: ServerResponse, token = TOKEN) {
   const [a, b, c, d, e, f, g] = seg
   if (method === 'GET' && a === 'user' && seg.length === 1) return send(res, 200, { ...s.users[0], email: 'bot@example.com' })
   if (method === 'GET' && a === 'users' && seg.length === 1) {
@@ -417,9 +487,13 @@ function route(s: FakeState, method: string, seg: string[], q: URLSearchParams, 
     return u ? send(res, 200, u) : notFound(res, '404 User Not Found')
   }
   if (a !== 'projects' || !b) return notFound(res)
-  const p = s.project
-  if (b !== String(p.id) && b !== p.path_with_namespace) return notFound(res, '404 Project Not Found')
+  const p = [s.project, ...s.otherProjects].find((x) => b === String(x.id) || b === x.path_with_namespace)
+  if (!p) return notFound(res, '404 Project Not Found')
   if (method === 'GET' && !c) return send(res, 200, p)
+  if (c === 'hooks') {
+    if (s.tokens[token] !== 'maintainer') return send(res, 403, { message: '403 Forbidden' })
+    return hooksRoute(s, p, method, d, q, body, res)
+  }
 
   if (c === 'repository') {
     if (method === 'GET' && d === 'branches') {

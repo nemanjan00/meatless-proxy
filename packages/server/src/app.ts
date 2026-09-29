@@ -15,6 +15,7 @@ import { webhookRoutes } from './http/webhooks.ts'
 import { sendError } from './http/util.ts'
 import { LiveHub, NowTracker } from './live.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
+import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
 import { registerSessionMemory } from './session-memory.ts'
 import { ensureSshKey } from './ssh.ts'
@@ -42,6 +43,8 @@ export interface App {
   mcp: HarnessMcpServer
   /** Live previews: tokens, the preview listener, and the harness's refusal of preview origins. */
   previews: Previews
+  /** GitLab webhook self-provisioning (src/integrations/provisioning.ts), null when GitLab is disabled. It starts with the workers. */
+  hookProvisioning: HookProvisioning | null
   /** Starts workers, rebuilds the queues from the database, and listens. Resolves with the bound ports. */
   start(opts?: StartOptions): Promise<{ port: number | null; previewPort?: number | null }>
   /** Graceful shutdown: stop taking jobs, let running jobs reach a boundary, close queue, MCP and store. */
@@ -61,6 +64,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   if (config.MP_BOOTSTRAP) await ensureAdmin(services)
   // Employees created before keypairs existed (or while a key write failed) get one now.
   for (const e of (await services.directory.employees.list()).items) await ensureSshKey(services, e.id)
+  const hookProvisioning = gitlabHookProvisioning(services, overrides.integrations)
 
   const tracker = new NowTracker(services)
   const live = new LiveHub(services)
@@ -103,6 +107,10 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))
   app.route('/', previews.routes)
+  app.route(
+    '/',
+    integrationStatusRoutes(services, () => hookProvisioning),
+  )
   app.route('/', apiRoutes({ services, tracker, version: VERSION, migrationsReady, visibility: auth.visibility }))
   const webDir = config.MP_WEB_DIST ?? defaultWebDist()
   if (serveWeb(app, webDir)) log.info('serving the web UI', { dir: webDir })
@@ -117,11 +125,13 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     live,
     mcp,
     previews,
+    hookProvisioning,
     async start(opts = {}) {
       if (opts.workers !== false) {
         workers = startWorkers(services)
         const recovered = await recoverQueues(services)
         if (recovered.events || recovered.runs || recovered.timers) log.info('queues rebuilt from the database', recovered)
+        hookProvisioning?.start()
       }
       if (opts.http === false) return { port: null }
       const port = opts.port ?? config.PORT
@@ -154,6 +164,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
         ws.wss.close()
         await previews.close().catch((err) => log.warn('preview listener close failed', { err: errorMessage(err) }))
         await workers?.stop(opts.timeoutMs ?? 30_000)
+        await hookProvisioning?.close()
         await closing.catch((err) => log.warn('http close failed', { err: errorMessage(err) }))
         await services.close()
         log.info('stopped')

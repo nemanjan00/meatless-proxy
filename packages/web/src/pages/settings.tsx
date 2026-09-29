@@ -6,6 +6,7 @@ import {
   Gauge,
   KeyRound,
   Link2,
+  Plug,
   Power,
   Settings,
   Ticket,
@@ -19,13 +20,14 @@ import { NavLink, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { EmptyState, LoadingRows } from '@/components/empty.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
+import { StatusIcon } from '@/components/status-icon.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { Switch } from '@/components/ui/switch.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
-import { useApi, useLoad } from '@/lib/api.tsx'
+import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { timeAgo } from '@/lib/format.ts'
@@ -35,6 +37,7 @@ import { cn } from '@/lib/utils.ts'
 const SECTIONS = [
   { key: 'employees', label: 'Employees', icon: Users, admin: true },
   { key: 'secrets', label: 'Secrets', icon: KeyRound, admin: true },
+  { key: 'integrations', label: 'Integrations', icon: Plug, admin: true },
   { key: 'triggers', label: 'Triggers', icon: Zap, admin: true },
   { key: 'limits', label: 'Limits', icon: Gauge, admin: true },
   { key: 'control', label: 'Kill switch', icon: Power, admin: true },
@@ -307,6 +310,98 @@ function Secrets() {
           Save secret
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** The first-party integrations and the secrets that set them up (docs/spec.md#integrations). */
+const INTEGRATIONS = [
+  { name: 'gitlab', label: 'GitLab', token: 'GITLAB_TOKEN', webhook: 'GITLAB_WEBHOOK_SECRET' },
+  { name: 'slack', label: 'Slack', token: 'SLACK_BOT_TOKEN', webhook: 'SLACK_SIGNING_SECRET' },
+  { name: 'linear', label: 'Linear', token: 'LINEAR_API_KEY', webhook: 'LINEAR_WEBHOOK_SECRET' },
+] as const
+
+/** A `gitlab_hook` record: a webhook the harness registered for an employee (src/integrations/provisioning.ts). */
+interface GitlabHookData {
+  employeeId: string
+  gitlabProject: string
+  hookId?: number
+  status: 'ok' | 'error'
+  error?: string
+  lastAction?: string
+  lastAttemptAt: string
+}
+
+function SetupMark({ on, label }: { on: boolean; label: string }) {
+  return (
+    <span className={cn('text-micro', on ? 'text-fg-secondary' : 'text-fg-quaternary')}>
+      {label} {on ? 'set' : 'missing'}
+    </span>
+  )
+}
+
+/** Per employee: which integrations are set up, and the GitLab webhooks the harness registered, with their errors. */
+function Integrations() {
+  const { employees } = useEmployees()
+  const secrets = useLoad((a) => a.secrets(), [])
+  const hooks = useLoad((a) => a.listRecords<GitlabHookData>('gitlab_hook', { limit: 1000 }), [])
+  useLiveReload(['records:gitlab_hook', 'records:secret'], () => {
+    hooks.reload()
+    secrets.reload()
+  })
+  if (!secrets.data || !hooks.data) return <LoadingRows />
+  const has = (name: string, employeeId: string) =>
+    secrets.data!.some(
+      (m) => m.name === name && (m.scope.type === 'global' || (m.scope.type === 'employee' && m.scope.id === employeeId)),
+    )
+  const provisioningToken = secrets.data.some((m) => m.name === 'GITLAB_HOOKS_TOKEN' && m.scope.type === 'global')
+  return (
+    <div className="max-w-[760px]" data-testid="integrations">
+      <p className="mb-4 text-fg-tertiary">
+        An integration is set up for an employee when its token is set (its own, or a global one). GitLab webhooks register
+        themselves for every GitLab repository the employee works on, when <span className="font-mono">PUBLIC_URL</span> is set.
+        Registering needs Maintainer: {provisioningToken ? 'the provisioning token' : 'the employee’s own token'} is used
+        {provisioningToken ? '' : ' (set GITLAB_HOOKS_TOKEN to keep service accounts at Developer)'}.
+      </p>
+      {employees.map((e) => {
+        const mine = hooks
+          .data!.items.filter((h) => h.data.employeeId === e.id)
+          .sort((a, b) => a.data.gitlabProject.localeCompare(b.data.gitlabProject))
+        return (
+          <section key={e.id} className="mb-6" aria-label={e.data.name}>
+            <div className="mb-2 flex items-center gap-2 text-foreground">
+              <EmployeeAvatar name={e.data.name} className="size-4" />
+              {e.data.name}
+            </div>
+            <div className="rounded-xl border">
+              {INTEGRATIONS.map((i) => {
+                const token = has(i.token, e.id)
+                return (
+                  <div key={i.name} className="flex h-9 items-center gap-3 border-b px-3 last:border-0">
+                    <StatusIcon status={token ? 'completed' : 'queued'} tooltip={false} className="size-3.5" />
+                    <span className="w-16 text-fg-secondary">{i.label}</span>
+                    <SetupMark on={token} label="token" />
+                    <SetupMark on={has(i.webhook, e.id)} label="· webhook secret" />
+                  </div>
+                )
+              })}
+              {mine.map((h) => (
+                <div key={h.id} className="flex flex-col gap-0.5 border-b px-3 py-2 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <StatusIcon status={h.data.status === 'ok' ? 'completed' : 'failed'} tooltip={false} className="size-3.5" />
+                    <span className="font-mono text-micro text-foreground">{h.data.gitlabProject}</span>
+                    <span className="text-micro text-fg-tertiary">
+                      {h.data.status === 'ok' ? `webhook ${h.data.hookId ?? ''}` : 'webhook failed'}
+                    </span>
+                    <span className="ml-auto text-micro text-fg-quaternary">{timeAgo(h.data.lastAttemptAt)} ago</span>
+                  </div>
+                  {h.data.error && <p className="pl-6.5 text-micro text-[var(--status-failed)]">{h.data.error}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )
+      })}
     </div>
   )
 }
@@ -611,6 +706,7 @@ export function SettingsPage() {
         {!allowed && <EmptyState text="Only admins can see this." />}
         {allowed && section === 'employees' && <Employees />}
         {allowed && section === 'secrets' && <Secrets />}
+        {allowed && section === 'integrations' && <Integrations />}
         {allowed && section === 'triggers' && <Triggers />}
         {allowed && section === 'limits' && <Limits />}
         {allowed && section === 'control' && <Control />}

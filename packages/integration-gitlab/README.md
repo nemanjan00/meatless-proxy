@@ -26,6 +26,20 @@ It has three parts, all behind one factory:
   `X-Next-Page`). It sends the token only as `PRIVATE-TOKEN` and redacts it from errors and logs. It retries 408, 429 and
   5xx and network errors with exponential backoff, honouring `Retry-After`. After the last retry it throws
   `UnavailableError`. Other 4xx throw `MpError('integration_request')` with `details.status` and GitLab's message.
+- `createGitlabHooks(client)`: project webhooks, for the harness only (never an MCP tool, so the model can't touch
+  them). The client's token needs Maintainer on the project.
+  - `listProjectHooks(project)`.
+  - `ensureProjectHook(project, { url, token, events?, tokenKnownFor? })` → `{ action: 'created' | 'updated' |
+    'unchanged', hook, changed, removedDuplicates }`. Finds ours by URL and creates it when it's missing. Otherwise it
+    repairs the events (`HOOK_EVENTS` by default), `enable_ssl_verification` (on unless the URL is `http:`) and a push
+    branch filter (cleared), and removes other hooks with the same URL. It never creates a second one. GitLab never
+    returns a hook's token, so the token is set again on every update unless `tokenKnownFor` is the id of the hook it
+    was last set on (the caller keeps a hash of the secret to know that).
+  - `removeProjectHook(project, id | { url })` → how many were removed (a missing hook is fine).
+- `HOOK_EVENTS`: `push_events`, `note_events`, `issues_events`, `merge_requests_events`, `job_events`,
+  `pipeline_events` on, `tag_push_events` off. `sslVerificationFor(url)`.
+- `gitlabProjectPath(repoUrl, baseUrl?)`: the project path of a repository URL on this GitLab (https with the instance's
+  sub-path, `git@host:group/repo.git`, `ssh://git@host:port/group/repo.git`; gitlab.com always counts), or `null`.
 - `assertNotMerging(method, path, body?)`: the guard the client runs before every request (see below).
 - `projectRef(project)`: `42` stays `42`, and `group/sub/repo` becomes `group%2Fsub%2Frepo`.
 - `handleGitlabWebhook(req, secret)`, `mapGitlabEvent(body)`, `verifyGitlabToken(header, secret)`, `dedupeKey(headers, body,
@@ -101,50 +115,80 @@ url, branches, labels, reviewers, note body and discussion id, pipeline and job 
 
 Each employee has **its own GitLab identity**: a service account with its own token and SSH key, so its branches,
 merge requests and comments show who did them, and its access can be limited and revoked on its own. The server
-(`packages/server/src/integrations`) builds one instance per employee from that employee's secrets.
+(`packages/server/src/integrations`) builds one instance per employee from that employee's secrets, and **registers
+the webhooks itself** (see [Webhooks](#webhooks)).
 
-1. **A service account per employee.** On GitLab Premium or Ultimate, create a *service account* (group *Settings →
-   Service accounts*, or *Admin → Service accounts* on self-managed). Otherwise use a dedicated user for the employee
-   (for example `billing-bot`, with a name that says it's an AI). Give it the **Developer** role on the projects it
-   works on: enough to push branches and open MRs, not to merge into protected branches.
-2. **A personal access token** for that account with the **`api`** scope. Add `write_repository` only if the harness
-   ever pushes over HTTPS; it doesn't: it pushes over SSH. Set an expiry and rotate it.
-3. **The employee's SSH key.** The harness generates an ed25519 keypair per employee and shows the public key in the web
-   UI. Add it to the service account (*User settings → SSH Keys*, or through the API for a service account), or as a
-   deploy key with write access on the project. Commits and pushes then go through that key.
-4. **Protected branches.** Protect `main` (and release branches) with *Allowed to merge* and *Allowed to push and merge*
-   set to Maintainers only, or to specific people, and not the service accounts. The harness also refuses to push to
-   protected branches, but GitLab must enforce it too. Leave *Allowed to force push* off. If you use merge request
-   approvals, don't count the service accounts as eligible approvers.
-5. **Webhooks** (*Settings → Webhooks → Add new webhook*):
-   - Deployment-wide: a group (or project) webhook with URL `https://<harness>/webhooks/gitlab`. Its events belong to no
-     employee in particular, so any employee's triggers and subscriptions can take them.
-   - Per employee (optional): `https://<harness>/webhooks/gitlab/<employee id or handle>`, for hooks that belong to one
-     employee's identity. Its events belong to that employee.
-   - Secret token: a long random value, the same as `GITLAB_WEBHOOK_SECRET` below (each URL has its own).
-   - Trigger: **Push events** (all branches, or a wildcard like `mp/*`), **Comments**, **Issues events**, **Merge request
-     events**, **Job events**, **Pipeline events**
-   - SSL verification: on
-6. **Secrets** in the harness (docs/spec.md#secrets):
-   - `GITLAB_TOKEN`: the employee's token from step 2, **scoped to the employee**.
-   - `GITLAB_WEBHOOK_SECRET`: global scope for `/webhooks/gitlab`; scoped to the employee for
-     `/webhooks/gitlab/<employee>`.
+1. **A service account per employee, as Developer.** On GitLab Premium or Ultimate, create a *service account* (group
+   *Settings → Service accounts*, or *Admin → Service accounts* on self-managed). Otherwise use a dedicated user for the
+   employee (for example `billing-bot`, with a name that says it's an AI). Give it the **Developer** role on the
+   projects (or the group) it works on: enough to push branches and open merge requests, and GitLab itself stops it
+   from merging into protected branches.
+2. **Its token.** A personal access token for that account with the **`api`** scope. It doesn't need
+   `write_repository`: the harness pushes over SSH. Set an expiry and rotate it.
+3. **Its SSH key.** The harness generates an ed25519 keypair per employee and shows the public key in the web UI
+   (*Settings → Employees*). Add it to the service account (*User settings → SSH Keys*, or through the API for a
+   service account). Pushes then go through that key.
+4. **Protected branches.** Protect `main` (and release branches): *Allowed to merge* and *Allowed to push and merge*
+   set to Maintainers, or to named people, never the service accounts. Leave *Allowed to force push* off. If you use
+   merge request approvals, don't count the service accounts as eligible approvers. The harness also refuses to push to
+   protected branches, but GitLab must enforce it too. This matters most when an employee's own token registers the
+   hooks (step 5): that account is then a Maintainer, and only the branch protection stops it from merging.
+5. **Secrets** in the harness ([secrets](../../docs/spec.md#secrets)), under *Settings → Secrets* or through the API:
+   - `GITLAB_TOKEN`, **scoped to the employee**: its token from step 2.
+   - `GITLAB_HOOKS_TOKEN`, **global**, recommended: a *provisioning token* used only to register webhooks. It's a token
+     of a Maintainer of the projects or an Owner of the group (a group access token with the Maintainer role and the
+     `api` scope works). With it, the service accounts stay Developer. Without it, each employee's own token registers
+     its hooks, and then needs Maintainer.
    - `GITLAB_BASE_URL` (optional): for self-hosted GitLab. The server's `GITLAB_BASE_URL` environment variable sets it
      for the deployment; a secret of that name overrides it (per employee or globally).
-
-   Set them in the web UI under *Settings → Secrets*, or through the API:
 
    ```sh
    curl -X PUT https://<harness>/api/secrets -H 'content-type: application/json' \
      -d '{ "name": "GITLAB_TOKEN", "value": "glpat-…", "scope": { "type": "employee", "id": "emp_…" } }'
    ```
 
-   A global secret is the fallback for an employee without its own. GitLab is enabled for an employee when its
-   `GITLAB_TOKEN` resolves; until then its `mcp.gitlab.*` tools answer "GitLab isn't set up for this employee: set the
-   GITLAB_TOKEN secret". A webhook URL without a secret answers `404`.
-7. **Handles**: give each person's contact a handle `{ system: 'gitlab', id: '<username>' }`. Otherwise the server
+   GitLab is enabled for an employee when its `GITLAB_TOKEN` resolves (a global one is the fallback). Until then its
+   `mcp.gitlab.*` tools answer "GitLab isn't set up for this employee: set the GITLAB_TOKEN secret".
+6. **`PUBLIC_URL`** on the server: the address GitLab can reach the harness at, e.g. `https://mp.example.com`.
+7. **Link the repositories to projects.** Each project's `repositories` lists its repository URLs (https or SSH), and
+   the employee is linked to the project (its contact as a member, owner, …), or one of its sessions `works_on` it. A
+   deployment with a single employee gets every project.
+8. **Handles**: give each person's contact a handle `{ system: 'gitlab', id: '<username>' }`. Otherwise the server
    looks the actor up (`resolveUser`), matches the contact by the user's public email and records the handle on it. It
    never creates contacts from webhooks.
+
+### Webhooks
+
+Once steps 5 to 7 are done, the webhooks appear by themselves. For each GitLab repository the employee works on, the
+harness registers a project hook at `https://<harness>/webhooks/gitlab/<employee id>` with push events (all
+branches), comments, issues, merge requests, jobs and pipelines, and SSL verification on. Its secret token is the
+employee's `GITLAB_WEBHOOK_SECRET`, generated and stored when it's missing. It runs at start, when one of these secrets
+changes, when a repository is linked or the employee joins a project, and every 6 hours. It repairs drift (events, SSL
+verification, the token), never creates duplicates, and removes the hook of a repository that is no longer linked.
+
+*Settings → Integrations* in the web UI (and `GET /api/integrations/status`) shows, per employee, which integrations are
+set up and each hook's status. The usual error is a 403: "the token needs Maintainer on <project> to register
+webhooks; set GITLAB_HOOKS_TOKEN (a Maintainer or group Owner) or give the service account Maintainer".
+
+The model never gets a tool to manage webhooks.
+
+### Manual webhooks (fallback)
+
+When the harness can't register hooks (no Maintainer token at all, or a hook on a group), add one by hand in
+*Settings → Webhooks → Add new webhook*:
+
+- Deployment-wide: a group (or project) webhook with URL `https://<harness>/webhooks/gitlab`, and a global
+  `GITLAB_WEBHOOK_SECRET`. Its events belong to no employee in particular, so any employee's triggers and
+  subscriptions can take them.
+- Per employee: `https://<harness>/webhooks/gitlab/<employee id or handle>`, with the employee-scoped
+  `GITLAB_WEBHOOK_SECRET`. Its events belong to that employee. Each URL has its own secret.
+- Secret token: a long random value, the same as the `GITLAB_WEBHOOK_SECRET` for that URL.
+- Trigger: **Push events** (all branches, or a wildcard like `mp/*`), **Comments**, **Issues events**, **Merge request
+  events**, **Job events**, **Pipeline events**
+- SSL verification: on
+
+A webhook URL without a secret answers `404`. A manual per-employee hook at the same URL as the harness's (the
+employee id) is adopted and repaired; one at the handle URL is left alone.
 
 ### Self-hosted GitLab
 
@@ -200,7 +244,8 @@ The subscription ends when the MR is merged or closed: after delivering `merge_r
 (`test/fake-gitlab.ts`, a `node:http` server on port 0 with GitLab's payload shapes, pagination headers and errors).
 Every tool goes through a real MCP client over `InMemoryTransport`. Webhook tests cover verification, dedupe and every
 event mapping; client tests cover 429 with Retry-After, 5xx retries, 4xx, network failures, token redaction and the
-merge guard.
+merge guard. Hook tests (`test/hooks.test.ts`) cover create, idempotence, token resets, drift repair, duplicates, http
+URLs, 403 and 404, and repository URL parsing; the tools list is checked to have no merge, webhook or admin tool.
 
 `MP_LIVE_GITLAB=1` with `GITLAB_TOKEN` (and optionally `GITLAB_BASE_URL`) runs one harmless read (`GET /user`) against a
 real GitLab (`test/live.test.ts`). It's skipped by default.

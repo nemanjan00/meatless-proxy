@@ -66,6 +66,21 @@ describe('tools list', () => {
     }
     expect(fake.requests.some((r) => /\/(merge|approve)$/.test(r.path))).toBe(false)
   })
+
+  it('has no webhook or admin tool: managing hooks is the harness’s job, never the model’s', async () => {
+    const { tools } = await client.listTools()
+    for (const t of tools) {
+      expect(t.name).not.toMatch(/hook|admin|member|permission|protect|token|key|setting/i)
+      expect(t.description ?? '').not.toMatch(/webhook/i)
+    }
+    for (const forbidden of ['add_hook', 'create_hook', 'ensure_project_hook', 'remove_project_hook', 'list_project_hooks']) {
+      const r: any = await client
+        .callTool({ name: forbidden, arguments: { project: 42, url: 'https://evil.example.com' } })
+        .catch((e: Error) => ({ error: e.message }))
+      expect(r.isError || r.error).toBeTruthy()
+    }
+    expect(fake.requests.some((r) => r.path.includes('/hooks'))).toBe(false)
+  })
 })
 
 describe('projects, branches and files', () => {
