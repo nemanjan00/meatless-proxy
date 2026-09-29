@@ -100,6 +100,30 @@ describe('git tools', () => {
     expect((call.args[1] as { ref?: string }).ref).toBeUndefined()
   })
 
+  it('reads a range of lines, and edits an exact piece of text', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    const body = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
+    await t.out('git.write_file', { path: 'big.txt', content: body })
+    const part = await t.out('git.read_file', { path: 'big.txt', offset: 10, limit: 3 })
+    expect(part).toMatchObject({ totalLines: 50, lines: '10-12', content: '10\tline 10\n11\tline 11\n12\tline 12' })
+    expect(part.next).toMatch(/offset 13/)
+
+    expect(await t.out('git.edit_file', { path: 'big.txt', old: 'line 20\n', new: 'line twenty\n' })).toMatchObject({
+      replaced: 1,
+      line: 20,
+    })
+    expect((await t.out('git.read_file', { path: 'big.txt', offset: 20, limit: 1 })).content).toBe('20\tline twenty')
+    // Not found, not unique, and replaceAll.
+    expect((await t.call('git.edit_file', { path: 'big.txt', old: 'nope', new: 'x' })).isError).toBe(true)
+    const twice = await t.call('git.edit_file', { path: 'big.txt', old: 'line 1', new: 'L1' })
+    expect(twice.isError).toBe(true)
+    expect(JSON.stringify(twice.output)).toMatch(/appears \d+ times/)
+    expect(await t.out('git.edit_file', { path: 'big.txt', old: 'line 3', new: 'L3', replaceAll: true })).toMatchObject({
+      replaced: 11,
+    })
+  })
+
   it('is not registered without a git cache', async () => {
     const t = await stack({ git: false, containers: false })
     expect(t.names.some((n) => n.startsWith('git.') || n.startsWith('env.'))).toBe(false)

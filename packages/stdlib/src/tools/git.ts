@@ -44,6 +44,9 @@ export async function authorFor(deps: Pick<StdlibDeps, 'directory'>, employeeId:
   }
 }
 
+/** git.read_file: the most lines one call returns. */
+const READ_MAX_LINES = 2000
+
 /** Git auth for an employee: its own SSH key (`StdlibDeps.sshKeyFor`), or none. */
 export async function gitAuthFor(deps: Pick<StdlibDeps, 'sshKeyFor'>, employeeId: string): Promise<GitAuth | undefined> {
   const key = await deps.sshKeyFor?.(employeeId)
@@ -254,21 +257,82 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
   kit.tool(
     {
       name: 'git.read_file',
-      description: 'Read a file in your checkout (path relative to the repository root).',
+      description:
+        'Read a file in your checkout (path relative to the repository root). For a big file, read the part you need with offset and limit (lines, numbered in the result); find where to look first with env.exec grep -n.',
       effect: 'read',
-      params: { properties: { path: { type: 'string' }, repo: repoProp, sessionId: { type: 'string' } }, required: ['path'] },
+      params: {
+        properties: {
+          path: { type: 'string' },
+          offset: { type: 'number', description: 'First line to read (1-based).' },
+          limit: { type: 'number', description: `How many lines. Default: to the end, at most ${READ_MAX_LINES}.` },
+          repo: repoProp,
+          sessionId: { type: 'string' },
+        },
+        required: ['path'],
+      },
     },
     async (a, ctx) => {
       const w = await worktree(ctx, a.repo, a.sessionId)
       const rel = safeRelPath(w.path, a.path)
       if (!rel) return fail('path is a directory')
       const content = await fs.read(w.path, rel)
+      const extra = await newInstructions(ctx.sessionId, w, rel, false)
+      if (a.offset === undefined && a.limit === undefined && content.length <= 30000)
+        return ok({ path: rel, size: content.length, content, ...extra })
+      // A range, or a file too big to return whole: numbered lines, and where to go on.
+      const lines = content.split('\n')
+      const start = Math.max(1, Math.floor(Number(a.offset) || 1))
+      const count = Math.min(Math.max(1, Math.floor(Number(a.limit) || READ_MAX_LINES)), READ_MAX_LINES)
+      const slice = lines.slice(start - 1, start - 1 + count)
+      let text = slice.map((l, i) => `${start + i}\t${l}`).join('\n')
+      if (text.length > 30000) text = clip(text, 30000)
+      const end = start + slice.length - 1
       return ok({
         path: rel,
-        size: content.length,
-        content: clip(content, 30000),
-        ...(await newInstructions(ctx.sessionId, w, rel, false)),
+        totalLines: lines.length,
+        lines: slice.length ? `${start}-${end}` : 'none',
+        content: text,
+        ...(end < lines.length ? { next: `offset ${end + 1} reads on (${lines.length - end} lines left)` } : {}),
+        ...extra,
       })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'git.edit_file',
+      description:
+        'Change part of a file in your checkout: replace an exact piece of text (old, copied from the file with its indentation) with new. old must appear exactly once, unless replaceAll is true; include enough surrounding lines to make it unique. Cheaper and safer than rewriting the file with git.write_file. Commit with git.commit.',
+      effect: 'idempotent',
+      params: {
+        properties: {
+          path: { type: 'string' },
+          old: { type: 'string', description: 'The exact text to replace.' },
+          new: { type: 'string', description: 'The text to put in its place (may be empty).' },
+          replaceAll: { type: 'boolean', description: 'Replace every occurrence.' },
+          repo: repoProp,
+        },
+        required: ['path', 'old', 'new'],
+      },
+    },
+    async (a, ctx) => {
+      const w = await worktree(ctx, a.repo)
+      const rel = safeRelPath(w.path, a.path)
+      if (!rel) return fail('path is a directory')
+      const oldText = String(a.old ?? '')
+      const newText = String(a.new ?? '')
+      if (!oldText) return fail('old is empty: to create or replace a whole file, use git.write_file')
+      if (oldText === newText) return fail('old and new are the same')
+      const content = await fs.read(w.path, rel).catch(() => null)
+      if (content === null) return fail(`no file ${rel}: create it with git.write_file`)
+      const count = content.split(oldText).length - 1
+      if (count === 0) return fail('old was not found in the file: read the part again and copy it exactly, with its indentation')
+      if (count > 1 && a.replaceAll !== true)
+        return fail(`old appears ${count} times: add surrounding lines to make it unique, or set replaceAll`)
+      const next = a.replaceAll === true ? content.split(oldText).join(newText) : content.replace(oldText, () => newText)
+      await fs.write(w.path, rel, next)
+      const at = content.slice(0, content.indexOf(oldText)).split('\n').length
+      return ok({ key: w.key, path: rel, replaced: a.replaceAll === true ? count : 1, line: at, size: next.length })
     },
   )
 
