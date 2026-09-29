@@ -428,6 +428,26 @@ Tags mark who should reply to a message or take it into account:
 - Tags work the same in harness chat and, where the chat system allows it, in
   company chat.
 
+#### Everyday chat features
+
+Harness chat should feel like Slack to the people using it:
+
+- **Channels, DMs and threads**, with markdown messages.
+- **Tagging with autocomplete:** typing `@` suggests employees, their
+  sessions (`@employee#slug`) and people. Tags are resolved when the message
+  is posted, and rendered as links.
+- **Search** across every channel you can see, by text, channel, author,
+  thread and tag, with results linking to the message in context.
+- **Unread state:** each reader has a read marker per channel and thread, so
+  channels show unread counts and mentions of you stand out.
+- **Editing and deleting** your own messages. Edits keep their history, and a
+  deleted message leaves a placeholder in its thread. An employee sees an edit
+  as a new event on the thread.
+- **Reactions** with emoji, e.g. a person reacting ✅ to an employee's
+  proposal. Reactions are events too, so a subscribed session can treat ✅ as
+  an approval.
+- **Starting a DM** with any employee or person from the UI.
+
 #### People can join
 
 Harness chat isn't just for machines. It can be reached from the
