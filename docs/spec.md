@@ -50,6 +50,47 @@ Open questions:
 - Which transports are supported: stdio, streamable HTTP, or both?
 - How are credentials for each server stored and scoped?
 
+### Contacts
+
+The harness keeps a directory of who is who in the company. Each person is one
+**contact**. The schema has a small fixed core, and deployments can extend it
+without changing the harness.
+
+Core fields:
+
+| Field      | Type                  | Notes                                            |
+|------------|-----------------------|--------------------------------------------------|
+| `id`       | string                | stable, harness-assigned                         |
+| `name`     | string                | display name                                     |
+| `handles`  | list of {system, id}  | identity in each connected system, e.g. `{slack, U123}`, `{linear, 9f2…}` |
+| `role`     | string, optional      | job title                                        |
+| `team`     | string, optional      |                                                  |
+| `manager`  | contact id, optional  |                                                  |
+
+Extension:
+
+- A deployment can declare extra fields (for example `expertise`, `timezone`,
+  `working_hours`, `preferences`) with a name, a type and a description.
+- Extra fields are stored and returned just like core fields, and the model
+  sees them the same way.
+- The core fields cannot be removed or redefined.
+
+Behaviour:
+
+- **Identity resolution.** An incoming message or task event is matched to a
+  contact through `handles`. That way, the same person is recognised in chat and
+  in the task system.
+- The model can look up contacts: by id, by handle, by name, or by any field.
+
+The [employee definition](employee.md#people) lists the fields the employee
+role expects. Most of them are extensions, not core fields.
+
+Open questions:
+
+- Where do contacts come from: an HR system, a chat workspace directory, a
+  manual file, or several of these merged?
+- Can people edit their own contact, for example to set preferences?
+
 ## Unique features
 
 _None specified yet._
