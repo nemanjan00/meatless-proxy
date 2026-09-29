@@ -37,6 +37,8 @@ about.
   same database.
 - Code is the exception: git repositories stay in git, with the
   [local cache](#git-repositories). The database stores the links to them.
+- The job queue (BullMQ on Redis) isn't state. Its jobs only carry ids, and
+  it can be rebuilt from the database ([execution model](execution.md#storage-and-processes)).
 
 ### No single operator
 

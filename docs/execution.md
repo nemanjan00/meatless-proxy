@@ -10,10 +10,10 @@ first. The rest of the document explains them.
 
 | #  | Decision | Section |
 |----|----------|---------|
-| 1  | Postgres is the database, the queue and the wake-up signal. There is no separate message broker. | [Storage](#storage-and-processes) |
+| 1  | Postgres is the database and the source of truth. **BullMQ** (on Redis) is the job queue and the timer. Queue state can always be rebuilt from Postgres. | [Storage](#storage-and-processes) |
 | 2  | Session history is an append-only **tree of entries**, like git commits. A session is a pointer to one entry (its head). | [History](#history-as-an-entry-tree) |
 | 3  | Fork, rewind, offload and commit are pointer operations on that tree, and none of them copy or delete history. | [History](#history-operations) |
-| 4  | A **run** is the unit of scheduling. Workers are stateless and claim runs from the database with a lease. | [Runs](#runs) |
+| 4  | A **run** is the unit of scheduling. Each runnable run is a BullMQ job. Workers are stateless, and BullMQ's job locks and stalled-job detection hand crashed runs to another worker. | [Runs](#runs) |
 | 5  | Every step is journaled before and after it happens, so a crashed run resumes from its last step, not from the start. | [Steps](#steps-and-journaling) |
 | 6  | Waiting (for children, people, containers or time) **suspends** the run and frees the worker. A completion event wakes it up again. | [Suspending](#suspending-and-waking) |
 | 7  | Side effects go through an **outbox** with idempotency keys. After a crash, an effect whose outcome is unknown is never blindly retried. | [Side effects](#side-effects) |
@@ -22,6 +22,7 @@ first. The rest of the document explains them.
 | 10 | Commit is compare-and-swap on the session head. If the head moved in the meantime, the run commits a summary on top of the new head. | [Commit](#commit) |
 | 11 | The context sent to the model is assembled in a fixed order, and only grows at the end, so prefixes stay cacheable. | [Context assembly](#context-assembly) |
 | 12 | Limits are checked before every model call and at every fork or loop. Pause and kill are flags checked at step boundaries. | [Limits](#limits-pause-and-kill) |
+| 13 | Everything runs in Docker in deployment: one app container (API, web UI and the agent loop) with the Docker socket, plus Postgres and Redis. Development needs no Docker. | [Deployment](#deployment) |
 
 ## Overview
 
@@ -38,35 +39,47 @@ first. The rest of the document explains them.
                                   new events (completions, replies, results) ◄── journal, outbox, usage
 ```
 
-Everything in the diagram is a table or a process that reads and writes
-tables. Nothing lives only in a process's memory.
+Everything in the diagram is a table, a queue, or a process that reads and
+writes them. Nothing lives only in a process's memory.
 
 ## Storage and processes
 
-**Postgres** holds all state ([database first](spec.md#database-first)):
+**Postgres** holds all state ([database first](spec.md#database-first)).
+Extension fields on contacts, projects and the rest are `jsonb`, validated
+against the schema the deployment declared. `LISTEN/NOTIFY` pushes changes to
+the web UI for live updates.
 
-- It is the **database**. Extension fields on contacts, projects and the rest
-  are `jsonb`, validated against the schema the deployment declared.
-- It is the **queue**. Workers claim runs with `SELECT … FOR UPDATE SKIP
-  LOCKED`.
-- It provides **wake-ups**. `LISTEN/NOTIFY` tells idle workers, the scheduler
-  and the web UI that something changed, so nothing has to poll the database
-  in a tight loop.
+**BullMQ**, on Redis, is the job queue. It was chosen because it's easy to
+test and gives us retries, delays, priorities and rate limits out of the box.
 
-The harness runs as a few process roles, all talking only to Postgres:
+- **Queues:** `events` (to route), `runs` (to execute), `effects` (outbox
+  deliveries), `pollers` (MCP pollers, as repeatable jobs).
+- **Timers:** schedules, timeouts, retry backoff and `wait` timeouts are
+  delayed or repeatable BullMQ jobs, so there's no separate scheduler.
+- **Postgres stays the source of truth.** A job only carries ids, e.g. "run
+  `r42`". The worker loads the actual state from Postgres. Rows are written
+  before their job is enqueued, so a job never refers to something that
+  doesn't exist yet.
+- **Rebuildable.** If Redis loses its data, the queues are rebuilt from
+  Postgres: every run in `queued`, every event not yet routed, and every effect
+  not yet delivered is enqueued again. Duplicate jobs are harmless, because
+  job ids are the row ids and state changes in Postgres are guarded (a run
+  can only move from `queued` to `running` once).
+
+The harness has a few process roles:
 
 | Role      | Does                                                               |
 |-----------|--------------------------------------------------------------------|
 | ingest    | receives webhooks, MCP notifications, runs MCP pollers, writes `events` |
 | router    | turns events into runs, deterministically                          |
 | worker    | executes runs: model calls, tool calls, containers                 |
-| scheduler | fires timers: schedules, timeouts, retry backoff, lease expiry     |
 | web       | the [web UI](spec.md#web-ui) and its API, live updates via `NOTIFY` |
 
-At first, all roles run in one process on one host. That host also has the
-[git cache](spec.md#git-repositories) and Docker. Splitting the roles across
-hosts later doesn't change the model, but runs that need a checkout will need
-to stick to the host that holds it.
+**For now the loop stays local:** all roles run in one Node process, together
+with the API and the web UI. That host also has the
+[git cache](spec.md#git-repositories) and Docker. BullMQ workers are what
+would move to other processes or hosts later. That doesn't change the model,
+but runs that need a checkout will need to stick to the host that holds it.
 
 ## Events
 
@@ -175,7 +188,7 @@ A **run** is the unit of scheduling: one piece of work in one session.
 | `tip`     | the run's latest entry                                             |
 | `state`   | see below                                                          |
 | `cause`   | the event or delivery that started it                              |
-| `lease`   | worker id and expiry, while running                                |
+| `worker`  | which worker holds it, while running                               |
 | `wait`    | what it's waiting for, while suspended                             |
 
 The default mode comes from how the run started: a subscription or a direct
@@ -193,13 +206,16 @@ trigger or template set the default".
    └─resume─ paused   (limit reached, supervisor, person, kill switch)
 ```
 
-- **Claiming.** An idle worker takes the oldest runnable run it's allowed to
-  take, and sets a lease (e.g. 60 s), which it renews while it works.
-- **Crash.** If the lease expires, the scheduler puts the run back into
-  `queued`, and another worker resumes it from its journal.
+- **Claiming.** A run in `queued` has a job in the `runs` queue. A worker picks
+  up the job, and moves the run to `running` in Postgres, but only if it's
+  still `queued`.
+- **Crash.** BullMQ holds a lock on the job while the worker renews it. If the
+  worker dies, BullMQ detects the stalled job and gives it to another worker,
+  which resumes the run from its journal.
 - **Priority.** Runs caused by a person, such as a chat reply or a UI action,
-  go ahead of background runs. There's a concurrency cap per employee, so one
-  busy employee can't starve the others.
+  get a higher job priority than background runs. There's a concurrency cap
+  per employee (BullMQ groups or rate limits), so one busy employee can't
+  starve the others.
 
 ## Steps and journaling
 
@@ -371,7 +387,41 @@ stays the same across calls, runs and forks:
   into entries, the journal or the outbox.
 - Outputs are redacted for secret values before they're stored as entries.
 
+## Deployment
+
+**Everything runs in Docker containers** when deployed:
+
+| Container | Contains                                                          |
+|-----------|-------------------------------------------------------------------|
+| app       | the API, the web UI and the agent loop (all roles), in one Node process |
+| postgres  | the database                                                      |
+| redis     | BullMQ's queues                                                   |
+
+- The **app** container mounts the host's **Docker socket**. It uses it to
+  start and stop the [project environments](spec.md#docker-orchestration) as
+  sibling containers on the host, not nested inside itself.
+- The git cache and harness data live in volumes mounted into the app
+  container.
+- Project environments get their own networks, separate from the harness's
+  network, so a project container can't reach Postgres or Redis.
+- It ships as one `compose.yaml`.
+
+**Development doesn't need Docker.** The app runs directly with Node, against
+a local Postgres and Redis. Docker is only needed to work on the Docker
+orchestration itself, and for the deployed setup. Tests for every other part
+run without it.
+
+Open questions:
+
+- Access to the Docker socket gives the app root-level control of the host.
+  Should it go through a socket proxy that only allows the calls it needs
+  (create, start, stop and remove containers, networks and volumes)?
+- How are Postgres and Redis provided in development without Docker: native
+  installs, or in-process substitutes for tests (e.g. PGlite)?
+
 ## Not covered here yet
 
-- **Language and framework.** This design only assumes Postgres, Docker and
-  git. The web UI is React, Tailwind and shadcn/ui ([stylebook](stylebook.md)).
+- **Language and framework.** BullMQ means the back end is Node, presumably in
+  TypeScript. The web UI is React, Tailwind and shadcn/ui
+  ([stylebook](stylebook.md)). Frameworks (API server, ORM or query builder)
+  are still to be chosen.
