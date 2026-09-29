@@ -325,3 +325,16 @@ describe('chat page against the mock', () => {
     await waitFor(() => expect(screen.getAllByTestId('unread-badge').length).toBeGreaterThan(0))
   })
 })
+
+describe('chat composer', () => {
+  it('focuses the message box when the hint row under it is pressed', async () => {
+    const { Composer } = await import('../src/components/chat-composer.tsx')
+    render(<Composer placeholder="Message #requests" onSend={async () => {}} />)
+    const box = screen.getByLabelText('Message')
+    expect(document.activeElement).not.toBe(box)
+    fireEvent.mouseDown(screen.getByTestId('tag-hint'))
+    expect(document.activeElement).toBe(box)
+    fireEvent.mouseDown(screen.getByRole('button', { name: /send/i }))
+    expect(document.activeElement).toBe(box)
+  })
+})

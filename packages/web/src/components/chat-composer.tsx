@@ -87,7 +87,19 @@ export const Composer = forwardRef<
     }
   }
   return (
-    <div className={cn('relative m-4 rounded-lg border bg-level-1 focus-within:border-ring/70', className)}>
+    // The whole box reads as the input, so a press anywhere in it that isn't
+    // on a control (the hint row, the padding) focuses the textarea.
+    // biome-ignore lint/a11y/noStaticElementInteractions: the textarea inside is the accessible control
+    <div
+      className={cn('relative m-4 cursor-text rounded-lg border bg-level-1 focus-within:border-ring/70', className)}
+      data-testid="composer"
+      onMouseDown={(e) => {
+        const target = e.target as HTMLElement
+        if (target.closest('textarea, button, a, [role="listbox"]')) return
+        e.preventDefault()
+        area.current?.focus()
+      }}
+    >
       {open && (
         <div
           role="listbox"
