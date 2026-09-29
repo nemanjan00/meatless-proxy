@@ -1,0 +1,14 @@
+{
+  "name": "@mp/store-postgres",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Postgres adapter for the @mp/store port: records, links and the entry tree in a handful of tables, with numbered SQL migrations.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0"
+  }
+}
