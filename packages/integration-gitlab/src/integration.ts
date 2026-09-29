@@ -53,23 +53,44 @@ export function createGitlabIntegration(opts: GitlabIntegrationOptions): GitlabI
       return result
     },
     async resolveUser(externalId: string): Promise<ExternalUser | null> {
-      const username = externalId.trim().replace(/^@/, '')
-      if (!username) return null
-      const found = await client.get('/users', { username })
-      const summary = Array.isArray(found)
-        ? found.find((u: any) => String(u.username).toLowerCase() === username.toLowerCase())
-        : undefined
-      if (!summary) return null
-      let full: any = summary
-      try {
-        full = await client.get(`/users/${summary.id}`)
-      } catch (e) {
-        if (!isMpError(e, 'integration_request')) throw e
+      const ref = externalId.trim().replace(/^@/, '')
+      if (!ref) return null
+      let summary: any
+      const byId = /^\d+$/.test(ref)
+      if (byId) {
+        // A numeric user id: looked up directly.
+        try {
+          summary = await client.get(`/users/${ref}`)
+        } catch (e) {
+          if (isMpError(e, 'integration_request') && e.details?.status === 404) return null
+          throw e
+        }
+      } else {
+        const found = await client.get('/users', { username: ref })
+        summary = Array.isArray(found)
+          ? found.find((u: any) => String(u.username).toLowerCase() === ref.toLowerCase())
+          : undefined
       }
+      if (!summary?.username) return null
+      let full: any = summary
+      // The search result has no public email: the user itself does.
+      if (!byId) {
+        try {
+          full = await client.get(`/users/${summary.id}`)
+        } catch (e) {
+          if (!isMpError(e, 'integration_request')) throw e
+        }
+      }
+      const username = String(summary.username)
+      const name = full.name ? String(full.name) : undefined
+      // Project and group access tokens act as bot users named `project_<id>_bot…` / `group_<id>_bot…`.
+      const bot = full.bot === true || /^(project|group)_\d+_bot/.test(username) || username === 'ghost'
       return {
-        handle: { system: SYSTEM, id: String(summary.username) },
+        handle: { system: SYSTEM, id: username },
         ...(full.public_email ? { email: String(full.public_email) } : {}),
-        ...(full.name ? { name: String(full.name) } : {}),
+        ...(name ? { name } : {}),
+        ...(name && name !== username ? { displayName: username } : {}),
+        ...(bot ? { bot: true } : {}),
       }
     },
   }

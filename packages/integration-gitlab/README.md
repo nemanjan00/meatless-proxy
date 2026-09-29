@@ -17,8 +17,9 @@ It has three parts, all behind one factory:
   - `name`: `'gitlab'`.
   - `createMcpServer()`: a new SDK `McpServer` with the tools below. Connect one per client.
   - `handleWebhook({ method, headers, body, query })`: `{ status, body, headers, events }`.
-  - `resolveUser(username)`: `{ handle: { system: 'gitlab', id }, email?, name? }` (the email is the user's *public*
-    email), or `null`.
+  - `resolveUser(username or numeric id)`: `{ handle: { system: 'gitlab', id: <username> }, email?, name?, displayName?,
+    bot? }` (the email is the user's *public* email; `displayName` is the username when the name differs; `bot` for
+    bot users, project and group access token users and `ghost`), or `null`.
   - `baseUrl` defaults to `https://gitlab.com`. For self-hosted GitLab, pass the instance URL, including any sub-path
     (`https://git.example.com/gitlab`). The API is at `<baseUrl>/api/v4`.
   - `retry`: `{ maxRetries (3), retryBaseMs (500), retryMaxMs (30 000), timeoutMs (30 000 per attempt) }`.
@@ -159,8 +160,9 @@ the webhooks itself** (see [Webhooks](#webhooks)).
    the employee is linked to the project (its contact as a member, owner, …), or one of its sessions `works_on` it. A
    deployment with a single employee gets every project.
 8. **Handles**: give each person's contact a handle `{ system: 'gitlab', id: '<username>' }`. Otherwise the server
-   looks the actor up (`resolveUser`), matches the contact by the user's public email and records the handle on it. It
-   never creates contacts from webhooks.
+   looks the actor up (`resolveUser`): it matches the contact by the user's public email and records the handle on it,
+   suggests a person with the same name to an admin, or creates a contact that can't sign in (bots never). See
+   docs/spec.md#identity-from-integrations.
 
 ### Webhooks
 

@@ -454,11 +454,12 @@ describe('channel names', () => {
 })
 
 describe('resolveUser', () => {
-  it('returns the handle, email and real name', async () => {
+  it('returns the handle, email, real name and display name', async () => {
     expect(await slackIntegration.resolveUser?.('U1')).toEqual({
       handle: { system: 'slack', id: 'U1' },
       email: 'ana@example.com',
       name: 'Ana Example',
+      displayName: 'ana',
     })
   })
   it('returns null for unknown users and throws other failures', async () => {
@@ -468,6 +469,14 @@ describe('resolveUser', () => {
   })
   it('omits missing fields', async () => {
     slack.users.set('U3', { id: 'U3', name: 'nomail' })
-    expect(await slackIntegration.resolveUser?.('U3')).toEqual({ handle: { system: 'slack', id: 'U3' } })
+    expect(await slackIntegration.resolveUser?.('U3')).toEqual({ handle: { system: 'slack', id: 'U3' }, displayName: 'nomail' })
+  })
+  it('leaves out a display name equal to the real name, and marks bots and Slackbot', async () => {
+    slack.users.set('U5', { id: 'U5', name: 'Same', real_name: 'Same' })
+    expect((await slackIntegration.resolveUser?.('U5'))?.displayName).toBeUndefined()
+    slack.users.set('UB1', { id: 'UB1', name: 'deploy', real_name: 'Deploy bot', is_bot: true })
+    expect(await slackIntegration.resolveUser?.('UB1')).toMatchObject({ bot: true, name: 'Deploy bot' })
+    slack.users.set('USLACKBOT', { id: 'USLACKBOT', name: 'slackbot', real_name: 'Slackbot' })
+    expect((await slackIntegration.resolveUser?.('USLACKBOT'))?.bot).toBe(true)
   })
 })

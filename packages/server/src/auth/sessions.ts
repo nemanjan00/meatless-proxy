@@ -32,7 +32,12 @@ export function publicOrigin(config: Services['config']): string {
 /** The contact, if it may sign in. Throws `DeniedError` otherwise (AI employees, people who left). */
 async function signInable(s: Deps, contactId: string): Promise<StoredRecord<ContactData>> {
   const contact = await s.directory.contacts.require(contactId)
-  if (!accessOf(contact)) throw new DeniedError(`contact ${contactId} can't sign in (only people who are still here can)`)
+  if (!accessOf(contact))
+    throw new DeniedError(
+      contact.data.access === 'none'
+        ? `contact ${contactId} can't sign in yet: give them an access on their People page first`
+        : `contact ${contactId} can't sign in (only people who are still here can)`,
+    )
   return contact
 }
 

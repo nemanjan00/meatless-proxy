@@ -43,6 +43,12 @@ function AccessTag({ p }: { p: PersonItem }) {
   if (p.deactivated) return <Tag className="text-[var(--red)]">deactivated</Tag>
   if (p.type === 'ai') return <Tag>AI employee</Tag>
   if (p.type === 'agent') return <Tag>agent</Tag>
+  if (p.noAccess)
+    return (
+      <Tag className="text-fg-quaternary" title="Found through an integration; give them access to let them sign in">
+        can't sign in
+      </Tag>
+    )
   const a = p.access ?? 'viewer'
   return (
     <Tag className={cn(a === 'admin' && 'text-foreground', a === 'viewer' && 'text-fg-quaternary')} title={ACCESS_INFO[a].hint}>
@@ -549,7 +555,7 @@ function AccessPanel({ detail, onChanged }: { detail: PersonDetail; onChanged(d:
         {detail.canAdmin && !detail.deactivated ? (
           <select
             aria-label="Access"
-            value={access}
+            value={detail.noAccess ? '' : access}
             className={selectClass}
             onChange={async (e) => {
               try {
@@ -560,6 +566,11 @@ function AccessPanel({ detail, onChanged }: { detail: PersonDetail; onChanged(d:
               }
             }}
           >
+            {detail.noAccess && (
+              <option value="" disabled>
+                Can't sign in
+              </option>
+            )}
             {ACCESS_ORDER.map((a) => (
               <option key={a} value={a}>
                 {ACCESS_INFO[a].label}
@@ -572,7 +583,9 @@ function AccessPanel({ detail, onChanged }: { detail: PersonDetail; onChanged(d:
         <p className="mt-1 text-micro text-fg-tertiary">
           {detail.deactivated
             ? `Deactivated ${agoPhrase(String(detail.contact.data.deactivatedAt))}: can't sign in. Their history stays.`
-            : ACCESS_INFO[access].hint}
+            : detail.noAccess
+              ? `Found through ${String(detail.contact.data.source ?? 'an integration')}: they can't sign in until you choose an access.`
+              : ACCESS_INFO[access].hint}
         </p>
       </SidePanel>
       <SidePanel title="Sign-in" testId="person-sign-in">

@@ -103,6 +103,7 @@ export function createLinearIntegration(opts: LinearIntegrationOptions): Integra
         handle: { system: SYSTEM, id: u.id },
         ...(u.email ? { email: u.email } : {}),
         ...(u.name || u.displayName ? { name: (u.name || u.displayName)! } : {}),
+        ...(u.name && u.displayName && u.displayName !== u.name ? { displayName: u.displayName } : {}),
       }
     },
   }

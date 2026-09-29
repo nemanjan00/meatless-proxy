@@ -17,8 +17,10 @@ returns an `Integration` named `slack`:
 
 - `createMcpServer()`: a fresh SDK `McpServer` with the [tools](#tools). The tools are `mcp.slack.<tool>`.
 - `handleWebhook(req)`: verifies the signature and returns `{ status, body?, headers?, events }`. See [events](#events-in).
-- `resolveUser(userId)`: calls `users.info` and returns `{ handle: { system: 'slack', id }, email?, name? }`. The name is
-  the user's `real_name`. An unknown user returns `null`. Any other failure throws.
+- `resolveUser(userId)`: calls `users.info` and returns `{ handle: { system: 'slack', id }, email?, name?, displayName?,
+  bot? }`. The name is the user's `real_name`, `displayName` the profile's display name when it differs, and `bot` is
+  set for bot users and Slackbot. An unknown user returns `null`. Any other failure throws. The server uses it to link
+  Slack users to contacts, or create them (packages/server, "Identity from integrations").
 
 The package also exports these building blocks:
 

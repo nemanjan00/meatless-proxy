@@ -5,6 +5,7 @@ import { createLinearIntegration } from '@mp/integration-linear'
 import { createSlackIntegration } from '@mp/integration-slack'
 import type { Integration } from '@mp/mcp'
 import type { EffectClass } from '@mp/tools'
+import { gitlabIdentity, type IdentityLookup, linearIdentity, slackIdentity } from './identity-lookups.ts'
 
 /** What an integration factory gets besides its secrets. */
 export interface IntegrationFactoryDeps {
@@ -38,6 +39,8 @@ export interface IntegrationSpec {
   effects: Record<string, EffectClass>
   /** Tools that answer in the system (used by the reply-goes-back-out policy). */
   answerTools?: string[]
+  /** How the system's users are looked up and named, for linking them to contacts (./identity-lookups.ts). */
+  identity?: IdentityLookup
   /** Builds an instance. Missing values are empty strings. */
   create(values: Record<string, string>, deps: IntegrationFactoryDeps): Integration
 }
@@ -64,6 +67,7 @@ export const slackSpec: IntegrationSpec = {
     update_message: 'idempotent',
   },
   answerTools: ['post_message', 'reply', 'update_message'],
+  identity: slackIdentity,
   create: (v, d) =>
     createSlackIntegration({
       secrets: { botToken: v.SLACK_BOT_TOKEN || UNSET, signingSecret: v.SLACK_SIGNING_SECRET ?? '' },
@@ -95,6 +99,7 @@ export const linearSpec: IntegrationSpec = {
     list_cycles: 'read',
     viewer: 'read',
   },
+  identity: linearIdentity,
   create: (v, d) =>
     createLinearIntegration({
       secrets: {
@@ -134,6 +139,7 @@ export const gitlabSpec: IntegrationSpec = {
     comment_issue: 'non_idempotent',
     current_user: 'read',
   },
+  identity: gitlabIdentity,
   create: (v, d) => {
     const baseUrl = v.GITLAB_BASE_URL || d.baseUrl
     return createGitlabIntegration({

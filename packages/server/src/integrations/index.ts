@@ -2,10 +2,12 @@ import { type Clock, errorMessage, type EventBus, type Hooks, type Logger, sleep
 import type { Directory } from '@mp/directory'
 import type { Events, IngestInput } from '@mp/events'
 import type { IntegrationEvent, WebhookRequest } from '@mp/mcp'
+import type { Records } from '@mp/records'
 import type { SecretStore } from '@mp/secrets'
 import type { Sessions } from '@mp/sessions'
 import type { ToolRegistry } from '@mp/tools'
-import { createActorResolver } from './identity.ts'
+import { createIdentityResolver, defineIdentityKinds, type IdentityResolver } from './identity.ts'
+import type { IdentityLookup } from './identity-lookups.ts'
 import { createInstance, InstanceCache, type IntegrationInstance } from './instances.ts'
 import { registerIntegrationPolicies } from './policies.ts'
 import type { ProvisioningOptions } from './provisioning.ts'
@@ -13,6 +15,9 @@ import { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
 
 export { closingReason, mergeRequestSubject, needsExternalReply } from './policies.ts'
 export { INTEGRATION_SPECS, type IntegrationSpec } from './specs.ts'
+export { identityRoutes } from './identity-routes.ts'
+export type { IdentityLookup } from './identity-lookups.ts'
+export type { IdentityResolver, ResolvedUser } from './identity.ts'
 export type { IntegrationInstance } from './instances.ts'
 export {
   createHookProvisioning,
@@ -41,6 +46,10 @@ export interface IntegrationsOptions {
   secretsTtlMs?: number
   /** GitLab webhook provisioning timing (src/integrations/provisioning.ts). */
   provisioning?: ProvisioningOptions
+  /** How long an event waits for its users to be looked up (./identity.ts). Default 1.5 s. */
+  identityTimeoutMs?: number
+  /** Replaces an integration's user lookup (./identity-lookups.ts), by integration name. */
+  identityLookups?: Record<string, IdentityLookup>
 }
 
 export interface IntegrationsDeps {
@@ -52,6 +61,8 @@ export interface IntegrationsDeps {
   events: Events
   sessions: Sessions
   directory: Directory
+  /** Holds `identity_link` records: integration users and the contacts they are. */
+  records: Records
   clock: Clock
   logger: Logger
 }
@@ -76,6 +87,8 @@ export interface Integrations {
    * ingested with their actor mapped to a contact.
    */
   handleWebhook(name: string, employeeRef: string | undefined, req: WebhookRequest): Promise<WebhookResponse>
+  /** Integration users to contacts: actors and mentions of incoming events (./identity.ts). */
+  readonly identity: IdentityResolver
   /** Resolves when every webhook ingest in progress has finished (tests, shutdown). */
   idle(): Promise<void>
   close(): Promise<void>
@@ -123,7 +136,12 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
   const offSecrets = deps.bus.subscribe<{ kind: string }>('record.changed', (m) => {
     if (m.payload.kind === 'secret') cache.invalidate()
   })
-  const actors = createActorResolver({ directory: deps.directory, clock: deps.clock, logger })
+  defineIdentityKinds(deps.records)
+  const identity = createIdentityResolver(
+    { records: deps.records, directory: deps.directory, clock: deps.clock, logger: logger.child({ component: 'identity' }) },
+    opts.identityTimeoutMs !== undefined ? { timeoutMs: opts.identityTimeoutMs } : {},
+  )
+  const lookupOf = (spec: IntegrationSpec) => opts.identityLookups?.[spec.name] ?? spec.identity
   const instanceFor = (spec: IntegrationSpec, employeeId: string | undefined) => cache.get(spec, employeeId)
 
   // ── Tools: definitions from an instance with placeholder secrets, calls to the caller's instance ──
@@ -181,17 +199,18 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     (await deps.directory.employees.get(ref)) ?? (await deps.directory.employees.byHandle(ref))
 
   const ingestOne = async (instance: IntegrationInstance, e: IntegrationEvent, employeeId: string | undefined) => {
+    // Who it is, before routing: the router's priority, the requester and `payload.author` filters depend on it.
+    const who = await identity.annotate(instance.integration, lookupOf(instance.spec), e)
     const input: IngestInput = {
       source: e.source,
       type: e.type,
       dedupeKey: e.dedupeKey,
       ...(e.subject ? { subject: e.subject } : {}),
-      ...(e.text ? { text: e.text } : {}),
-      payload: e.payload,
+      ...(who.text ? { text: who.text } : {}),
+      payload: who.payload,
       ...(employeeId ? { employeeId } : {}),
+      ...(who.contactId ? { actorContactId: who.contactId } : {}),
     }
-    const contactId = await actors.contactFor(instance.integration, e.actor)
-    if (contactId) input.actorContactId = contactId
     for (let attempt = 1; ; attempt++) {
       try {
         const { event, created } = await deps.events.ingest(input)
@@ -263,13 +282,16 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
       return instanceFor(spec, employeeId)
     },
     handleWebhook,
+    identity,
     async idle() {
       while (pending.size) await Promise.all([...pending])
+      await identity.idle()
     },
     async close() {
       offSecrets()
       offPolicies()
       await Promise.all([...pending])
+      await identity.idle()
       await cache.close()
     },
   }

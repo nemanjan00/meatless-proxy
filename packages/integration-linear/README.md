@@ -5,7 +5,7 @@ all behind one factory that implements `Integration` from `@mp/mcp`:
 
 - **Tools**: an MCP server named `linear` over Linear's GraphQL API, so the tools are `mcp.linear.<tool>`.
 - **Events in**: signed Linear webhooks, verified and turned into events with subject `linear:<issue identifier>`.
-- **Identity**: `resolveUser(id)` returns a Linear user's email and name, so the server can match them to a contact.
+- **Identity**: `resolveUser(id)` returns a Linear user's email, name and display name, so the server can link them to a contact.
 
 Layer 2. Depends on `@mp/core`, `@mp/mcp`, `@modelcontextprotocol/sdk` and `zod`. There is no Linear SDK: the
 GraphQL client is a thin wrapper over `fetch`.
@@ -150,8 +150,9 @@ The server (`packages/server/src/integrations`) builds one instance per employee
    the LINEAR_API_KEY secret". A webhook URL without a signing secret answers `404`. The server passes the values as
    `secrets: { apiKey, webhookSecret }`.
 4. **Handles**: give each person's contact a handle `{ system: 'linear', id: '<their Linear user id>' }` (the ids are
-   in `list_users`). Otherwise the server looks the actor up with `resolveUser`, matches the contact by email and
-   records the handle on it. It never creates contacts from webhooks. Call `viewer` with the employee's key to learn
+   in `list_users`). Otherwise the server looks the actor up with `resolveUser`: it matches the contact by email and
+   records the handle on it, suggests a person with the same name to an admin, or creates a contact that can't sign
+   in. See docs/spec.md#identity-from-integrations. Call `viewer` with the employee's key to learn
    its own Linear user id.
 
 ## Recommended trigger

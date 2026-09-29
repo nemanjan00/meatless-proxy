@@ -57,6 +57,7 @@ import { ATTACHMENT_ROUTES, type AttachmentsApi, attachmentsMethods } from './at
 import { NOTIFICATION_ROUTES, type NotificationsApi, notificationsMethods } from './notifications.ts'
 import { LIMIT_ROUTES, type LimitsApi, limitsMethods } from './limits.ts'
 import { KNOWLEDGE_ROUTES, type KnowledgeApi, knowledgeMethods } from './knowledge.ts'
+import { IDENTITY_ROUTES, type IdentityApi, identityMethods } from './identity.ts'
 import { CHAT_ACTIVITY_ROUTES, type ChatActivityApi, chatActivityMethods } from './chat-activity.ts'
 import { PROJECT_ROUTES, type ProjectsApi, projectsMethods } from './projects.ts'
 import { PROCEDURE_ROUTES, type ProceduresApi, proceduresMethods } from './procedures.ts'
@@ -166,6 +167,7 @@ export const ROUTES = {
   ...NOTIFICATION_ROUTES,
   ...LIMIT_ROUTES,
   ...KNOWLEDGE_ROUTES,
+  ...IDENTITY_ROUTES,
   ...CHAT_ACTIVITY_ROUTES,
 } as const satisfies Record<string, readonly [HttpMethod, string]>
 
@@ -272,7 +274,8 @@ export interface ApiClient
     NotificationsApi,
     ChatActivityApi,
     LimitsApi,
-    KnowledgeApi {
+    KnowledgeApi,
+    IdentityApi {
   // ── Records ──────────────────────────────────────────────────────────────
 
   /** `GET /api/kinds` → every record kind's schema (core and extension fields, title field). */
@@ -698,6 +701,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     ...notificationsMethods(call),
     ...limitsMethods(call),
     ...knowledgeMethods(call),
+    ...identityMethods(call),
     ...chatActivityMethods(call),
   }
 }

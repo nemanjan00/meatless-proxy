@@ -83,7 +83,9 @@ describe('nobody is trusted on their word', () => {
       const need = typeof hit!.rule.need === 'function' ? hit!.rule.need(hit!.params) : hit!.rule.need
       if (
         method === 'GET' &&
-        !['listSecrets', 'listMcpServers', 'mcpServerTools', 'slackManifest', 'integrationsStatus'].includes(name)
+        !['listSecrets', 'listMcpServers', 'mcpServerTools', 'slackManifest', 'integrationsStatus', 'identityLinks'].includes(
+          name,
+        )
       )
         expect(['viewer', 'public'], name).toContain(need)
       if (['health', 'ready', 'authConfig'].includes(name)) expect(need, name).toBe('public')
@@ -415,7 +417,9 @@ describe('roles', () => {
     for (const k of ['login_link', 'auth_session', 'mcp_token', 'secret']) expect(kinds).not.toContain(k)
     expect((await t.req('GET', '/api/records/auth_session')).status).toBe(404)
     const contact = (await t.req('GET', '/api/kinds')).body.find((k: any) => k.kind === 'contact')
-    expect(contact.extensions.find((f: any) => f.name === 'access')).toMatchObject({ values: ['viewer', 'member', 'admin'] })
+    expect(contact.extensions.find((f: any) => f.name === 'access')).toMatchObject({
+      values: ['viewer', 'member', 'admin', 'none'],
+    })
   })
 })
 

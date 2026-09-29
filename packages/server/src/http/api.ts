@@ -47,6 +47,8 @@ const HIDDEN_KINDS = new Set<string>([
 ])
 // Chat images' metadata and saved descriptions have their own API, with the image's visibility (a DM's images are private).
 for (const k of ['chat_attachment', 'image_description']) HIDDEN_KINDS.add(k)
+// Integration users without a contact (names, emails): admins, through /api/identity (src/integrations/identity-routes.ts).
+HIDDEN_KINDS.add('identity_link')
 /** Kinds whose records can belong to a DM (and are then visible to its members only). */
 const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 

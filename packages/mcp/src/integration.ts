@@ -62,5 +62,10 @@ export interface IntegrationEvent {
 export interface ExternalUser {
   handle: { system: string; id: string }
   email?: string
+  /** The user's full name. */
   name?: string
+  /** The short name people see in the system (Slack's display name, GitLab's username), when it differs. */
+  displayName?: string
+  /** A bot or app account, not a person: never turned into a person contact. */
+  bot?: boolean
 }

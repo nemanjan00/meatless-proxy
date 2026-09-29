@@ -339,7 +339,9 @@ Everyone using the web UI, the API or the MCP server is signed in as a
 - **Roles** on a contact: `admin` (secrets, employees, limits, triggers, kill
   switch), `member` (chat, sessions, knowledge, starting and steering work) and
   `viewer` (read only). They're stored in the contact's `access` field, because
-  `role` is the job title; a person without one is a viewer. AI employees act
+  `role` is the job title; a person without one is a viewer, and `none` means
+  they can't sign in (people [created from an integration's
+  directory](#identity-from-integrations) start there). AI employees act
   with their own [permissions](#permissions), not a role. A
   [local agent](#local-agents-as-chat-participants) acts with its sponsor's
   access, capped at `member`, and never signs in itself.
@@ -838,7 +840,9 @@ Each integration has three parts:
   into [events](execution.md#events) with a proper subject, actor and dedupe
   key. They're routed by triggers and subscriptions like everything else.
 - **Identity:** the system's users are matched to [contacts](#contacts)
-  through `handles`, so "who asked" is known.
+  through `handles`, so "who asked" is known. Users without a contact are
+  looked up in the system and linked or created
+  ([identity from integrations](#identity-from-integrations)).
 
 | | Slack | Linear | GitLab |
 |---|---|---|---|
@@ -1038,7 +1042,9 @@ Behaviour:
   over MCP (`agent`, with the person it acts for as its `sponsor`).
 - **Identity resolution.** An incoming message or task event is matched to a
   contact through `handles`. That way, the same person is recognised in chat and
-  in the task system.
+  in the task system. A user no contact has a handle for yet is looked up in
+  the integration's own directory ([identity from
+  integrations](#identity-from-integrations)).
 - The model can look up contacts: by id, by handle, by name, or by any field.
 - A contact's projects, and the contact's role on each one, come from the
   [links between contacts and projects](#links-between-contacts-and-projects).
@@ -1046,10 +1052,64 @@ Behaviour:
 The [employee definition](employee.md#people) lists the fields the employee
 role expects. Most of them are extensions, not core fields.
 
+#### Identity from integrations
+
+People write in Slack, GitLab and Linear long before anyone adds them to the
+directory, so the harness links integration users to contacts by itself.
+Without that, a Slack message is anonymous: no requester, no permissions, no
+personal memory, and filters on `payload.author.kind: 'contact'` don't match.
+
+When an event's actor handle (`slack:<id>`, `gitlab:<username>`,
+`linear:<id>`) matches no contact:
+
+1. The user is looked up with the employee's own credentials for that
+   integration: Slack `users.info` (email, real and display name, `is_bot`),
+   GitLab `/users/:id` (name, username, public email, bot), Linear `user(id)`
+   (name, display name, email).
+2. **Same email** (case-insensitive): the handle is added to that contact.
+3. Else, **same name only**: a person with exactly that name (or display name)
+   and no handle in that system yet may be the same person, or not. The harness
+   doesn't guess: it records a **suggestion** for an admin, and the event stays
+   anonymous.
+4. Else a **new contact** is created: a person with the name, the email and the
+   handle, `source` set to the system, and `access: none`, so they **can't
+   sign in** until an admin gives them an access. (`none` isn't
+   [deactivation](#sign-in-and-roles): nobody left.)
+5. **Bots** (Slack bots and Slackbot, GitLab bot users) never become people.
+   They stay anonymous, with their name shown.
+
+- **Before routing.** The contact is on the event (`actorContactId`, and
+  `payload.author` `{ kind: 'contact', id }`) before triggers and the router
+  see it, so human priority, the requester, private DM work and people-only
+  triggers all work for integration users.
+- **Mentions.** Users mentioned in the text (Slack `<@U…>`) are resolved the
+  same way, and the event text names them: `@Ana Example (slack U123)`, and the
+  author as `Ana Example (slack U123)`. The employee's own bot shows as the
+  employee. The raw text stays in the payload.
+- **Fast.** Lookups are cached per system and user for an hour, misses,
+  suggestions and bots included (a failed lookup for a minute), so a busy
+  channel doesn't call the API on every message. An event waits at most 1.5 s;
+  after that it goes on anonymous and the lookup finishes in the background for
+  the next one.
+- **Privacy.** Only the name, the email and the handle are stored. Logs carry
+  ids, never emails. Names from other systems are cut to one short line.
+- **Admins decide the rest** (API; the People page shows it):
+  `GET /api/identity/unlinked` lists the users that are unknown or suggested
+  (`?status=all` for every status: `unknown`, `suggested`, `created`, `linked`,
+  `ignored`), with name, email, last seen and the suggested contact.
+  `POST /api/identity/link { system, id, contactId }` puts the handle on a
+  person; a handle on a contact the harness created for that very user moves
+  there (anything else is a conflict). `POST /api/identity/ignore
+  { system, id, ignored? }` keeps a user anonymous and stops looking them up.
+  All three are for admins only.
+- **Replaceable.** Each integration has a small identity lookup (look up,
+  find mentions, render names), next to the integration's definition.
+
 Open questions:
 
 - Where do contacts come from: an HR system, a chat workspace directory, a
-  manual file, or several of these merged?
+  manual file, or several of these merged? (Today: added by hand, or created
+  from an integration's directory as above.)
 - Can people edit their own contact, for example to set preferences?
 
 ### Projects

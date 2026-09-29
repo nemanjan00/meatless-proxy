@@ -170,6 +170,8 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
 - `GET /api/integrations/status` → per employee, which integrations are set up (token and webhook secret, from secret
   metadata only) and its GitLab webhooks with their status and error, plus whether provisioning is on (admins; see
   [GitLab webhooks](#gitlab-webhooks)).
+- `GET /api/identity/unlinked`, `POST /api/identity/link`, `POST /api/identity/ignore` (`@mp/api` `IDENTITY_ROUTES`):
+  integration users and their contacts (admins; see [Identity from integrations](#identity-from-integrations)).
 - `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
 - `GET /api/sessions/:id/preview` and `POST /api/previews/token` are `@mp/api` routes, served by `src/previews` (see [Live previews](#live-previews)).
 
@@ -591,6 +593,39 @@ set themselves up"). Nobody adds them by hand.
   Integrations*.
 - **Off** without `PUBLIC_URL` (logged once at start), or when GitLab isn't in `INTEGRATIONS`.
 
+## Identity from integrations
+
+`src/integrations/identity.ts` links Slack, GitLab and Linear users to contacts
+(docs/spec.md#identity-from-integrations). Every webhook event goes through
+`identity.annotate(integration, lookup, event)` before it's ingested: the actor
+and the users mentioned in the text are resolved, `actorContactId` and
+`payload.author` (`{ kind: 'contact', id }`) are set, and the text names them
+(`@Ana Example (slack U123)`).
+
+- **Resolving** a handle no contact has: the integration's `IdentityLookup`
+  (`src/integrations/identity-lookups.ts`, set as `identity` on its
+  `IntegrationSpec`; `slackIdentity` also finds and renders `<@U…>` mentions)
+  looks the user up with that employee's instance. Same email: the handle goes
+  on that contact. Same name only (a person with no handle in that system):
+  a suggestion, no link. Else a person contact with `access: 'none'` (which
+  `accessOf` refuses: no sign-in) and `source: '<system>'`. Bots: no contact.
+- **Records:** one `identity_link` per user, key `<system>:<id>`: `status`
+  (`unknown`, `suggested`, `created`, `linked`, `ignored`), `name`, `email`,
+  `contactId`, `suggestedContactId`, `firstSeenAt`, `lastSeenAt` (written at
+  most every 5 minutes). Hidden from the generic records API.
+- **Cache and timeout:** outcomes per system and id for an hour (misses,
+  suggestions and bots too; failures for a minute), lookups of one user in
+  flight shared. An event waits `identityTimeoutMs` (default 1.5 s), then goes
+  on anonymous while the lookup finishes. `integrations.idle()` waits for it.
+- **Routes** (`src/integrations/identity-routes.ts`, admins only):
+  `GET /api/identity/unlinked?status=&system=&limit=` → `{ items }` (default
+  status `unknown,suggested`; `all` for every one), `POST /api/identity/link
+  { system, id, contactId }` (a handle on the contact created for that user
+  moves; on another contact: 409; only people), `POST /api/identity/ignore
+  { system, id, ignored? }`. Both drop the cached outcome.
+- **Options:** `IntegrationsOptions.identityTimeoutMs`, and
+  `identityLookups: { <integration>: IdentityLookup }` to replace a lookup.
+
 ## Alerts
 
 `src/alerts.ts` posts in `#alerts`, which the bootstrap employee creates the
@@ -909,6 +944,10 @@ The same functions are exported for the HTTP API: `exportTree(services)` →
   email and handles, idempotency, deactivation ending cookie sessions, tokens and links and reactivation, the last
   admin, access changes for admins only, filters, sign-ins and tokens for admins and the person only). In memory, and
   on Postgres + Redis when configured.
+- `identity.test.ts`: identity from integrations with a fake lookup (email match, a created contact that can't sign
+  in, name-only suggestions, bots, caching, failures, timeouts, concurrent events, ignored users, mention rendering) and
+  through signed Slack webhooks (the `payload.author` trigger fires for a Slack user, the admin-only routes, link, move
+  and ignore).
 - `limits.test.ts`: the defaults with no configuration and from the environment, defaults applied with no records, a
   run pausing at 100 % of the daily budget (and an override letting it through), the limits API (admins only;
   create, edit, delete, validation; the overview with budget usage and unpriced models), pricing (built-in table,

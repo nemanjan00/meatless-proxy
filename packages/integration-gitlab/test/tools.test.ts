@@ -421,8 +421,24 @@ describe('resolveUser', () => {
       handle: { system: 'gitlab', id: 'ana' },
       email: 'ana@example.com',
       name: 'Ana Example',
+      displayName: 'ana',
     })
-    expect(await integration.resolveUser!('@marko')).toEqual({ handle: { system: 'gitlab', id: 'marko' }, name: 'Marko Example' })
+    expect(await integration.resolveUser!('@marko')).toEqual({
+      handle: { system: 'gitlab', id: 'marko' },
+      name: 'Marko Example',
+      displayName: 'marko',
+    })
+  })
+  it('looks numeric ids up directly, and marks bot users', async () => {
+    expect(await integration.resolveUser!('11')).toMatchObject({
+      handle: { system: 'gitlab', id: 'ana' },
+      email: 'ana@example.com',
+    })
+    expect(await integration.resolveUser!('999')).toBeNull()
+    expect(await integration.resolveUser!('billing-bot')).toMatchObject({
+      handle: { system: 'gitlab', id: 'billing-bot' },
+      bot: true,
+    })
   })
   it('returns null for unknown users', async () => {
     expect(await integration.resolveUser!('ghost')).toBeNull()

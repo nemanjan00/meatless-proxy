@@ -367,11 +367,12 @@ describe('event mapping', () => {
 })
 
 describe('resolveUser', () => {
-  it('returns the handle, email and name', async () => {
+  it('returns the handle, email, name and display name', async () => {
     expect(await integration.resolveUser!(uid(102))).toEqual({
       handle: { system: 'linear', id: uid(102) },
       email: 'ana@example.com',
       name: 'Ana Example',
+      displayName: 'ana',
     })
   })
   it('returns null for an unknown user', async () => {

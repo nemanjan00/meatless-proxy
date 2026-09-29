@@ -378,6 +378,8 @@ export interface PersonItem {
   employeeId?: string
   /** Sign-in access for people; null for AI employees and agents (they never sign in). */
   access: Access | null
+  /** Found through an integration (e.g. Slack) and not given access yet: can't sign in until an admin grants it. */
+  noAccess?: boolean
   /** Deactivated by an admin: can't sign in, history kept. */
   deactivated: boolean
   /** Their last sign-in (a link or the identity provider). Shown to admins and to the person themselves, else null. */

@@ -22,11 +22,19 @@ const RANK: Record<Access, number> = { viewer: 0, member: 1, admin: 2 }
 /** Whether `have` is at least `need`. */
 export const atLeast = (have: Access, need: Access) => RANK[have] >= RANK[need]
 
+/**
+ * The `access` of a person who may not sign in (yet): contacts created from an integration's
+ * directory (src/integrations/identity.ts) get it. An admin gives them a real access to let them in.
+ * Unlike `deactivatedAt`, it says nothing about the person having left.
+ */
+export const NO_ACCESS = 'none'
+
 export const accessField: FieldDef = {
   name: 'access',
   type: 'enum',
-  values: [...ACCESS_LEVELS],
-  description: 'Sign-in access: viewer (read only), member (chat, sessions, knowledge) or admin. Missing means viewer.',
+  values: [...ACCESS_LEVELS, NO_ACCESS],
+  description:
+    'Sign-in access: viewer (read only), member (chat, sessions, knowledge) or admin; none: may not sign in. Missing means viewer.',
 }
 
 /** Set by an admin who deactivated someone (src/knowledge/people.ts): they can't sign in; their history stays. */
@@ -96,10 +104,14 @@ export function defineAuthKinds(records: Records) {
     records.kinds.extend('contact', deactivatedFields)
 }
 
-/** A contact's access, or null when it may not sign in at all (an AI employee, someone who left, or someone deactivated). */
+/**
+ * A contact's access, or null when it may not sign in at all (an AI employee, someone who left,
+ * someone deactivated, or someone with access `none`, e.g. created from Slack's directory).
+ */
 export function accessOf(contact: StoredRecord<ContactData> | null | undefined): Access | null {
   if (!contact) return null
   if (contact.data.kind !== 'person' || contact.data.status === 'left' || contact.data.deactivatedAt) return null
   const a = contact.data.access
+  if (a === NO_ACCESS) return null
   return typeof a === 'string' && (ACCESS_LEVELS as readonly string[]).includes(a) ? (a as Access) : 'viewer'
 }

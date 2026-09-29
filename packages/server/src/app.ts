@@ -21,7 +21,7 @@ import { LiveHub, NowTracker } from './live.ts'
 import { ChatActivity, chatActivityRoutes } from './chat-activity.ts'
 import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
-import { gitlabHookProvisioning, type HookProvisioning, integrationStatusRoutes } from './integrations/index.ts'
+import { gitlabHookProvisioning, type HookProvisioning, identityRoutes, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
 import { procedureRoutes } from './procedures/index.ts'
 import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
@@ -148,6 +148,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     '/',
     integrationStatusRoutes(services, () => hookProvisioning),
   )
+  app.route('/', identityRoutes(services)) // integration users and their contacts (src/integrations/identity-routes.ts)
   app.route('/', mcpServerRoutes(services))
   app.route('/', projectRoutes(services))
   app.route('/', procedureRoutes(services))

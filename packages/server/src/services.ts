@@ -590,7 +590,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   if (config.INTEGRATIONS.length) {
     const baseUrls = { ...(config.GITLAB_BASE_URL ? { gitlab: config.GITLAB_BASE_URL } : {}), ...o.integrations?.baseUrls }
     services.integrations = await createIntegrations(
-      { tools, hooks, bus, secrets, events, sessions, directory, clock, logger },
+      { tools, hooks, bus, secrets, events, sessions, directory, records, clock, logger },
       { enabled: config.INTEGRATIONS, ...o.integrations, baseUrls },
     )
   }

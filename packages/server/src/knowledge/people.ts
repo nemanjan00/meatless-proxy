@@ -126,6 +126,7 @@ export class PeopleViews {
       type,
       ...(e ? { employeeId: e.id } : {}),
       access: type === 'person' ? (access && ACCESS_LEVELS.includes(access) ? access : 'viewer') : null,
+      ...(type === 'person' && (c.data.access as string | undefined) === 'none' ? { noAccess: true } : {}),
       deactivated: !!c.data.deactivatedAt,
       lastSignInAt: seen?.lastSignInAt ?? null,
       lastSeenAt: seen?.lastSeenAt ?? null,

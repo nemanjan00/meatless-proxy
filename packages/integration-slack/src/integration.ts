@@ -175,10 +175,26 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): Integrati
   const resolveUser = async (externalId: string): Promise<ExternalUser | null> => {
     try {
       const r = await client.call('users.info', { user: externalId }, {})
-      const u = (r.user ?? {}) as { id?: string; real_name?: string; profile?: { email?: string; real_name?: string } }
+      const u = (r.user ?? {}) as {
+        id?: string
+        name?: string
+        real_name?: string
+        is_bot?: boolean
+        profile?: { email?: string; real_name?: string; display_name?: string }
+      }
+      const id = u.id ?? externalId
       const name = u.real_name || u.profile?.real_name
+      const display = u.profile?.display_name || undefined
       const email = u.profile?.email
-      return { handle: { system: SLACK_SYSTEM, id: u.id ?? externalId }, ...(email ? { email } : {}), ...(name ? { name } : {}) }
+      // Slackbot isn't flagged `is_bot`, but it's no person either.
+      const bot = u.is_bot === true || id === 'USLACKBOT'
+      return {
+        handle: { system: SLACK_SYSTEM, id },
+        ...(email ? { email } : {}),
+        ...(name ? { name } : {}),
+        ...(display && display !== name ? { displayName: display } : {}),
+        ...(bot ? { bot: true } : {}),
+      }
     } catch (err) {
       if (slackErrorCode(err) === 'user_not_found') return null
       throw err

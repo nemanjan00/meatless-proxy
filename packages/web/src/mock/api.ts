@@ -51,6 +51,7 @@ import { createMockAttachmentsApi } from './attachments.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
 import { createMockKnowledgeApi } from './knowledge.ts'
+import { createMockIdentityApi } from './identity.ts'
 import { createMockLimitsApi } from './limits.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
@@ -1267,6 +1268,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // Limits and pricing (./limits.ts).
     ...createMockLimitsApi({ db, iso, delay, write, get, all }),
+
+    // Integration users the harness couldn't link to a contact by itself (./identity.ts).
+    ...createMockIdentityApi({ delay }),
 
     // Who is working on chat threads, and a small simulation when you post (./chat-activity.ts).
     channelActivity: chatActivity.channelActivity,

@@ -149,6 +149,8 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/events', need: 'admin' },
   // Integration setup and webhook provisioning status (src/integrations/status.ts).
   { method: 'GET', path: '/api/integrations/status', need: 'admin' },
+  // Integration users and the contacts they are (src/integrations/identity-routes.ts): names and emails, so admins.
+  { method: '*', path: '/api/identity/*', need: 'admin' },
   // MCP servers (src/mcp-servers), reading included: their URLs and secret names are for admins.
   { method: '*', path: '/api/mcp-servers', need: 'admin' },
   { method: '*', path: '/api/mcp-servers/*', need: 'admin' },
