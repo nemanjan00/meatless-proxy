@@ -153,6 +153,28 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
   const slack = deps.specs.slack
   if (slack)
     offs.push(
+      // An instant "on it": as soon as a Slack message sets someone to work (a run started or woken),
+      // the employee's bot reacts :eyes: to it, without waiting for a model call.
+      deps.bus.subscribe<{ eventId: string; deliveries?: { outcome?: string; runId?: string }[] }>('event.routed', async (m) => {
+        const working = (m.payload.deliveries ?? []).some((d) => d.outcome === 'run' || d.outcome === 'woke')
+        if (!working) return
+        try {
+          const event = await events.get(m.payload.eventId)
+          if (event?.data.source !== `integration:${slack.name}` || !event.data.employeeId) return
+          if (!/^message\./.test(event.data.type)) return
+          const p = (event.data.payload ?? {}) as { channel?: unknown; ts?: unknown }
+          if (typeof p.channel !== 'string' || typeof p.ts !== 'string') return
+          const instance = await deps.instanceFor(slack, event.data.employeeId)
+          if (!instance.hasToken) return
+          const r = await instance.callTool('react', { channel: p.channel, ts: p.ts, name: 'eyes' })
+          if (r.isError) logger.debug('slack: could not react to acknowledge', { eventId: event.id, output: r.output })
+        } catch (err) {
+          logger.debug('slack: could not react to acknowledge', { eventId: m.payload.eventId, err: errorMessage(err) })
+        }
+      }),
+    )
+  if (slack)
+    offs.push(
       deps.hooks.on(afterRun, async ({ run, session, result }) => {
         if (result.status !== 'completed') return undefined
         const eventId = run.data.cause.eventId

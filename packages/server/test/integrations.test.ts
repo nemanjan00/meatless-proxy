@@ -371,7 +371,12 @@ function integrationSuite(backend: Backend) {
     const session = await s.sessions.require(run.data.sessionId)
     expect(session.data.parent?.sessionId).toBe(await s.routerSessionFor(meatless))
 
-    const react = api.calls.find((c) => c.path === 'reactions.add')!
+    // The instant "on it": the bot reacted :eyes: as soon as the mention set work going.
+    // (the scripted model then reacts too: two reactions, the harness's first).
+    const reactions = api.calls.filter((c) => c.path === 'reactions.add')
+    expect(reactions).toHaveLength(2)
+    expect(reactions[0]!.body).toMatchObject({ name: 'eyes' })
+    const react = reactions.at(-1)!
     expect(react.token).toBe('Bearer xoxb-meatless')
     expect(react.body).toMatchObject({ channel: 'C1', timestamp: '1700000000.000100', name: 'eyes' })
     // The final text went back to the thread, as the same bot.
