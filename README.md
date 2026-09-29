@@ -54,10 +54,13 @@ The whole thing runs with Docker Compose:
 git clone https://github.com/nemanjan00/meatless-proxy.git
 cd meatless-proxy
 cp .env.example .env    # then set OPENAI_API_KEY and SECRETS_KEY
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)   # so the app can reach the Docker socket
 docker compose up
 ```
 
-Then open <http://localhost:3000>. On first start the harness creates a default
+Then open <http://localhost:3000>. Set `APP_PORT` to serve on another port.
+The app container manages project environments as sibling containers through
+the host's Docker socket, so run it on a host dedicated to it. On first start the harness creates a default
 AI employee, **Meatless**, with its router session, and the channels
 `#general` and `#requests`. Post in `#requests` and it answers in the thread.
 
@@ -100,6 +103,14 @@ cp .env.example .env              # once, then fill in
 npm run dev
 ```
 
+Or, if you'd rather not build them, run both in Docker for development:
+
+```sh
+docker run -d --name mp-dev-postgres -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=meatless_proxy -p 127.0.0.1:55432:5432 postgres:18
+docker run -d --name mp-dev-redis -p 127.0.0.1:56379:6379 redis:8
+# then DATABASE_URL=postgres://postgres@127.0.0.1:55432/meatless_proxy and REDIS_URL=redis://127.0.0.1:56379
+```
+
 Without `DATABASE_URL` and `REDIS_URL`, the server falls back to in-memory
 storage and an in-memory queue. That's handy for trying things out, but
 nothing is kept.
@@ -113,6 +124,8 @@ npm run typecheck
 npm run check:deps     # architecture: layers point down, no cycles
 npm run check:secrets  # nothing that looks like a key in the repo
 npm run check          # all of the above
+MP_DOCKER_TEST=1 npx vitest run --project node packages/containers-docker   # against a real Docker daemon
+MP_LIVE_MODEL_TEST=1 npx vitest run --project node packages/model-openai     # one real model call
 ```
 
 CI runs all of these on every push, with Postgres and Redis.
