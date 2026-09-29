@@ -79,6 +79,9 @@ export const subjectFor = (channel: string, ts: string) => ({ system: SLACK_SYST
  * Maps one `event_callback` envelope to an integration event, or null when it
  * isn't one we route (the app's own messages, joins, unknown types, …).
  */
+/** One key per Slack message, whichever event (`message` or `app_mention`) brings it. */
+const messageKey = (channel: string, ts: string) => `slack:msg:${channel}:${ts}`
+
 export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promise<IntegrationEvent | null> {
   const ev = env.event
   if (env.type !== 'event_callback' || !ev || !env.event_id) return null
@@ -91,10 +94,17 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
     if (isDm) return 'DM'
     return `#${(await ctx.channelName(channel)) ?? channel}`
   }
-  const base = (type: string, subjectTs: string, actor: string | undefined, text: string, payload: Json): IntegrationEvent => ({
+  const base = (
+    type: string,
+    subjectTs: string,
+    actor: string | undefined,
+    text: string,
+    payload: Json,
+    dedupeKey = `slack:${env.event_id}`,
+  ): IntegrationEvent => ({
     source: SLACK_SOURCE,
     type,
-    dedupeKey: `slack:${env.event_id}`,
+    dedupeKey,
     subject: subjectFor(channel, subjectTs),
     ...(actor ? { actor: { system: SLACK_SYSTEM, id: actor } } : {}),
     text,
@@ -144,7 +154,10 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
       }
       if (!MESSAGE_SUBTYPES.has(ev.subtype) || !ev.ts || isSelf(ev, self)) return null
       const reply = !!ev.thread_ts && ev.thread_ts !== ev.ts
-      const type = isDm ? 'message.direct' : reply ? 'message.replied' : 'message.posted'
+      const mentioned = mentionsApp(ev.text, self)
+      // Slack sends a mention twice (`message` and `app_mention`, with different event ids): both map
+      // to one `message.mentioned` event with one dedupe key, so it's handled once.
+      const type = isDm ? 'message.direct' : mentioned ? 'message.mentioned' : reply ? 'message.replied' : 'message.posted'
       const who = ev.user ?? ev.bot_id ?? 'someone'
       return base(
         type,
@@ -160,9 +173,10 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
-          mentions_app: mentionsApp(ev.text, self),
+          mentions_app: mentioned,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
         }),
+        messageKey(channel, ev.ts),
       )
     }
     case 'app_mention': {
@@ -180,7 +194,9 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
+          mentions_app: true,
         }),
+        messageKey(channel, ev.ts),
       )
     }
     case 'reaction_added': {

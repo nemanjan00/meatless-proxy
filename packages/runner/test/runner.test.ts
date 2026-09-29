@@ -267,6 +267,58 @@ describe('runner', () => {
     expect(await h.sessions.inbox(s.id)).toEqual([])
   })
 
+  it('starts a new run for a delivery that arrived during the last model call', async () => {
+    let s!: { id: string }
+    let calls = 0
+    const h = harness(async () => {
+      calls++
+      if (calls === 1) {
+        // The reply is being written when a new message lands in the inbox.
+        await h.sessions.addToInbox({
+          sessionId: s.id,
+          eventId: 'evt_late',
+          expectedToAct: true,
+          trusted: true,
+          text: 'Ana: did you get this?',
+          source: 'chat',
+          type: 'message.replied',
+        })
+        return reply('first answer')
+      }
+      return reply('yes, got it')
+    })
+    s = await h.session()
+    const run = await h.start(s.id)
+    await h.runner.execute(run.id)
+    const runs = await h.sessions.runs({ sessionId: s.id })
+    expect(runs).toHaveLength(2)
+    const next = runs.find((r) => r.id !== run.id)!
+    expect(next.data.cause).toMatchObject({ type: 'event', eventId: 'evt_late', note: 'inbox' })
+    await h.runner.execute(next.id)
+    expect(h.model.calls[1]!.messages.at(-1)?.content).toContain('Ana: did you get this?')
+    expect(await h.sessions.inbox(s.id)).toEqual([])
+  })
+
+  it('leaves information-only inbox items for next time', async () => {
+    let s!: { id: string }
+    const h = harness(async () => {
+      await h.sessions.addToInbox({
+        sessionId: s.id,
+        eventId: 'evt_fyi',
+        expectedToAct: false,
+        trusted: true,
+        text: 'fyi',
+        source: 'chat',
+        type: 'message.replied',
+      })
+      return reply('done')
+    })
+    s = await h.session()
+    const run = await h.start(s.id)
+    await h.runner.execute(run.id)
+    expect(await h.sessions.runs({ sessionId: s.id })).toHaveLength(1)
+  })
+
   it('pauses after too many steps', async () => {
     const h = harness(() => callTools([{ name: 'noop' }]), { maxSteps: 3 })
     h.tool({ name: 'noop' }, async () => ({ output: 'ok' }))

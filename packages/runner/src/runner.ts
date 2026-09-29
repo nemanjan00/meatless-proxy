@@ -210,7 +210,32 @@ export function createRunner(opts: RunnerOptions): Runner {
     current = await sessions.transition(run.id, 'running', result.status, { result, endedAt: clock.iso() })
     await hooks.decide(afterRun, { run: current, session, result })
     await wakeWaiters(run.id)
+    await followUpInbox(current, session)
     return { status: result.status, runId: run.id }
+  }
+
+  /**
+   * A delivery that reached a continuing run's inbox during its last step is still unread when the run
+   * ends. If any of it asks the session to act, a new run picks it up; otherwise it waits for next time.
+   */
+  const followUpInbox = async (run: Run, session: Session) => {
+    if (run.data.mode !== 'continuing' || run.data.state !== 'completed') return
+    const left = (await sessions.inbox(session.id)).filter((i) => i.data.expectedToAct)
+    if (!left.length) return
+    if (await sessions.activeContinuingRun(session.id)) return
+    const next = await sessions.createRun({
+      sessionId: session.id,
+      mode: 'continuing',
+      cause: { type: 'event', eventId: left[0]!.data.eventId, note: 'inbox' },
+      ...(run.data.requesterId ? { requesterId: run.data.requesterId } : {}),
+      priority: run.data.priority,
+    })
+    await enqueue(next.id, { priority: run.data.priority })
+    baseLogger.info('run started for deliveries that arrived as the last one ended', {
+      sessionId: session.id,
+      runId: next.id,
+      items: left.length,
+    })
   }
 
   const vision = opts.vision === true

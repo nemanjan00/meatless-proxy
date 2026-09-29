@@ -92,12 +92,12 @@ shown instead). Lookups on the webhook path don't retry, because Slack wants an 
 
 | Slack event | Event type | Subject ts | Payload |
 |-------------|------------|------------|---------|
-| `message` in a channel, top level (or `thread_ts == ts`) | `message.posted` | `ts` | `team_id, channel, channel_type, channel_name?, user, bot_id?, subtype?, text, ts, thread_ts?, is_reply, mentions_app, files?` |
+| `message` in a channel, top level (or `thread_ts == ts`), not mentioning the app | `message.posted` | `ts` | `team_id, channel, channel_type, channel_name?, user, bot_id?, subtype?, text, ts, thread_ts?, is_reply, mentions_app, files?` |
 | `message` with `thread_ts != ts` | `message.replied` | `thread_ts` | same |
 | `message` with `channel_type: im` (a DM to the app, threaded or not) | `message.direct` | `thread_ts` or `ts` | same, without `channel_name` |
 | `message` / `message_changed` | `message.edited` | the edited message's thread | `channel, user, ts, thread_ts?, text, previous_text` |
 | `message` / `message_deleted` | `message.deleted` | the deleted message's thread | `channel, user?, ts, thread_ts?, previous_text?` |
-| `app_mention` | `message.mentioned` | `thread_ts` or `ts` | `channel, user, text, ts, thread_ts?, is_reply` |
+| `app_mention`, or a `message` mentioning the app | `message.mentioned` | `thread_ts` or `ts` | `channel, user, text, ts, thread_ts?, is_reply, mentions_app` |
 | `reaction_added` on a message | `reaction.added` | the reacted message's `ts` | `channel, user, reaction, ts, item_user, item_is_own` |
 
 Some events are ignored:
@@ -114,9 +114,10 @@ Other bots' messages come through as `message.posted` with `bot_id` and no actor
 
 Notes:
 
-- A mention in a channel arrives twice: as `message.mentioned`, and as `message.posted` or `message.replied` with
-  `mentions_app: true`. They have different `event_id`s. Trigger on the mention, and filter the other one out of general
-  triggers.
+- Slack delivers a mention in a channel twice (a `message` and an `app_mention` event, with different `event_id`s).
+  Both become one `message.mentioned` event with `mentions_app: true` (dedupe key `slack:msg:<channel>:<ts>`, whichever
+  arrives first), so a mention is handled once. A `message` that mentions the app is `message.mentioned` too, not
+  `message.posted` or `message.replied`.
 - `reaction.added` uses the reacted message's own `ts`. For a reply in a thread, that isn't the thread root, because the
   event doesn't say which thread the message is in.
 

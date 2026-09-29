@@ -101,7 +101,8 @@ describe('signature verification', () => {
       headers: { ...req.headers, 'x-slack-retry-num': '1', 'x-slack-retry-reason': 'http_timeout' },
     })
     expect(retry.events[0]?.dedupeKey).toBe(first.events[0]?.dedupeKey)
-    expect(first.events[0]?.dedupeKey).toMatch(/^slack:Ev\d+$/)
+    // New messages are keyed by channel and ts (a mention arrives as two Slack events).
+    expect(first.events[0]?.dedupeKey).toMatch(/^slack:msg:C\w+:[\d.]+$/)
     clock.advance(301_000)
     expect((await slackIntegration.handleWebhook(req)).status).toBe(401)
   })
@@ -152,13 +153,13 @@ describe('Events API envelopes', () => {
 })
 
 describe('event mapping', () => {
-  it('message → message.posted, with the channel name resolved', async () => {
+  it('message → message.posted, with the channel name resolved (a message mentioning the app is message.mentioned)', async () => {
     const r = await deliver(msg({ text: 'deploy is <@UBOT> ready?' }))
     expect(r.events).toEqual([
       {
         source: 'integration:slack',
-        type: 'message.posted',
-        dedupeKey: expect.stringMatching(/^slack:Ev/),
+        type: 'message.mentioned',
+        dedupeKey: expect.stringMatching(/^slack:msg:/),
         subject: { system: 'slack', id: 'C1/1712345000.000100' },
         actor: { system: 'slack', id: 'U1' },
         text: 'Slack #general U1: deploy is <@UBOT> ready?',
@@ -332,6 +333,25 @@ describe('event mapping', () => {
       envelope({ type: 'app_mention', user: 'U1', text: '<@UBOT>', ts: '5.0', thread_ts: '4.0', channel: 'C1' }),
     )
     expect(inThread.events[0]?.subject).toEqual({ system: 'slack', id: 'C1/4.0' })
+  })
+
+  it('a mention Slack sends twice (message and app_mention) becomes one message.mentioned event', async () => {
+    const asMessage = await deliver(
+      envelope({ type: 'message', channel: 'C1', channel_type: 'channel', user: 'U1', text: '<@UBOT> test', ts: '7.0' }),
+    )
+    const asMention = await deliver(envelope({ type: 'app_mention', channel: 'C1', user: 'U1', text: '<@UBOT> test', ts: '7.0' }))
+    const a = asMessage.events[0]!
+    const b = asMention.events[0]!
+    expect(a.type).toBe('message.mentioned')
+    expect(b.type).toBe('message.mentioned')
+    expect(a.dedupeKey).toBe('slack:msg:C1:7.0')
+    expect(b.dedupeKey).toBe(a.dedupeKey)
+    expect(a.payload).toMatchObject({ mentions_app: true })
+    // A plain message keeps its type and gets the same per-message key.
+    const plain = await deliver(
+      envelope({ type: 'message', channel: 'C1', channel_type: 'channel', user: 'U1', text: 'hi', ts: '8.0' }),
+    )
+    expect(plain.events[0]).toMatchObject({ type: 'message.posted', dedupeKey: 'slack:msg:C1:8.0' })
   })
 
   it('reaction_added → reaction.added; own reactions and non-message items are ignored', async () => {
