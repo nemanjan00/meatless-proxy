@@ -5,7 +5,8 @@
   "type": "module",
   "description": "MCP port: connected MCP servers, their tools, calls and notifications. Includes a fake hub.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
   },
   "dependencies": {
     "@mp/core": "0.0.0"

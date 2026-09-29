@@ -1,0 +1,14 @@
+{
+  "name": "@mp/model-openai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible chat completions adapter for @mp/model (Kimi first), over fetch.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/model": "0.0.0"
+  }
+}

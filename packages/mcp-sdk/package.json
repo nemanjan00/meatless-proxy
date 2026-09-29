@@ -1,0 +1,16 @@
+{
+  "name": "@mp/mcp-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "McpHub adapter over the official MCP TypeScript SDK (stdio and streamable HTTP).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/mcp": "0.0.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "zod": "^4.6.5"
+  }
+}
