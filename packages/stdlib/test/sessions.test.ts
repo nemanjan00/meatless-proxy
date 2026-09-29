@@ -432,6 +432,23 @@ describe('sessions.message', () => {
     expect(a2.eventId).toBe(a1.eventId)
   })
 
+  it('stops two sessions that keep messaging each other, or paste files at each other', async () => {
+    const t = await stack()
+    const other = await t.newSession('Verifier')
+    for (let i = 0; i < 20; i++) await t.out('sessions.message', { to: other.id, text: `batch ${i}` })
+    const r = await t.call('sessions.message', { to: other.id, text: 'batch 20' })
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r.output)).toContain('tell the person who asked')
+    // A third session is a separate exchange; so is the same pair once the window has passed.
+    const third = await t.newSession('Someone else')
+    expect((await t.call('sessions.message', { to: third.id, text: 'hi' })).isError).toBeFalsy()
+    // One big paste is enough to hit the character budget.
+    const fourth = await t.newSession('Paste target')
+    await t.out('sessions.message', { to: fourth.id, text: 'x'.repeat(30_000) })
+    const paste = await t.call('sessions.message', { to: fourth.id, text: 'y'.repeat(15_000) })
+    expect(JSON.stringify(paste.output)).toContain('fs.share')
+  })
+
   it('refuses unknown targets and itself', async () => {
     const t = await stack()
     expect((await t.call('sessions.message', { to: '@nobody#x', text: 'hi' })).isError).toBe(true)

@@ -156,3 +156,31 @@ describe('the duplicate guard', () => {
     expect(byOther.messageId).not.toBe(one.messageId)
   })
 })
+
+describe('chat.save_attachment', () => {
+  it('saves an image a person posted into the employee’s files, byte for byte, and refuses what it can’t see', async () => {
+    const h = await stack()
+    const ana = { kind: 'contact' as const, id: h.ana.id }
+    const ch = await h.chat.createChannel({ name: 'general', createdBy: ana })
+    const png = solidPng(4, 4, [10, 20, 30, 255])
+    const up = await h.attachments.upload({ bytes: png, name: '../shot 1.png', by: ana })
+    await h.chat.post({ channelId: ch.id, author: ana, text: 'look at this image’s exif', attachments: [up.id] })
+    const r = await h.out('chat.save_attachment', { attachment: up.id })
+    expect(r).toMatchObject({ mime: 'image/png', size: png.byteLength })
+    expect(r.path).toMatch(/^\/attachments\/[^/]+$/)
+    const back = await h.files.storage.read(h.employee.id, r.path)
+    expect(Buffer.from(back).equals(Buffer.from(png))).toBe(true)
+    const at = await h.out('chat.save_attachment', { attachment: up.id, path: '/work/files/in/x.png' })
+    expect(at.path).toBe('/in/x.png')
+
+    const bob = await h.directory.contacts.create({ name: 'Bob', email: 'bob@example.com' })
+    const dm = await h.chat.openDm([ana, { kind: 'contact', id: bob.id }], ana)
+    const secret = await h.attachments.upload({ bytes: png, name: 's.png', by: ana })
+    await h.chat.post({ channelId: dm.id, author: ana, text: 'just us', attachments: [secret.id] })
+    const denied = await h.call('chat.save_attachment', { attachment: secret.id }).then(
+      (x) => x.isError === true,
+      () => true,
+    )
+    expect(denied).toBe(true)
+  })
+})

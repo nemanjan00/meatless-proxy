@@ -1,6 +1,6 @@
 import { subscriptionScope } from '../subscription-presets.ts'
 import { ValidationError, type Json } from '@mp/core'
-import { internalSubject } from '@mp/events'
+import { internalSubject, subjectKey } from '@mp/events'
 import {
   TERMINAL_RUN_STATES,
   contentText,
@@ -16,6 +16,11 @@ import type { Entry, Ref } from '@mp/store'
 import { mcpToolName, type ToolContext } from '@mp/tools'
 import { RESERVED_META, Roles, checkRef, clip, fail, line, ok, pathValue, sessionBrief, str, type Kit } from '../kit.ts'
 import type { TaskSystemConfig } from '../types.ts'
+
+/** How far back sessions.message looks at the exchange between two sessions. */
+const MESSAGE_WINDOW_MS = 15 * 60_000
+/** The most two sessions may send each other within the window, in messages and characters. */
+const MESSAGE_BUDGET = { count: 20, chars: 40_000 }
 
 const LINK_KINDS = ['contact', 'project', 'session', 'procedure']
 const modeProp = {
@@ -866,6 +871,21 @@ export function registerSessionTools(kit: Kit): void {
     },
   )
 
+  /**
+   * Messages between two sessions (both ways) within the window: AIs talking to each other can loop, or
+   * relay whole files as chat text, and burn millions of tokens before a person notices.
+   */
+  const exchangeWith = async (me: string, other: string) => {
+    const since = new Date(deps.clock.now() - MESSAGE_WINDOW_MS).toISOString()
+    const sent = async (from: string, to: string) =>
+      (
+        await deps.events.query({ type: 'session.message', subjectKey: subjectKey(internalSubject(to)), since, limit: 500 })
+      ).filter((e) => (e.data.payload as { fromSessionId?: string } | undefined)?.fromSessionId === from)
+    const all = [...(await sent(me, other)), ...(await sent(other, me))]
+    const chars = all.reduce((n, e) => n + String((e.data.payload as { text?: unknown } | undefined)?.text ?? '').length, 0)
+    return { count: all.length, chars }
+  }
+
   kit.tool(
     {
       name: 'sessions.message',
@@ -893,6 +913,12 @@ export function registerSessionTools(kit: Kit): void {
       }
       if (!target) return fail(`no session ${to}`)
       if (target.id === ctx.sessionId) return fail("can't message yourself")
+      const sofar = await exchangeWith(ctx.sessionId, target.id)
+      if (sofar.count >= MESSAGE_BUDGET.count || sofar.chars + text.length > MESSAGE_BUDGET.chars)
+        return fail(
+          `not sent: this session and ${to} have exchanged ${sofar.count} messages (${sofar.chars} characters) in the last ${MESSAGE_WINDOW_MS / 60_000} minutes, the most the harness allows. Stop, and tell the person who asked what's blocking and who can unblock it. To hand over files, don't paste them: put them in your filesystem (/files in an environment) and fs.share them.`,
+          { limited: true },
+        )
       const me = await sessions.require(ctx.sessionId)
       const myEmp = await deps.directory.employees.get(ctx.employeeId)
       const targetEmp = await deps.directory.employees.get(target.data.employeeId)

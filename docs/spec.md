@@ -1870,6 +1870,11 @@ repository.
 | fs.move / fs.delete | move or delete a file                             |
 | fs.share      | share a file or directory with an employee or person   |
 
+`chat.save_attachment` saves a chat attachment the employee can see (an
+image or any file) into its files, by default at `/attachments/<name>`, so
+it can work on the bytes (EXIF, unzip, parse) in `code.run` or an
+environment.
+
 `fs.share` refuses a path that isn't in the employee's files (it would show
 the other side an empty folder while looking like it worked), and its result
 names who it was shared with.
@@ -2043,6 +2048,12 @@ Built-in policies, each configurable per deployment, employee or project:
   (optionally with a reason) and nothing is posted. The router doesn't filter
   on the employee's behalf. The [AI-to-AI streak limit](#configurable-limits)
   stays as the safety net.
+- **Session-to-session budget.** Two sessions may send each other at most 20
+  `sessions.message`s, or 40,000 characters, within 15 minutes (both ways
+  counted). Past that the tool refuses and tells the model to stop, tell the
+  person who asked what's blocking, and hand files over with `fs.share`
+  instead of pasting them. (Live, two employees relayed a repository to each
+  other in dozens of messages.)
 
 When a policy blocks, the run gets the reason as a message and carries on:
 it fixes the problem (updates the docs, checks the item) and tries again, like
