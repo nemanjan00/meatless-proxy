@@ -126,6 +126,13 @@ export interface StdlibConfig {
    * (`DOCKER_DIRECT_NETWORK`). Default true; false turns it into no network.
    */
   directNetwork?: boolean
+  /** Environment profiles env.up offers by name (`ENV_PROFILES`). Default: `DEFAULT_ENV_PROFILES`. */
+  envProfiles?: import('./env-profiles.ts').EnvProfile[]
+  /**
+   * The profile env.up uses when neither the call, the project nor a Dockerfile in the checkout
+   * says (`ENV_DEFAULT_PROFILE`). Default `default`.
+   */
+  envDefaultProfile?: string
   /**
    * Fork limits used when neither the usage service's defaults nor a limit record sets them. The
    * server passes its defaults to `@mp/usage` instead. `maxConcurrentSessions` is enforced by the runner.

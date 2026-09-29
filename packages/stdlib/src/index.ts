@@ -1,4 +1,5 @@
 export * from './types.ts'
+export { DEFAULT_ENV_PROFILES, describeProfiles, envProfile, type EnvProfile } from './env-profiles.ts'
 export { registerStdlib } from './register.ts'
 export { employeePrompt, type EmployeePromptInput } from './prompt.ts'
 export { DEFAULT_TOOLSET, REVIEWER_TOOLSET, REVIEWER_ONLY_TOOLS, ROUTER_EXCLUDED_TOOLS } from './toolsets.ts'

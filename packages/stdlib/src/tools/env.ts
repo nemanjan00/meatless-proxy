@@ -3,7 +3,9 @@ import type { Json } from '@mp/core'
 import { egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import type { Session } from '@mp/sessions'
 import type { ToolContext } from '@mp/tools'
+import { DEFAULT_ENV_PROFILES, describeProfiles, envProfile } from '../env-profiles.ts'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
+import { nodeWorktreeFs } from '../worktree-fs.ts'
 
 /** Where each checkout of a session is in its environment: /repos/<repository name>, made unique. */
 function repoMountsOf(worktrees: { key: string; path: string }[]): { key: string; path: string; containerPath: string }[] {
@@ -84,7 +86,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       fallback: kit.deps.config.defaultEgress ?? [],
       direct: kit.deps.config.directNetwork ?? true,
     })
-    return { net, emp, projectId: pid }
+    return { net, emp, projectId: pid, project }
   }
 
   kit.tool(
@@ -95,10 +97,13 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       effect: 'idempotent',
       params: {
         properties: {
+          profile: {
+            type: 'string',
+            description: `A ready-made toolkit to work in, by name (the usual choice): ${describeProfiles(kit.deps.config.envProfiles ?? DEFAULT_ENV_PROFILES)}. Without network nothing can be installed, so pick the one with the tools you need. Default: the project's profile, else the checkout's Dockerfile, else ${kit.deps.config.envDefaultProfile ?? 'default'}.`,
+          },
           image: {
             type: 'string',
-            description:
-              "Image to run, e.g. alpine:3 (sh, grep, find, sed), node:22 or python:3.13 (with git, curl and the language). Without network nothing can be installed, so pick one that has what you need. Default: build the checkout's Dockerfile.",
+            description: 'Any other image instead of a profile, e.g. node:22 or python:3.13.',
           },
           dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, when building.' },
           repo: {
@@ -166,11 +171,46 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       if (badExpose.length) return fail('expose must be a list of distinct ports (1-65535)', { issues: badExpose })
       const expose = (a.expose as number[] | undefined) ?? []
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
-      if (!str(a.image) && !w) return fail('give an image, or check out a repository first (git.checkout) to build it')
+      if (!str(a.image) && !str(a.profile) && !w)
+        return fail('give an image or a profile, or check out a repository first (git.checkout)')
 
       // The employee's network setting with the project, or the deployment default. The model can
       // only narrow it: a direct network to proxied hosts, proxied hosts to fewer. Never to direct.
-      const { net, emp, projectId } = await decideNetwork(session, ctx, w?.projectId)
+      const { net, emp, projectId, project } = await decideNetwork(session, ctx, w?.projectId)
+
+      // What to run: an image, a named profile, the project's profile, the checkout's Dockerfile,
+      // else the default profile (most repositories have no Dockerfile to build).
+      const profiles = kit.deps.config.envProfiles ?? [...DEFAULT_ENV_PROFILES]
+      let image = str(a.image)
+      let profile: string | undefined
+      if (!image && str(a.profile)) {
+        const p = envProfile(profiles, a.profile)
+        if (!p) return fail(`no profile ${a.profile}: pick one of ${profiles.map((x) => x.name).join(', ')}`)
+        image = p.image
+        profile = p.name
+      }
+      if (!image && !str(a.dockerfile) && project?.data.envProfile) {
+        const p = envProfile(profiles, project.data.envProfile)
+        if (p) {
+          image = p.image
+          profile = p.name
+        }
+      }
+      if (!image && !str(a.dockerfile)) {
+        const hasDockerfile = w
+          ? await (kit.deps.worktreeFs ?? nodeWorktreeFs()).read(w.path, 'Dockerfile').then(
+              () => true,
+              () => false,
+            )
+          : false
+        if (!hasDockerfile) {
+          const p = envProfile(profiles, kit.deps.config.envDefaultProfile ?? 'default') ?? profiles[0]
+          if (p) {
+            image = p.image
+            profile = p.name
+          }
+        }
+      }
       let egress: EnvSpec['egress'] = net.allow.length ? { allow: [...net.allow] } : undefined
       let direct = net.direct === true
       if (a.egress !== undefined) {
@@ -200,9 +240,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const otherMounts = repoMounts.map((m) => ({ hostPath: m.path, containerPath: m.containerPath }))
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
-        ...(str(a.image)
-          ? { image: a.image }
-          : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
+        ...(image ? { image } : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
         ...(w ? { mounts: [{ hostPath: w.path, containerPath: '/workspace' }, ...otherMounts], workdir: '/workspace' } : {}),
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
@@ -228,6 +266,8 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         name: info.name,
         status: info.status,
         ...(w ? { workspace: '/workspace', checkout: w.key } : {}),
+        ...(image ? { image } : {}),
+        ...(profile ? { profile } : {}),
         ...(repoMounts.length ? { repos: Object.fromEntries(repoMounts.map((m) => [m.containerPath, m.key])) } : {}),
         network,
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),

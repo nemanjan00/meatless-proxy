@@ -1327,6 +1327,18 @@ person follows a project's contributing guide.
 - Each task gets its **own isolated environment**, with its own containers,
   network and volumes, mounted on the task's checkout. It's torn down when the
   task ends.
+- **What it runs.** `env.up` runs, in this order: an image it's given, a
+  **profile** it names, the project's profile (`envProfile`), the checkout's
+  `Dockerfile`, else the default profile (`ENV_DEFAULT_PROFILE`, `default`).
+  A profile is a ready-made toolkit image with a name and a one-line
+  description the model sees; the built-in catalog is
+  [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) (`default`,
+  `analyst`, `librarian`, `multimedia`, `reversing`, …), and `ENV_PROFILES`
+  replaces it. Without network nothing can be installed in an environment,
+  so the right profile matters. Whatever the image's entrypoint, the
+  container is kept running for `env.exec`. The checkout is at `/workspace`
+  and every checkout of the session at `/repos/<name>`; git runs through the
+  `git.*` tools, since the checkout's `.git` points outside the container.
 - Resource limits (CPU, memory, time) apply per environment.
 - **Names and labels.** Every container, network and volume is named
   `mp-<employee>-<session>-…` and labelled with the employee and session, so

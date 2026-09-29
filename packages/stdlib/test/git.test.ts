@@ -107,15 +107,26 @@ describe('git tools', () => {
 })
 
 describe('env tools', () => {
+  it("picks a profile by name, the project's profile, or refuses an unknown one", async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    expect((await t.call('env.up', { profile: 'nope' })).isError).toBe(true)
+    expect(await t.out('env.up', { profile: 'analyst' })).toMatchObject({ profile: 'analyst', image: 'nemanjan00/dev:analyst' })
+    await t.out('env.down', {})
+    await t.directory.projects.update(t.project.id, { envProfile: 'librarian' })
+    expect(await t.out('env.up', {})).toMatchObject({ profile: 'librarian', image: 'nemanjan00/dev:librarian' })
+  })
+
   it('up mounts the checkout, exec runs commands, logs, down', async () => {
     const t = await stack()
     expect((await t.call('env.up', {})).isError).toBe(true) // no image and no checkout
     const w = await t.out('git.checkout', { projectId: t.project.id })
     const up = await t.out('env.up', { env: { NODE_ENV: 'test' } })
-    expect(up).toMatchObject({ status: 'running', workspace: '/workspace' })
+    // No Dockerfile in the checkout and no profile named: the default profile.
+    expect(up).toMatchObject({ status: 'running', workspace: '/workspace', profile: 'default', image: 'nemanjan00/dev:default' })
     const spec = t.containers.created[0]!
     expect(spec).toMatchObject({
-      build: { context: w.path },
+      image: 'nemanjan00/dev:default',
       // The checkout at /workspace, and every checkout of the session at /repos/<name>.
       mounts: [
         { hostPath: w.path, containerPath: '/workspace' },

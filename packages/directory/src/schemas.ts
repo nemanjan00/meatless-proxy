@@ -168,6 +168,12 @@ export const projectSchema: KindSchema = {
       },
     },
     {
+      name: 'envProfile',
+      type: 'string',
+      description:
+        "The environment profile its work runs in by default (env.up), e.g. 'analyst' for data work: one of the deployment's profiles.",
+    },
+    {
       name: 'egress',
       type: 'object',
       description:
@@ -206,6 +212,8 @@ export interface ProjectData extends Record<string, unknown> {
   repositories?: Repository[]
   /** Egress allowlist for the project's environments (see `EnvSpec.egress` in `@mp/containers`). */
   egress?: { allow: string[] }
+  /** The environment profile its work runs in by default (env.up). */
+  envProfile?: string
   links?: { system?: string; ref?: string }[]
 }
 

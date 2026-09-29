@@ -179,6 +179,15 @@ export const configSchema = z.object({
    * network. Default true.
    */
   DOCKER_DIRECT_NETWORK: bool(true),
+  /**
+   * Environment profiles env.up offers by name, as JSON `[{ name, image, description }]` (or a file):
+   * they replace the built-in catalog (nemanjan00/dev). Unset: the built-in one.
+   */
+  ENV_PROFILES: jsonOrFile('ENV_PROFILES').pipe(
+    z.array(z.object({ name: z.string().min(1), image: z.string().min(1), description: z.string().min(1) })).optional(),
+  ),
+  /** The profile env.up uses when nothing else decides (see ENV_PROFILES). Default `default`. */
+  ENV_DEFAULT_PROFILE: optStr,
   /** The sandbox user, `uid:gid`: the same as the app's, so both can write the files volume. */
   SANDBOX_USER: optStr.transform((v) => v ?? '1000:1000').refine((v) => /^\d+:\d+$/.test(v), 'must be uid:gid'),
   SANDBOX_CPUS: z.coerce.number().positive().default(1),

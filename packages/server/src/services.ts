@@ -575,6 +575,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         pushPolicy: { protected: ['main', 'master', 'production', 'release/**'], allow: ['mp/**'] },
         defaultEgress: config.DEFAULT_EGRESS,
         directNetwork: config.DOCKER_DIRECT_NETWORK,
+        ...(config.ENV_PROFILES?.length ? { envProfiles: config.ENV_PROFILES } : {}),
+        ...(config.ENV_DEFAULT_PROFILE ? { envDefaultProfile: config.ENV_DEFAULT_PROFILE } : {}),
       },
     }
     const names = stdlib.registerStdlib(tools, deps)

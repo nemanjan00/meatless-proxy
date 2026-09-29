@@ -187,6 +187,8 @@ its working directory, so a chart it saves is a file it can share.
 |----------|---------|--------------|
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
 | `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
+| `ENV_PROFILES` | [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) profiles | the toolkits `env.up` offers by name, as JSON `[{ "name", "image", "description" }]`; a project can pick one as its default (`envProfile`) |
+| `ENV_DEFAULT_PROFILE` | `default` | the profile `env.up` uses when the call, the project and the checkout (no Dockerfile) don't decide |
 | `DOCKER_DIRECT_NETWORK` | `true` | `false` turns every employee's "Direct network (no proxy)" setting into no network |
 | `DOCKER_NAME_PREFIX` | `mp-` | prefix of every container and network (and their `mp.deployment` label); give each deployment on one Docker host its own, e.g. `mp-e2e-` |
 | `SANDBOX_ENABLED` | `true` | turn code execution off (it also needs `DOCKER_ENABLED`) |
