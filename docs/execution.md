@@ -361,12 +361,17 @@ stays the same across calls, runs and forks:
 | Which of several subscribers handles an event? | Tagged ones, else the primary subscriber. The others get it as context. |
 | Global kill switch? | Yes, as the global pause/kill flag. |
 
+## Secrets and tools at call time
+
+- The worker resolves a tool call against the [tool registry](spec.md#tool-registry)
+  and checks it against the employee's whitelist and blacklist again. A call to a
+  tool that isn't allowed fails without running.
+- It then injects the tool's [secret variables](spec.md#secrets) that are in
+  scope, like env vars, only for the duration of the call. The values never go
+  into entries, the journal or the outbox.
+- Outputs are redacted for secret values before they're stored as entries.
+
 ## Not covered here yet
 
-- **Secrets.** How credentials for MCP servers, git and containers are stored
-  and handed to tools.
-- **Tool registry.** How the standard library and MCP tools are exposed to each
-  employee, template and procedure, and how each tool's effect class is
-  declared.
 - **Language and framework.** This design only assumes Postgres, Docker and
   git.

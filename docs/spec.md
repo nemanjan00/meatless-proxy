@@ -72,6 +72,8 @@ module to it:
 | identity          | [Identity](#identity)                         |
 | permissions       | [Permissions](#permissions)                   |
 | untrusted input   | [Untrusted input](#untrusted-input)           |
+| secrets           | [Secrets](#secrets)                           |
+| tool registry     | [Tool registry](#tool-registry)               |
 | harness chat      | [Harness chat](#harness-chat)                 |
 | chat, tasks       | [MCP](#mcp)                                   |
 | contacts          | [Contacts](#contacts)                         |
@@ -280,6 +282,70 @@ Open questions:
 
 - Should the router pass on a cleaned-up description of the work instead of
   the raw content, so that downstream sessions never see the original text?
+
+### Secrets
+
+The **secrets module** holds credentials and other sensitive values as named
+**secret variables**, e.g. `LINEAR_TOKEN`, `GITHUB_DEPLOY_KEY` or
+`STAGING_DB_URL`.
+
+- **Injected on tool calls, like environment variables.** When a tool runs, the
+  harness injects the secret variables that tool needs, the way env vars are
+  given to a process: into an MCP server's environment, into a container's
+  environment, as git credentials, or into an HTTP header.
+- **The model never sees the values.** It only knows secret names, and refers
+  to them by name when it needs one (e.g. a container that needs
+  `STAGING_DB_URL`). Values are resolved by the harness at call time, outside
+  the model's context.
+- **Scoped.** Each secret variable is scoped to an employee, a project, or a
+  single tool or MCP server. A tool call gets only the secrets in scope for
+  that employee, project and tool.
+- **Redacted.** Secret values are masked in tool outputs, container logs, the
+  history, the database journal and the web UI, in case a tool echoes one back.
+- **Managed from the web UI** by people with the right permissions. Values can
+  be written but not read back. Every use is recorded (which secret, which tool
+  call, which session), and the value itself is never recorded.
+
+Open questions:
+
+- Stored encrypted in the database, or in an external secret store (Vault, a
+  cloud secret manager) that the database only references?
+- How are secrets rotated, and do running environments pick up a new value?
+
+### Tool registry
+
+Every tool the model can call is registered in the **tool registry**: the
+standard library tools and every tool of every connected MCP server.
+
+| Field          | Notes                                                    |
+|----------------|----------------------------------------------------------|
+| `name`         | namespaced, e.g. `sessions.fork`, `mcp.linear.create_issue` |
+| `description`  | what the model sees                                      |
+| `schema`       | the tool's input schema                                  |
+| `effect class` | read, idempotent or non-idempotent ([execution model](execution.md#side-effects)) |
+| `secrets`      | the secret variables it needs injected                   |
+
+#### Whitelist and blacklist per employee
+
+- Each employee has a **whitelist** and a **blacklist** of tools. Both accept
+  names and patterns, e.g. `mcp.linear.*` or `containers.*`.
+- An employee can use a tool only if it's on the whitelist and **not** on the
+  blacklist. The blacklist wins.
+- Tools not on the whitelist aren't shown to the model at all, so they don't
+  take up context.
+- An employee's tool set is fixed when a session starts. Changing the lists
+  applies to new sessions, which keeps the cached prefix of running sessions
+  valid ([context assembly](execution.md#context-assembly)).
+- The lists work alongside the hard limits: no tool can give an employee
+  production access, because its credentials don't allow it
+  ([no production access](#no-production-access)).
+
+Open questions:
+
+- Can templates and procedures narrow an employee's tool set further for their
+  sessions (never widen it)?
+- Is a new tool from an MCP server off until someone whitelists it, or on if a
+  pattern already covers it?
 
 ### Harness chat
 
