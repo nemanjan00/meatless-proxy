@@ -536,22 +536,38 @@ what's new into events.
 
 #### Integrations
 
-Everything outside is reached through MCP servers, for maximum flexibility:
-a new system means a new MCP server, never new harness code. Worked, tested
-examples for the systems most companies use will live in
-[docs/integrations.md](integrations.md) (planned, to be set up together with
-real accounts):
+The harness ships **first-party integrations** for Slack, Linear and GitLab.
+Each one is an MCP server that lives in this repo, so the MCP principle holds:
+the harness only ever talks MCP, and any integration can be replaced by
+another MCP server or extended later.
 
-- **Linear** (task system): the MCP server config, mapping notifications to
-  `task.*` events with the issue as subject, a trigger for new assigned
-  issues, and `taskSystem` settings for real forks.
-- **GitHub** (git host and PRs): PR creation after `git.push`, and PR and CI
-  events as subscription targets.
-- **Slack** (company chat): posting through MCP, and Slack events bridged in
-  through the webhook ingest.
+Each integration has three parts:
 
-Each comes with a ready JSON snippet for `MCP_SERVERS` and the triggers to
-create.
+- **Tools** (MCP) that act on the system as the employee's own account or bot.
+- **Events in:** webhooks from the system, with signatures verified, turned
+  into [events](execution.md#events) with a proper subject, actor and dedupe
+  key. They're routed by triggers and subscriptions like everything else.
+- **Identity:** the system's users are matched to [contacts](#contacts)
+  through `handles`, so "who asked" is known.
+
+| | Slack | Linear | GitLab |
+|---|---|---|---|
+| Tools | post, reply in thread, read channel or thread, react, look up users, open DM | search, get, create and update issues; comment; assign; set state and labels; list teams, projects and cycles; create sub-issues for [real forks](#real-forks-go-through-the-task-system) | projects, branches and files; create and update merge requests; comment on MRs and issues; pipeline status and job logs; issues |
+| Events in | Events API (messages, mentions, reactions, app DMs) | webhooks (issue created, updated or assigned; comments; state changes) | webhooks (MR opened or updated; comments; pipeline and job status; push; issues) |
+| Subjects | `slack:<channel>/<thread ts>` | `linear:<issue identifier>` | `gitlab:<project>!<mr iid>`, `gitlab:<project>#<issue iid>`, `gitlab:<project>@pipeline/<id>` |
+
+- **Slack is company chat alongside harness chat:** a session working on a
+  Slack thread subscribes to it, and replies go back to Slack.
+- **Linear is the task system:** a new issue assigned to an employee starts
+  work through a trigger, and comments on it come back through the
+  subscription.
+- **GitLab is the git host:** employees push to their own branches over SSH
+  with their own key, open merge requests, and are notified about pipeline
+  results and review comments on their MRs. They never merge
+  ([no production access](#no-production-access)).
+- Configuration is per deployment: tokens and webhook secrets are
+  [secrets](#secrets), and each integration is enabled when its secrets are
+  set.
 
 #### The harness as an MCP server
 
@@ -777,6 +793,22 @@ and can run it.
 - Output from builds, tests and running services (logs, exit codes, artifacts)
   is captured and available to the model and in the task's
   [audit trail](employee.md#4-boundaries).
+
+#### Live previews
+
+When an employee runs a project in its environment, people can watch it
+**live in the web UI**, on the session page and in the Now view, while it's
+being built.
+
+- An environment can **expose ports**, e.g. a dev server on 5173. The harness
+  proxies them at `/preview/<env>/<port>/`, WebSockets included, so hot reload
+  works. It's served only to signed-in people who may see the session.
+- The session page shows the preview in a frame next to the history. It
+  reloads as the employee changes the code, and it's marked with which commit
+  is running.
+- An employee can link a preview in chat, and people can open it full-screen.
+- Previews live as long as their environment. Nothing is exposed on the
+  host's own ports.
 
 Open questions:
 
