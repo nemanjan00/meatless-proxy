@@ -90,9 +90,12 @@ describe('employee files on disk', () => {
 })
 
 describe('DEFAULT_EGRESS', () => {
-  it('is a comma-separated allowlist, none by default, checked at start', async () => {
+  it('is a comma-separated allowlist, any public host by default, checked at start', async () => {
     const { loadConfig } = await import('../src/config.ts')
-    expect(loadConfig({}).DEFAULT_EGRESS).toEqual([])
+    // Permissive by default: any public host through the logging proxy; `none` turns it off.
+    expect(loadConfig({}).DEFAULT_EGRESS).toEqual(['*'])
+    expect(loadConfig({ DEFAULT_EGRESS: '' }).DEFAULT_EGRESS).toEqual(['*'])
+    expect(loadConfig({ DEFAULT_EGRESS: 'none' }).DEFAULT_EGRESS).toEqual([])
     expect(loadConfig({ DEFAULT_EGRESS: 'pypi.org, *.github.com:443' }).DEFAULT_EGRESS).toEqual(['pypi.org', '*.github.com:443'])
     expect(() => loadConfig({ DEFAULT_EGRESS: 'pypi.org,not a host' })).toThrow(/DEFAULT_EGRESS: not hostname globs: not a host/)
   })

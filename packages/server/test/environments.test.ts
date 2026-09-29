@@ -137,7 +137,8 @@ describe('GET /api/environments', () => {
       canStop: true,
       canControl: true,
     })
-    expect(e.network).toMatchObject({ via: 'none' })
+    // The deployment default: any public host, through the logging proxy.
+    expect(e.network).toMatchObject({ via: 'proxy', allow: ['*'] })
     const [p] = (await t.req('GET', `/api/environments?sessionId=${privSession}`, undefined, bob.headers)).body.items
     expect(p).toMatchObject({
       profile: 'analyst',

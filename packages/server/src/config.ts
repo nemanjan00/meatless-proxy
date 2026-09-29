@@ -169,14 +169,18 @@ export const configSchema = z.object({
   /**
    * Hosts environments and code.run sandboxes may reach through the egress proxy when neither the employee's
    * network setting nor the session's project names any, comma-separated (e.g. `pypi.org,files.pythonhosted.org`).
-   * Default: none, so no network.
+   * Default `*`: any public host, through the proxy (logged; private, loopback and link-local addresses stay
+   * unreachable unless listed exactly), so work can install its dependencies. `none`: no network.
    */
-  DEFAULT_EGRESS: optStr.transform((v) =>
-    (v ?? '')
+  DEFAULT_EGRESS: optStr.transform((v) => {
+    const raw = (v ?? '').trim()
+    if (!raw) return ['*']
+    if (raw.toLowerCase() === 'none') return []
+    return raw
       .split(',')
       .map((x) => x.trim())
-      .filter(Boolean),
-  ),
+      .filter(Boolean)
+  }),
   /**
    * Whether an employee's `direct` network setting gives its sandbox and environments a real network with
    * no proxy (a bridge of its own, out through the host's NAT). `false` turns every direct setting into no

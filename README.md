@@ -195,7 +195,7 @@ its working directory, so a chart it saves is a file it can share.
 |----------|---------|--------------|
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
 | `DESKTOP_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-desktop:latest` | the desktop sidecar of `env.up { desktop: true }` (`docker/desktop/Dockerfile`: Xvfb, x11vnc and websockify; build your own with `docker build -t mp-desktop docker/desktop`) |
-| `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
+| `DEFAULT_EGRESS` | `*` | hosts environments and sandboxes may reach (through the logging egress proxy) when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org`; `*` is any public host, `none` is no network |
 | `ENV_PROFILES` | [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) profiles | the toolkits `env.up` offers by name, as JSON `[{ "name", "image", "description" }]`; a project can pick one as its default (`envProfile`) |
 | `ENV_DEFAULT_PROFILE` | `default` | the profile `env.up` uses when the call, the project and the checkout (no Dockerfile) don't decide |
 | `DOCKER_DIRECT_NETWORK` | `true` | `false` turns every employee's "Direct network (no proxy)" setting into no network |

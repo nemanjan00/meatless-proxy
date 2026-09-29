@@ -44,7 +44,7 @@ first by a small built-in loader; variables already set win.
 | `SANDBOX_ENABLED` | `true` | `code.run`/`code.reset` (needs `DOCKER_ENABLED`) |
 | `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | The sandbox image (`docker/sandbox/Dockerfile`) |
 | `DESKTOP_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-desktop:latest` | The desktop sidecar of `env.up { desktop: true }` (`docker/desktop/Dockerfile`) |
-| `DEFAULT_EGRESS` | none | Hosts environments and sandboxes may reach through the egress proxy when neither the employee's `network` setting nor the session's project names any, comma-separated. Checked at start. Default: no network |
+| `DEFAULT_EGRESS` | `*` (any public host; `none` for no network) | Hosts environments and sandboxes may reach through the egress proxy when neither the employee's `network` setting nor the session's project names any, comma-separated. Checked at start. Default: no network |
 | `SANDBOX_USER` | `1000:1000` | The sandbox user, the same as the app's so both can write the files volume |
 | `SANDBOX_CPUS` / `SANDBOX_MEMORY_MB` / `SANDBOX_PIDS` | `1` / `1024` / `256` | Limits per employee's sandbox container |
 | `SANDBOX_IDLE_MINUTES` | `15` | Idle kernels, then idle containers, are stopped |

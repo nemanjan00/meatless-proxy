@@ -1522,11 +1522,15 @@ person follows a project's contributing guide.
     only what both allow (the narrower host and port of each pair).
   - A session with no project (or a project without a list) falls back to the
     employee's own list, or else to the deployment default `DEFAULT_EGRESS`
-    (none unless set).
-  - `['*']` allows any public host. It's only ever an admin's explicit choice
-    for one employee, never a default. IP literals and private, loopback and
-    link-local addresses stay blocked unless listed exactly, and every request
-    is still logged.
+    (`*` unless set; `none` for no network).
+  - `['*']` allows any public host, and it is the deployment default: work has
+    to install its dependencies (npm, pip) and a closed default left test
+    suites unrun. IP literals and private, loopback and link-local addresses
+    stay blocked unless listed exactly, and every request is still logged by
+    the egress proxy. A project's allowlist or an employee's own list narrows
+    it; `DEFAULT_EGRESS=none` closes it for a deployment. The trade-off,
+    accepted deliberately: a model steered by untrusted content can reach any
+    public host, which the proxy log shows but doesn't stop.
   - The model can only narrow the result, with `env.up { egress }`: fewer
     hosts, or from a direct network to proxied hosts. It can never ask for a
     direct network or widen a proxied one to it.
