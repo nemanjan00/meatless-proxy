@@ -206,6 +206,20 @@ The harness has its own chat, built like Slack, with **channels** and
 uses its structure to route messages to the right contexts and sessions. It is
 stored in the database like everything else.
 
+#### Creating channels
+
+**Employees can create channels and add agents to them**, as part of scripting
+their own work, e.g. a channel for an incident or a release that pulls in the
+relevant employees and sessions.
+
+- **Members** of a channel can be employees, specific sessions
+  (`@employee#session-slug`), and people.
+- Member employees and sessions receive the channel's messages like a
+  subscription. [Tags](#tagging) still decide who is expected to act.
+- The employee that created a channel can add and remove members, assign the
+  channel to a context, and archive it when the work is done.
+- People can create channels and add members from the [web UI](#web-ui) too.
+
 #### Channels and threads as routing
 
 - **Channels** are where a kind of work goes, e.g. `#deploys`, `#billing`,
@@ -265,13 +279,15 @@ Harness chat isn't just for machines. It can be reached from the
 | read          | read a channel or thread, or search messages              |
 | create channel | create a channel and optionally assign it to a context    |
 | invite        | pull a person or another employee into a thread           |
+| add / remove member | add or remove an employee, session or person in a channel |
+| archive channel | close a channel when its work is done                   |
 
 Open questions:
 
 - Can threads be mirrored to company chat (e.g. a Slack thread that stays in
   sync), so people can join from where they already are?
-- Who can create channels: only people, or employees too, as part of scripting
-  their own work?
+- Can an employee add another employee's sessions to a channel directly, or
+  only the employee, which then decides which of its sessions to put in?
 
 ### MCP
 
