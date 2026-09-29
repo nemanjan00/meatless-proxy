@@ -1,7 +1,7 @@
 import { errorMessage, type Json } from '@mp/core'
 import type { MpEvent } from '@mp/events'
 import type { Ref } from '@mp/store'
-import { afterFork } from '@mp/router'
+import { runInput } from '@mp/router'
 import type { Services } from './services.ts'
 
 /**
@@ -23,7 +23,7 @@ const snippet = (text: string) => {
   return flat.length > SNIPPET_CHARS ? `${flat.slice(0, SNIPPET_CHARS - 1)}…` : flat
 }
 
-/** Registers the `router.afterFork` handler. Returns a function that removes it. */
+/** Registers the `router.runInput` handler. Returns a function that removes it. */
 export function registerSessionMemory(s: Services): () => void {
   const log = s.logger.child({ component: 'session-memory' })
 
@@ -44,11 +44,11 @@ export function registerSessionMemory(s: Services): () => void {
     return (event.data.text ?? '').replace(/^[\w.:-]+: /, '')
   }
 
-  return s.hooks.onTransform(afterFork, async (payload) => {
+  return s.hooks.onTransform(runInput, async (payload) => {
     try {
-      const { event, context, fork } = payload
+      const { event, context, session: fork } = payload
       const text = await textOf(event)
-      const projectIds = await projectsOf([context.id, fork.id])
+      const projectIds = await projectsOf([...new Set([context.id, fork.id])])
       const contactIds = event.data.actorContactId ? [event.data.actorContactId] : []
       const refs: Ref[] = [
         ...projectIds.map((id) => ({ kind: 'project', id })),

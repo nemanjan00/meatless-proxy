@@ -325,6 +325,29 @@ export function triggerMatches(match: TriggerMatch, event: EventData): boolean {
 /** Whether a trigger match constrains anything (a schedule trigger must not). */
 const hasMatch = (m: TriggerMatch) => Object.values(m).some((v) => v !== undefined)
 
+const WILDCARD = new Set(['*', '**'])
+const narrows = (glob: string | undefined) => glob !== undefined && glob !== '' && !WILDCARD.has(glob)
+const nonEmpty = (v: unknown) => v !== undefined && v !== null && (typeof v !== 'object' || Object.keys(v as object).length > 0)
+
+/**
+ * Whether a match narrows anything down. A match-everything trigger (`{}`, or only wildcards) is
+ * refused: catching everything nothing else claims is the fallback's job, and the fallback is the
+ * employee's router.
+ */
+export function isCatchAll(m: TriggerMatch): boolean {
+  return !(
+    narrows(m.source) ||
+    narrows(m.type) ||
+    narrows(m.subject?.system) ||
+    narrows(m.subject?.id) ||
+    nonEmpty(m.where) ||
+    nonEmpty(m.filter)
+  )
+}
+
+export const CATCH_ALL_MESSAGE =
+  "a trigger must match something specific (a source, an event type, a subject, or a filter). Events nothing else claims already go to the employee's router: that's the fallback."
+
 const MAX_CAS_RETRIES = 50
 
 // ─── Service ────────────────────────────────────────────────────────────────
@@ -359,6 +382,7 @@ export function createEvents(opts: EventsOptions): Events {
       const schedule = input.schedule !== undefined ? checkSchedule(input.schedule) : undefined
       const match = input.match ?? {}
       if (schedule && hasMatch(match)) throw new ValidationError('a schedule trigger has no event match')
+      if (!schedule && isCatchAll(match)) throw new ValidationError(CATCH_ALL_MESSAGE)
       if (match.filter !== undefined) eventFilter(match.filter)
       const data: TriggerData = {
         name: input.name,
@@ -397,6 +421,7 @@ export function createEvents(opts: EventsOptions): Events {
       }
       if (schedule && hasMatch(p.match ?? current.data.match ?? {}))
         throw new ValidationError('a schedule trigger has no event match')
+      if (!schedule && isCatchAll(p.match ?? current.data.match ?? {})) throw new ValidationError(CATCH_ALL_MESSAGE)
       // Slots that passed while the trigger was disabled don't fire when it's enabled again.
       if (schedule && p.enabled === true && !current.data.enabled) p.lastScheduledAt = clock.iso()
       return records.update<TriggerData>('trigger', id, p, actor ? { actor } : {})

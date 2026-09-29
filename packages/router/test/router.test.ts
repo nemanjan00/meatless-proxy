@@ -5,7 +5,7 @@ import { createRecords } from '@mp/records'
 import { createSessions } from '@mp/sessions'
 import { memoryStore } from '@mp/store'
 import { describe, expect, it } from 'vitest'
-import { afterFork, beforeDeliver, chatTags, createRouter, renderEvent, type RecipientResolver } from '../src/index.ts'
+import { beforeDeliver, runInput, chatTags, createRouter, renderEvent, type RecipientResolver } from '../src/index.ts'
 
 async function setup(opts: { resolvers?: RecipientResolver[] } = {}) {
   const bus = createEventBus()
@@ -286,7 +286,7 @@ describe('reactions', () => {
     expect((await t.router.plan(bySelf)).map((d) => d.sessionId)).toEqual([])
   })
 
-  describe('afterFork', () => {
+  describe('runInput', () => {
     it('adds entries to a fork after the fork point and before the event', async () => {
       const t = await setup()
       const ctx = await t.mk('requests context')
@@ -298,11 +298,11 @@ describe('reactions', () => {
         fork: true,
       })
       const seen: { context: string; fork: string; reason: string }[] = []
-      t.hooks.onTransform(afterFork, (p) => {
-        seen.push({ context: p.context.id, fork: p.fork.id, reason: p.delivery.reason })
+      t.hooks.onTransform(runInput, (p) => {
+        seen.push({ context: p.context.id, fork: p.session.id, reason: p.delivery.reason })
         return { ...p, entries: [...p.entries, { kind: 'system' as const, content: { text: 'remember: Ana prefers mornings' } }] }
       })
-      t.hooks.onTransform(afterFork, (p) => ({
+      t.hooks.onTransform(runInput, (p) => ({
         ...p,
         entries: [...p.entries, { kind: 'system' as const, content: { text: 'second' }, meta: { from: 'test' } }],
       }))
@@ -324,19 +324,27 @@ describe('reactions', () => {
       expect(hist[2]!.meta.from).toBe('test')
     })
 
-    it('is not called without a fork', async () => {
+    it('also runs for runs in the context itself (no fork), and not for inbox deliveries', async () => {
       const t = await setup()
-      let calls = 0
-      t.hooks.onTransform(afterFork, (p) => {
-        calls++
-        return p
+      const seen: { context: string; session: string; forked: boolean }[] = []
+      t.hooks.onTransform(runInput, (p) => {
+        seen.push({ context: p.context.id, session: p.session.id, forked: !!p.fork })
+        return { ...p, entries: [...p.entries, { kind: 'system' as const, content: { text: 'remembered' } }] }
       })
       const ev = await t.ingest({ source: 'mcp:linear', type: 'task.assigned', employeeId: 'emp_a', text: 'x' })
       const res = await t.router.route(ev.id)
       expect(res.deliveries[0]!.reason).toBe('fallback')
-      expect(calls).toBe(0)
+      expect(seen).toEqual([{ context: t.routerA.id, session: t.routerA.id, forked: false }])
       const hist = await t.sessions.runHistory((res.deliveries[0]!.outcome as { runId: string }).runId)
-      expect(hist.map((e) => e.kind)).toEqual(['system', 'event'])
+      expect(hist.map((e) => e.kind)).toEqual(['system', 'system', 'event'])
+      // A delivery into a running continuing run's inbox doesn't start a run, so no input is added.
+      const work = await t.mk('busy')
+      const subject = { system: 'mp', id: 'msg_busy' }
+      await t.events.subscriptions.subscribe(work.id, subject, { primary: true })
+      const active = await t.sessions.createRun({ sessionId: work.id, cause: { type: 'manual' } })
+      await t.sessions.transition(active.id, 'queued', 'running')
+      await t.router.route((await t.ingest({ source: 'chat', type: 'message.replied', subject, text: 'hi' })).id)
+      expect(seen).toHaveLength(1)
     })
   })
 
@@ -351,7 +359,13 @@ describe('reactions', () => {
       fork: true,
     })
     // A catch-all trigger with a higher priority does not take it.
-    await t.events.triggers.create({ name: 'all', employeeId: 'emp_a', match: {}, target: { type: 'router' }, priority: 99 })
+    await t.events.triggers.create({
+      name: 'all',
+      employeeId: 'emp_a',
+      match: { source: 'schedule' },
+      target: { type: 'router' },
+      priority: 99,
+    })
     const ev = await t.ingest({
       source: SCHEDULE_SOURCE,
       type: SCHEDULE_FIRED,

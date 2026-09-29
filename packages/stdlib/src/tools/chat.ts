@@ -138,7 +138,9 @@ export function registerChatTools(kit: Kit): void {
         if (!m) throw new NotFoundError('message', threadRef(a.threadId))
         const out = await post(ctx, m.data.channelId, text, m.id)
         // Replying makes the thread this session's conversation: follow-ups come back here.
-        // It becomes the primary subscriber only if nobody else is.
+        // It becomes the primary subscriber only if nobody else is. A router context never
+        // subscribes: follow-ups come back through its trigger and it decides again.
+        if ((await sessions.get(ctx.sessionId))?.data.meta?.role === 'router') return out
         const subject = { system: 'mp', id: out.threadId }
         const subs = await deps.events.subscriptions.forSubject(subject)
         if (!subs.some((x) => x.data.sessionId === ctx.sessionId)) {

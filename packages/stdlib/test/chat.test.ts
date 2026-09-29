@@ -128,7 +128,7 @@ describe('triggers', () => {
     const foreign = await t.events.triggers.create({
       name: 'theirs',
       employeeId: other.id,
-      match: {},
+      match: { type: 'task.*' },
       target: { type: 'router' },
     })
     expect((await t.call('triggers.update', { triggerId: foreign.id, enabled: false })).isError).toBe(true)

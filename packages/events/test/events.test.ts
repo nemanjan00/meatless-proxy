@@ -186,10 +186,16 @@ describe('triggers', () => {
     expect(t.id).toMatch(/^trg_/)
     expect(t.data).toMatchObject({ enabled: true, priority: 0, fork: false, mode: 'ephemeral', fired: 0 })
     await expect(
-      events.triggers.create({ name: 'bad', employeeId: EMP, match: {}, target: { type: 'session' } as any }),
+      events.triggers.create({ name: 'bad', employeeId: EMP, match: { type: 'x' }, target: { type: 'session' } as any }),
     ).rejects.toBeInstanceOf(ValidationError)
     await expect(
-      events.triggers.create({ name: 'bad', employeeId: EMP, match: {}, target: { type: 'router' }, mode: 'x' as any }),
+      events.triggers.create({
+        name: 'bad',
+        employeeId: EMP,
+        match: { type: 'x' },
+        target: { type: 'router' },
+        mode: 'x' as any,
+      }),
     ).rejects.toBeInstanceOf(ValidationError)
   })
 
@@ -222,7 +228,7 @@ describe('triggers', () => {
       employeeId: EMP,
       enabled: false,
       priority: 100,
-      match: {},
+      match: { type: 'task.*' },
       target: { type: 'router' },
     })
     clock.advance(1)
@@ -244,8 +250,14 @@ describe('triggers', () => {
   })
 
   it('lists, updates and removes', async () => {
-    const a = await events.triggers.create({ name: 'a', employeeId: EMP, match: {}, target: { type: 'router' } })
-    const b = await events.triggers.create({ name: 'b', employeeId: EMP2, match: {}, target: { type: 'router' }, enabled: false })
+    const a = await events.triggers.create({ name: 'a', employeeId: EMP, match: { type: 'task.*' }, target: { type: 'router' } })
+    const b = await events.triggers.create({
+      name: 'b',
+      employeeId: EMP2,
+      match: { type: 'task.*' },
+      target: { type: 'router' },
+      enabled: false,
+    })
     expect((await events.triggers.list()).map((t) => t.id)).toEqual([a.id, b.id])
     expect((await events.triggers.list({ employeeId: EMP })).map((t) => t.id)).toEqual([a.id])
     expect((await events.triggers.list({ enabled: false })).map((t) => t.id)).toEqual([b.id])
@@ -258,7 +270,7 @@ describe('triggers', () => {
   })
 
   it('recordFired counts concurrent firings', async () => {
-    const t = await events.triggers.create({ name: 'a', employeeId: EMP, match: {}, target: { type: 'router' } })
+    const t = await events.triggers.create({ name: 'a', employeeId: EMP, match: { type: 'task.*' }, target: { type: 'router' } })
     await Promise.all(Array.from({ length: 20 }, () => events.triggers.recordFired(t.id)))
     const after = await events.triggers.get(t.id)
     expect(after!.data.fired).toBe(20)
@@ -338,5 +350,44 @@ describe('subscriptions', () => {
     expect(await events.subscriptions.forSubject(PAY)).toEqual([])
     expect(await events.subscriptions.endForSession(SES2, 'session ended')).toBe(1)
     expect(await events.subscriptions.forSession(SES2)).toEqual([])
+  })
+})
+
+describe('no catch-all triggers', () => {
+  it('refuses triggers that match everything: that is the router fallback', async () => {
+    const records = createRecords({ store: memoryStore() })
+    const events = createEvents({ records })
+    const make = (match: any) => events.triggers.create({ name: 't', employeeId: 'emp_x', match, target: { type: 'router' } })
+    for (const m of [
+      {},
+      { source: '*' },
+      { type: '**' },
+      { source: '**', type: '*' },
+      { where: {} },
+      { filter: {} },
+      { subject: { system: '*' } },
+    ])
+      await expect(make(m), JSON.stringify(m)).rejects.toThrow(/router.*fallback/)
+    // Anything that narrows is fine.
+    for (const m of [
+      { source: 'mcp:*' },
+      { type: 'task.*' },
+      { subject: { system: 'linear' } },
+      { where: { 'payload.x': 1 } },
+      { filter: { 'payload.x': 1 } },
+    ])
+      await expect(make(m)).resolves.toBeTruthy()
+    // Updating a trigger into a catch-all is refused too; schedule triggers need no match.
+    const t = await make({ type: 'task.*' })
+    await expect(events.triggers.update(t.id, { match: {} })).rejects.toThrow(/fallback/)
+    await expect(
+      events.triggers.create({
+        name: 's',
+        employeeId: 'emp_x',
+        match: {},
+        schedule: { cron: '0 9 * * *' },
+        target: { type: 'router' },
+      }),
+    ).resolves.toBeTruthy()
   })
 })

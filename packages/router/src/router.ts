@@ -61,24 +61,27 @@ export interface InputEntry {
   meta?: Record<string, Json>
 }
 
-/** Payload of `afterFork`: `entries` go on top of the fork point, before the event. */
-export interface AfterForkPayload {
+/** Payload of `runInput`: `entries` go into the new run, after the session's history and before the event. */
+export interface RunInputPayload {
   event: MpEvent
   delivery: Delivery
-  /** The context session that was forked. */
+  /** The session the delivery was for (the context, when it was forked). */
   context: Session
-  /** The new fork that handles the event. */
-  fork: Session
+  /** The session the new run runs in: the fork when the context was forked, else the context itself. */
+  session: Session
+  /** Set when the context was forked for this delivery. */
+  fork?: Session
   entries: InputEntry[]
 }
 
 /**
- * Runs after the router forked a context for a delivery, before the fork's
- * first run is created. A transform hook: handlers may add `entries` (e.g.
- * recalled memories), which go after the fork point and before the event, so
- * the fork keeps the context's cached prefix.
+ * Runs before the router starts a new run for a delivery (in the context
+ * itself or in a fork of it). A transform hook: handlers may add `entries`
+ * (e.g. recalled memories), which go into the run after the session's history
+ * and before the event, so the session keeps its cached prefix. Deliveries
+ * into a running session's inbox don't pass through it.
  */
-export const afterFork = defineHook<AfterForkPayload>('router.afterFork')
+export const runInput = defineHook<RunInputPayload>('router.runInput')
 
 export interface RouterOptions {
   events: Events
@@ -295,13 +298,26 @@ export function createRouter(opts: RouterOptions): Router {
     if (!session) return { type: 'skipped', sessionId, reason: 'session not found' }
 
     // Forks: a fresh fork of the context handles this one event.
-    let before: InputEntry[] = []
+    let runSession = session
+    let fork: Session | undefined
     if (d.fork) {
-      const fork = await opts.sessions.fork(sessionId, { title: forkTitle(session.data.title, event) })
+      fork = await opts.sessions.fork(sessionId, { title: forkTitle(session.data.title, event) })
       sessionId = fork.id
-      if (opts.hooks)
-        before = (await opts.hooks.transform(afterFork, { event, delivery: d, context: session, fork, entries: [] })).entries
+      runSession = fork
     }
+    const inputFor = async (): Promise<InputEntry[]> =>
+      opts.hooks
+        ? (
+            await opts.hooks.transform(runInput, {
+              event,
+              delivery: d,
+              context: session,
+              session: runSession,
+              ...(fork ? { fork } : {}),
+              entries: [],
+            })
+          ).entries
+        : []
 
     const mode: RunMode = d.mode ?? (d.reason === 'trigger' || d.reason === 'fallback' ? 'ephemeral' : 'continuing')
 
@@ -346,7 +362,7 @@ export function createRouter(opts: RouterOptions): Router {
       cause: { type: 'event', eventId: event.id, note: d.reason },
       ...(event.data.actorContactId ? { requesterId: event.data.actorContactId } : {}),
       priority: d.priority,
-      input: [...before, eventEntry(event, d)],
+      input: [...(await inputFor()), eventEntry(event, d)],
     })
     if (decision && 'pause' in decision) {
       await opts.sessions.transition(run.id, 'queued', 'paused', { pauseReason: decision.pause })

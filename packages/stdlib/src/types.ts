@@ -97,6 +97,8 @@ export interface PolicyConfig {
   docsMaintenance?: boolean
   /** A run can't complete while required checklist items are open. Default true. */
   checklistGate?: boolean
+  /** A router context's ephemeral runs must commit a one-line decision summary. Default true. */
+  routerDecisions?: boolean
   /** Post a run's final answer in the chat thread it was asked in, if it didn't reply itself. Default true. */
   answerWhereAsked?: boolean
   /** Commit uncommitted worktree changes when a run ends. Default true. */

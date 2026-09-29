@@ -89,6 +89,7 @@ export function needsAutoReply(entries: Entry[], output: string | undefined): bo
  * - docs maintenance (`beforeFinish`): a run that committed code must write docs, or say "no docs update needed: <reason>".
  * - session document (`beforeFinish`, off by default): the run must update its session document.
  * - commit on stop (`afterRun`): uncommitted worktree changes are committed to the session's branch.
+ * - router decisions (`beforeFinish`): an ephemeral run of a router context must commit a one-line decision summary.
  * - answer where asked (`afterRun`): a run started by a chat message that ends with a final answer,
  *   without replying or handing the work off, has that answer posted in the thread it was asked in.
  *   The session is subscribed to the thread, so follow-ups come back to it.
@@ -164,6 +165,18 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
       }),
     )
 
+  if (config.routerDecisions !== false)
+    offs.push(
+      hooks.on(beforeFinish, async ({ run, session, status }) => {
+        if (status !== 'completed' || session.data.meta?.role !== 'router' || run.data.mode !== 'ephemeral') return undefined
+        if (run.data.commitSummary) return undefined
+        return {
+          block:
+            'you are a router context: record your decision before finishing. Call sessions.commit with a one-line summary: the subject, who asked, what it is about, and what you decided (answered directly / forwarded to @employee#slug / started @employee#slug (ses_…) / ran procedure X). That line is all you keep of this run.',
+        }
+      }),
+    )
+
   if (config.answerWhereAsked !== false)
     offs.push(
       hooks.on(afterRun, async ({ run, session, result }) => {
@@ -183,6 +196,9 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
             author: { kind: 'session', id: session.id },
             text: result.output!,
           })
+          // A router context never holds conversations: a follow-up comes back through its trigger,
+          // and it decides again (answer, forward, or start a session).
+          if (session.data.meta?.role === 'router') return undefined
           const subject = { system: 'mp', id: threadId }
           const subs = await deps.events.subscriptions.forSubject(subject)
           if (!subs.some((x) => x.data.sessionId === session.id))

@@ -113,6 +113,17 @@ export function registerSessionTools(kit: Kit): void {
     return sessions.runHistory(run.id)
   }
 
+  /**
+   * Work started from a router context doesn't inherit the router's instructions and decision log:
+   * it forks at the router's first entry (the employee prompt), and gets its context from the
+   * instruction. The prompt prefix stays shared, so it's still cached.
+   */
+  const routerForkPoint = async (parent: Session): Promise<string | null> => {
+    if (parent.data.meta?.role !== 'router') return null
+    const [first] = await sessions.history(parent.id)
+    return first?.id ?? null
+  }
+
   kit.tool(
     {
       name: 'sessions.create',
@@ -216,7 +227,10 @@ export function registerSessionTools(kit: Kit): void {
       const output = await kit.once('sessions.fork', ctx, async () => {
         const parent = await kit.ownSession(a.sessionId, ctx)
         await kit.checkLimits(ctx.employeeId, parent, 1)
-        const at = a.atEntry ?? (parent.id === ctx.sessionId ? await kit.currentPoint(ctx) : parent.data.head)
+        const at =
+          a.atEntry ??
+          (await routerForkPoint(parent)) ??
+          (parent.id === ctx.sessionId ? await kit.currentPoint(ctx) : parent.data.head)
         const fork = await sessions.fork(parent.id, {
           atEntry: at,
           title: str(a.title) ?? `${parent.data.title}: ${line(instruction, 60)}`,
@@ -300,7 +314,7 @@ export function registerSessionTools(kit: Kit): void {
         }
       }
 
-      const at = a.atEntry ?? (await kit.currentPoint(ctx))
+      const at = a.atEntry ?? (await routerForkPoint(parent)) ?? (await kit.currentPoint(ctx))
       const children = await sessions.loop(parent.id, items, {
         atEntry: at,
         titlePrefix: str(a.titlePrefix) ?? parent.data.title,

@@ -161,6 +161,25 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
 
   const names: string[] = []
 
+  /**
+   * When a router context starts new work, the session it starts becomes the primary subscriber of
+   * the subject the router was asked about (the thread, issue or MR), so follow-ups skip the router.
+   */
+  const handOverSubject = async (newSessionId: string, ctx: ToolContext) => {
+    const caller = await sessions.get(ctx.sessionId)
+    if (caller?.data.meta?.role !== 'router') return
+    const run = await sessions.getRun(ctx.runId)
+    const eventId = run?.data.cause.eventId
+    if (!eventId) return
+    const event = await deps.events.get(eventId)
+    const subject = event?.data.subject
+    if (!subject) return
+    await deps.events.subscriptions.subscribe(newSessionId, subject, {
+      primary: true,
+      actor: { type: 'session', id: ctx.sessionId },
+    })
+  }
+
   const kit: Kit = {
     deps,
     registry,
@@ -292,6 +311,8 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     },
 
     async startRun(sessionId, ctx, o) {
+      // A router hands the subject over: the new session owns it now, so follow-ups reach it directly.
+      if (o.type !== 'loop') await handOverSubject(sessionId, ctx)
       const run = await sessions.createRun({
         sessionId,
         ...(o.mode ? { mode: o.mode } : {}),

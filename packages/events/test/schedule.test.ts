@@ -280,9 +280,10 @@ describe('schedule triggers', () => {
     beforeEach(async () => {
       scheduled = await hourly()
       catchAll = await events.triggers.create({
-        name: 'everything',
+        name: 'everything with a source',
         employeeId: EMP,
-        match: {},
+        // Matches every event, but spelled out: a bare {} is refused (that's the router fallback).
+        match: { filter: { source: { $exists: true } } },
         target: { type: 'router' },
         priority: 100,
       })
