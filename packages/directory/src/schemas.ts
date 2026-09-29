@@ -137,6 +137,13 @@ export const projectSchema: KindSchema = {
       },
     },
     {
+      name: 'egress',
+      type: 'object',
+      description:
+        "Where the project's containers may connect, through the egress proxy: hostname globs with optional ports, e.g. registry.npmjs.org, *.github.com:443.",
+      fields: [{ name: 'allow', type: 'list', required: true, of: { type: 'string' } }],
+    },
+    {
       name: 'links',
       type: 'list',
       description: 'Task boards, chat channels, other.',
@@ -163,6 +170,8 @@ export interface ProjectData extends Record<string, unknown> {
   description?: string
   status?: 'active' | 'maintenance' | 'sunset'
   repositories?: Repository[]
+  /** Egress allowlist for the project's environments (see `EnvSpec.egress` in `@mp/containers`). */
+  egress?: { allow: string[] }
   links?: { system?: string; ref?: string }[]
 }
 

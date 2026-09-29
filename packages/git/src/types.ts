@@ -18,19 +18,32 @@ export interface WorktreeInfo {
   head: string
 }
 
+/**
+ * Credentials for one command that talks to a remote. The key is used only for that command
+ * (written to a private temp file and removed afterwards) and never logged.
+ */
+export interface GitAuth {
+  /** An SSH private key (OpenSSH or PEM format). */
+  sshPrivateKey?: string
+  /** `known_hosts` content. Without it no host keys are remembered. */
+  knownHosts?: string
+  /** true: only hosts in `knownHosts` (`StrictHostKeyChecking=yes`). Default: accept new hosts (`accept-new`). */
+  strictHostKeyChecking?: boolean
+}
+
 export interface GitCache {
   /** Where the bare mirror for a remote lives: `<root>/<host>/<path>`, like Go's module cache. */
   mirrorPath(url: string): string
   /** Clones the mirror if it isn't there yet. */
-  ensureMirror(url: string): Promise<string>
-  fetch(url: string): Promise<void>
-  /** A checkout of `ref` at `path`, optionally on a new branch. */
-  createWorktree(url: string, opts: { path: string; ref?: string; newBranch?: string }): Promise<WorktreeInfo>
+  ensureMirror(url: string, auth?: GitAuth): Promise<string>
+  fetch(url: string, auth?: GitAuth): Promise<void>
+  /** A checkout of `ref` at `path`, optionally on a new branch. `auth` is used if the mirror has to be cloned first. */
+  createWorktree(url: string, opts: { path: string; ref?: string; newBranch?: string; auth?: GitAuth }): Promise<WorktreeInfo>
   removeWorktree(url: string, path: string): Promise<void>
   /** Commits every change in the worktree. Returns the new sha, or null if there was nothing to commit. */
   commitAll(path: string, opts: { message: string; author: Author; trailers?: Record<string, string> }): Promise<string | null>
   /** Pushes a branch. Throws `DeniedError` unless the policy allows the branch. */
-  push(path: string, branch: string, policy: PushPolicy): Promise<void>
+  push(path: string, branch: string, policy: PushPolicy, auth?: GitAuth): Promise<void>
   diff(path: string, base?: string): Promise<string>
   log(path: string, limit?: number): Promise<{ sha: string; subject: string; author: string }[]>
   status(path: string): Promise<{ clean: boolean; files: string[] }>

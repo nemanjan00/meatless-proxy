@@ -21,6 +21,10 @@ git CLI adapter (L2) for `@mp/git`. Runs `git` with `execFile` (no shell).
   `refs/remotes/origin/<b>` in the cache. Non-fast-forward -> `ConflictError`. Never forces.
 - `diff(path, base?)`: against HEAD, or against the merge base with `base`; includes new and deleted files (staged into a
   throwaway index, the real one is untouched). `log`, `status` (porcelain, untracked files included).
+- Auth: with a `GitAuth`, the key (and `knownHosts`) are written to files with mode 0600 in a fresh private temp dir,
+  and that one operation runs with `GIT_SSH_COMMAND='ssh -i <key> -o IdentitiesOnly=yes -o UserKnownHostsFile=<file or
+  /dev/null> -o StrictHostKeyChecking=<accept-new|yes> -o BatchMode=yes'`. The dir is removed afterwards, also on
+  error. Keys never appear in logs or errors (only the temp path is in the command).
 - Hooks are disabled (`core.hooksPath=/dev/null`), signing off, `ext::` transport blocked, `GIT_TERMINAL_PROMPT=0`.
   Credentials in URLs are masked in error messages.
 - Every operation on one cache repo and its worktrees is serialised in-process.
@@ -28,7 +32,10 @@ git CLI adapter (L2) for `@mp/git`. Runs `git` with `execFile` (no shell).
 ## Tests
 
 `test/git-cli.test.ts` uses real git against local `file://` repositories in a temp dir, with
-`GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`.
+`GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. `test/ssh.test.ts` puts a fake `ssh` first on the PATH that
+records its arguments and the key file (mode, content, dir mode) and runs the remote command locally, so `ssh://`
+remotes work against local repositories: it checks the key reaches ensureMirror, fetch and push, known hosts and strict
+checking, the cleanup (also after a failure), and that nothing is set without auth.
 
 ## Replacing it
 

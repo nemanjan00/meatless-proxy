@@ -31,7 +31,8 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
   `REVIEWER_PROMPT`, `ONCE_KIND`, `RESERVED_META`, `Roles`).
 
 `StdlibDeps` additions beyond the original contract: `worktreeFs?` (file
-access inside worktrees, default the local disk) and `config.defaults.maxConcurrentSessions`.
+access inside worktrees, default the local disk), `config.defaults.maxConcurrentSessions`, and
+`sshKeyFor?(employeeId)` (the employee's `SSH_PRIVATE_KEY` secret, passed as per-call git auth).
 `TaskSystemConfig` documents the shape of `employee.taskSystem` for real forks.
 
 ## Tools
@@ -80,6 +81,16 @@ Notes on behaviour:
   `<employee.git.branchPrefix || 'mp/<employee slug>'>/<session slug>`, recorded
   in `session.meta.worktrees`. Commits carry `Session:` and `Requested-by:`
   trailers. Pushes go through `assertPushAllowed` with `config.pushPolicy`.
+  `git.checkout` (fetch, worktree) and `git.push` pass `{ sshPrivateKey }` from
+  `deps.sshKeyFor(employeeId)` when it returns a key, else no auth.
+- **Environments**: `env.up` names the environment `envNameFor(<employee slug>,
+  <session slug>)` (`[a-z0-9-]`, at most `MAX_ENV_NAME` = 40 characters, cut with
+  a 6-hex hash suffix), so Docker names are `mp-<employee>-<session>-…` and stay
+  under 63 characters; labels `mp.employee` and `mp.session`. Its egress
+  allowlist is the `egress` of the checkout's project (else the session's first
+  linked project); the tool's `egress` argument can only narrow it (every entry
+  must be covered by the project list, `egressEntryCovered`). No project list
+  means no network.
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
   escapes with `nodeWorktreeFs`).
 - **Policies.** The docs policy looks at the run's own entries (after
@@ -97,7 +108,8 @@ fake git cache and container runtime), policy tests drive the hooks directly,
 and `test/e2e.test.ts` runs sessions with the real runner and router and a
 scripted model (fork + wait, chat replies through subscriptions, procedures
 with the checklist gate, git with a denied push and the docs policy, commit on
-stop, memory, files, session messages).
+stop, memory, files, session messages). `test/env-egress.test.ts` covers env
+naming, egress allowlists and narrowing, and the SSH key passed to git.
 
 ## Replacing it
 

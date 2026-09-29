@@ -4,7 +4,10 @@
  */
 export interface DockerLike {
   createNetwork(opts: Record<string, any>): Promise<unknown>
-  getNetwork(id: string): { remove(opts?: Record<string, any>): Promise<unknown> }
+  getNetwork(id: string): {
+    remove(opts?: Record<string, any>): Promise<unknown>
+    connect(opts: Record<string, any>): Promise<unknown>
+  }
   createContainer(opts: Record<string, any>): Promise<ContainerLike>
   getContainer(id: string): ContainerLike
   listContainers(opts?: Record<string, any>): Promise<ContainerSummaryLike[]>

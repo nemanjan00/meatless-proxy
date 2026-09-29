@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { NotFoundError, ValidationError, type Json } from '@mp/core'
-import { assertPushAllowed, mirrorKey, type Author, type GitCache } from '@mp/git'
+import { assertPushAllowed, mirrorKey, type Author, type GitAuth, type GitCache } from '@mp/git'
 import type { Session } from '@mp/sessions'
 import type { ToolContext } from '@mp/tools'
 import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type WorktreeMeta } from '../kit.ts'
@@ -43,6 +43,12 @@ export async function authorFor(deps: Pick<StdlibDeps, 'directory'>, employeeId:
   }
 }
 
+/** Git auth for an employee: its own SSH key (`StdlibDeps.sshKeyFor`), or none. */
+export async function gitAuthFor(deps: Pick<StdlibDeps, 'sshKeyFor'>, employeeId: string): Promise<GitAuth | undefined> {
+  const key = await deps.sshKeyFor?.(employeeId)
+  return key ? { sshPrivateKey: key } : undefined
+}
+
 export function trailersFor(sessionId: string, requesterId?: string): Record<string, string> {
   return { Session: sessionId, ...(requesterId ? { 'Requested-by': requesterId } : {}) }
 }
@@ -83,8 +89,14 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const emp = await kit.employee(ctx.employeeId)
       const branch = branchFor(emp, session.data.slug)
       const path = join(deps.config.worktreesRoot, session.id, key)
-      await git.fetch(repo.url)
-      const info = await git.createWorktree(repo.url, { path, ref: a.ref ?? repo.defaultBranch ?? 'main', newBranch: branch })
+      const auth = await gitAuthFor(deps, ctx.employeeId)
+      await git.fetch(repo.url, auth)
+      const info = await git.createWorktree(repo.url, {
+        path,
+        ref: a.ref ?? repo.defaultBranch ?? 'main',
+        newBranch: branch,
+        ...(auth ? { auth } : {}),
+      })
       const w: WorktreeMeta = {
         key,
         projectId: project.id,
@@ -191,7 +203,7 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const w = await worktree(ctx, a.repo)
       const branch = str(a.branch) ?? w.branch
       assertPushAllowed(branch, deps.config.pushPolicy)
-      await git.push(w.path, branch, deps.config.pushPolicy)
+      await git.push(w.path, branch, deps.config.pushPolicy, await gitAuthFor(deps, ctx.employeeId))
       return ok({ key: w.key, pushed: branch, url: w.url })
     },
   )

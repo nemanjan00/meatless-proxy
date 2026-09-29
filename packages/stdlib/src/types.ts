@@ -31,6 +31,11 @@ export interface StdlibDeps {
   /** Optional: without them the git and env tools aren't registered. */
   git?: GitCache
   containers?: ContainerRuntime
+  /**
+   * The employee's SSH private key (its `SSH_PRIVATE_KEY` secret), used for git fetches and pushes
+   * for the duration of each command. Optional: without it git runs with the harness's own credentials.
+   */
+  sshKeyFor?: (employeeId: string) => Promise<string | undefined>
   /** Queues a run for execution (the server wires it to the runner). */
   enqueueRun: (runId: string, opts?: { priority?: number }) => Promise<void>
   /** Wakes a suspended run if its wait is satisfied. */

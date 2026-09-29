@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { copyFile, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import {
@@ -14,7 +14,7 @@ import {
   type Clock,
   type Logger,
 } from '@mp/core'
-import { assertPushAllowed, isValidBranchName, mirrorKey, type GitCache, type WorktreeInfo } from '@mp/git'
+import { assertPushAllowed, isValidBranchName, mirrorKey, type GitAuth, type GitCache, type WorktreeInfo } from '@mp/git'
 
 export interface GitCliOptions {
   /** Cache root. Mirrors live at `<root>/<host>/<path>`. */
@@ -46,6 +46,43 @@ const BASE_CONFIG = ['core.hooksPath=/dev/null', 'commit.gpgSign=false', 'tag.gp
 const TRAILER_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 
 const maskUrl = (s: string) => s.replace(/(\w+:\/\/)[^/@\s]+@/g, '$1***@')
+
+const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+
+/**
+ * Runs `fn` with the environment that makes git use `auth` for SSH: the key (and known hosts)
+ * in a private temp dir, `GIT_SSH_COMMAND` pointing at them. The files are removed afterwards,
+ * whatever happens. Without `auth`, `fn` gets no extra environment.
+ */
+async function withAuth<T>(auth: GitAuth | undefined, fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
+  if (!auth) return fn({})
+  const dir = await mkdtemp(join(tmpdir(), 'mp-git-ssh-')) // mode 0700
+  try {
+    const args = ['ssh']
+    if (auth.sshPrivateKey) {
+      const key = join(dir, 'id')
+      const text = auth.sshPrivateKey.endsWith('\n') ? auth.sshPrivateKey : `${auth.sshPrivateKey}\n`
+      await writeFile(key, text, { mode: 0o600 })
+      args.push('-i', shellQuote(key), '-o', 'IdentitiesOnly=yes')
+    }
+    let knownHosts = '/dev/null'
+    if (auth.knownHosts) {
+      knownHosts = join(dir, 'known_hosts')
+      await writeFile(knownHosts, auth.knownHosts.endsWith('\n') ? auth.knownHosts : `${auth.knownHosts}\n`, { mode: 0o600 })
+    }
+    args.push(
+      '-o',
+      `UserKnownHostsFile=${shellQuote(knownHosts)}`,
+      '-o',
+      `StrictHostKeyChecking=${auth.strictHostKeyChecking ? 'yes' : 'accept-new'}`,
+      '-o',
+      'BatchMode=yes',
+    )
+    return await fn({ GIT_SSH_COMMAND: args.join(' ') })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
 
 /**
  * `GitCache` on the git CLI. Each remote gets one bare cache repository (the "mirror"),
@@ -112,7 +149,7 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
     }
   }
 
-  async function ensureMirrorUnlocked(url: string): Promise<string> {
+  async function ensureMirrorUnlocked(url: string, auth?: GitAuth): Promise<string> {
     const path = mirrorPath(url)
     if (await exists(join(path, 'HEAD'))) return path
     if (url.startsWith('-')) throw new ValidationError(`not a repository url: ${url}`)
@@ -123,8 +160,10 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
       await git(['--git-dir', tmp, 'config', 'remote.origin.url', url])
       for (const spec of FETCH_REFSPECS) await git(['--git-dir', tmp, 'config', '--add', 'remote.origin.fetch', spec])
       await git(['--git-dir', tmp, 'config', 'gc.worktreePruneExpire', 'now'])
-      await git(['--git-dir', tmp, 'fetch', '--prune', '--quiet', 'origin'])
-      await git(['--git-dir', tmp, 'remote', 'set-head', 'origin', '--auto'], { allowFail: true })
+      await withAuth(auth, async (env) => {
+        await git(['--git-dir', tmp, 'fetch', '--prune', '--quiet', 'origin'], { env })
+        await git(['--git-dir', tmp, 'remote', 'set-head', 'origin', '--auto'], { env, allowFail: true })
+      })
       await rename(tmp, path)
     } catch (e) {
       await rm(tmp, { recursive: true, force: true })
@@ -176,15 +215,17 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
   const cache: GitCache = {
     mirrorPath,
 
-    ensureMirror(url) {
-      return locked(mirrorPath(url), () => ensureMirrorUnlocked(url))
+    ensureMirror(url, auth) {
+      return locked(mirrorPath(url), () => ensureMirrorUnlocked(url, auth))
     },
 
-    fetch(url) {
+    fetch(url, auth) {
       return locked(mirrorPath(url), async () => {
-        const m = await ensureMirrorUnlocked(url)
-        await git(['--git-dir', m, 'remote', 'update', '--prune'])
-        await git(['--git-dir', m, 'remote', 'set-head', 'origin', '--auto'], { allowFail: true })
+        const m = await ensureMirrorUnlocked(url, auth)
+        await withAuth(auth, async (env) => {
+          await git(['--git-dir', m, 'remote', 'update', '--prune'], { env })
+          await git(['--git-dir', m, 'remote', 'set-head', 'origin', '--auto'], { env, allowFail: true })
+        })
       })
     },
 
@@ -194,7 +235,7 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
         return Promise.reject(new ValidationError(`not a valid branch name: ${o.newBranch}`))
       }
       return locked(mirrorPath(url), async () => {
-        const m = await ensureMirrorUnlocked(url)
+        const m = await ensureMirrorUnlocked(url, o.auth)
         const sha = await resolveRef(m, o.ref)
         if (o.newBranch !== undefined && (await revParse(m, `refs/heads/${o.newBranch}`))) {
           throw new ConflictError(`branch ${o.newBranch} already exists`)
@@ -277,7 +318,7 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
       })
     },
 
-    async push(path, branch, policy) {
+    async push(path, branch, policy, auth) {
       // The hard rule comes first, before git is even asked anything.
       assertPushAllowed(branch, policy)
       const name = branch.replace(/^refs\/heads\//, '')
@@ -287,7 +328,9 @@ export function gitCliCache(opts: GitCliOptions): GitCache {
         const url = (await git(['--git-dir', m, 'config', '--get', 'remote.origin.url'])).stdout.trim()
         if (!url || url.startsWith('-')) throw new ValidationError('mirror has no usable origin url')
         try {
-          await git(['push', '--porcelain', '--no-verify', '--', url, `refs/heads/${name}:refs/heads/${name}`], { cwd: path })
+          await withAuth(auth, (env) =>
+            git(['push', '--porcelain', '--no-verify', '--', url, `refs/heads/${name}:refs/heads/${name}`], { cwd: path, env }),
+          )
         } catch (e) {
           if (e instanceof GitError && /rejected|non-fast-forward|fetch first/.test(e.message + String(e.details?.stderr))) {
             throw new ConflictError(`push to ${name} rejected: ${e.message}`)

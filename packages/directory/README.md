@@ -20,6 +20,7 @@ as extendable records on top of `@mp/records`.
 
 Ownership and membership are links `contact -> project` with a role (`ProjectRoles`: owner, backup, member, reviewer,
 stakeholder, or any string), stored once and read from both sides. Any contact can own a project, including an employee's.
+A project's optional `egress: { allow: string[] }` is its containers' egress allowlist (see `EnvSpec.egress`).
 A procedure's `projectIds` are mirrored as `applies_to` links. Schemas (`contactSchema`, ...) and data types are exported;
 deployments add fields with `records.kinds.extend(kind, fields)`.
 

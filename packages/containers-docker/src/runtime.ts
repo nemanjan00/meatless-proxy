@@ -5,7 +5,9 @@ import { StringDecoder } from 'node:string_decoder'
 import {
   ExecAbortedError,
   TIMEOUT_EXIT_CODE,
+  invalidEgressEntries,
   type ContainerRuntime,
+  type EgressLogEntry,
   type EnvInfo,
   type EnvSpec,
   type ExecOptions,
@@ -25,6 +27,7 @@ import {
 } from '@mp/core'
 import Docker from 'dockerode'
 import type { ContainerInspectLike, ContainerSummaryLike, DockerLike } from './docker-like.ts'
+import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
 
 export interface DockerRuntimeOptions {
   /** A dockerode instance (or anything shaped like one). Default: `new Docker({ socketPath })`. */
@@ -43,7 +46,14 @@ export interface DockerRuntimeOptions {
   pidsLimit?: number
   /** Output kept per stream and exec; the rest is dropped with a marker. Default 10 MiB. */
   maxOutputBytes?: number
+  /** Image for the egress proxy sidecar: anything with `node` on the PATH. Default `DEFAULT_PROXY_IMAGE`. */
+  proxyImage?: string
 }
+
+export const DEFAULT_PROXY_IMAGE = 'node:26-alpine'
+/** The proxy's network alias on the environment's network, and its URL there. */
+export const PROXY_ALIAS = 'proxy'
+export const PROXY_URL = `http://${PROXY_ALIAS}:${EGRESS_PROXY_PORT}`
 
 export const DEFAULT_CAP_DROP = ['NET_RAW', 'MKNOD', 'AUDIT_WRITE', 'SYS_CHROOT', 'SETFCAP']
 
@@ -77,11 +87,14 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   const capDrop = opts.capDrop ?? DEFAULT_CAP_DROP
   const pidsLimit = opts.pidsLimit ?? 4096
   const maxOutput = opts.maxOutputBytes ?? 10 * 1024 * 1024
+  const proxyImage = opts.proxyImage ?? DEFAULT_PROXY_IMAGE
 
   const envName = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
   const mainName = (name: string) => `${prefix}${name}`
   const serviceName = (name: string, svc: string) => `${prefix}${name}-${svc}`
   const networkName = (name: string) => `${prefix}${name}`
+  const egressNetworkName = (name: string) => `${prefix}${name}-egress`
+  const proxyName = (name: string) => `${prefix}${name}-proxy`
 
   const hardening = {
     Privileged: false,
@@ -130,17 +143,67 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     return tag
   }
 
+  async function pullIfMissing(image: string): Promise<void> {
+    try {
+      await docker.getImage(image).inspect()
+    } catch (e) {
+      if (statusOf(e) !== 404) throw mapError(e, `image ${image}`)
+      await follow(docker, await docker.pull(image), `pull ${image}`)
+    }
+  }
+
+  /** The proxy settings every container of an environment with `egress` gets. */
+  function proxyEnv(spec: EnvSpec): Record<string, string> {
+    if (!spec.egress) return {}
+    const noProxy = ['localhost', '127.0.0.1', ...(spec.services ?? []).map((s) => s.name)].join(',')
+    return {
+      HTTP_PROXY: PROXY_URL,
+      HTTPS_PROXY: PROXY_URL,
+      http_proxy: PROXY_URL,
+      https_proxy: PROXY_URL,
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
+    }
+  }
+
+  /**
+   * The egress proxy: on the environment's internal network (alias `proxy`) and on a second,
+   * non-internal network of its own, the only way out.
+   */
+  async function createProxy(spec: EnvSpec, net: string, labels: Record<string, string>): Promise<void> {
+    const egressNet = egressNetworkName(spec.name)
+    await docker.createNetwork({
+      Name: egressNet,
+      Driver: 'bridge',
+      Internal: false,
+      CheckDuplicate: true,
+      Labels: { ...labels, [LABEL_ROLE]: 'egress' },
+    })
+    const name = proxyName(spec.name)
+    const c = await docker.createContainer({
+      name,
+      Image: proxyImage,
+      Cmd: ['node', '-e', EGRESS_PROXY_SOURCE],
+      Env: envList({ ALLOW: JSON.stringify(spec.egress!.allow), PORT: String(EGRESS_PROXY_PORT) }),
+      User: '65534:65534',
+      Labels: { ...labels, [LABEL_ROLE]: 'proxy' },
+      HostConfig: {
+        ...hardening,
+        NetworkMode: net,
+        ReadonlyRootfs: true,
+        Memory: 256 * 1024 * 1024,
+        MemorySwap: 256 * 1024 * 1024,
+      },
+      NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: [PROXY_ALIAS] } } },
+    })
+    await docker.getNetwork(egressNet).connect({ Container: name })
+    await c.start()
+  }
+
   async function create(spec: EnvSpec, labels: Record<string, string>): Promise<void> {
     const image = await ensureImage(spec)
-    for (const svc of spec.services ?? []) {
-      const svcImage = svc.image
-      try {
-        await docker.getImage(svcImage).inspect()
-      } catch (e) {
-        if (statusOf(e) !== 404) throw mapError(e, `image ${svcImage}`)
-        await follow(docker, await docker.pull(svcImage), `pull ${svcImage}`)
-      }
-    }
+    for (const svc of spec.services ?? []) await pullIfMissing(svc.image)
+    if (spec.egress) await pullIfMissing(proxyImage)
     const net = networkName(spec.name)
     await docker.createNetwork({
       Name: net,
@@ -149,11 +212,13 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       CheckDuplicate: true,
       Labels: labels,
     })
+    if (spec.egress) await createProxy(spec, net, labels)
+    const viaProxy = proxyEnv(spec)
     for (const svc of spec.services ?? []) {
       const c = await docker.createContainer({
         name: serviceName(spec.name, svc.name),
         Image: svc.image,
-        Env: envList(svc.env),
+        Env: envList({ ...svc.env, ...viaProxy }),
         Labels: { ...labels, [LABEL_ROLE]: 'service', [LABEL_SERVICE]: svc.name },
         HostConfig: { ...hardening, NetworkMode: net, ...limits(spec) },
         NetworkingConfig: { EndpointsConfig: { [net]: { Aliases: [svc.name] } } },
@@ -165,7 +230,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       Image: image,
       Cmd: spec.command ?? ['sleep', 'infinity'],
       ...(spec.workdir ? { WorkingDir: spec.workdir } : {}),
-      Env: envList(spec.env),
+      Env: envList({ ...spec.env, ...viaProxy }),
       Labels: { ...labels, [LABEL_ROLE]: 'main' },
       HostConfig: {
         ...hardening,
@@ -189,8 +254,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       throw mapError(e, `environment ${name}`)
     }
     const ids = new Set(containers.map((c) => c.Id))
-    // The main container is also removed by name, in case a listing missed it.
-    const targets = [...ids, mainName(name)]
+    // The main container and the proxy are also removed by name, in case a listing missed them.
+    const targets = [...ids, mainName(name), proxyName(name)]
     for (const id of targets) {
       try {
         await docker.getContainer(id).remove({ force: true, v: true })
@@ -198,10 +263,12 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         if (statusOf(e) !== 404) throw mapError(e, `container ${id}`)
       }
     }
-    try {
-      await docker.getNetwork(networkName(name)).remove()
-    } catch (e) {
-      if (statusOf(e) !== 404) throw mapError(e, `network ${networkName(name)}`)
+    for (const net of [networkName(name), egressNetworkName(name)]) {
+      try {
+        await docker.getNetwork(net).remove()
+      } catch (e) {
+        if (statusOf(e) !== 404) throw mapError(e, `network ${net}`)
+      }
     }
   }
 
@@ -338,6 +405,19 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       }
     },
 
+    async egressLog(envId) {
+      const name = proxyName(envName(envId))
+      let buf: Buffer
+      try {
+        const res = await docker.getContainer(name).logs({ stdout: true, stderr: false, follow: false })
+        buf = Buffer.isBuffer(res) ? res : await readAll(res)
+      } catch (e) {
+        if (statusOf(e) === 404) return []
+        throw mapError(e, `egress proxy of ${envId}`)
+      }
+      return parseEgressLog(demuxBuffer(buf))
+    },
+
     async destroyEnv(envId) {
       const name = envName(envId)
       await removeAll(name)
@@ -357,6 +437,12 @@ function validate(spec: EnvSpec) {
   }
   for (const svc of spec.services ?? []) {
     if (!NAME_RE.test(svc.name) || svc.name === 'main') issues.push(`bad service name: ${svc.name}`)
+    if (spec.egress && svc.name === PROXY_ALIAS) issues.push(`service name ${PROXY_ALIAS} is taken by the egress proxy`)
+  }
+  if (spec.egress) {
+    if (spec.allowInternet) issues.push('egress and allowInternet exclude each other')
+    if (!Array.isArray(spec.egress.allow)) issues.push('egress.allow must be a list')
+    else for (const bad of invalidEgressEntries(spec.egress.allow)) issues.push(`bad egress entry: ${bad}`)
   }
   for (const k of [...Object.keys(spec.env ?? {}), ...(spec.services ?? []).flatMap((s) => Object.keys(s.env ?? {}))]) {
     if (!ENV_KEY_RE.test(k)) issues.push(`bad env var name: ${k}`)
@@ -364,6 +450,22 @@ function validate(spec: EnvSpec) {
   if (spec.limits?.cpus !== undefined && !(spec.limits.cpus > 0)) issues.push('limits.cpus must be > 0')
   if (spec.limits?.memoryMb !== undefined && !(spec.limits.memoryMb > 0)) issues.push('limits.memoryMb must be > 0')
   if (issues.length) throw new ValidationError('invalid environment spec', issues)
+}
+
+/** The proxy's JSON log lines; anything else in its output is skipped. */
+export function parseEgressLog(text: string): EgressLogEntry[] {
+  const out: EgressLogEntry[] = []
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (!t.startsWith('{')) continue
+    try {
+      const v = JSON.parse(t) as EgressLogEntry
+      if (typeof v.host === 'string' && typeof v.allowed === 'boolean' && typeof v.method === 'string') out.push(v)
+    } catch {
+      // not a log line
+    }
+  }
+  return out
 }
 
 function limits(spec: EnvSpec): Record<string, number> {

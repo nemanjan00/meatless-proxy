@@ -1,7 +1,32 @@
+import { createHash } from 'node:crypto'
 import type { Json } from '@mp/core'
-import type { ContainerRuntime, EnvSpec } from '@mp/containers'
+import { egressEntryCovered, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
 import { worktreeFor } from './git.ts'
+
+/**
+ * Longest environment name. The runtime prefixes it (`mp-`) and suffixes container and network
+ * names (`-proxy`, `-egress`, `-<service>`), which keeps them under Docker's 63 characters.
+ */
+export const MAX_ENV_NAME = 40
+
+const cleanSlug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+
+/**
+ * `<employee slug>-<session slug>`, reduced to `[a-z0-9-]`. Longer than `max`, it is cut and gets a
+ * short hash of the full name, so different sessions keep different names.
+ */
+export function envNameFor(employeeSlug: string, sessionSlug: string, max = MAX_ENV_NAME): string {
+  const full = `${cleanSlug(employeeSlug) || 'employee'}-${cleanSlug(sessionSlug) || 'session'}`
+  if (full.length <= max) return full
+  const hash = createHash('sha256').update(full).digest('hex').slice(0, 6)
+  return `${full.slice(0, max - hash.length - 1).replace(/-+$/, '')}-${hash}`
+}
 
 /** Keeps the end of long output, which is usually where the error is. */
 const tail = (text: string, max = 8000) =>
@@ -12,7 +37,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Calling it again returns the running one. Use env.exec to build, test or run.",
+        "Start this session's isolated environment (containers on a private network) with your checkout mounted at /workspace: from an image, or built from the checkout's Dockerfile. Network access goes only through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the project's egress allowlist; without one there is no network. Calling it again returns the running one. Use env.exec to build, test or run.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -29,6 +54,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
               required: ['name', 'image'],
             },
           },
+          egress: {
+            type: 'array',
+            items: { type: 'string' },
+            description: "Narrow the project's egress allowlist to these hosts (a subset of it). Default: the whole list.",
+          },
         },
       },
     },
@@ -41,19 +71,47 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       }
       const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
       if (!str(a.image) && !w) return fail('give an image, or check out a repository first (git.checkout) to build it')
+
+      // Egress: the checkout's project (else the session's first linked project) sets the allowlist.
+      const projectId = w?.projectId ?? (await kit.projectsOf(session))[0]
+      const project = projectId ? await kit.deps.directory.projects.get(projectId) : null
+      const projectAllow = project?.data.egress?.allow
+      let egress: EnvSpec['egress']
+      if (a.egress !== undefined) {
+        if (!Array.isArray(a.egress)) return fail('egress must be a list of hosts')
+        const requested = (a.egress as unknown[]).map(String)
+        const wider = requested.filter((e) => !projectAllow || !egressEntryCovered(e, projectAllow))
+        if (wider.length)
+          return fail(
+            projectAllow
+              ? "egress can only narrow the project's allowlist"
+              : 'the project has no egress allowlist, so there is no network to narrow',
+            { notAllowed: wider },
+          )
+        if (projectAllow) egress = { allow: requested }
+      } else if (projectAllow) egress = { allow: [...projectAllow] }
+
+      const emp = await kit.employee(ctx.employeeId)
       const spec: EnvSpec = {
-        name: `mp-${session.id.toLowerCase()}`,
+        name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
         ...(str(a.image)
           ? { image: a.image }
           : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
         ...(w ? { mounts: [{ hostPath: w.path, containerPath: '/workspace' }], workdir: '/workspace' } : {}),
         ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
         ...(a.services ? { services: a.services } : {}),
+        ...(egress ? { egress } : {}),
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
       await kit.patchMeta(session.id, (m) => ({ ...m, env: { id: info.id, name: info.name } }))
-      return ok({ envId: info.id, name: info.name, status: info.status, ...(w ? { workspace: '/workspace' } : {}) })
+      return ok({
+        envId: info.id,
+        name: info.name,
+        status: info.status,
+        ...(w ? { workspace: '/workspace' } : {}),
+        network: egress ? { via: 'proxy', allow: egress.allow } : 'none',
+      })
     },
   )
 

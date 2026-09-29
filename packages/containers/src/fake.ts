@@ -8,6 +8,7 @@ import {
   type ExecOptions,
   type ExecResult,
 } from './types.ts'
+import { checkEgress, invalidEgressEntries, type EgressLogEntry } from './egress.ts'
 
 /** What a scripted command answers. */
 export interface FakeResponse {
@@ -42,6 +43,8 @@ export interface FakeEnv {
   info: EnvInfo
   spec: EnvSpec
   logs: string[]
+  /** Decisions made through `egressAllowed`, as the proxy would log them. */
+  egress: EgressLogEntry[]
 }
 
 export interface FakeRuntimeOptions {
@@ -65,6 +68,13 @@ export interface FakeRuntime extends ContainerRuntime {
   stop(envId: string): void
   /** Makes the next `createEnv` fail with this error. */
   failNextCreate(err: Error): void
+  /**
+   * Whether a container of the environment could reach `host:port`, as the real runtime would decide
+   * it: through the egress allowlist when `egress` is set, anything with `allowInternet`, else nothing.
+   * Decisions for proxied environments are added to `egressLog`.
+   */
+  egressAllowed(envId: string, host: string, port: number): boolean
+  egressLog(envId: string): Promise<EgressLogEntry[]>
 }
 
 const matches = (m: FakeMatcher, cmd: string[]) =>
@@ -99,6 +109,12 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       }
       if (!spec.name) throw new ValidationError('environment needs a name')
       if (!spec.image && !spec.build) throw new ValidationError('environment needs an image or a build')
+      if (spec.egress) {
+        if (spec.allowInternet) throw new ValidationError('egress and allowInternet exclude each other')
+        const bad = invalidEgressEntries(spec.egress.allow ?? [])
+        if (!Array.isArray(spec.egress.allow) || bad.length)
+          throw new ValidationError('invalid egress allowlist', bad.length ? bad : undefined)
+      }
       if ([...envs.values()].some((e) => e.info.name === spec.name))
         throw new ConflictError(`environment ${spec.name} already exists`)
       const info: EnvInfo = {
@@ -108,7 +124,7 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         labels: { ...spec.labels, 'mp.env': spec.name, 'mp.managed': 'true' },
         createdAt: clock.iso(),
       }
-      envs.set(info.id, { info, spec: structuredClone(spec), logs: [] })
+      envs.set(info.id, { info, spec: structuredClone(spec), logs: [], egress: [] })
       return copy(info)
     },
 
@@ -192,7 +208,32 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
       return runtime
     },
 
-    envs: () => [...envs.values()].map((e) => ({ info: copy(e.info), spec: structuredClone(e.spec), logs: [...e.logs] })),
+    envs: () =>
+      [...envs.values()].map((e) => ({
+        info: copy(e.info),
+        spec: structuredClone(e.spec),
+        logs: [...e.logs],
+        egress: e.egress.map((l) => ({ ...l })),
+      })),
+
+    egressAllowed(envId, host, port) {
+      const env = live(envId)
+      if (!env.spec.egress) return env.spec.allowInternet === true
+      const d = checkEgress(env.spec.egress.allow, host, port)
+      env.egress.push({
+        at: clock.iso(),
+        method: 'CONNECT',
+        host,
+        port,
+        allowed: d.allowed,
+        ...(d.reason ? { reason: d.reason } : {}),
+      })
+      return d.allowed
+    },
+
+    async egressLog(envId) {
+      return live(envId).egress.map((l) => ({ ...l }))
+    },
 
     appendLog(envId, text) {
       live(envId).logs.push(text)

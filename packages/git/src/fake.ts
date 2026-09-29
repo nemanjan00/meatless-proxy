@@ -5,6 +5,7 @@ import {
   isValidBranchName,
   mirrorKey,
   type Author,
+  type GitAuth,
   type GitCache,
   type PushPolicy,
   type WorktreeInfo,
@@ -43,6 +44,8 @@ export interface FakeGitCall {
 
 export interface FakeGitCache extends GitCache {
   readonly calls: FakeGitCall[]
+  /** The auth every remote-facing call got (`ensureMirror`, `fetch`, `createWorktree`, `push`), in order. */
+  readonly auths: { method: string; target: string; auth: GitAuth | undefined }[]
   /** Every successful push, in order. */
   readonly pushes: { url: string; branch: string; sha: string }[]
   /** The upstream repository for `url` (created on first use with one commit on `main`). */
@@ -73,6 +76,7 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
   const mirrors = new Map<string, FakeRepo>()
   const worktrees = new Map<string, FakeWorktree>()
   const calls: FakeGitCall[] = []
+  const auths: FakeGitCache['auths'] = []
   const pushes: { url: string; branch: string; sha: string }[] = []
   let seq = 0
 
@@ -118,6 +122,8 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
   }
 
   const record = (method: string, ...args: unknown[]) => void calls.push({ method, args: structuredClone(args) })
+  const recordAuth = (method: string, target: string, auth: GitAuth | undefined) =>
+    void auths.push({ method, target, auth: auth ? { ...auth } : undefined })
 
   const resolve = (repo: FakeRepo, ref: string): string => {
     const sha =
@@ -135,6 +141,7 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
 
   const cache: FakeGitCache = {
     calls,
+    auths,
     pushes,
     remote,
 
@@ -142,15 +149,17 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
       return `${root}/${mirrorKey(url)}`
     },
 
-    async ensureMirror(url) {
+    async ensureMirror(url, auth) {
       record('ensureMirror', url)
+      recordAuth('ensureMirror', url, auth)
       if (!mirrors.has(url)) mirrors.set(url, cloneRepo(remote(url)))
       return cache.mirrorPath(url)
     },
 
-    async fetch(url) {
+    async fetch(url, auth) {
       record('fetch', url)
-      await cache.ensureMirror(url)
+      recordAuth('fetch', url, auth)
+      if (!mirrors.has(url)) mirrors.set(url, cloneRepo(remote(url)))
       const m = mirror(url)
       const r = remote(url)
       for (const [sha, c] of r.commits) m.commits.set(sha, c)
@@ -160,8 +169,10 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
     },
 
     async createWorktree(url, o) {
-      record('createWorktree', url, o)
-      await cache.ensureMirror(url)
+      const { auth, ...rest } = o
+      record('createWorktree', url, rest)
+      recordAuth('createWorktree', url, auth)
+      if (!mirrors.has(url)) mirrors.set(url, cloneRepo(remote(url)))
       const m = mirror(url)
       if (worktrees.has(o.path)) throw new ConflictError(`worktree ${o.path} already exists`)
       const head = resolve(m, o.ref ?? m.defaultBranch)
@@ -204,8 +215,9 @@ export function fakeGitCache(opts: FakeGitOptions = {}): FakeGitCache {
       return sha
     },
 
-    async push(path, branch, policy: PushPolicy) {
+    async push(path, branch, policy: PushPolicy, auth) {
       record('push', path, branch, policy)
+      recordAuth('push', path, auth)
       assertPushAllowed(branch, policy)
       const w = wt(path)
       const name = branch.replace(/^refs\/heads\//, '')

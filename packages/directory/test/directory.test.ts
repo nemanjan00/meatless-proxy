@@ -281,3 +281,14 @@ describe('procedures', () => {
     expect((await records.backlinks({ kind: 'contact', id: ana.id })).map((r) => r.id)).toEqual([prc.id])
   })
 })
+
+describe('project egress', () => {
+  it('stores an egress allowlist and validates its shape', async () => {
+    const p = await dir.projects.create({ name: 'Billing', egress: { allow: ['registry.npmjs.org', '*.github.com:443'] } })
+    expect((await dir.projects.require(p.id)).data.egress).toEqual({ allow: ['registry.npmjs.org', '*.github.com:443'] })
+    await dir.projects.update(p.id, { egress: { allow: [] } })
+    expect((await dir.projects.require(p.id)).data.egress).toEqual({ allow: [] })
+    await expect(dir.projects.create({ name: 'X', egress: { allow: 'npm' } as any })).rejects.toThrow(ValidationError)
+    await expect(dir.projects.create({ name: 'Y', egress: {} as any })).rejects.toThrow(ValidationError)
+  })
+})

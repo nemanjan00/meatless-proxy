@@ -1,4 +1,5 @@
 import { MpError } from '@mp/core'
+import type { EgressLogEntry } from './egress.ts'
 
 export interface Mount {
   hostPath: string
@@ -20,7 +21,16 @@ export interface EnvSpec {
   /** Extra containers on the same private network, e.g. a database. */
   services?: { name: string; image: string; env?: Record<string, string> }[]
   limits?: { cpus?: number; memoryMb?: number }
-  /** Default false: no route to the internet or to the harness's own services. */
+  /**
+   * Network access through an allowlisting egress proxy: containers get no direct route out, only
+   * `HTTP_PROXY`/`HTTPS_PROXY` pointing at a proxy that lets through `allow` (hostname globs with
+   * optional ports, see `checkEgress`). Can't be combined with `allowInternet`.
+   */
+  egress?: { allow: string[] }
+  /**
+   * Unrestricted internet access, the escape hatch. Default false: without `egress` there is no
+   * network beyond the environment's own private network (no internet, no harness services).
+   */
   allowInternet?: boolean
   labels?: Record<string, string>
 }
@@ -58,6 +68,8 @@ export interface ContainerRuntime {
   listEnvs(labels?: Record<string, string>): Promise<EnvInfo[]>
   exec(envId: string, cmd: string[], opts?: ExecOptions): Promise<ExecResult>
   logs(envId: string, opts?: { tail?: number }): Promise<string>
+  /** The egress proxy's log, oldest first. Empty for an environment without `egress`. Optional. */
+  egressLog?(envId: string): Promise<EgressLogEntry[]>
   /** Removes the environment's containers, network and volumes. Idempotent. */
   destroyEnv(envId: string): Promise<void>
 }
