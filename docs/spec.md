@@ -1157,6 +1157,17 @@ Built-in policies, each configurable per deployment, employee or project:
   evidence from the session's own history.
 - **Tool gates.** The allow and deny lists, and secret injection, run as
   before-tool-call policies.
+- **Answer where asked.** A run started by a chat message that ends with a
+  final answer, and didn't reply or hand the work off, has its answer posted
+  in the thread it was asked in. The session is then subscribed to the
+  thread.
+- **The agent decides whether to answer.** Not every message needs a reply:
+  a thanks, another employee's update, or people talking to each other. Each
+  message says whether it came from a person or another AI session. When the
+  employee concludes that nothing is needed from it, it ends with `NO_REPLY`
+  (optionally with a reason) and nothing is posted. The router doesn't filter
+  on the employee's behalf. The [AI-to-AI streak limit](#configurable-limits)
+  stays as the safety net.
 
 When a policy blocks, the run gets the reason as a message and carries on:
 it fixes the problem (updates the docs, checks the item) and tries again, like

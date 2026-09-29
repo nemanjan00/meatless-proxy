@@ -132,7 +132,10 @@ export function renderEvent(event: MpEvent, maxChars = 4000): string {
       ? ` thread ${d.subject.id}`
       : ` ${d.subject.system}:${d.subject.id}`
     : ''
-  const head = `[${d.source} ${d.type}${subject}]`
+  // Who it's from, so the receiving session can decide whether a reply is needed.
+  const author = (d.payload as any)?.by ?? (d.payload as any)?.author
+  const from = author?.kind === 'session' ? '; from another AI session' : author?.kind === 'contact' ? '; from a person' : ''
+  const head = `[${d.source} ${d.type}${subject}${from}]`
   const body =
     d.text ?? (typeof d.payload === 'string' ? d.payload : d.payload === undefined ? '' : JSON.stringify(d.payload, null, 2))
   const text = `${head}\n${body}`

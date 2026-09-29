@@ -307,3 +307,17 @@ describe('answer where asked: needsAutoReply', async () => {
     expect(needsAutoReply([ev(true), res('docs.read')], 'done')).toBe(true)
   })
 })
+
+describe('answer where asked: the agent may decide not to answer', async () => {
+  const { needsAutoReply, NO_REPLY_RE } = await import('../src/policies.ts')
+  const ev = {
+    kind: 'event',
+    content: { source: 'chat', expectedToAct: true, text: 'thanks!', type: 'message.replied', eventId: 'e', trusted: true },
+  } as any
+  it('posts nothing when the run ends with NO_REPLY', () => {
+    for (const out of ['NO_REPLY', 'no reply', '[NO_REPLY]', 'NO_REPLY: just a thanks', '  no_reply  '])
+      expect(needsAutoReply([ev], out), out).toBe(false)
+    expect(needsAutoReply([ev], 'No reply is needed, but here is the answer: 42')).toBe(true)
+    expect(NO_REPLY_RE.test('Reply sent.')).toBe(false)
+  })
+})

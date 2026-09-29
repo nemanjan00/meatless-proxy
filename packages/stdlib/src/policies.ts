@@ -14,6 +14,11 @@ export const NO_DOCS_PHRASE = /no docs update needed:\s*\S/i
 /** Paths that count as docs when written with git.write_file. */
 export const DOCS_PATH = /(^|\/)docs\/|\.mdx?$/i
 
+/** What the model ends with when it decides a message needs no answer. */
+export const NO_REPLY = 'NO_REPLY'
+/** `NO_REPLY`, alone or followed by a reason (`NO_REPLY: just a thanks`). */
+export const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::.*)?$/is
+
 /** Tools that answer in chat: a run that used one has already replied somewhere. */
 export const CHAT_ANSWER_TOOLS = ['chat.post', 'chat.reply', 'chat.invite']
 /** Tools that hand the work to another session: that session answers, not this run. */
@@ -68,7 +73,8 @@ export const wroteDocs = (entries: Entry[]) =>
  * and it neither answered in chat nor handed the work to another session.
  */
 export function needsAutoReply(entries: Entry[], output: string | undefined): boolean {
-  if (!output?.trim()) return false
+  // The agent decides: it may conclude that nothing needs saying.
+  if (!output?.trim() || NO_REPLY_RE.test(output)) return false
   const asked = entries.some(
     (e) => e.kind === 'event' && (e.content as any)?.source === 'chat' && (e.content as any)?.expectedToAct,
   )
