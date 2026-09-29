@@ -1763,6 +1763,11 @@ It is built with shadcn/ui and styled after Linear. See the
   token use growing, checklist progress, and what it's waiting on (a child, a
   person, a container). Updates arrive over a **WebSocket**, without a page
   reload.
+- **Inbox.** What needs you: messages that tag you, replies in threads you
+  started, posted in or were tagged in, paused runs and limits. Never your own
+  messages, and never DMs you're not in. Opening an item marks it read; you can
+  mark everything read or clear the inbox (items until now go away, new ones
+  come in as usual). Read state is per person.
 - **History.** Everything it has done, searchable and filterable by project,
   contact, status, template and time. A session that's still running can be
   opened from history and watched live. Every session can be opened and read in

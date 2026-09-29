@@ -802,6 +802,11 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       return delay({ items, paused: db.control.paused, counts })
     },
     inbox: () => delay([...db.inbox].sort((a, b) => b.at.localeCompare(a.at))),
+    markInboxRead: (q) => {
+      if (q.clear) db.inbox = []
+      else for (const i of db.inbox) if (q.ids?.includes(i.id)) i.read = true
+      return delay(undefined)
+    },
 
     listEvents: (q = {}) => {
       let items = all<EventData>('event').filter(

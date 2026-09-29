@@ -25,6 +25,7 @@ import { StatusIcon } from '@/components/status-icon.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
 import { RecordPropertiesForm } from '@/components/record-form.tsx'
+import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { Switch } from '@/components/ui/switch.tsx'
@@ -223,6 +224,7 @@ function Secrets() {
   const { employees, name } = useEmployees()
   const list = useLoad((a) => a.secrets(), [])
   const [form, setForm] = useState({ name: '', value: '', scope: 'global' as SecretScope['type'], id: '' })
+  const [projectName, setProjectName] = useState('')
   const scopeLabel = (s: SecretScope) =>
     s.type === 'global' ? 'global' : s.type === 'employee' ? `employee · ${name(s.id ?? '')}` : `${s.type} · ${s.id}`
   const add = async () => {
@@ -299,11 +301,33 @@ function Secrets() {
               </option>
             ))}
           </select>
+        ) : form.scope === 'project' ? (
+          form.id ? (
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, id: '' })}
+              className="h-8 max-w-44 truncate rounded-md border px-2 text-mini"
+              aria-label="Change project"
+              title="Change project"
+            >
+              {projectName || form.id}
+            </button>
+          ) : (
+            <RecordPicker
+              kinds={['project']}
+              placeholder="Project…"
+              className="w-44"
+              onPick={(o) => {
+                setProjectName(o.label)
+                setForm({ ...form, id: o.id })
+              }}
+            />
+          )
         ) : form.scope !== 'global' ? (
           <Input
             value={form.id}
             onChange={(e) => setForm({ ...form, id: e.target.value })}
-            placeholder={form.scope === 'tool' ? 'tool name' : 'project id'}
+            placeholder="tool name"
             className="w-44 font-mono text-micro"
             aria-label="Scope id"
           />

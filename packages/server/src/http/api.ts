@@ -9,6 +9,7 @@ import { normalizeWhere, type Condition, type StoredRecord } from '@mp/store'
 import type { UsageData } from '@mp/usage'
 import { Hono, type Context } from 'hono'
 import { AUTH_KINDS } from '../auth/access.ts'
+import { PersonInbox } from '../inbox.ts'
 import { principalOf } from '../auth/guard.ts'
 import type { ChatVisibility } from '../auth/visibility.ts'
 import type { Services } from '../services.ts'
@@ -90,6 +91,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
   const views = () => new Views(s)
   const actor = async (c: Context) => actorOf(await currentContact(s, c))
   const vis = deps.visibility
+  const inbox = new PersonInbox(s, vis)
   const me_ = (c: Context) => principalOf(c).contactId
 
   /** Extra conditions hiding DM channels (and their messages and chat events) from people who aren't members. */
@@ -574,46 +576,15 @@ export function apiRoutes(deps: ApiDeps): Hono {
     return c.json({ items, paused: (await s.control.state()).paused, counts } satisfies Api.NowSnapshot)
   })
 
-  app.get('/api/inbox', async (c) => {
-    const v = views()
-    const items: Api.InboxItem[] = []
-    for (const run of (await s.sessions.runs({ state: 'paused' })).reverse().slice(0, 100)) {
-      const session = await v.session(run.data.sessionId)
-      const reason = run.data.pauseReason ?? 'paused'
-      items.push({
-        id: `paused:${run.id}`,
-        type: /budget|limit|token|cost/i.test(reason) ? 'limit' : 'paused_run',
-        title: `Paused: ${session?.data.title ?? run.data.sessionId}`,
-        detail: reason,
-        at: run.updatedAt,
-        read: false,
-        sessionId: run.data.sessionId,
-        runId: run.id,
-        employee: await v.employeeSummary(run.data.employeeId),
-      })
-    }
-    const mentions = await s.records.query<DomainMessage['data']>('message', {
-      where: [{ field: 'tags', op: 'contains', value: { type: 'person' } }, ...(await dmFilter(c, 'message'))],
-      orderBy: { field: 'createdAt', dir: 'desc' },
-      limit: 50,
-    })
-    for (const m of mentions.items) {
-      const author = await v.author(m.data.author)
-      const people = m.data.tags.filter((t) => t.type === 'person').map((t) => t.raw)
-      items.push({
-        id: `mention:${m.id}`,
-        type: 'mention',
-        title: `${author.name} mentioned ${people.join(', ')}`,
-        detail: m.data.text.slice(0, 200),
-        at: m.data.createdAt,
-        read: false,
-        channelId: m.data.channelId,
-        threadId: m.data.threadId ?? m.id,
-        ...(author.type === 'employee' ? { employee: { id: author.id, name: author.name } } : {}),
-      })
-    }
-    items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
-    return c.json(items)
+  app.get('/api/inbox', async (c) => c.json((await inbox.items(me_(c), views())) satisfies Api.InboxItem[]))
+
+  app.post('/api/inbox/read', async (c) => {
+    const body = await jsonBody<{ ids?: unknown; clear?: unknown }>(c)
+    if (body.ids !== undefined && (!Array.isArray(body.ids) || body.ids.some((x) => typeof x !== 'string')))
+      throw new BadRequestError('ids must be a list of inbox item ids')
+    if (body.clear !== undefined && typeof body.clear !== 'boolean') throw new BadRequestError('clear must be a boolean')
+    await inbox.mark(me_(c), { ...(body.ids ? { ids: body.ids as string[] } : {}), ...(body.clear ? { clear: true } : {}) })
+    return c.body(null, 204)
   })
 
   // ── Events and triggers ──────────────────────────────────────────────────

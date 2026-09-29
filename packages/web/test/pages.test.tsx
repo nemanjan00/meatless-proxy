@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { App } from '../src/app.tsx'
-import { CHN, createMockDataLayer, SES } from '../src/mock/index.ts'
+import { CHN, CON, createMockDataLayer, SES } from '../src/mock/index.ts'
 import { applyNowEvent } from '../src/pages/now.tsx'
 
 function renderAt(path: string) {
@@ -112,6 +112,21 @@ describe('pages against the mock API', () => {
     expect(screen.getByTestId('links-graph')).toBeInTheDocument()
   })
 
+  it('References are picked by name with a typeahead, not typed as ids', async () => {
+    const { data } = renderAt(`/contacts/${CON.ana}`)
+    const form = await screen.findByTestId('record-form')
+    // Manager shows the name; change it by typing a name.
+    expect(await within(form).findByText('Dana Park')).toBeInTheDocument()
+    fireEvent.click(within(form).getByRole('button', { name: 'Change Manager' }))
+    const box = await within(form).findByLabelText(/Manager/, { selector: 'input' })
+    fireEvent.change(box, { target: { value: 'chen' } })
+    const option = await within(form).findByRole('option', { name: /Chen Li/ })
+    fireEvent.click(option)
+    expect(await within(form).findByText('Chen Li')).toBeInTheDocument()
+    fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await data.api.getRecord('contact', CON.ana)).data.manager).toBe(CON.chen))
+  })
+
   it('Settings writes secrets without reading them back', async () => {
     const { data } = renderAt('/settings/secrets')
     await screen.findByTestId('secrets')
@@ -125,6 +140,17 @@ describe('pages against the mock API', () => {
   it('Inbox lists items', async () => {
     renderAt('/inbox')
     expect((await screen.findAllByTestId('inbox-item')).length).toBe(6)
+  })
+
+  it('Inbox marks everything read, and clears', async () => {
+    const { data } = renderAt('/inbox')
+    await screen.findAllByTestId('inbox-item')
+    fireEvent.click(screen.getByRole('button', { name: /Mark all read/ }))
+    await waitFor(async () => expect((await data.api.inbox()).every((i) => i.read)).toBe(true))
+    expect(screen.getByRole('button', { name: /Mark all read/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /Clear/ }))
+    expect(await screen.findByText("You're all caught up.")).toBeInTheDocument()
+    expect(await data.api.inbox()).toEqual([])
   })
 })
 

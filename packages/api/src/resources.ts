@@ -785,7 +785,8 @@ export interface ChatThread {
 /** `GET /api/inbox`: things that need a person. */
 export interface InboxItem {
   id: string
-  type: 'mention' | 'approval' | 'paused_run' | 'review' | 'limit'
+  /** `reply`: someone answered in a thread you're in. */
+  type: 'mention' | 'reply' | 'approval' | 'paused_run' | 'review' | 'limit'
   title: string
   /** One line of context. */
   detail?: string

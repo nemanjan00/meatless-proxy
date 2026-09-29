@@ -142,6 +142,7 @@ export const GUARD_RULES: GuardRule[] = [
 
   // Chat, messages to sessions, forks, and steering one's own work. Marking read is your own state.
   { method: 'POST', path: '/api/chat/read', need: 'viewer' },
+  { method: 'POST', path: '/api/inbox/read', need: 'viewer' },
   { method: 'POST', path: '/api/chat/*', need: 'member' },
   { method: 'PATCH', path: '/api/chat/*', need: 'member' },
   { method: 'DELETE', path: '/api/chat/*', need: 'member' },

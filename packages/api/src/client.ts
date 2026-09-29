@@ -93,6 +93,7 @@ export const ROUTES = {
 
   now: ['GET', '/api/now'],
   inbox: ['GET', '/api/inbox'],
+  markInboxRead: ['POST', '/api/inbox/read'],
 
   listEvents: ['GET', '/api/events'],
   getEvent: ['GET', '/api/events/:id'],
@@ -345,6 +346,8 @@ export interface ApiClient extends SetupApi {
   now(): Promise<NowSnapshot>
   /** `GET /api/inbox` → items for people: mentions, approvals, paused runs, reviews, limits. */
   inbox(): Promise<InboxItem[]>
+  /** `POST /api/inbox/read`: marks items read (`ids`), or clears the inbox (`clear`: everything until now). */
+  markInboxRead(q: { ids?: string[]; clear?: boolean }): Promise<void>
 
   // ── Events and triggers ──────────────────────────────────────────────────
 
@@ -587,6 +590,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
     now: () => call('now'),
     inbox: () => call('inbox'),
+    markInboxRead: (q) => call('markInboxRead', undefined, undefined, q),
 
     listEvents: (q = {}) => call('listEvents', undefined, { ...q }),
     getEvent: (id) => call('getEvent', { id }),

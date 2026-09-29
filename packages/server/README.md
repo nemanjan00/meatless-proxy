@@ -109,6 +109,9 @@ becomes an event with source `mcp:<server>`, routed like any other.
 Exactly the routes of `@mp/api` (`ROUTES`), plus:
 
 - `POST /api/mcp/tokens`: the same as `POST /api/auth/tokens` (kept for MCP clients).
+- `GET /api/inbox` and `POST /api/inbox/read { ids?, clear? }` (`src/inbox.ts`, `PersonInbox`): the signed-in person's
+  mentions, replies in their threads (started, posted in or tagged in) and paused runs, minus their own messages and
+  hidden DMs; read ids and `clearedAt` live in an `inbox_state` record keyed by the contact id (any signed-in person).
 - `POST /api/employees/:id/ssh-key` → `{ employeeId, publicKey }`: rotates the employee's SSH keypair (admins).
 - The employee page's routes (`@mp/api` `SETUP_ROUTES`, served by `src/setup`, see [Employees and guided
   setup](#employees-and-guided-setup)): `POST /api/employees`, `GET /api/employees/:id/ssh-key`,

@@ -1,10 +1,11 @@
 import type { ApiKindSchema, ApiRecord } from '@mp/api'
 import { ApiRequestError } from '@mp/api'
-import { Pencil } from 'lucide-react'
+import { Pencil, X } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { Controller, type Resolver, useForm } from 'react-hook-form'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.tsx'
@@ -233,12 +234,13 @@ export function JsonSummary({ text }: { text: string }) {
   )
 }
 
-/** A reference: the record's name as a link, and the raw id on "Edit". */
+/** A reference: the record's name as a link; "Edit" (or an empty value) opens a typeahead over the kinds it may point to. */
 function RefField({ field, form }: { field: FormField; form: ReturnType<typeof useForm<FormValues>> }) {
   const id = `f-${field.name}`
   const [editing, setEditing] = useState(false)
   const v = String(form.watch(field.name) ?? '')
   const kind = kindOfId(v) ?? field.refKinds?.[0]
+  const set = (next: string) => form.setValue(field.name, next, { shouldDirty: true, shouldValidate: true })
   if (v && kind && !editing && !form.formState.errors[field.name])
     return (
       <div className="group/ref flex h-7 items-center gap-1 rounded-md px-1.5 hover:bg-secondary/60">
@@ -248,65 +250,76 @@ function RefField({ field, form }: { field: FormField; form: ReturnType<typeof u
           id={id}
           onClick={() => setEditing(true)}
           className="ml-auto shrink-0 rounded p-0.5 text-fg-quaternary opacity-0 group-hover/ref:opacity-100 hover:text-foreground focus-visible:opacity-100"
-          aria-label={`Edit ${field.label}`}
+          aria-label={`Change ${field.label}`}
         >
           <Pencil className="size-3" />
         </button>
+        {!field.required && (
+          <button
+            type="button"
+            onClick={() => set('')}
+            className="shrink-0 rounded p-0.5 text-fg-quaternary opacity-0 group-hover/ref:opacity-100 hover:text-foreground focus-visible:opacity-100"
+            aria-label={`Clear ${field.label}`}
+          >
+            <X className="size-3" />
+          </button>
+        )}
       </div>
     )
   return (
-    <Input
+    <RecordPicker
       id={id}
-      {...form.register(field.name)}
-      placeholder={field.refKinds?.map((k) => `${k} id`).join(' / ') ?? 'id'}
-      className={cn(inline, 'font-mono text-micro')}
+      kinds={field.refKinds ?? []}
+      autoFocus={editing}
+      onPick={(o) => {
+        set(o.id)
+        setEditing(false)
+      }}
+      onCancel={() => setEditing(false)}
     />
   )
 }
 
-/** A list of references: one linked name per line, and the raw ids (one per line) on "Edit". */
+/** A list of references: linked names, each removable, and a typeahead to add more. */
 function RefListField({ field, form }: { field: FormField; form: ReturnType<typeof useForm<FormValues>> }) {
   const id = `f-${field.name}`
-  const [editing, setEditing] = useState(false)
   const ids = String(form.watch(field.name) ?? '')
     .split('\n')
     .map((x) => x.trim())
     .filter(Boolean)
-  const refKind = Array.isArray(field.def.of?.ref) ? field.def.of.ref[0] : field.def.of?.ref
-  if (ids.length && !editing && !form.formState.errors[field.name])
-    return (
-      <div className="group/refs flex items-start gap-1 rounded-md px-1.5 py-1 hover:bg-secondary/60">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {ids.map((v) => {
-            const kind = kindOfId(v) ?? refKind
-            return kind ? (
-              <RefName key={v} kind={kind} id={v} className="max-w-full text-mini" />
-            ) : (
-              <span key={v} className="font-mono text-micro">
-                {v}
-              </span>
-            )
-          })}
-        </div>
-        <button
-          type="button"
-          id={id}
-          onClick={() => setEditing(true)}
-          className="shrink-0 rounded p-0.5 text-fg-quaternary opacity-0 group-hover/refs:opacity-100 hover:text-foreground focus-visible:opacity-100"
-          aria-label={`Edit ${field.label}`}
-        >
-          <Pencil className="size-3" />
-        </button>
-      </div>
-    )
+  const of = field.def.of?.ref
+  const refKinds = Array.isArray(of) ? of : of ? [of] : []
+  const set = (next: string[]) => form.setValue(field.name, next.join('\n'), { shouldDirty: true, shouldValidate: true })
   return (
-    <Textarea
-      id={id}
-      {...form.register(field.name)}
-      rows={2}
-      placeholder="One id per line"
-      className="min-h-0 border-transparent bg-transparent px-1.5 py-1 font-mono text-micro shadow-none hover:border-input dark:bg-transparent"
-    />
+    <div className="flex flex-col gap-0.5">
+      {ids.map((v) => {
+        const kind = kindOfId(v) ?? refKinds[0]
+        return (
+          <div key={v} className="group/refs flex h-6 items-center gap-1 rounded-md px-1.5 hover:bg-secondary/60">
+            {kind ? (
+              <RefName kind={kind} id={v} className="max-w-full text-mini" />
+            ) : (
+              <span className="font-mono text-micro">{v}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => set(ids.filter((x) => x !== v))}
+              className="ml-auto shrink-0 rounded p-0.5 text-fg-quaternary opacity-0 group-hover/refs:opacity-100 hover:text-foreground focus-visible:opacity-100"
+              aria-label={`Remove from ${field.label}`}
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        )
+      })}
+      <RecordPicker
+        id={id}
+        kinds={refKinds}
+        exclude={ids}
+        placeholder={ids.length ? 'Add another…' : undefined}
+        onPick={(o) => set([...ids, o.id])}
+      />
+    </div>
   )
 }
 

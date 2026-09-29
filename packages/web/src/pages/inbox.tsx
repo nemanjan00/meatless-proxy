@@ -1,16 +1,18 @@
 import type { InboxItem } from '@mp/api'
-import { AtSign, CircleAlert, Gauge, Inbox, ShieldCheck, Stamp } from 'lucide-react'
+import { AtSign, CheckCheck, CircleAlert, Gauge, Inbox, MessageSquareReply, ShieldCheck, Stamp, X } from 'lucide-react'
 import { Link } from 'react-router'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { Page } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
-import { useLiveReload, useLoad } from '@/lib/api.tsx'
+import { Button } from '@/components/ui/button.tsx'
+import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
 const TYPE: Record<InboxItem['type'], { icon: typeof Inbox; label: string; color: string }> = {
   approval: { icon: Stamp, label: 'Approval', color: 'var(--blue)' },
   mention: { icon: AtSign, label: 'Mention', color: 'var(--fg-tertiary)' },
+  reply: { icon: MessageSquareReply, label: 'Reply', color: 'var(--fg-tertiary)' },
   paused_run: { icon: CircleAlert, label: 'Paused', color: 'var(--status-paused)' },
   review: { icon: ShieldCheck, label: 'Review', color: 'var(--indigo)' },
   limit: { icon: Gauge, label: 'Limit', color: 'var(--orange)' },
@@ -22,13 +24,42 @@ export function inboxHref(i: InboxItem): string {
   return '/usage'
 }
 
-/** Threads you were pulled into, approvals, paused runs and reviews. */
+/** Mentions of you, replies in your threads, approvals, paused runs and reviews. Read on click; clearable. */
 export function InboxPage() {
-  const list = useLoad((api) => api.inbox(), [])
-  useLiveReload(['now'], list.reload, ['run.state'])
+  const api = useApi()
+  const list = useLoad((a) => a.inbox(), [])
+  useLiveReload(['now', 'records:message'], list.reload, ['run.state', 'record.changed'], 600)
   const items = list.data ?? []
+  const unread = items.filter((i) => !i.read)
+  const mark = (q: { ids?: string[]; clear?: boolean }) => {
+    list.setData((prev) => (prev ? (q.clear ? [] : prev.map((i) => (q.ids?.includes(i.id) ? { ...i, read: true } : i))) : prev))
+    api.markInboxRead(q).catch(() => list.reload())
+  }
   return (
-    <Page title="Inbox" icon={<Inbox />}>
+    <Page
+      title="Inbox"
+      icon={<Inbox />}
+      actions={
+        items.length > 0 ? (
+          <>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-fg-tertiary"
+              disabled={!unread.length}
+              onClick={() => mark({ ids: unread.map((i) => i.id) })}
+            >
+              <CheckCheck />
+              Mark all read
+            </Button>
+            <Button size="xs" variant="ghost" className="text-fg-tertiary" onClick={() => mark({ clear: true })}>
+              <X />
+              Clear
+            </Button>
+          </>
+        ) : null
+      }
+    >
       {list.error && !list.data ? (
         <ErrorState error={list.error} retry={list.reload} />
       ) : !list.data ? (
@@ -51,6 +82,7 @@ export function InboxPage() {
               <Link
                 key={i.id}
                 to={inboxHref(i)}
+                onClick={() => !i.read && mark({ ids: [i.id] })}
                 className="group flex h-12 items-center gap-3 px-6 hover:bg-secondary"
                 data-testid="inbox-item"
               >
