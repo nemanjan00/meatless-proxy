@@ -3,8 +3,9 @@ name: meatless-proxy
 
 services:
   app:
+    # The published image; if it can't be pulled (or with `--build`), it's built from this checkout.
+    image: ghcr.io/nemanjan00/meatless-proxy:latest
     build: .
-    image: meatless-proxy:latest
     restart: unless-stopped
     env_file:
       - path: .env

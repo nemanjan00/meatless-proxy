@@ -157,6 +157,11 @@ Dependencies only point down the layers, and every component can be replaced
 by writing a new package against the same interface. See
 [docs/architecture.md](docs/architecture.md).
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please report vulnerabilities
+privately, as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)

@@ -1,0 +1,20 @@
+name: Idea or feature
+description: Something meatless-proxy should do.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What's hard or impossible today, and for whom.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+  - type: textarea
+    id: spec
+    attributes:
+      label: Where it fits
+      description: Which part of docs/spec.md it touches, if you know.
