@@ -1,0 +1,16 @@
+{
+  "name": "@mp/chat",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Harness chat: channels, threads, messages, members and tags. Every message becomes a durable event.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0",
+    "@mp/events": "0.0.0"
+  }
+}
