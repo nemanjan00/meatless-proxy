@@ -1,0 +1,15 @@
+{
+  "name": "@mp/memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory entries: remember with dedupe, recall by keywords and links, scoping and visibility.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0"
+  }
+}

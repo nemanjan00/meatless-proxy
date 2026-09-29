@@ -1,0 +1,15 @@
+{
+  "name": "@mp/usage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Usage ledger for model calls, cost from pricing, breakdowns, configurable limits and budget checks.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0"
+  }
+}

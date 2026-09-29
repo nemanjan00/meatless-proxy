@@ -1,0 +1,15 @@
+{
+  "name": "@mp/files",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Each employee's filesystem, stored as records, with sharing to people and other employees.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0"
+  }
+}

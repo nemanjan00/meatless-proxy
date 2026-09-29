@@ -1,0 +1,15 @@
+{
+  "name": "@mp/skills",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Company-level and project-level skills: listing, overriding by name, loading.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mp/core": "0.0.0",
+    "@mp/store": "0.0.0",
+    "@mp/records": "0.0.0"
+  }
+}
