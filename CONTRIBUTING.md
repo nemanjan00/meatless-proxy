@@ -4,6 +4,9 @@ Thanks for looking. meatless-proxy is experimental and moves fast, so the
 best way to help is to open an issue first and talk about what you want to
 change.
 
+Using a coding agent? Point it at [AGENTS.md](AGENTS.md) (Claude Code reads
+it through `CLAUDE.md`).
+
 ## How the code is organised
 
 Read [docs/architecture.md](docs/architecture.md) before changing code. In

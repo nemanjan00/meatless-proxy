@@ -159,7 +159,8 @@ by writing a new package against the same interface. See
 
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Please report vulnerabilities
+See [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents: start with
+[AGENTS.md](AGENTS.md). Please report vulnerabilities
 privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
