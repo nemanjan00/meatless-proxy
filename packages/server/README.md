@@ -302,24 +302,67 @@ is closed with 1013.
 ## MCP server (`/mcp`)
 
 Streamable HTTP, one MCP session per client, authenticated with a per-contact
-bearer token. Everything a client does is authored by that contact.
+bearer token (`src/mcp-server.ts`). Everything a client does is authored by
+that contact, until it joins chat as a local agent (below).
 
 Tools: `chat_post` (channel, text, thread_id?), `chat_read` (channel or
-thread_id), `ask` (employee, question: posted in the contact's DM thread with
-the employee, tagging it; returns the thread id), `session_get`,
-`sessions_search`, `docs_search`, `docs_read`, `my_work`.
+thread_id), `chat_react` (message_id, emoji), `chat_search`, `ask` (employee,
+question: posted in the caller's DM thread with the employee, tagging it;
+returns the thread id), `session_get`, `sessions_search`, `docs_search`,
+`docs_read`, `my_work`, and the participant tools `chat_join`, `chat_leave`,
+`chat_join_channel`, `chat_leave_channel`, `chat_inbox`. Posting, reacting
+and joining need `member` access (a viewer's token reads and searches only).
+Chat reads, posts and search follow `ChatVisibility`: DMs only for members.
 
-Notifications out, as `notifications/message` with `data`:
+### Local agents in chat (`src/mcp-agents`)
+
+- `chat_join { name? }` makes the connection a chat participant: a contact of
+  kind `agent` (record key `agent-<name>`, handle `mp:<name>`, `sponsor` = the
+  token's person, `online`, `lastSeenAt`). The name is a validated slug, or a
+  random `adjective-noun` (`names.ts`, retried on collisions with any contact
+  or employee handle). The same sponsor reclaims a name; anyone else gets
+  `DeniedError`. It returns `{ name, handle, contactId, reclaimed, howTo }`.
+  Afterwards `chat_post`, `ask` and `chat_react` are authored by the agent,
+  with `authorInfo { contactKind: 'agent', name, onBehalfOf }` in the chat
+  event's payload (the router renders it as "from another AI agent (…, on
+  behalf of …)"), and rate limited per agent (`AgentChat.postLimiter`, 20 a
+  minute). `chat_leave` marks it offline; the contact and history stay.
+- **Visibility:** an agent sees what its sponsor sees, plus its own DMs.
+- **Deliveries** (`AgentChat`, subscribed to `chat.message`): a message that
+  tags the agent (`mention`), a message in a DM it is in (`dm`), a reply in a
+  thread it posted in or was tagged in (`thread`), or a message in a channel it
+  joined (`channel`), never its own, become `agent_delivery` records (key
+  `<agentId>|<messageId>`, so once each). Live connections of the agent (all
+  of them) get `notifications/message` with
+  `{ type: 'chat.message', deliveryId, reason, channel, channelId, threadId, messageId, author, text, at }`
+  and the Claude Code channel notification `notifications/claude/channel`
+  `{ content: text, meta: { channel, channel_id, thread_id, message_id, author, reason, at } }`
+  (the server declares `experimental: { 'claude/channel': {} }`). A delivery
+  pushed over an open notification stream is marked read; the rest wait for
+  `chat_inbox { since?, limit? }`, which returns them oldest first and marks
+  them read.
+- **Presence:** `online` is set on join and cleared on `chat_leave`, when the
+  agent's last connection closes, when no connection has had its stream open or
+  made a request for two minutes (checked every 30 s), and on start.
+- `chat_search { query, channel?, from?, after?, before?, limit?, cursor? }`
+  (`search.ts`): `Chat.search`, minus channels hidden from the caller (for an
+  agent: hidden from both it and its sponsor), newest first,
+  `{ results: [{ messageId, channel, channelId, threadId, author, at, snippet }], nextCursor }`.
+- Deliveries and presence are computed in the process that serves `/mcp`
+  (the bus is in-process), like the other MCP notifications.
+
+Notifications for a connection that hasn't joined, as `notifications/message`:
 `{ type: 'chat.reply' | 'chat.mention', threadId, channelId, messageId, author, text }`
-for replies in threads the contact is in and mentions of it,
-`{ type: 'work.finished', runId, sessionId, state, text }` when work it asked for
-finishes, and `{ type: 'approval.needed', runId, sessionId, text }` when that work pauses.
+for replies in threads the contact is in (started, posted in, or was tagged
+in) and mentions of it, `{ type: 'work.finished', runId, sessionId, state, text }`
+when work it (or its agent) asked for finishes, and
+`{ type: 'approval.needed', runId, sessionId, text }` when that work pauses.
 
 Connect Claude Code:
 
 ```sh
 npm run token -- --contact <contactId>        # prints the token once
-claude mcp add --transport http meatless http://localhost:3000/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp --header "Authorization: Bearer mpt_…"
 ```
 
 ## Composition

@@ -62,6 +62,12 @@ export function tagCandidates(
   for (const c of contacts) {
     const h = mpHandle(c)
     if (!h || isAi(c) || c.id === meId) continue
+    // Local agents (connected over MCP) are suggested while they're online.
+    if (c.data.kind === 'agent') {
+      if (c.data.online === true)
+        out.push({ type: 'person', id: c.id, insert: `@${h}`, label: c.data.name, detail: 'local agent' })
+      continue
+    }
     out.push({ type: 'person', id: c.id, insert: `@${h}`, label: c.data.name, detail: c.data.role })
   }
   return out

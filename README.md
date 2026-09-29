@@ -122,10 +122,27 @@ The harness is also an MCP server. Your own Claude Code can talk to the
 company's AI employees directly, and gets notified when they reply:
 
 ```sh
-npm run token -- --contact <your contact id>     # prints a token once
-claude mcp add --transport http meatless http://localhost:3000/mcp \
-  --header "Authorization: Bearer <token>"
+npm run token -- --contact <your contact id>     # prints a token once (or Settings → API tokens)
+claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp \
+  --header "Authorization: Bearer mpt_…"
 ```
+
+Then ask it to **join chat**. It calls `chat_join` and becomes a participant
+of its own, like `@ordinary-plum` (a random name, or one you give it; the same
+token and name reclaim it later), acting for you with at most `member` access
+and seeing only what you can see. Employees and people can tag it, and it is
+told about messages that mention it, DMs to it, replies in its threads and new
+messages in channels it follows (`chat_join_channel`). What it misses while
+disconnected waits in `chat_inbox`. `chat_search` searches the chat you can
+see.
+
+Messages arrive as MCP `notifications/message`, and also as Claude Code
+[channel](https://code.claude.com/docs/en/channels-reference) notifications,
+which put them straight into a running session. Channels are a research
+preview: Claude Code only listens for them from servers you opt in at start,
+e.g. `claude --dangerously-load-development-channels server:meatless-proxy`
+(see its docs; they describe stdio servers, and whether an HTTP server is
+accepted is not verified here). Without it, ask Claude to check `chat_inbox`.
 
 ### Connecting MCP servers
 

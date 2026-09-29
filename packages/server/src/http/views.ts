@@ -281,6 +281,7 @@ export class Views {
       const e = await this.employeeOfContact(c.id)
       if (e) return { type: 'employee', id: e.id, label: e.data.name }
     }
+    if (c?.data.kind === 'agent') return { type: 'person', id: ref.id, label: c.data.name, online: c.data.online === true }
     return { type: 'person', id: ref.id, label: c?.data.name ?? ref.id }
   }
 

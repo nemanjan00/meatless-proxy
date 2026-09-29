@@ -24,7 +24,7 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
 - `registerUsagePolicies(hooks, deps)`: budgets (`beforeModelCall` pauses when
   `usage.checkBudget` fails) and usage recording (`afterModelCall`).
 - `registerRouterPolicies(hooks, deps, config?)`: the AI-to-AI streak limit on
-  `router.beforeDeliver`.
+  `router.beforeDeliver` (sessions and contacts of kind `ai` or `agent`, i.e. local agents, count as AI).
 - Helpers: `nodeWorktreeFs()`, `safeRelPath()`, `branchFor()`, `trailersFor()`,
   `runEntries()`, `committedCode()`, `wroteDocs()`, constants
   (`AUTO_COMMIT_MESSAGE`, `NO_DOCS_PHRASE`, `DOCS_PATH`, `AI_STREAK_TOPIC`,

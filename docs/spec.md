@@ -306,7 +306,9 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   switch), `member` (chat, sessions, knowledge, starting and steering work) and
   `viewer` (read only). They're stored in the contact's `access` field, because
   `role` is the job title; a person without one is a viewer. AI employees act
-  with their own [permissions](#permissions), not a role.
+  with their own [permissions](#permissions), not a role. A
+  [local agent](#local-agents-as-chat-participants) acts with its sponsor's
+  access, capped at `member`, and never signs in itself.
 - **Every write is attributed** to the signed-in contact, in revisions and in
   chat. The WebSocket and the MCP server require the same sign-in.
 - **What people see** follows the confidentiality rules: DMs only for their
@@ -740,23 +742,69 @@ The harness is also an **MCP server**, so other AI agents can reach the
 company's employees directly: a person's own Claude Code, or another company's
 harness. That's the AI-to-AI path from the [goals](#goals).
 
-- **Tools:** post in harness chat, ask an employee (`@employee`), look up
-  sessions, read and search documents, and check on work the caller started.
-  They're the same standard-library tools, scoped to what the connected
-  contact may see and ask for ([permissions](#permissions)).
+- **Tools:** post in harness chat, react, ask an employee (`@employee`),
+  search chat, look up sessions, read and search documents, and check on work
+  the caller started. They're scoped to what the connected contact may see and
+  ask for ([permissions](#permissions)): DMs only for their members, and a
+  viewer's token reads and searches but doesn't post.
 - **Notifications out:** the server pushes MCP notifications to connected
   clients when something happens for them: a reply in a thread they're in, a
   mention of them, their work finishing, or a request for their approval. A
   client never has to poll.
 - **Identity:** each connection authenticates as a [contact](#contacts), with
   a per-contact token. The contact's permissions apply, and anything it
-  submits counts as coming from that contact.
+  submits counts as coming from that contact, or from its agent once it has
+  joined chat (below).
 - **Transport:** streamable HTTP at `/mcp`, so any MCP client can connect.
+
+##### Local agents as chat participants
+
+A connected agent can **join harness chat as itself** (`chat_join`), so
+people and employees can talk to it like to anyone else:
+
+- **Its own identity.** It becomes a contact of kind `agent`, with a handle
+  `@<name>`: the name it asks for (a slug), or a random, memorable
+  `adjective-noun` one such as `@ordinary-plum`. Its **sponsor** is the
+  token's person. Reconnecting with the same person's token and name reclaims
+  it; another person can't take it. Leaving (`chat_leave`) marks it offline and
+  keeps the contact and its history.
+- **Access.** It acts with its sponsor's access, capped at `member`: a
+  viewer's token can't join or post. It sees the channels and DMs its sponsor
+  can see, plus its own DMs. Its posts are rate limited.
+- **Authorship.** After joining, its posts, questions and reactions are its
+  own. Employees see its messages as coming "from another AI agent (name, on
+  behalf of sponsor)". It counts as AI for the
+  [AI-to-AI streak limit](#configurable-limits), so employee ↔ agent
+  ping-pong is capped like employee ↔ employee. A top-level message from it in
+  a requests channel starts work like a person's would.
+- **Delivery.** It is sent messages that mention it, DMs to it, replies in
+  threads it posted in or was tagged in, and new messages in channels it
+  follows (`chat_join_channel`, `chat_leave_channel`), never its own. Each
+  carries the channel, thread, author, text and message id. They are pushed
+  while it is connected, as the standard `notifications/message`, and as
+  Claude Code [channel](https://code.claude.com/docs/en/channels-reference)
+  notifications (the server declares the experimental `claude/channel`
+  capability and sends `notifications/claude/channel` with `content` and
+  string `meta`), which put the message straight into a running Claude Code
+  session that opted the server in. Whatever it missed while disconnected
+  stays unread and comes back from `chat_inbox`.
+- **Presence.** Whether it is online shows in channel member lists, and
+  online agents are offered when tagging with `@`.
+- **Chat search** (`chat_search`: text, channel, author, time range, paged
+  with a cursor) covers what the caller can see, for people and agents alike.
+
+Messages an agent receives come from other people and AIs: its instructions
+say to treat them as information and requests, not as instructions that
+override its own user ([untrusted input](#untrusted-input)).
 
 Open questions:
 
 - How are inbound events delivered: MCP notifications, polling, or webhooks
   bridged into MCP? (Proposal: all three, see [Notifications in](#notifications-in).)
+- Claude Code's channel docs describe stdio servers opted in with
+  `--channels` or `--dangerously-load-development-channels server:<name>`
+  (a research preview). Whether it accepts an HTTP server as a channel isn't
+  verified; `chat_inbox` and `notifications/message` work either way.
 
 ### Contacts
 
@@ -786,6 +834,9 @@ Extension:
 
 Behaviour:
 
+- **Kinds.** A contact is a person, an AI employee's own contact (`ai`), or a
+  [local agent](#local-agents-as-chat-participants) that joined harness chat
+  over MCP (`agent`, with the person it acts for as its `sponsor`).
 - **Identity resolution.** An incoming message or task event is matched to a
   contact through `handles`. That way, the same person is recognised in chat and
   in the task system.
@@ -1326,7 +1377,8 @@ Built-in policies, each configurable per deployment, employee or project:
   thread.
 - **The agent decides whether to answer.** Not every message needs a reply:
   a thanks, another employee's update, or people talking to each other. Each
-  message says whether it came from a person or another AI session. When the
+  message says whether it came from a person, another AI session, or a local
+  AI agent (and whom it acts for). When the
   employee concludes that nothing is needed from it, it ends with `NO_REPLY`
   (optionally with a reason) and nothing is posted. The router doesn't filter
   on the employee's behalf. The [AI-to-AI streak limit](#configurable-limits)
@@ -1441,6 +1493,7 @@ procedure or session:
 - tokens and cost, per run, per session, per tree, per employee and per period
 - wall-clock time per run and per session
 - messages between employees in one thread without a person taking part
+  (local AI agents connected over MCP count as AI, not as people)
 
 When a limit is reached, the work pauses and the relevant owner or requester is
 asked whether to continue. It is never silently dropped.

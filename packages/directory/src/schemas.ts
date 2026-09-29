@@ -17,7 +17,13 @@ export const contactSchema: KindSchema = {
   titleField: 'name',
   core: [
     { name: 'name', type: 'string', required: true, description: 'Display name.' },
-    { name: 'kind', type: 'enum', values: ['person', 'ai'], required: true, description: 'A person or an AI employee.' },
+    {
+      name: 'kind',
+      type: 'enum',
+      values: ['person', 'ai', 'agent'],
+      required: true,
+      description: 'A person, an AI employee, or a local AI agent that joined chat over MCP on behalf of a person.',
+    },
     {
       name: 'handles',
       type: 'list',
@@ -42,7 +48,7 @@ export const contactSchema: KindSchema = {
 
 export interface ContactData extends Record<string, unknown> {
   name: string
-  kind: 'person' | 'ai'
+  kind: 'person' | 'ai' | 'agent'
   handles?: Handle[]
   email?: string
   role?: string

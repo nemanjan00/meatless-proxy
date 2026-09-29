@@ -137,12 +137,31 @@ export function renderEvent(event: MpEvent, maxChars = 4000): string {
     : ''
   // Who it's from, so the receiving session can decide whether a reply is needed.
   const author = (d.payload as any)?.by ?? (d.payload as any)?.author
-  const from = author?.kind === 'session' ? '; from another AI session' : author?.kind === 'contact' ? '; from a person' : ''
-  const head = `[${d.source} ${d.type}${subject}${from}]`
+  const from =
+    author?.kind === 'session'
+      ? '; from another AI session'
+      : author?.contactKind === 'agent'
+        ? `; from another AI agent (${author.name ?? author.id}${author.onBehalfOf ? `, on behalf of ${author.onBehalfOf}` : ''})`
+        : author?.kind === 'contact'
+          ? '; from a person'
+          : ''
+  // When it arrived, so the session knows what time it is (new content only: the cached prefix is untouched).
+  const at = eventTime(d.receivedAt)
+  const head = `[${d.source} ${d.type}${subject}${from}${at ? `; ${at}` : ''}]`
   const body =
     d.text ?? (typeof d.payload === 'string' ? d.payload : d.payload === undefined ? '' : JSON.stringify(d.payload, null, 2))
   const text = `${head}\n${body}`
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n… (truncated, ${text.length - maxChars} more characters)` : text
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** An event's time for the model: `Tue 2026-09-29 12:07 UTC`. Empty for a missing or unparsable time. */
+export function eventTime(iso: string | undefined): string {
+  const ms = iso ? Date.parse(iso) : Number.NaN
+  if (Number.isNaN(ms)) return ''
+  const d = new Date(ms)
+  return `${WEEKDAYS[d.getUTCDay()]} ${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 16)} UTC`
 }
 
 /** A readable title for a fork that handles one event: the start of its text, else its type. */

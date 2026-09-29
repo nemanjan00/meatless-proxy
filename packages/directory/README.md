@@ -9,7 +9,7 @@ as extendable records on top of `@mp/records`.
 `employee` (`emp_`), `project` (`pro_`) and `procedure` (`prc_`) on
 `records.kinds` and returns:
 
-- `contacts`: `create` (kind defaults to `person`; handles must be unique), `get`, `require`, `update`, `list`, `search(text)`,
+- `contacts`: `create` (kind `person`, `ai` for an employee's contact, or `agent` for a local agent in chat; defaults to `person`; handles must be unique), `get`, `require`, `update`, `list`, `search(text)`,
   `byHandle(system, id)` (identity resolution; `mp` handles match slugs, so `@Ana` finds `ana`), `byEmail`.
 - `employees`: `create` (also creates the AI contact with handle `{system: 'mp', id: <slug>}`, the slug of `handle` when given, else of `name`, and links employee -> contact with role
   `identity`; the slug is the employee's record key), `get`, `require`, `list`, `update` (renaming renames the contact and handle),

@@ -313,14 +313,18 @@ export function registerUsagePolicies(hooks: Hooks, deps: StdlibDeps): () => voi
 /**
  * Router policies. AI-to-AI streak: deliveries of a harness chat message are
  * paused (the run is created paused) once more than `maxAiStreak` messages in
- * a row in its thread were written by sessions or AI contacts, with no person
- * posting in between. `maxAiStreak` comes from the config, else from the
+ * a row in its thread were written by sessions or AI contacts (employees'
+ * or local agents'), with no person posting in between. `maxAiStreak` comes from the config, else from the
  * limits of the receiving employee, else 20.
  */
 export function registerRouterPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyConfig = {}): () => void {
   const isAi = new Map<string, boolean>()
   const aiContact = async (id: string) => {
-    if (!isAi.has(id)) isAi.set(id, (await deps.directory.contacts.get(id))?.data.kind === 'ai')
+    // AI employees' contacts and local agents connected over MCP both count as AI.
+    if (!isAi.has(id)) {
+      const kind = (await deps.directory.contacts.get(id))?.data.kind
+      isAi.set(id, kind === 'ai' || kind === 'agent')
+    }
     return isAi.get(id)!
   }
   return hooks.on(beforeDeliver, async ({ event, delivery }) => {

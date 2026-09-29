@@ -192,8 +192,12 @@ export interface EmployeeData extends Record<string, unknown> {
 /** Kind `contact`. */
 export interface ContactData extends Record<string, unknown> {
   name: string
-  /** `ai` for AI employees' contact records. */
-  kind?: 'person' | 'ai'
+  /** `ai` for AI employees' contact records, `agent` for local agents that joined chat over MCP. */
+  kind?: 'person' | 'ai' | 'agent'
+  /** A local agent: whether it is connected now. */
+  online?: boolean
+  /** A local agent: the person it acts for. */
+  sponsor?: string
   handles?: { system: string; id: string }[]
   role?: string
   team?: string
@@ -617,6 +621,8 @@ export interface ChatMember {
   id: string
   /** Display name, e.g. `Billing Bot`, `@billing-bot#pay-123-refund`, `Ana`. */
   label: string
+  /** Set for a local agent (a contact of kind `agent`): whether it is connected now. */
+  online?: boolean
 }
 
 /** Kind `channel`. DMs are channels with `dm: true`. */

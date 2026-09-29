@@ -27,7 +27,12 @@ beforeAll(async () => {
     },
   })
   const s = t.a.services
-  const ana = await s.directory.contacts.create({ name: 'Ana Example', kind: 'person', handles: [{ system: 'mp', id: 'ana' }] })
+  const ana = await s.directory.contacts.create({
+    name: 'Ana Example',
+    kind: 'person',
+    access: 'member',
+    handles: [{ system: 'mp', id: 'ana' }],
+  })
   anaId = ana.id
   token = (await createMcpToken(s, ana.id, 'test')).token
   const doc = await s.docs.create({
@@ -71,8 +76,15 @@ describe('MCP server /mcp', () => {
     const tools = (await client.listTools()).tools.map((x) => x.name).sort()
     expect(tools).toEqual([
       'ask',
+      'chat_inbox',
+      'chat_join',
+      'chat_join_channel',
+      'chat_leave',
+      'chat_leave_channel',
       'chat_post',
+      'chat_react',
       'chat_read',
+      'chat_search',
       'docs_read',
       'docs_search',
       'my_work',

@@ -110,6 +110,16 @@ export interface ChatAuthor {
   id: string
 }
 
+/** Facts about an author, carried in the event payload next to `{kind, id}`: e.g. that a contact is a local AI agent. */
+export interface AuthorInfo {
+  /** The contact's kind, e.g. `agent` for a local agent connected over MCP. */
+  contactKind?: string
+  /** Display name. */
+  name?: string
+  /** For an agent: the name of the person it acts for. */
+  onBehalfOf?: string
+}
+
 /** A tag resolved at post time. Tags that resolve to nothing are kept as `unresolved`. */
 export type ChatTag = { raw: string } & (
   | { type: 'employee'; employeeId: string }
@@ -184,7 +194,7 @@ export interface ChatEventPayload {
   threadId: string | null
   text: string
   tags: ChatTag[]
-  author: ChatAuthor
+  author: ChatAuthor & AuthorInfo
 }
 
 export type NameResolution =
@@ -218,6 +228,8 @@ export interface PostInput {
   threadId?: string | null
   author: ChatAuthor
   text: string
+  /** Extra facts about the author for the durable event's payload (the message record keeps `{kind, id}`). */
+  authorInfo?: AuthorInfo
 }
 
 export interface Chat {
@@ -454,7 +466,14 @@ export function createChat(opts: ChatOptions): Chat {
         { channelId: ch.id, threadId, author, text: input.text, tags, mentions, createdAt: clock.iso() },
         { actor: authorActor(author) },
       )
-      const payload: ChatEventPayload = { messageId: msg.id, channelId: ch.id, threadId, text: input.text, tags, author }
+      const payload: ChatEventPayload = {
+        messageId: msg.id,
+        channelId: ch.id,
+        threadId,
+        text: input.text,
+        tags,
+        author: { ...input.authorInfo, ...author },
+      }
       await events.ingest({
         source: 'chat',
         type: threadId ? 'message.replied' : 'message.posted',

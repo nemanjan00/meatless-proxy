@@ -42,7 +42,7 @@ export class ChatVisibility {
   async channelOfRecord(r: StoredRecord | null | undefined): Promise<string | null> {
     if (!r) return null
     if (r.kind === 'channel') return r.id
-    if (r.kind === 'message') return typeof r.data.channelId === 'string' ? r.data.channelId : null
+    if (r.kind === 'message' || r.kind === 'agent_delivery') return typeof r.data.channelId === 'string' ? r.data.channelId : null
     if (r.kind === 'event') {
       const p = r.data.payload as { channelId?: unknown } | null | undefined
       return r.data.source === 'chat' && typeof p?.channelId === 'string' ? p.channelId : null
@@ -50,7 +50,7 @@ export class ChatVisibility {
     return null
   }
 
-  /** Whether the contact may see a record (DM channels, their messages and chat events are private to members). */
+  /** Whether the contact may see a record (DM channels, their messages, chat events and agent deliveries are private to members). */
   async canSeeRecord(contactId: string, r: StoredRecord | null | undefined): Promise<boolean> {
     const ch = await this.channelOfRecord(r)
     return ch ? this.canSeeChannel(contactId, ch) : true

@@ -477,6 +477,10 @@ function AddMember({ existing, onAdd }: { existing: string[]; onAdd(m: ChatMembe
   )
 }
 
+/** A member's name, with presence for local agents. */
+const memberLabel = (m: ChatMember) =>
+  m.online === undefined ? m.label : `${m.label} (agent, ${m.online ? 'online' : 'offline'})`
+
 /** Search results, grouped by channel. A click opens the message in context. */
 function SearchResults({
   query,
@@ -802,7 +806,7 @@ export function ChatPage() {
                           <Users className="size-3.5" /> {channel.data.members.length}
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent className="max-w-72">{channel.data.members.map((m) => m.label).join(', ')}</TooltipContent>
+                      <TooltipContent className="max-w-72">{channel.data.members.map(memberLabel).join(', ')}</TooltipContent>
                     </Tooltip>
                     {!channel.data.dm && (
                       <AddMember

@@ -1,11 +1,11 @@
-import { createEventBus, createHooks, type Json } from '@mp/core'
+import { ManualClock, createEventBus, createHooks, type Json } from '@mp/core'
 import { SCHEDULE_FIRED, SCHEDULE_SOURCE, createEvents } from '@mp/events'
 import { memoryQueue } from '@mp/queue'
 import { createRecords } from '@mp/records'
 import { createSessions } from '@mp/sessions'
 import { memoryStore } from '@mp/store'
 import { describe, expect, it } from 'vitest'
-import { beforeDeliver, runInput, chatTags, createRouter, renderEvent, type RecipientResolver } from '../src/index.ts'
+import { beforeDeliver, runInput, chatTags, createRouter, eventTime, renderEvent, type RecipientResolver } from '../src/index.ts'
 
 async function setup(opts: { resolvers?: RecipientResolver[] } = {}) {
   const bus = createEventBus()
@@ -232,8 +232,29 @@ describe('router', () => {
       payload: { body: 'y'.repeat(10_000) },
     })
     const text = renderEvent(ev, 200)
-    expect(text.startsWith('[mcp:linear task.created linear:X-1]')).toBe(true)
+    expect(text.startsWith('[mcp:linear task.created linear:X-1; ')).toBe(true)
     expect(text).toContain('truncated')
+  })
+
+  it('renders when the event arrived, with the weekday, in UTC', async () => {
+    const bus = createEventBus()
+    const clock = new ManualClock(Date.UTC(2026, 8, 29, 12, 7, 31))
+    const events = createEvents({ records: createRecords({ store: memoryStore({ bus }) }), bus, clock })
+    const { event } = await events.ingest({ source: 'chat', type: 'message.posted', text: 'what time is it?' })
+    expect(event.data.receivedAt).toBe('2026-09-29T12:07:31.000Z')
+    expect(renderEvent(event)).toBe('[chat message.posted; Tue 2026-09-29 12:07 UTC]\nwhat time is it?')
+    // Each event carries its own arrival time.
+    clock.advance(5 * 24 * 3600_000)
+    const later = (await events.ingest({ source: 'chat', type: 'message.posted', text: 'and now?' })).event
+    expect(renderEvent(later).split('\n')[0]).toBe('[chat message.posted; Sun 2026-10-04 12:07 UTC]')
+  })
+
+  it('formats event times, and leaves out missing or broken ones', () => {
+    expect(eventTime('2026-09-29T00:00:00.000Z')).toBe('Tue 2026-09-29 00:00 UTC')
+    expect(eventTime('2026-12-31T23:59:59.999+01:00')).toBe('Thu 2026-12-31 22:59 UTC')
+    expect(eventTime('')).toBe('')
+    expect(eventTime(undefined)).toBe('')
+    expect(eventTime('not a date')).toBe('')
   })
 })
 
