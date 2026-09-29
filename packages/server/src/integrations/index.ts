@@ -246,7 +246,9 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     const input: IngestInput = {
       source: e.source,
       type: e.type,
-      dedupeKey: e.dedupeKey,
+      // Per employee: two employees' apps in one workspace each get their own delivery of the same
+      // message (a mention of one is a plain reply to the other), and each must reach its employee.
+      dedupeKey: employeeId ? `${e.dedupeKey}@${employeeId}` : e.dedupeKey,
       ...(e.subject ? { subject: e.subject } : {}),
       ...(who.text ? { text: who.text } : {}),
       payload: who.payload,

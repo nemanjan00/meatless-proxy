@@ -587,6 +587,36 @@ function integrationSuite(backend: Backend) {
     expect(none.isError).toBe(true)
   })
 
+  it('slack: two employees’ apps in one thread each get their own delivery of the same message', async () => {
+    const s = t.a.services
+    const vee = (await s.directory.employees.create({ name: 'Vee', toolAllow: ['**'] })).id
+    const secretB = 'slack-signing-vee-000'
+    await s.secrets.set('SLACK_BOT_TOKEN', 'xoxb-vee', { type: 'employee', id: vee })
+    await s.secrets.set('SLACK_SIGNING_SECRET', secretB, { type: 'employee', id: vee })
+    // The same message (channel and ts), one delivery per app, with different event ids.
+    const ts = '1700000009.000100'
+    const message = (eventId: string) => ({
+      ...mention(eventId, 'U_ANA', 'which one of you is faster?', ts),
+      event: {
+        type: 'message',
+        channel: 'C1',
+        user: 'U_ANA',
+        text: 'which one of you is faster?',
+        ts,
+        thread_ts: '1700000000.000001',
+      },
+    })
+    expect((await post('/webhooks/slack/meatless', slackRequest(SLACK_SECRET_A, message('EvTwoA')))).status).toBe(200)
+    expect((await post(`/webhooks/slack/${vee}`, slackRequest(secretB, message('EvTwoB')))).status).toBe(200)
+    // A redelivery to one app is still a duplicate.
+    expect((await post(`/webhooks/slack/${vee}`, slackRequest(secretB, message('EvTwoB')))).status).toBe(200)
+    await settle()
+    const events = (await s.events.query({ source: 'integration:slack' })).filter(
+      (e) => (e.data.payload as { ts?: string } | undefined)?.ts === ts,
+    )
+    expect(events.map((e) => e.data.employeeId).sort()).toEqual([meatless, vee].sort())
+  })
+
   it('a bad signature gets 401 and nothing is ingested', async () => {
     const s = t.a.services
     const before = (await s.rawEvents.query({ source: 'integration:slack' })).length

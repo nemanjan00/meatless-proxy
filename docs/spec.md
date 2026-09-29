@@ -856,6 +856,10 @@ Each integration has three parts:
 - **Events in:** webhooks from the system, with signatures verified, turned
   into [events](execution.md#events) with a proper subject, actor and dedupe
   key. They're routed by triggers and subscriptions like everything else.
+  On an employee's own webhook URL the dedupe key is the employee's: two
+  employees' Slack apps in one thread each get their own delivery of a
+  message (a mention of one is a plain reply to the other), and each one
+  reaches its employee. A redelivery to the same app is still a duplicate.
 - **Identity:** the system's users are matched to [contacts](#contacts)
   through `handles`, so "who asked" is known. Users without a contact are
   looked up in the system and linked or created
