@@ -95,7 +95,12 @@ export function chatTags(event: MpEvent): EventTags {
 /** The text a session sees for an event. */
 export function renderEvent(event: MpEvent, maxChars = 4000): string {
   const d = event.data
-  const head = `[${d.source} ${d.type}${d.subject ? ` ${d.subject.system}:${d.subject.id}` : ''}]`
+  const subject = d.subject
+    ? d.subject.system === 'mp'
+      ? ` thread ${d.subject.id}`
+      : ` ${d.subject.system}:${d.subject.id}`
+    : ''
+  const head = `[${d.source} ${d.type}${subject}]`
   const body =
     d.text ?? (typeof d.payload === 'string' ? d.payload : d.payload === undefined ? '' : JSON.stringify(d.payload, null, 2))
   const text = `${head}\n${body}`
@@ -195,7 +200,8 @@ export function createRouter(opts: RouterOptions): Router {
     }
 
     // 5. Fallback: the router session of the employee (or the default router).
-    if (!claimed()) {
+    // A session's own message that nobody claimed isn't new work for a router.
+    if (!claimed() && !tags.authorSessionId) {
       const fallback = await opts.routerSessionFor(event.data.employeeId)
       if (fallback) add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })
     }

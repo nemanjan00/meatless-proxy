@@ -320,7 +320,7 @@ export function memoryStore(opts: StoreOptions = {}): Store {
             const entry = { id, parent: e.parent, kind: e.kind, hash, meta: clone(e.meta ?? {}), createdAt: now() }
             s.entries.set(id, entry)
             if (e.parent !== null) s.children.set(e.parent, [...(s.children.get(e.parent) ?? []), id])
-            publish(StoreTopics.entryAppended, { id, parent: e.parent, kind: e.kind })
+            publish(StoreTopics.entryAppended, { id, parent: e.parent, kind: e.kind, meta: clone(e.meta ?? {}) })
             return { ...clone(entry), content: clone(e.content) }
           }),
 

@@ -302,7 +302,7 @@ export function createRunner(opts: RunnerOptions): Runner {
       clock,
       emit,
     }
-    emit('tool.called', { runId: run.id, sessionId: session.id, name, args: redact(args as Json) })
+    emit('tool.called', { runId: run.id, sessionId: session.id, callId: call.id, step, name, args: redact(args as Json) })
     let result: ToolResult
     try {
       result = await tools.execute(name, args, ctx)
@@ -312,7 +312,7 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
     result = await hooks.transform(afterToolCall, { run, session, tool: def, result }).then((x) => x.result)
     const output = redact(result.output)
-    emit('tool.result', { runId: run.id, sessionId: session.id, name, isError: !!result.isError })
+    emit('tool.result', { runId: run.id, sessionId: session.id, callId: call.id, step, name, isError: !!result.isError })
     return {
       content: { ...base, output, ...(result.isError ? { isError: true } : {}) },
       control: result.control ?? [],

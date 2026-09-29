@@ -4,6 +4,11 @@ import type { Ref } from '@mp/store'
 import type { ToolContext } from '@mp/tools'
 import { clip, fail, ok, str, type Kit } from '../kit.ts'
 
+/** Thread ids as the model may write them: `msg_…`, or `mp:msg_…` as event subjects show them. */
+export function threadRef(id: string): string {
+  return id.trim().replace(/^mp:/, '')
+}
+
 const channelProp = { type: 'string', description: 'Channel name (e.g. deploys or #deploys) or id (chn_…).' }
 
 export function registerChatTools(kit: Kit): void {
@@ -108,7 +113,10 @@ export function registerChatTools(kit: Kit): void {
       if (!text) return fail('text is required')
       const output = await kit.once('chat.post', ctx, async () => {
         const ch = await channel(a.channel)
-        return { channel: ch.data.name, ...(await post(ctx, ch.id, text, str(a.threadId))) }
+        return {
+          channel: ch.data.name,
+          ...(await post(ctx, ch.id, text, a.threadId ? threadRef(String(a.threadId)) : undefined)),
+        }
       })
       return ok(output)
     },
@@ -125,8 +133,8 @@ export function registerChatTools(kit: Kit): void {
       const text = str(a.text)
       if (!text) return fail('text is required')
       const output = await kit.once('chat.reply', ctx, async () => {
-        const m = await chat.getMessage(a.threadId)
-        if (!m) throw new NotFoundError('message', a.threadId)
+        const m = await chat.getMessage(threadRef(a.threadId))
+        if (!m) throw new NotFoundError('message', threadRef(a.threadId))
         return post(ctx, m.data.channelId, text, m.id)
       })
       return ok(output)
@@ -151,8 +159,8 @@ export function registerChatTools(kit: Kit): void {
     async (a) => {
       const limit = Math.min(Math.max(1, a.limit ?? 20), 100)
       if (a.threadId) {
-        const m = await chat.getMessage(a.threadId)
-        if (!m) throw new NotFoundError('message', a.threadId)
+        const m = await chat.getMessage(threadRef(a.threadId))
+        if (!m) throw new NotFoundError('message', threadRef(a.threadId))
         const all = await chat.thread(m.data.threadId ?? m.id)
         const shown = all.slice(-limit)
         return ok({
@@ -287,8 +295,8 @@ export function registerChatTools(kit: Kit): void {
       if (!text) return fail('text is required')
       if (!Array.isArray(a.who) || !a.who.length) return fail('who is empty')
       const output = await kit.once('chat.invite', ctx, async () => {
-        const m = await chat.getMessage(a.threadId)
-        if (!m) throw new NotFoundError('message', a.threadId)
+        const m = await chat.getMessage(threadRef(a.threadId))
+        if (!m) throw new NotFoundError('message', threadRef(a.threadId))
         const tags: string[] = []
         for (const w of a.who as unknown[]) tags.push((await resolveMember(w)).tag)
         const res = await post(ctx, m.data.channelId, `${[...new Set(tags)].join(' ')} ${text}`, m.id)

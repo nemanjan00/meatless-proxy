@@ -246,4 +246,6 @@ export interface EntryAppended {
   id: string
   parent: string | null
   kind: string
+  /** The entry's meta, e.g. `sessionId`, `runId`, so listeners don't have to look the entry up. */
+  meta: Record<string, Json>
 }

@@ -638,7 +638,7 @@ export async function postgresStore(opts: PostgresStoreOptions = {}): Promise<Po
               )
             ).rows[0]
             if (!row) throw new ConflictError(`entry ${id} already exists`)
-            emit(StoreTopics.entryAppended, { id, parent: e.parent, kind: e.kind } satisfies EntryAppended)
+            emit(StoreTopics.entryAppended, { id, parent: e.parent, kind: e.kind, meta: e.meta ?? {} } satisfies EntryAppended)
             return toEntry({ ...row, content: plain(e.content) })
           }),
 
