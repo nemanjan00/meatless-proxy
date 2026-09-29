@@ -227,6 +227,103 @@ Open questions:
 - How long can an environment stay up, for example for someone to look at a
   running preview?
 
+### Sessions
+
+A **session** is one line of work by the model: its conversation history, its
+state, and what it is working on. Sessions are persistent, forkable, linked,
+documented and templatable.
+
+#### Properties
+
+- **Persistent.** A session survives harness restarts and can be resumed at
+  any time, with its full history and state.
+- **Forkable.** Any session can be forked at any point in its history. The fork
+  starts with everything the parent had up to that point, then goes its own
+  way. The parent is not affected.
+- **Trees.** Forks form a tree. Every session knows its parent and the point it
+  was forked from, and can list its children. The whole tree can be walked from
+  any session in it.
+- **Loops (fan-out).** A session can split into *n* child sessions in one step,
+  one per item in a list (for example, one per repository, per ticket, or per
+  contact). Each child gets the parent's context plus its own item.
+- **New sessions.** A session can also be created from nothing or from a
+  template, with no parent.
+- **Linked.** Sessions link to contacts and to projects, many-to-many in both
+  directions, and to other sessions beyond the fork tree (e.g. `related`,
+  `follows up`).
+- **Documented.** Every session has structured metadata and a markdown
+  document, following the same pattern as projects.
+- **Templatable.** A session can be created from a template (see below), and
+  an existing session can be saved as a template.
+
+#### Metadata
+
+Core fields, extendable the same way as contacts and projects:
+
+| Field         | Type                  | Notes                                     |
+|---------------|-----------------------|-------------------------------------------|
+| `id`          | string                | stable, harness-assigned                  |
+| `title`       | string                |                                           |
+| `status`      | string                | e.g. active / waiting / done / abandoned  |
+| `parent`      | {session id, point}, optional | where it was forked from          |
+| `template`    | template id, optional | the template it was created from          |
+| `created`     | timestamp             |                                           |
+| `updated`     | timestamp             |                                           |
+
+The session's markdown document holds what a person or another session needs
+to know about it: its purpose, a summary of what was done, decisions, and
+anything left open. The session keeps it up to date as it works.
+
+#### Links
+
+Session links use the same kind of link record as
+[contacts and projects](#links-between-contacts-and-projects), with a role:
+
+- **Session ↔ contact**, many-to-many, e.g. `requested by`, `waiting on`,
+  `reviewer`.
+- **Session ↔ project**, many-to-many, e.g. `works on`, `affects`.
+- **Session ↔ session**, e.g. `related`, `follows up`, `blocks`. Fork tree
+  edges are recorded separately, in `parent`.
+
+These links answer questions like "which sessions are working on project X?",
+"what's in flight for Ana?" and "what is this session waiting on?".
+
+#### Templates
+
+A template describes how to start a session:
+
+- the initial instructions and context
+- parameters that are filled in when a session is created (e.g. a project id or
+  a ticket), including the item in a loop
+- default links, metadata and tools
+
+Templates are versioned, and each session records which template version it
+came from.
+
+#### Tooling
+
+The model has tools for working with sessions:
+
+| Tool           | What it does                                                  |
+|----------------|---------------------------------------------------------------|
+| create         | start a new session, blank or from a template                 |
+| fork           | fork a session at a given point                               |
+| loop           | split a session into *n* children, one per item               |
+| look up        | find sessions by id, title, status, any metadata field, link, or text in their document |
+| tree           | get a session's parent, children, or whole tree               |
+| save metadata  | set or update metadata fields and the session's document      |
+| link / unlink  | add or remove links to contacts, projects and other sessions  |
+| save template  | turn a session into a template                                |
+
+Open questions:
+
+- In a loop, how do children report back to the parent: does the parent wait
+  for all of them and get their results, or do results arrive as they finish?
+- What is a "point" in a session's history when forking: a message, a tool
+  call, or any turn?
+- Can two sessions in a tree be merged back together?
+- Are forks limited, e.g. by depth or by how many children one loop can have?
+
 ## Unique features
 
 _None specified yet._
