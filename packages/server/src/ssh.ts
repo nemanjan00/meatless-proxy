@@ -1,6 +1,5 @@
-import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import type { KindSchema } from '@mp/core'
-import * as gitPort from '@mp/git'
+import { generateSshKeypair } from '@mp/git'
 import type { Services } from './services.ts'
 
 /** The secret (scoped to the employee) holding an employee's SSH private key. */
@@ -23,16 +22,6 @@ export const OPENSSH_KEY_HEADER = `-----BEGIN ${KEY_LABEL}-----`
 /** The last line of an OpenSSH private key. */
 export const OPENSSH_KEY_FOOTER = `-----END ${KEY_LABEL}-----`
 
-const u32 = (n: number) => {
-  const b = Buffer.alloc(4)
-  b.writeUInt32BE(n >>> 0)
-  return b
-}
-const sshString = (b: Buffer | string) => {
-  const buf = typeof b === 'string' ? Buffer.from(b) : b
-  return Buffer.concat([u32(buf.length), buf])
-}
-
 export interface SshKeyPair {
   /** `ssh-ed25519 AAAA… comment`, for authorized_keys and git hosts. */
   publicKey: string
@@ -40,54 +29,14 @@ export interface SshKeyPair {
   privateKey: string
 }
 
-/**
- * An ed25519 keypair in OpenSSH formats: `generateSshKeypair` from `@mp/git`
- * when it is available, else the local `node:crypto` implementation.
- */
+/** An ed25519 keypair in OpenSSH formats, from `@mp/git`. */
 export function newSshKeyPair(comment: string): SshKeyPair {
-  const fromGit = (gitPort as { generateSshKeypair?: (c: string) => unknown }).generateSshKeypair
-  if (typeof fromGit === 'function') {
-    const k = fromGit(comment) as Partial<SshKeyPair>
-    if (typeof k?.publicKey === 'string' && typeof k.privateKey === 'string')
-      return { publicKey: k.publicKey, privateKey: k.privateKey }
-  }
-  return generateSshKeyPair(comment)
+  const k = generateSshKeypair(comment)
+  return { publicKey: k.publicKeyOpenssh, privateKey: k.privateKeyOpenssh }
 }
 
-/** Generates an ed25519 keypair in OpenSSH formats, with `node:crypto` only. */
-export function generateSshKeyPair(comment = ''): SshKeyPair {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
-  const pub = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url')
-  const seed = Buffer.from(privateKey.export({ format: 'jwk' }).d!, 'base64url')
-  const type = 'ssh-ed25519'
-  const pubBlob = Buffer.concat([sshString(type), sshString(pub)])
-  const check = randomBytes(4)
-  let priv = Buffer.concat([
-    check,
-    check,
-    sshString(type),
-    sshString(pub),
-    sshString(Buffer.concat([seed, pub])),
-    sshString(comment),
-  ])
-  const pad: number[] = []
-  for (let i = 1; (priv.length + pad.length) % 8 !== 0; i++) pad.push(i)
-  priv = Buffer.concat([priv, Buffer.from(pad)])
-  const body = Buffer.concat([
-    Buffer.from('openssh-key-v1\0'),
-    sshString('none'),
-    sshString('none'),
-    sshString(''),
-    u32(1),
-    sshString(pubBlob),
-    sshString(priv),
-  ])
-  const b64 = body.toString('base64').replace(/(.{70})/g, '$1\n')
-  return {
-    publicKey: `${type} ${pubBlob.toString('base64')}${comment ? ` ${comment}` : ''}`,
-    privateKey: `${OPENSSH_KEY_HEADER}\n${b64.replace(/\n$/, '')}\n${OPENSSH_KEY_FOOTER}\n`,
-  }
-}
+/** Kept for callers and tests: the same as `newSshKeyPair`. */
+export const generateSshKeyPair = (comment = ''): SshKeyPair => newSshKeyPair(comment)
 
 type KeyDeps = Pick<Services, 'secrets' | 'directory' | 'records' | 'clock' | 'logger'>
 
