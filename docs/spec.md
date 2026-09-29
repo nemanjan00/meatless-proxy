@@ -565,9 +565,22 @@ Each integration has three parts:
   with their own key, open merge requests, and are notified about pipeline
   results and review comments on their MRs. They never merge
   ([no production access](#no-production-access)).
-- Configuration is per deployment: tokens and webhook secrets are
-  [secrets](#secrets), and each integration is enabled when its secrets are
-  set.
+- **Each employee has its own identity in each system**, like its own SSH
+  key:
+  - GitLab: a **service account** per employee, with its own token.
+  - Slack: a **bot** per employee (one Slack app each), with its own bot token
+    and signing secret.
+  - Linear: an API key per employee.
+- Tokens and webhook secrets are [secrets](#secrets) **scoped to the
+  employee**, so a tool call always acts as the employee who makes it. A
+  deployment-wide secret is the fallback when an employee has none of its own.
+- **Webhook URLs:** `/webhooks/<integration>/<employee>` for things that
+  belong to one employee's identity, such as that employee's Slack app or its
+  GitLab service account's hooks. `/webhooks/<integration>` is for
+  deployment-wide hooks, such as a GitLab group or project hook, or the Linear
+  workspace. Each URL has its own secret.
+- An integration is enabled for an employee when its secrets are set, and the
+  employee's tool allow list decides which of its tools it may use.
 
 #### The harness as an MCP server
 
