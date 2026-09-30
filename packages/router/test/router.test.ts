@@ -135,6 +135,30 @@ describe('router', () => {
     expect((await u.router.plan(other)).map((d) => d.sessionId)).toContain(w2.id)
   })
 
+  it("a message in the thread addressed to someone else is only noted by the thread's owner", async () => {
+    const t = await setup()
+    const work = await t.mk('thread work')
+    const subject = { system: 'slack', id: 'C1/2.2' }
+    await t.events.subscriptions.subscribe(work.id, subject, { primary: true })
+    const toNikola = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.replied',
+      subject,
+      employeeId: 'emp_a',
+      text: '@Nikola evo ti kroz cliproxy',
+      payload: { addressedToOthers: true },
+    })
+    expect(await t.router.plan(toNikola)).toMatchObject([{ sessionId: work.id, expectedToAct: false }])
+    const toAll = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.replied',
+      subject,
+      employeeId: 'emp_a',
+      text: 'thanks!',
+    })
+    expect(await t.router.plan(toAll)).toMatchObject([{ sessionId: work.id, expectedToAct: true }])
+  })
+
   it('does not fall back for a message addressed to someone else, or for a reaction', async () => {
     const t = await setup()
     // Two employees' Slack apps both get a message that mentions only one of them: the other one's copy.

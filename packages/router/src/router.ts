@@ -239,7 +239,9 @@ export function createRouter(opts: RouterOptions): Router {
       add({ sessionId, reason: 'session_tag', expectedToAct: true, trusted: true, fork: false })
     }
 
-    // 2. Subscriptions to the subject. Tags decide who acts; without tags, the primary subscriber does.
+    // 2. Subscriptions to the subject. Tags decide who acts; without tags, the primary subscriber does, unless
+    // the message is addressed to someone else (it mentions others and not this employee): then it's only noted.
+    const toOthers = (event.data.payload as { addressedToOthers?: unknown } | undefined)?.addressedToOthers === true
     if (subject) {
       const subs = await opts.events.subscriptions.forEvent(event.data)
       const anyTags = tags.sessions.length > 0 || tags.employees.length > 0
@@ -258,7 +260,7 @@ export function createRouter(opts: RouterOptions): Router {
         add({
           sessionId: s.data.sessionId,
           reason: 'subscription',
-          expectedToAct: anyTags ? tagged : s.data.primary,
+          expectedToAct: anyTags ? tagged : s.data.primary && !toOthers,
           trusted: true,
           fork: false,
           subscriptionId: s.id,
