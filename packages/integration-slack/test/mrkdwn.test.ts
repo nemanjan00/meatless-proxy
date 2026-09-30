@@ -4,7 +4,7 @@ import { toSlackMrkdwn } from '../src/index.ts'
 describe('toSlackMrkdwn', () => {
   it('turns what a model wrote live into mrkdwn', () => {
     const md = [
-      '<@U068DQCPCP7> — here is what I can do:',
+      '<@U0TEST0001> — here is what I can do:',
       '',
       '## Capabilities',
       '- **Knowledge base first**, then live data',
@@ -13,7 +13,7 @@ describe('toSlackMrkdwn', () => {
     ].join('\n')
     expect(toSlackMrkdwn(md)).toBe(
       [
-        '<@U068DQCPCP7> — here is what I can do:',
+        '<@U0TEST0001> — here is what I can do:',
         '',
         '*Capabilities*',
         '• *Knowledge base first*, then live data',

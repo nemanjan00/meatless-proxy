@@ -429,7 +429,7 @@ describe('event mapping', () => {
       const payload = (await deliver(msg({ text, ts }))).events[0]!.payload as { plainConversation?: boolean }
       return payload.plainConversation
     }
-    expect(await plainOf('opet komarci?', '1700000104.000100')).toBe(true)
+    expect(await plainOf('lunch anyone?', '1700000104.000100')).toBe(true)
     expect(await plainOf(`<@${BOT_USER}> help`, '1700000105.000100')).toBeUndefined()
   })
 

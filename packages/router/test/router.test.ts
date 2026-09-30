@@ -140,15 +140,15 @@ describe('router', () => {
     const work = await t.mk('thread work')
     const subject = { system: 'slack', id: 'C1/2.2' }
     await t.events.subscriptions.subscribe(work.id, subject, { primary: true })
-    const toNikola = await t.ingest({
+    const toBo = await t.ingest({
       source: 'integration:slack',
       type: 'message.replied',
       subject,
       employeeId: 'emp_a',
-      text: '@Nikola evo ti kroz cliproxy',
+      text: '@Bo here is the link',
       payload: { addressedToOthers: true },
     })
-    expect(await t.router.plan(toNikola)).toMatchObject([{ sessionId: work.id, expectedToAct: false }])
+    expect(await t.router.plan(toBo)).toMatchObject([{ sessionId: work.id, expectedToAct: false }])
     const toAll = await t.ingest({
       source: 'integration:slack',
       type: 'message.replied',
@@ -172,12 +172,12 @@ describe('router', () => {
     expect(await t.router.plan(other)).toEqual([])
     const reaction = await t.ingest({ source: 'integration:slack', type: 'reaction.added', employeeId: 'emp_b', text: ':eyes:' })
     expect(await t.router.plan(reaction)).toEqual([])
-    // Channel chatter that mentions nobody ("opet komarci?") is conversation, like plain chat.
+    // Channel chatter that mentions nobody ("lunch anyone?") is conversation, like plain chat.
     const chatter = await t.ingest({
       source: 'integration:slack',
       type: 'message.posted',
       employeeId: 'emp_b',
-      text: 'opet komarci?',
+      text: 'lunch anyone?',
       payload: { plainConversation: true },
     })
     expect(await t.router.plan(chatter)).toEqual([])

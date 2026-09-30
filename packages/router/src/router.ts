@@ -333,7 +333,7 @@ export function createRouter(opts: RouterOptions): Router {
     // it through its subscription, and a router run per emoji costs a model call for nothing.
     const payload = event.data.payload as { addressedToOthers?: unknown; plainConversation?: unknown } | undefined
     // A channel message that doesn't mention the employee (payload.plainConversation, e.g. Slack) is conversation
-    // too, like plain chat: live, both employees' routers ran on "opet komarci?" and one posted its decision.
+    // too, like plain chat: live, both employees' routers ran on a remark meant for nobody.
     const notForFallback =
       payload?.addressedToOthers === true || payload?.plainConversation === true || event.data.type.startsWith('reaction.')
     if (!claimed() && !tags.authorSessionId && !plainChat && !notForFallback) {

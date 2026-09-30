@@ -361,9 +361,9 @@ describe('router decision logs', async () => {
     for (const out of [
       'Logged.',
       'Decision recorded.',
-      'slack:C0C4UQLN71V/1790710610.513439 (#vegan, from a person): :eyes: reaction → NO_REPLY (acknowledgment reaction, nothing needed)',
+      'slack:C0TEST0001/1700000000.000100 (#general, from a person): :eyes: reaction → NO_REPLY (acknowledgment reaction, nothing needed)',
       'thread msg_1 (#requests, from Bob): capital of Serbia → started @meatless#capital-of-serbia (ses_1)',
-      'Decision recorded: NO_REPLY — slack:C0C4UQLN71V/1790756052.669589 (Slack #vegan, from Nikola): "opet komarci?" is a casual remark',
+      'Decision recorded: NO_REPLY — slack:C0TEST0001/1700000000.000200 (Slack #general, from Bo): "lunch anyone?" is a casual remark',
       'Decision recorded and committed.',
       'No reply needed — casual chatter, NO_REPLY.',
     ])
