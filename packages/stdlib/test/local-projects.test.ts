@@ -25,6 +25,36 @@ describe('local projects (projects.create_local and git on local:<slug>)', () =>
     expect(t.names).not.toContain('projects.create_local')
   })
 
+  it("lists a local project's branches without a checkout, marking those waiting for review", async () => {
+    const t = await stack()
+    const { projectId } = await t.out('projects.create_local', { name: 'Parser' })
+    t.deps.localProjects!.branches = async (slug) => ({
+      defaultBranch: 'main',
+      branches: [
+        { name: 'main', sha: 'a1', ahead: 0, behind: 0, subject: 'Initial', author: 'Meatless', date: '2026-09-29T18:00:00Z' },
+        {
+          name: 'mp/meatless/parser',
+          sha: 'b2',
+          ahead: 2,
+          behind: 0,
+          subject: `Add ${slug}`,
+          author: 'Meatless',
+          date: '2026-09-29T19:00:00Z',
+        },
+      ],
+    })
+    const r = await t.out('projects.branches', { projectId })
+    expect(r.repositories[0]).toMatchObject({ url: 'local:parser', defaultBranch: 'main' })
+    expect(r.repositories[0].branches.map((b: any) => [b.name, b.waitingForReview])).toEqual([
+      ['main', false],
+      ['mp/meatless/parser', true],
+    ])
+    expect(t.git.worktrees()).toHaveLength(0) // no checkout was needed
+    // A project on a git host points at the host's own tool.
+    const remote = await t.call('projects.branches', { projectId: t.project.id })
+    expect(JSON.stringify(remote.output)).toContain('mcp.gitlab.list_branches')
+  })
+
   it('there is no tool that merges, whatever it is called', async () => {
     const t = await stack()
     expect(t.names.filter((n) => /merge|accept|approve_mr|fast.?forward/i.test(n))).toEqual([])

@@ -1402,6 +1402,12 @@ and work that has no GitLab project yet.
   checkout works at once. Linking a `local:` URL to another project is
   refused: local repositories are only made with their project, and only
   admins change which one a project has (records API included).
+- **Branches.** `projects.branches { projectId }` lists a local project's
+  branches with their last commit and how far each is ahead of and behind the
+  default branch, straight from the repository (no checkout, no environment),
+  marking those waiting for review. Live, a status task checked out five
+  repositories and started an environment to run `git branch`, which doesn't
+  work inside one.
 - **Pushing.** `git.checkout` and `git.push` work as for any repository, under
   the same push policy: the employee's own `mp/**` branches, never `main`,
   `master`, `production` or `release/**`. The repository also refuses
@@ -2195,6 +2201,9 @@ pointed at the employee's own work: a note a session leaves for itself ("check
 CI", "poke the reviewer if there is no answer"), delivered back into that
 session later.
 
+- **Environments.** A task's run that started an environment stops it when it
+  ends: nothing uses it until the next firing (a daily task left a container
+  running). Follow-ups don't, since they wake ordinary work sessions.
 - **What a task is:**
   - the instruction (a follow-up's note), self-contained: the run starts
     without the conversation it was asked in

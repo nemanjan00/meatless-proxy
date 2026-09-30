@@ -1,6 +1,7 @@
 import { ManualClock } from '@mp/core'
 import { SCHEDULED_TASK_FIRED } from '@mp/events'
-import type { ModelRequest } from '@mp/model'
+import { callTools, reply as modelReply, type ModelRequest, type ScriptResult } from '@mp/model'
+import { fakeRuntime } from '@mp/containers'
 import { afterEach, describe, expect, it } from 'vitest'
 import { scheduleTick } from '../src/scheduler.ts'
 import { errorsIn, testApp, until, type TestApp } from './helpers.ts'
@@ -14,15 +15,19 @@ const SYSTEM = { type: 'system' as const, id: 'test' }
 const textOf = (req: ModelRequest) =>
   req.messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''))).join('\n')
 
-async function setup(reply: (req: ModelRequest) => string = () => 'Invoice reminder sent.') {
+async function setup(
+  reply: (req: ModelRequest) => string | ScriptResult = () => 'Invoice reminder sent.',
+  opts: { containers?: ReturnType<typeof fakeRuntime> } = {},
+) {
   // Tuesday 2026-09-29 09:00 UTC.
   const clock = new ManualClock(Date.parse('2026-09-29T09:00:00Z'))
   const requests: ModelRequest[] = []
   const t = await testApp({
-    overrides: { clock },
+    overrides: { clock, ...(opts.containers ? { containers: opts.containers } : {}) },
     script: (req) => {
       requests.push(req)
-      return reply(req)
+      const r = reply(req)
+      return typeof r === 'string' ? modelReply(r) : r
     },
   })
   apps.push(t)
@@ -43,6 +48,36 @@ async function setup(reply: (req: ModelRequest) => string = () => 'Invoice remin
   }
   return { t, s, clock, employee, ana, requests, quiet, fire }
 }
+
+describe('scheduled task runs and environments', () => {
+  it("a task's run that started an environment stops it when it ends", async () => {
+    const rt = fakeRuntime()
+    const lastTool = (req: ModelRequest) => {
+      const m = [...req.messages].reverse().find((x) => x.role === 'tool')
+      return m ? String(m.content ?? '') : ''
+    }
+    const { s, employee, ana, fire } = await setup(
+      (req) =>
+        lastTool(req).includes('running') ? 'Status: all green.' : callTools([{ name: 'env.up', args: { image: 'node:22' } }]),
+      { containers: rt },
+    )
+    const task = await s.schedules!.create(
+      {
+        employeeId: employee.id,
+        instruction: 'Post the status',
+        when: { type: 'once', at: '2026-09-29T11:00:00.000Z' },
+        timezone: 'UTC',
+        requesterId: ana.id,
+      },
+      SYSTEM,
+    )
+    await fire(Date.parse('2026-09-29T11:00:20Z'))
+    expect(rt.created.length).toBe(1)
+    await until(async () => rt.envs().length === 0, 'the environment to stop')
+    const session = await s.sessions.require(task.data.sessionId!)
+    expect(session.data.meta?.env).toBeUndefined()
+  })
+})
 
 describe('scheduled tasks fire', () => {
   it('a one-off starts a run in its session with the instruction, reports in its thread, records the result and is done', async () => {

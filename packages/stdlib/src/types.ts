@@ -71,6 +71,11 @@ export interface StdlibDeps {
       employeeId: string
       actor: Actor
     }): Promise<{ projectId: string; name: string; url: string; defaultBranch: string }>
+    /** A local repository's branches (by slug), each with how far ahead of and behind the default branch it is. */
+    branches?(slug: string): Promise<{
+      defaultBranch: string
+      branches: { name: string; sha: string; ahead: number; behind: number; subject: string; author: string; date: string }[]
+    }>
   }
   /**
    * The company timezone (an IANA name, the `timezone` setting), used by `time.now` when the call

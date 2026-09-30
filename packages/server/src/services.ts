@@ -627,6 +627,10 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       // projects.create_local: a project on a repository the harness hosts, the employee a member (src/local-projects).
       localProjects: {
         create: (input: Parameters<typeof createLocalProjectForEmployee>[1]) => createLocalProjectForEmployee(services, input),
+        branches: async (slug: string) => ({
+          defaultBranch: await localRepos.defaultBranch(slug),
+          branches: await localRepos.branches(slug),
+        }),
       },
       defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
       scheduledTasks,

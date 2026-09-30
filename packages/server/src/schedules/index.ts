@@ -112,8 +112,26 @@ export function trackScheduledRuns(s: Services): () => void {
       const last = t.data.lastRun
       if (!last) continue
       await record(t.id, { ...last, ...facts })
+      // A task's run that started an environment stops it when it ends: nothing uses it until the next firing
+      // (live, a daily status task left a container running). Not follow-ups: they wake ordinary work sessions.
+      if (t.data.kind === 'task' && TERMINAL_RUN_STATES.includes(facts.state as never)) {
+        if (facts.sessionId) await stopEnvOf(facts.sessionId)
+      }
     }
   })
+  const stopEnvOf = async (sessionId: string) => {
+    try {
+      const session = await s.sessions.get(sessionId)
+      const env = session?.data.meta?.env as { id?: unknown } | undefined
+      if (!session || typeof env?.id !== 'string' || !s.containers) return
+      await s.containers.destroyEnv(env.id)
+      const { env: _gone, ...meta } = (session.data.meta ?? {}) as Record<string, unknown>
+      await s.sessions.update(session.id, { meta: meta as never })
+      log.info('stopped the environment of a finished scheduled run', { sessionId, envId: env.id })
+    } catch (err) {
+      log.warn('could not stop the environment of a finished scheduled run', { sessionId, err: errorMessage(err) })
+    }
+  }
   return () => {
     offRouted()
     offState()

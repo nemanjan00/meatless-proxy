@@ -69,6 +69,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'memory.remember',
   'memory.verify',
   'procedures.run',
+  'projects.branches',
   'projects.create_local',
   'schedule.cancel',
   'schedule.create',

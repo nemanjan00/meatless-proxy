@@ -1,3 +1,4 @@
+import { localRepoSlug } from '@mp/git'
 import { fail, ok, str, type Kit } from '../kit.ts'
 import type { StdlibDeps } from '../types.ts'
 
@@ -38,6 +39,37 @@ export function registerProjectTools(kit: Kit, localProjects: NonNullable<Stdlib
         role: 'member',
         next: 'git.checkout with this projectId, then commit and git.push your branch. A person merges it in the web UI.',
       })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'projects.branches',
+      description:
+        "List a project's branches with their last commit and how far each is ahead of and behind the default branch, straight from the repository: no checkout and no environment needed. A branch ahead of it and not behind is waiting to be merged. Local projects (repositories the harness hosts); for a project on GitLab use mcp.gitlab.list_branches.",
+      effect: 'read',
+      params: { properties: { projectId: { type: 'string' } }, required: ['projectId'] },
+    },
+    async (a) => {
+      const project = await kit.deps.directory.projects.get(String(a.projectId ?? ''))
+      if (!project) return fail(`no project ${a.projectId}`)
+      const repos = (project.data.repositories ?? []).map((r) => ({ url: r.url, slug: localRepoSlug(r.url) }))
+      const local = repos.filter((r): r is { url: string; slug: string } => !!r.slug)
+      if (!local.length)
+        return fail(`${project.data.name} has no repository hosted by the harness: for GitLab use mcp.gitlab.list_branches`, {
+          repositories: repos.map((r) => r.url),
+        })
+      if (!localProjects.branches) return fail('branch listing is not available in this deployment')
+      const out = []
+      for (const r of local) {
+        const b = await localProjects.branches(r.slug)
+        out.push({
+          url: r.url,
+          defaultBranch: b.defaultBranch,
+          branches: b.branches.map((x) => ({ ...x, waitingForReview: x.name !== b.defaultBranch && x.ahead > 0 })),
+        })
+      }
+      return ok({ project: project.data.name, repositories: out })
     },
   )
 }
