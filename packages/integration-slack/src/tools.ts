@@ -14,6 +14,7 @@ import {
 } from './blocks.ts'
 import { type SlackClient, type SlackResponse, slackErrorCode, slackErrorMessages } from './client.ts'
 import { fileInfo } from './files.ts'
+import { toSlackMrkdwn } from './mrkdwn.ts'
 
 type Obj = Record<string, unknown>
 
@@ -141,7 +142,7 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
   const post = async (args: { channel: string; text: string; thread_ts?: string | undefined }) => {
     const r = await client.call(
       'chat.postMessage',
-      { channel: args.channel, text: args.text, thread_ts: args.thread_ts, mrkdwn: true },
+      { channel: args.channel, text: toSlackMrkdwn(args.text), thread_ts: args.thread_ts, mrkdwn: true },
       { write: true, json: true },
     )
     return compact({ channel: str(r.channel), ts: str(r.ts), thread_ts: args.thread_ts })
@@ -149,7 +150,7 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
 
   tool(
     'post_message',
-    'Post a message in a Slack channel or DM. Text is Slack mrkdwn (*bold*, _italic_, `code`, <@U123> mentions, <https://x|links>). Pass thread_ts to post inside a thread. Returns the new message ts.',
+    'Post a message in a Slack channel or DM. Text is Slack mrkdwn (*bold*, _italic_, `code`, <@U123> mentions, <https://x|links>); common Markdown (**bold**, [text](url), - lists, # headings) is converted. To tag someone, write <@U123> with their Slack user id, the one shown after their name in messages ("Ana (slack U123)"): a plain "@Ana" or "@Ana (slack U123)" tags nobody. Several people can share a name, so take the id from the message they wrote or were mentioned in, or look them up with directory.find_contact (handles slack:U…); never guess it. Pass thread_ts to post inside a thread. Returns the new message ts.',
     {
       channel,
       text: z.string().min(1).describe('Message text (mrkdwn)'),
@@ -160,7 +161,7 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
   )
   tool(
     'reply',
-    'Reply in a Slack thread. thread_ts is the ts of the thread root message (the subject of a Slack event is slack:<channel>/<thread_ts>).',
+    'Reply in a Slack thread. thread_ts is the ts of the thread root message (the subject of a Slack event is slack:<channel>/<thread_ts>). Text as for post_message: mrkdwn, mention people as <@U123>.',
     { channel, thread_ts: ts.describe('Thread root ts'), text: z.string().min(1).describe('Reply text (mrkdwn)') },
     WRITE,
     post,
@@ -416,7 +417,11 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
     { channel, ts, text: z.string().min(1).describe('New text (mrkdwn)') },
     WRITE,
     async (a) => {
-      const r = await client.call('chat.update', { channel: a.channel, ts: a.ts, text: a.text }, { write: true, json: true })
+      const r = await client.call(
+        'chat.update',
+        { channel: a.channel, ts: a.ts, text: toSlackMrkdwn(a.text) },
+        { write: true, json: true },
+      )
       return { channel: str(r.channel), ts: str(r.ts) }
     },
   )

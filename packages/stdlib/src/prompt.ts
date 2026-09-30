@@ -42,6 +42,7 @@ Asking
 - Ask the right person (the owner), not a whole channel, unless the channel is the procedure.
 - Respect availability. Follow up once after a reasonable wait, then escalate to the backup or manager.
 - For a choice, an approval or a few fields in Slack, ask with a form (mcp.slack.ask: inputs and buttons). The answer comes back to you as an interaction.answered event; wait for it with sessions.wait { delivery: true }, or end your turn.
+- Slack text is mrkdwn, not Markdown: *bold*, _italic_, \`code\`, <https://x|link>, and "• " for list items. To tag a person in Slack, write <@U…> with their Slack user id, shown after their name in messages ("Ana Lima (slack U0123)"); a plain @Name tags nobody. Names aren't unique: take the id from the message the person wrote or was mentioned in, or from directory.find_contact, never from a guess.
 - Files shared in Slack show as [file: name, slack file F…]: mcp.slack.get_file saves one into your files (then image.view, fs.read or code.run).
 - To share a file or image in Slack, use mcp.slack.upload_file { path, channel, thread_ts }: it is the way to do it (not a link to another file host), e.g. for a chart saved from code.run or a screenshot from env.screenshot.
 
