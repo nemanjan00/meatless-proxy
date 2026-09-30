@@ -8,7 +8,7 @@ import type { IntegrationSpec } from './specs.ts'
 
 /** A router's decision log, not an answer (the stdlib's ROUTER_LOG_RE; this package doesn't depend on it). */
 const ROUTER_LOG_RE =
-  /(→|->)\s*(NO_REPLY|started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*(logged|noted|recorded|decision (recorded|logged)|done|committed)\.?\s*$/i
+  /\bNO_REPLY\b|(→|->)\s*(started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*decision (recorded|logged|committed)\b|^\s*(logged|noted|recorded|done|committed)\.?\s*$/i
 
 /** What the model ends with when it decides a message needs no answer (the stdlib's convention). */
 const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?no[_ -]?reply\]?\s*(?::[^\n]*)?\s*$/i

@@ -424,6 +424,13 @@ describe('event mapping', () => {
       (await payloadOf(`<@${BOT_USER}> and <@UOTHERBOT>, both of you`, '1700000102.000100')).addressedToOthers,
     ).toBeUndefined()
     expect((await payloadOf('anyone around?', '1700000103.000100')).addressedToOthers).toBeUndefined()
+    // Mentioning nobody (or others) in a channel is plain conversation for this app; mentioning it isn't.
+    const plainOf = async (text: string, ts: string) => {
+      const payload = (await deliver(msg({ text, ts }))).events[0]!.payload as { plainConversation?: boolean }
+      return payload.plainConversation
+    }
+    expect(await plainOf('opet komarci?', '1700000104.000100')).toBe(true)
+    expect(await plainOf(`<@${BOT_USER}> help`, '1700000105.000100')).toBeUndefined()
   })
 
   it('clips long text in the rendering, keeps it whole in the payload', async () => {

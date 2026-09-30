@@ -32,7 +32,7 @@ export const NO_REPLY_RE = /^\s*\[?no[_ -]?reply\]?\s*(?::|\n|$)|(?:^|\n)\s*\[?n
  * answer to a quick question is still posted, so the person isn't left without one.
  */
 export const ROUTER_LOG_RE =
-  /(→|->)\s*(NO_REPLY|started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*(logged|noted|recorded|decision (recorded|logged)|done|committed)\.?\s*$/i
+  /\bNO_REPLY\b|(→|->)\s*(started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*decision (recorded|logged|committed)\b|^\s*(logged|noted|recorded|done|committed)\.?\s*$/i
 
 /** Whether a session's final text shouldn't be posted as a reply because it's its routing decision. */
 export function isRouterLog(session: { data: { meta?: Record<string, unknown> } }, output: string | undefined): boolean {

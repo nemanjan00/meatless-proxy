@@ -138,7 +138,8 @@ and tags combine as described below:
 5. **Fallback.** Anything left over goes to the router session of the employee
    whose scope covers the subject, or to the deployment's default router
    session.
-   Not for plain chat between people, not for a message addressed to someone
+   Not for plain chat between people (in chat, or a Slack channel message that
+   doesn't mention the employee, `payload.plainConversation`), not for a message addressed to someone
    else (it mentions others and not this employee, `payload.addressedToOthers`:
    two employees' Slack apps both get it, and only the one mentioned acts),
    and not for reactions (the thread's owner gets them through its

@@ -148,7 +148,16 @@ describe('router', () => {
     expect(await t.router.plan(other)).toEqual([])
     const reaction = await t.ingest({ source: 'integration:slack', type: 'reaction.added', employeeId: 'emp_b', text: ':eyes:' })
     expect(await t.router.plan(reaction)).toEqual([])
-    // A plain message still falls back.
+    // Channel chatter that mentions nobody ("opet komarci?") is conversation, like plain chat.
+    const chatter = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.posted',
+      employeeId: 'emp_b',
+      text: 'opet komarci?',
+      payload: { plainConversation: true },
+    })
+    expect(await t.router.plan(chatter)).toEqual([])
+    // Anything else unclaimed still falls back.
     const plain = await t.ingest({ source: 'integration:slack', type: 'message.posted', employeeId: 'emp_b', text: 'anyone?' })
     expect((await t.router.plan(plain)).map((d) => d.reason)).toEqual(['fallback'])
   })

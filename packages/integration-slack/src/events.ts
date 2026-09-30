@@ -191,6 +191,8 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           is_reply: reply,
           mentions_app: mentioned,
           addressedToOthers: !isDm && !mentioned && addressedToOthers(ev.text, self) ? true : undefined,
+          // A channel message that doesn't mention this app is people talking (the app's threads reach it by subscription).
+          plainConversation: !isDm && !mentioned ? true : undefined,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
         }),
         messageKey(channel, ev.ts),

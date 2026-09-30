@@ -363,6 +363,9 @@ describe('router decision logs', async () => {
       'Decision recorded.',
       'slack:C0C4UQLN71V/1790710610.513439 (#vegan, from a person): :eyes: reaction → NO_REPLY (acknowledgment reaction, nothing needed)',
       'thread msg_1 (#requests, from Bob): capital of Serbia → started @meatless#capital-of-serbia (ses_1)',
+      'Decision recorded: NO_REPLY — slack:C0C4UQLN71V/1790756052.669589 (Slack #vegan, from Nikola): "opet komarci?" is a casual remark',
+      'Decision recorded and committed.',
+      'No reply needed — casual chatter, NO_REPLY.',
     ])
       expect(isRouterLog(router, out), out).toBe(true)
     expect(isRouterLog(router, "I'm Meatless, an AI employee.")).toBe(false)
