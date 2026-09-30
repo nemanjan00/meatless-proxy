@@ -1,5 +1,29 @@
-import type { Access, PersonDetail, PersonHandle, PersonItem, PersonType, SignInLinkResult } from '@mp/api'
-import { Bot, Brain, ChevronRight, FolderKanban, Link2, Pencil, Plus, Search, UserCheck, UserX, Users } from 'lucide-react'
+import type {
+  Access,
+  PersonDetail,
+  PersonHandle,
+  PersonItem,
+  PersonLearnedFact,
+  PersonSuggestion,
+  PersonType,
+  SignInLinkResult,
+} from '@mp/api'
+import {
+  ArrowRight,
+  Bot,
+  Brain,
+  Check,
+  ChevronRight,
+  FolderKanban,
+  Link2,
+  Pencil,
+  Plus,
+  Search,
+  UserCheck,
+  UserX,
+  Users,
+  X,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -484,6 +508,117 @@ function Tokens({ detail, onChanged }: { detail: PersonDetail; onChanged(): void
   )
 }
 
+/** "learned by Infra Bot from <source>, 2 days ago": where an AI employee got a field or note. */
+function Provenance({ fact }: { fact: PersonLearnedFact }) {
+  return (
+    <p className="mt-0.5 text-micro text-fg-quaternary" data-testid="person-provenance">
+      learned by{' '}
+      <Link to={`/employees/${fact.employee.employeeId}`} className="text-fg-tertiary hover:text-foreground">
+        {fact.employee.name}
+      </Link>{' '}
+      from <span className="text-fg-tertiary">{fact.source}</span>,{' '}
+      <time dateTime={fact.at} title={formatDateTime(fact.at)}>
+        {agoPhrase(fact.at)}
+      </time>
+      {fact.acceptedBy && <> · accepted by {fact.acceptedBy.name}</>}
+    </p>
+  )
+}
+
+const FIELD_LABEL: Record<PersonSuggestion['field'], string> = { role: 'Role', team: 'Team', manager: 'Manager' }
+
+/** Changes employees suggested for fields that already have a value: the person or an admin accepts or rejects them. */
+function Suggestions({ detail, onChanged }: { detail: PersonDetail; onChanged(d: PersonDetail): void }) {
+  const api = useApi()
+  const [busy, setBusy] = useState<string | null>(null)
+  if (!detail.suggestions.length) return null
+  const first = detail.contact.data.name.split(' ')[0]
+  const decide = async (x: PersonSuggestion, accept: boolean) => {
+    setBusy(x.id)
+    try {
+      const next = accept
+        ? await api.acceptPersonSuggestion(detail.contact.id, x.id)
+        : await api.rejectPersonSuggestion(detail.contact.id, x.id)
+      toast(accept ? `${FIELD_LABEL[x.field]} updated` : 'Suggestion dismissed')
+      onChanged(next)
+    } catch (e) {
+      toast.error(errorText(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <DetailSection title={`Suggested changes · ${detail.suggestions.length}`} id="person-suggestions">
+      {!detail.canReview && <p className="mb-2 text-micro text-fg-tertiary">Only {first} or an admin can accept these.</p>}
+      <ul className="flex flex-col gap-3">
+        {detail.suggestions.map((x) => (
+          <li key={x.id} className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start" data-testid="person-suggestion">
+            <div className="min-w-0 flex-1">
+              <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-mini">
+                <span className="text-fg-tertiary">{FIELD_LABEL[x.field]}</span>
+                <span className="text-fg-tertiary line-through">{x.currentLabel ?? x.current ?? 'None'}</span>
+                <ArrowRight className="size-3 text-fg-quaternary" />
+                <span className="font-medium text-foreground">{x.proposedLabel ?? x.proposed}</span>
+              </p>
+              <p className="mt-0.5 text-micro text-fg-quaternary">
+                suggested by{' '}
+                <Link to={`/employees/${x.employee.employeeId}`} className="text-fg-tertiary hover:text-foreground">
+                  {x.employee.name}
+                </Link>{' '}
+                from <span className="text-fg-tertiary">{x.source}</span>,{' '}
+                <time dateTime={x.suggestedAt} title={formatDateTime(x.suggestedAt)}>
+                  {agoPhrase(x.suggestedAt)}
+                </time>
+                {x.times > 1 && <> · said {x.times} times</>}
+              </p>
+            </div>
+            {detail.canReview && (
+              <div className="flex shrink-0 gap-1">
+                <Button size="xs" variant="outline" disabled={busy === x.id} onClick={() => decide(x, true)}>
+                  <Check /> Accept
+                </Button>
+                <Button size="xs" variant="ghost" disabled={busy === x.id} onClick={() => decide(x, false)}>
+                  <X /> Reject
+                </Button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </DetailSection>
+  )
+}
+
+/** The bio, with the notes employees added shown with where they came from. */
+function Bio({ detail }: { detail: PersonDetail }) {
+  const bio = detail.contact.data.bio?.trim()
+  if (!bio) return null
+  const notes = new Map(detail.learned.filter((f) => f.field === 'bio' && f.line).map((f) => [f.line!, f]))
+  return (
+    <DetailSection title="Bio" id="person-bio">
+      <ul className="flex flex-col gap-2 text-mini">
+        {bio.split('\n').map((line, i) => {
+          const note = notes.get(line)
+          if (!line.trim()) return null
+          return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: bio lines can repeat, their order is stable
+            <li key={i} className="min-w-0 break-words text-fg-secondary">
+              {note ? (
+                <>
+                  <span>{note.value}</span>
+                  <Provenance fact={note} />
+                </>
+              ) : (
+                line
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </DetailSection>
+  )
+}
+
 function RecentRequests({ id }: { id: string }) {
   const list = useLoad((a) => a.listSessions({ requesterId: id, limit: 8, sort: 'activity' }), [id])
   return (
@@ -701,6 +836,7 @@ export function PersonPage() {
   const c = p.contact.data
   const handles = (c.handles ?? []).filter((h) => h.system !== 'mp')
   const first = c.name.split(' ')[0]
+  const learnedField = (field: PersonLearnedFact['field']) => p.learned.find((f) => f.field === field)
   return (
     <Page
       title={back}
@@ -762,6 +898,16 @@ export function PersonPage() {
                     <span className="text-fg-quaternary">None: employees can't match them in Slack, GitLab or Linear yet</span>
                   )}
                 </dd>
+                <dt className="text-fg-tertiary">Role</dt>
+                <dd className="min-w-0 text-fg-secondary">
+                  {c.role ?? <span className="text-fg-quaternary">None</span>}
+                  {learnedField('role') && <Provenance fact={learnedField('role')!} />}
+                </dd>
+                <dt className="text-fg-tertiary">Team</dt>
+                <dd className="min-w-0 text-fg-secondary">
+                  {c.team ?? <span className="text-fg-quaternary">None</span>}
+                  {learnedField('team') && <Provenance fact={learnedField('team')!} />}
+                </dd>
                 <dt className="text-fg-tertiary">Manager</dt>
                 <dd className="text-fg-secondary">
                   {p.manager ? (
@@ -775,6 +921,7 @@ export function PersonPage() {
                   ) : (
                     <span className="text-fg-quaternary">None</span>
                   )}
+                  {learnedField('manager') && <Provenance fact={learnedField('manager')!} />}
                 </dd>
                 {p.reports.length > 0 && (
                   <>
@@ -801,6 +948,8 @@ export function PersonPage() {
                 )}
               </dl>
             </DetailSection>
+            <Suggestions detail={p} onChanged={(next) => d.setData(next)} />
+            <Bio detail={p} />
             <DetailSection title={`Projects${p.projects.length ? ` · ${p.projects.length}` : ''}`} id="person-projects">
               {p.projects.length === 0 ? (
                 <p className="text-fg-tertiary">Not on any project.</p>

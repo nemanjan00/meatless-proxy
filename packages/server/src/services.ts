@@ -248,7 +248,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   // ── Domain ───────────────────────────────────────────────────────────────
   const records = createRecords({ store, bus })
   const docs = createDocs(records)
-  const directory = createDirectory({ records })
+  const directory = createDirectory({ records, clock })
   defineSshFields(records)
   defineAuthKinds(records)
   const memory = createMemory({ records, clock })

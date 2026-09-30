@@ -154,14 +154,16 @@ Over the typed knowledge API (`@mp/api` `KNOWLEDGE_ROUTES`), not the generic rec
   deactivated on request, search over names, emails, teams and handles; rows with the avatar, title, email and handles,
   projects, access and last sign-in (admins). AI employees link to their employee page. **Add person**
   (`src/components/new-person-dialog.tsx`, admins): name, email, access, title, team, manager, handles and **Send a
-  sign-in link** (shown to copy, and sent as a Slack DM when possible). **`/contacts/:id`**: profile, projects, memories
+  sign-in link** (shown to copy, and sent as a Slack DM when possible). **`/contacts/:id`**: profile (a field an AI
+  employee learned says "learned by <employee> from <source>, <when>"), suggested changes with **Accept** / **Reject**
+  (admins and the person themself; others see them without buttons), the bio (employees' notes with their source), projects, memories
   about them (count and a link to the filtered Memory page), recent requests, API tokens (list and revoke), and a side
   panel with access, sign-ins, **Sign-in link** and **Deactivate** / **Reactivate** (confirmed).
 
 The mock (`src/mock/knowledge.ts`, data in `src/mock/knowledge-data.ts`) applies the same memory privacy and access rules
 as the server, with thirteen memories (personal ones, one corrected), seven skills (one switched off, one project skill
 replacing a company one, one with three versions), people with access and handles, a deactivated person, a local agent,
-sign-ins, tokens and when employees used each memory and skill.
+what an employee learned about Gus and a change it suggested, sign-ins, tokens and when employees used each memory and skill.
 
 ### Notifications
 
@@ -367,8 +369,8 @@ and history, a correction needing a note, forgetting after a confirmation, addin
 Skills (grouping, when to use, usage, off and replaces-company marks, New skill from the template and a taken name,
 importing a SKILL.md, editing with the preview, versions and restore, switching off, SKILL.md parsing), and People (the
 list and its filters, Add person with a Slack-sent link, members without Add, a person's page with memories, requests
-and tokens, revoking a token, changing access, a sign-in link, deactivating after a confirmation, editing handles, and
-what members don't see).
+and tokens, revoking a token, changing access, a sign-in link, deactivating after a confirmation, editing handles, learned
+fields and bio notes with their source, accepting and rejecting a suggestion, and what members don't see).
 `chat-activity.test.tsx`: the activity state (delivering, outcomes and their notices, expiry, load, `expectsWork`)
 and the chat page: a worker under its message updating live to paused and failed, "3 working", "Delivering…"
 replaced by the router and then the hand-off, nothing for plain chat, and a static dot with reduced motion.

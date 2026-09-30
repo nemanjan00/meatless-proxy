@@ -34,6 +34,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'directory.get_procedure',
   'directory.get_project',
   'directory.projects_of',
+  'directory.update_contact',
   'docs.backlinks',
   'docs.list',
   'docs.read',
@@ -153,4 +154,6 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'schedule.run_now',
   // A router run is one decision; there is no work of its own to come back to.
   'sessions.follow_up',
+  // Recording what it learns about people is work too: the session the router starts has it, with the conversation to cite.
+  'directory.update_contact',
 ]

@@ -43,7 +43,45 @@ export const contactSchema: KindSchema = {
     { name: 'permissions', type: 'string', description: 'What this contact may ask for, in plain words.' },
     { name: 'bio', type: 'text' },
     { name: 'status', type: 'enum', values: ['active', 'left'] },
+    {
+      name: 'learned',
+      type: 'list',
+      description:
+        'Where role, team, manager and bio notes came from when an AI employee learned them (directory.update_contact): who, when, from what.',
+      of: {
+        type: 'object',
+        fields: [
+          { name: 'field', type: 'enum', values: ['role', 'team', 'manager', 'bio'], required: true },
+          { name: 'value', type: 'string', required: true },
+          { name: 'employeeId', type: 'ref', ref: 'employee', required: true },
+          { name: 'source', type: 'string', required: true },
+          { name: 'at', type: 'timestamp', required: true },
+          { name: 'line', type: 'string', description: 'For a bio note: the line appended to the bio.' },
+          { name: 'acceptedBy', type: 'ref', ref: 'contact', description: 'Who accepted it, when it was a suggestion.' },
+          { name: 'acceptedAt', type: 'timestamp' },
+        ],
+      },
+    },
   ],
+}
+
+/** Contact fields an AI employee may learn (directory.update_contact). Bio notes are appended, not set. */
+export const LEARNABLE_FIELDS = ['role', 'team', 'manager'] as const
+export type LearnableField = (typeof LEARNABLE_FIELDS)[number]
+
+/** Where a contact field (or a bio note) came from, when an AI employee learned it. */
+export interface LearnedFact {
+  field: LearnableField | 'bio'
+  value: string
+  employeeId: string
+  /** Where it was learned: a message, thread, ticket or event reference, or a one-line quote. */
+  source: string
+  at: string
+  /** For a bio note: the exact line appended to the bio. */
+  line?: string
+  /** Set when the value came from an accepted suggestion. */
+  acceptedBy?: string
+  acceptedAt?: string
 }
 
 export interface ContactData extends Record<string, unknown> {
@@ -57,6 +95,45 @@ export interface ContactData extends Record<string, unknown> {
   permissions?: string
   bio?: string
   status?: 'active' | 'left'
+  learned?: LearnedFact[]
+}
+
+/**
+ * A change an AI employee proposed to a contact field that already had a value. An admin or the
+ * person themself accepts it (the value is applied) or rejects it. One per employee, contact,
+ * field and proposed value (its record key), so saying it again updates it instead of adding one.
+ */
+export const contactSuggestionSchema: KindSchema = {
+  kind: 'contact_suggestion',
+  prefix: 'csg',
+  description: 'A proposed change to a contact field that already has a value, waiting for an admin or the person to decide.',
+  core: [
+    { name: 'contactId', type: 'ref', ref: 'contact', required: true },
+    { name: 'field', type: 'enum', values: ['role', 'team', 'manager'], required: true },
+    { name: 'current', type: 'string', description: 'The value when it was (last) suggested.' },
+    { name: 'proposed', type: 'string', required: true },
+    { name: 'employeeId', type: 'ref', ref: 'employee', required: true },
+    { name: 'source', type: 'string', required: true },
+    { name: 'status', type: 'enum', values: ['pending', 'accepted', 'rejected'], required: true },
+    { name: 'times', type: 'number', description: 'How many times the employee suggested it.' },
+    { name: 'suggestedAt', type: 'timestamp', required: true, description: 'When it was last suggested.' },
+    { name: 'decidedBy', type: 'ref', ref: 'contact' },
+    { name: 'decidedAt', type: 'timestamp' },
+  ],
+}
+
+export interface ContactSuggestionData extends Record<string, unknown> {
+  contactId: string
+  field: LearnableField
+  current?: string
+  proposed: string
+  employeeId: string
+  source: string
+  status: 'pending' | 'accepted' | 'rejected'
+  times?: number
+  suggestedAt: string
+  decidedBy?: string
+  decidedAt?: string
 }
 
 export const employeeSchema: KindSchema = {
@@ -309,4 +386,10 @@ export const APPLIES_TO = 'applies_to'
 export const contactRef = (id: string): Ref => ({ kind: 'contact', id })
 export const projectRef = (id: string): Ref => ({ kind: 'project', id })
 
-export const directorySchemas: KindSchema[] = [contactSchema, employeeSchema, projectSchema, procedureSchema]
+export const directorySchemas: KindSchema[] = [
+  contactSchema,
+  employeeSchema,
+  projectSchema,
+  procedureSchema,
+  contactSuggestionSchema,
+]

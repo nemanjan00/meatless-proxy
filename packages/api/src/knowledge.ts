@@ -368,6 +368,8 @@ export interface PersonRecordData extends Record<string, unknown> {
   deactivatedBy?: string
   /** A local agent: the person it acts for. */
   sponsor?: string
+  /** Where learned fields and bio notes came from (read `PersonDetail.learned`, which leaves out stale ones). */
+  learned?: unknown[]
 }
 
 /** A `GET /api/people` row. */
@@ -403,6 +405,46 @@ export interface PersonDetail extends PersonItem {
   /** Whether the viewer may edit their profile, and change their access or deactivate them. */
   canEdit: boolean
   canAdmin: boolean
+  /** What AI employees learned about them that still holds: fields as they are now, bio notes still in the bio. */
+  learned: PersonLearnedFact[]
+  /** Pending suggestions from AI employees for fields that already have a value, newest first (people only). */
+  suggestions: PersonSuggestion[]
+  /** Whether the viewer may accept or reject them: an admin, or the person themself. */
+  canReview: boolean
+}
+
+/** A field or bio note an AI employee learned, and from where. */
+export interface PersonLearnedFact {
+  field: 'role' | 'team' | 'manager' | 'bio'
+  /** The value (a contact id for `manager`; the note for `bio`). */
+  value: string
+  /** For `manager`: the manager's name. */
+  valueLabel?: string
+  employee: { employeeId: string; name: string }
+  /** Where it was learned: a message, thread or ticket reference, or a one-line quote. */
+  source: string
+  at: string
+  /** For a bio note: the line in the bio. */
+  line?: string
+  /** Who accepted it, when it was a suggestion. */
+  acceptedBy?: KnowledgePerson | null
+  acceptedAt?: string
+}
+
+/** A change an AI employee proposed to a field that already has a value. */
+export interface PersonSuggestion {
+  id: string
+  field: 'role' | 'team' | 'manager'
+  current: string | null
+  proposed: string
+  /** For `manager`: the names of the current and proposed manager. */
+  currentLabel?: string
+  proposedLabel?: string
+  employee: { employeeId: string; name: string }
+  source: string
+  /** When it was last suggested, and how many times. */
+  suggestedAt: string
+  times: number
 }
 
 /** `GET /api/people` query. */
@@ -487,6 +529,8 @@ export const KNOWLEDGE_ROUTES = {
   personSignInLink: ['POST', '/api/people/:id/sign-in-link'],
   deactivatePerson: ['POST', '/api/people/:id/deactivate'],
   reactivatePerson: ['POST', '/api/people/:id/reactivate'],
+  acceptPersonSuggestion: ['POST', '/api/people/:id/suggestions/:suggestionId/accept'],
+  rejectPersonSuggestion: ['POST', '/api/people/:id/suggestions/:suggestionId/reject'],
 } as const
 
 /** The client methods of this section (part of `ApiClient`). */
@@ -531,6 +575,10 @@ export interface KnowledgeApi {
   deactivatePerson(id: string): Promise<PersonDetail>
   /** `POST /api/people/:id/reactivate` → the person, able to sign in again with a new link (admins). */
   reactivatePerson(id: string): Promise<PersonDetail>
+  /** `POST /api/people/:id/suggestions/:suggestionId/accept` → the person, with the suggested value applied (admins, or the person themself). */
+  acceptPersonSuggestion(id: string, suggestionId: string): Promise<PersonDetail>
+  /** `POST /api/people/:id/suggestions/:suggestionId/reject` → the person, the suggestion dismissed (admins, or the person themself). */
+  rejectPersonSuggestion(id: string, suggestionId: string): Promise<PersonDetail>
 }
 
 type Call = <T>(
@@ -562,5 +610,7 @@ export function knowledgeMethods(call: Call): KnowledgeApi {
     personSignInLink: (id, opts = {}) => call('personSignInLink', { id }, undefined, opts),
     deactivatePerson: (id) => call('deactivatePerson', { id }, undefined, {}),
     reactivatePerson: (id) => call('reactivatePerson', { id }, undefined, {}),
+    acceptPersonSuggestion: (id, suggestionId) => call('acceptPersonSuggestion', { id, suggestionId }, undefined, {}),
+    rejectPersonSuggestion: (id, suggestionId) => call('rejectPersonSuggestion', { id, suggestionId }, undefined, {}),
   }
 }

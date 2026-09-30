@@ -188,6 +188,33 @@ export function seedKnowledge(db: MockDb, at: (minutesAgo: number) => string) {
   put<PersonRecordData>('contact', CON.anaAgent, [
     { data: { name: "Ana's Claude Code", kind: 'agent', sponsor: CON.ana, role: 'Local agent' }, ago: 2 * DAY },
   ])
+  // What an employee learned about Gus, and a change it suggested (docs/spec.md "What employees learn about people").
+  const gusNote = 'Maintains the staging cluster Terraform.'
+  const gusSource = 'thread in #platform about the staging outage'
+  const gusLine = `- ${at(DAY).slice(0, 10)}: ${gusNote} [source: ${gusSource}]`
+  patch(CON.gus, {
+    bio: gusLine,
+    learned: [
+      { field: 'team', value: 'Platform', employeeId: EMP.infra, source: 'MR !42 description', at: at(2 * DAY) },
+      { field: 'bio', value: gusNote, employeeId: EMP.infra, source: gusSource, at: at(DAY), line: gusLine },
+    ],
+  })
+  put('contact_suggestion', mockId('csg', 1), [
+    {
+      data: {
+        contactId: CON.gus,
+        field: 'role',
+        current: 'Platform engineer',
+        proposed: 'Senior platform engineer',
+        employeeId: EMP.infra,
+        source: 'Gus in #platform: "I lead the platform on-call rota now"',
+        status: 'pending',
+        times: 1,
+        suggestedAt: at(3 * 60),
+      },
+      ago: 3 * 60,
+    },
+  ])
   link(['contact', CON.gus], ['project', PRO.platform], 'member')
   link(['contact', CON.chen], ['project', PRO.payments], 'stakeholder')
   const signIn = (id: string, signedInMinAgo: number, seenMinAgo: number) =>

@@ -5,8 +5,8 @@ as extendable records on top of `@mp/records`.
 
 ## API
 
-`createDirectory({ records })` registers the kinds `contact` (`con_`),
-`employee` (`emp_`), `project` (`pro_`) and `procedure` (`prc_`) on
+`createDirectory({ records, clock? })` registers the kinds `contact` (`con_`),
+`employee` (`emp_`), `project` (`pro_`), `procedure` (`prc_`) and `contact_suggestion` (`csg_`) on
 `records.kinds` and returns:
 
 - `contacts`: `create` (kind `person`, `ai` for an employee's contact, or `agent` for a local agent in chat; defaults to `person`; handles must be unique), `get`, `require`, `update`, `list`, `search(text)`,
@@ -18,6 +18,15 @@ as extendable records on top of `@mp/records`.
   `removeMember`, `setOwner`, `owner`, `members` (`{contact, roles, links}[]`), `forContact` (`{project, roles, links}[]`).
 - `procedures`: `create`, `get`, `require`, `update`, `list`, `find(text, { projectIds })` (keyword scoring over name, applies, body;
   archived procedures are left out). `approvals` are `{ contactId | role, step? }`; `archived: true` retires one.
+- `learning` (`learning.ts`, docs/spec.md "What employees learn about people"): `learn({ contactId, employeeId, source,
+  role?, team?, manager?, bioNote? })` fills empty fields (recording `{ field, value, employeeId, source, at }` in the
+  contact's `learned` list), turns a value for a set field into a `contact_suggestion` record (`csg_`, keyed by contact,
+  field, employee and normalised value, so a repeat updates it and a rejected one stays rejected), and appends a bio
+  note as `- <date>: <note> [source: <source>]` unless the bio already says it; people only, 120 characters per field,
+  280 per note, 4000 for the bio. `suggestions(contactId, { status })`, `getSuggestion`, `accept(id, by)` (applies it,
+  records who accepted, settles other employees' suggestions of the same value), `reject(id, by)`, and `facts(contact)`:
+  the learned facts that still hold. Contact writes are compare-and-swap, retried. `createDirectory` takes an optional
+  `clock` for their timestamps.
 
 A repository is `{ url, httpUrl?, defaultBranch?, path? }`: `url` is what git fetches and pushes (ssh when the
 employee pushes with its key), `httpUrl` the same repository over https. An employee works on a project through a
@@ -38,7 +47,8 @@ their `kind` field; filter in code.
 ## Tests
 
 `test/directory.test.ts`, against `memoryStore()`: identity resolution across systems, handle conflicts, employees and
-their contacts, renames, ownership both ways, an AI owner, referential integrity, procedure search, extension fields.
+their contacts, renames, ownership both ways, an AI owner, referential integrity, procedure search, extension fields, accepting, rejecting and
+reopening suggestions. The tool's rules are tested in `packages/stdlib/test/update-contact.test.ts`.
 
 ## Replacing it
 

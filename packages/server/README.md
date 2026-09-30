@@ -874,7 +874,11 @@ The employee git stores get `LOCAL_REPOS_DIR` too, so checkouts and pushes reach
   `idempotencyKey` returns the first person), `GET|PATCH /api/people/:id` (members edit people's profiles; access,
   AI employees and agents are admins'), `POST …/sign-in-link`, `…/deactivate` (sets `deactivatedAt`, which `accessOf`
   refuses everywhere, ends their web sessions and revokes their tokens; not yourself, not the last admin) and
-  `…/reactivate`. Last sign-in and tokens are shown to admins and to the person.
+  `…/reactivate`. Last sign-in and tokens are shown to admins and to the person. A person's detail also carries
+  `learned` (what AI employees learned that still holds, with employee, source and time) and pending `suggestions`
+  from `directory.learning`; `POST …/suggestions/:suggestionId/{accept,reject}` decide one, for admins and the person
+  themself whatever their access (`selfOrAdmin` in `guard-rules.ts`), 404 for a suggestion about someone else, 409
+  once decided (docs/spec.md "What employees learn about people").
 - `use.ts`: `knowledge_use` records (per memory or skill and employee: the last time and a count), written after
   `memory.recall` and `skills.load` tool calls (an `afterToolCall` hook) and when memories are loaded at the start of
   work (`src/session-memory.ts`). Kept apart from the records so using one makes no version.

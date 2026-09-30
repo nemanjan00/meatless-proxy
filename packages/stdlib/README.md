@@ -65,7 +65,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search, tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
 | `chat.*` | post, reply, read, search, create_channel, add_member, remove_member, archive, invite |
 | `subscriptions.*` / `triggers.*` | subscribe, unsubscribe, list / list, create, update, disable |
-| `directory.*` / `procedures.run` | find_contact, get_contact, find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
+| `directory.*` / `procedures.run` | find_contact, get_contact (with `learned` and `pendingSuggestions`), update_contact (role, team, manager and bio notes an employee learned, with a source: fills empty fields, suggests changes to set ones, refuses every other field and AI contacts; idempotent; not in router contexts), find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
 | `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |

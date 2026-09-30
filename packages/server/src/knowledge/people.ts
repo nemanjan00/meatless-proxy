@@ -1,6 +1,6 @@
 import type * as Api from '@mp/api'
 import { ConflictError, DeniedError, NotFoundError, ValidationError, errorMessage, isMpError, type KindSchema } from '@mp/core'
-import type { Contact, ContactData } from '@mp/directory'
+import type { Contact, ContactData, ContactSuggestion, LearnedFact } from '@mp/directory'
 import type { StoredRecord } from '@mp/store'
 import { type Context, Hono } from 'hono'
 import { ACCESS_LEVELS, type Access, type AuthSessionData, defineAuthKinds } from '../auth/access.ts'
@@ -161,6 +161,7 @@ export class PeopleViews {
       item.type === 'person' && this.private(c.id)
         ? (await listApiTokens(this.s, c.id)).map((t) => ({ ...t }) satisfies Api.ApiToken)
         : null
+    const suggestions = item.type === 'person' ? await this.s.directory.learning.suggestions(c.id) : []
     return {
       ...item,
       manager: this.names.person(c.data.manager),
@@ -169,6 +170,48 @@ export class PeopleViews {
       tokens,
       canEdit: this.canEdit(c),
       canAdmin: this.me.access === 'admin' && item.type === 'person',
+      learned: this.s.directory.learning.facts(c).map((f) => this.fact(f)),
+      suggestions: suggestions.map((x) => this.suggestion(x)),
+      canReview: item.type === 'person' && this.private(c.id),
+    }
+  }
+
+  private employeeName(id: string) {
+    return { employeeId: id, name: this.names.employees.get(id)?.data.name ?? id }
+  }
+
+  private contactName(id: string | undefined) {
+    return id ? (this.names.contacts.get(id)?.data.name ?? id) : undefined
+  }
+
+  fact(f: LearnedFact): Api.PersonLearnedFact {
+    return {
+      field: f.field,
+      value: f.value,
+      ...(f.field === 'manager' ? { valueLabel: this.contactName(f.value)! } : {}),
+      employee: this.employeeName(f.employeeId),
+      source: f.source,
+      at: f.at,
+      ...(f.line ? { line: f.line } : {}),
+      ...(f.acceptedBy ? { acceptedBy: this.names.person(f.acceptedBy) } : {}),
+      ...(f.acceptedAt ? { acceptedAt: f.acceptedAt } : {}),
+    }
+  }
+
+  suggestion(x: ContactSuggestion): Api.PersonSuggestion {
+    const d = x.data
+    const manager = d.field === 'manager'
+    return {
+      id: x.id,
+      field: d.field,
+      current: d.current ?? null,
+      proposed: d.proposed,
+      ...(manager && d.current ? { currentLabel: this.contactName(d.current)! } : {}),
+      ...(manager ? { proposedLabel: this.contactName(d.proposed)! } : {}),
+      employee: this.employeeName(d.employeeId),
+      source: d.source,
+      suggestedAt: d.suggestedAt,
+      times: d.times ?? 1,
     }
   }
 }
@@ -396,6 +439,30 @@ export function peopleRoutes(s: Services, vis: ChatVisibility): Hono {
         throw new ConflictError('someone else changed them meanwhile: reload and try again')
       throw e
     }
+    return c.json(await detail(c, contact.id))
+  })
+
+  // Suggestions from AI employees (docs/spec.md "What employees learn about people"): an admin or the
+  // person themself decides (the guard checks who, src/knowledge/guard-rules.ts).
+  const suggestionOf = async (c: Context) => {
+    const contact = await requirePerson(c.req.param('id') ?? '')
+    const sid = c.req.param('suggestionId') ?? ''
+    const x = await s.directory.learning.getSuggestion(sid)
+    if (!x || x.data.contactId !== contact.id) throw new NotFoundError('suggestion', sid)
+    return { contact, x }
+  }
+  app.post('/api/people/:id/suggestions/:suggestionId/accept', async (c) => {
+    const { contact, x } = await suggestionOf(c)
+    const by = me(c).contactId
+    await s.directory.learning.accept(x.id, by, { actor: actorOf(by) })
+    s.logger.info('contact suggestion accepted', { contactId: contact.id, suggestionId: x.id, field: x.data.field, by })
+    return c.json(await detail(c, contact.id))
+  })
+  app.post('/api/people/:id/suggestions/:suggestionId/reject', async (c) => {
+    const { contact, x } = await suggestionOf(c)
+    const by = me(c).contactId
+    await s.directory.learning.reject(x.id, by, { actor: actorOf(by) })
+    s.logger.info('contact suggestion rejected', { contactId: contact.id, suggestionId: x.id, field: x.data.field, by })
     return c.json(await detail(c, contact.id))
   })
 

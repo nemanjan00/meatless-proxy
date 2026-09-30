@@ -1,4 +1,4 @@
-import { ConflictError, ValidationError, validateRecord } from '@mp/core'
+import { type Clock, ConflictError, ValidationError, systemClock, validateRecord } from '@mp/core'
 import type { LinkedRecord, Records } from '@mp/records'
 import type { Actor, Link, Page, RecordQuery, StoredRecord } from '@mp/store'
 import {
@@ -16,6 +16,7 @@ import {
   type ProcedureData,
   type ProjectData,
 } from './schemas.ts'
+import { type ContactLearning, createContactLearning } from './learning.ts'
 import { keywords, scoreText, slugify } from './text.ts'
 
 /** `Omit` that keeps known keys of types with an index signature. */
@@ -132,10 +133,14 @@ export interface Directory {
   employees: Employees
   projects: Projects
   procedures: Procedures
+  /** What AI employees learn about people: filled fields, suggestions, bio notes (learning.ts). */
+  learning: ContactLearning
 }
 
 export interface DirectoryDeps {
   records: Records
+  /** Timestamps of learned facts and suggestions. Default: the system clock. */
+  clock?: Clock
 }
 
 const MAX_SEARCH_WORDS = 8
@@ -145,7 +150,7 @@ const normEmail = (e: string) => e.trim().toLowerCase()
 const actorOpt = (o: WriteOpts | undefined) => (o?.actor ? { actor: o.actor } : {})
 
 /** Registers the directory kinds on `records.kinds` and returns the service. */
-export function createDirectory({ records }: DirectoryDeps): Directory {
+export function createDirectory({ records, clock = systemClock }: DirectoryDeps): Directory {
   for (const s of directorySchemas) records.kinds.define(s)
 
   /** Union of per-keyword text queries, scored and sorted. */
@@ -431,5 +436,5 @@ export function createDirectory({ records }: DirectoryDeps): Directory {
     },
   }
 
-  return { contacts, employees, projects, procedures }
+  return { contacts, employees, projects, procedures, learning: createContactLearning({ records, clock }) }
 }

@@ -13,7 +13,9 @@ import {
   type MemoryRecordData,
   type PersonDetail,
   type PersonItem,
+  type PersonLearnedFact,
   type PersonRecordData,
+  type PersonSuggestion,
   type ProcedureRecordData,
   type ProjectData,
   type SessionData,
@@ -276,7 +278,88 @@ export function createMockKnowledgeApi(h: MockKnowledgeHelpers): KnowledgeApi {
       tokens: item.type === 'person' && priv(c.id) ? h.tokens.filter((t) => t.contactId === c.id).map((t) => ({ ...t })) : null,
       canEdit: isAdmin() || (access() === 'member' && item.type === 'person'),
       canAdmin: isAdmin() && item.type === 'person',
+      learned: learnedOf(c),
+      suggestions: item.type === 'person' ? pendingOf(c.id).map(suggestionView) : [],
+      canReview: item.type === 'person' && priv(c.id),
     }
+  }
+  // What employees learned, and their suggestions (like packages/directory/src/learning.ts).
+  type Fact = Omit<PersonLearnedFact, 'employee' | 'valueLabel' | 'acceptedBy'> & { employeeId: string; acceptedBy?: string }
+  const employeeName = (id: string) => ({ employeeId: id, name: get<EmployeeData>('employee', id)?.data.name ?? id })
+  const contactName = (id: string | undefined) => (id ? (get<PersonRecordData>('contact', id)?.data.name ?? id) : undefined)
+  const learnedOf = (c: ApiRecord<PersonRecordData>): PersonLearnedFact[] => {
+    const lines = (c.data.bio ?? '').split('\n')
+    return ((c.data.learned ?? []) as Fact[])
+      .filter((f) => (f.field === 'bio' ? !!f.line && lines.includes(f.line) : c.data[f.field] === f.value))
+      .map(({ employeeId, acceptedBy, ...f }) => ({
+        ...f,
+        ...(f.field === 'manager' ? { valueLabel: contactName(f.value)! } : {}),
+        employee: employeeName(employeeId),
+        ...(acceptedBy ? { acceptedBy: person(acceptedBy) } : {}),
+      }))
+  }
+  type Suggestion = {
+    contactId: string
+    field: PersonSuggestion['field']
+    current?: string
+    proposed: string
+    employeeId: string
+    source: string
+    status: 'pending' | 'accepted' | 'rejected'
+    times?: number
+    suggestedAt: string
+    decidedBy?: string
+    decidedAt?: string
+  }
+  const pendingOf = (cid: string) =>
+    all<Suggestion>('contact_suggestion')
+      .filter((x) => x.data.contactId === cid && x.data.status === 'pending')
+      .sort((a, b) => b.data.suggestedAt.localeCompare(a.data.suggestedAt))
+  const suggestionView = (x: ApiRecord<Suggestion>): PersonSuggestion => {
+    const d = x.data
+    const manager = d.field === 'manager'
+    return {
+      id: x.id,
+      field: d.field,
+      current: d.current ?? null,
+      proposed: d.proposed,
+      ...(manager && d.current ? { currentLabel: contactName(d.current)! } : {}),
+      ...(manager ? { proposedLabel: contactName(d.proposed)! } : {}),
+      employee: employeeName(d.employeeId),
+      source: d.source,
+      suggestedAt: d.suggestedAt,
+      times: d.times ?? 1,
+    }
+  }
+  const decide = (id: string, suggestionId: string, accept: boolean) => {
+    const c = contact(id)
+    if (!c) return fail(404, 'not_found', `person ${id} not found`)
+    if (!priv(id)) return fail(403, 'denied', 'only an admin or the person themself decides on suggestions about them')
+    const x = get<Suggestion>('contact_suggestion', suggestionId)
+    if (!x || x.data.contactId !== id) return fail(404, 'not_found', `suggestion ${suggestionId} not found`)
+    if (x.data.status !== 'pending') return fail(409, 'conflict', `this suggestion was already ${x.data.status}`)
+    const at = iso()
+    write<Suggestion>('contact_suggestion', x.id, {
+      ...x.data,
+      status: accept ? 'accepted' : 'rejected',
+      decidedBy: me.id,
+      decidedAt: at,
+    })
+    if (!accept) return delay(personDetail(c))
+    const d = x.data
+    const kept = ((c.data.learned ?? []) as Fact[]).filter((f) => f.field !== d.field)
+    const fact: Fact = {
+      field: d.field,
+      value: d.proposed,
+      employeeId: d.employeeId,
+      source: d.source,
+      at: d.suggestedAt,
+      acceptedBy: me.id,
+      acceptedAt: at,
+    }
+    return delay(
+      personDetail(write<PersonRecordData>('contact', id, { ...c.data, [d.field]: d.proposed, learned: [...kept, fact] })),
+    )
   }
   const contact = (id: string) => get<PersonRecordData>('contact', id)
   const link = (c: ApiRecord<PersonRecordData>, send: boolean) => {
@@ -533,6 +616,8 @@ export function createMockKnowledgeApi(h: MockKnowledgeHelpers): KnowledgeApi {
         personDetail(write<PersonRecordData>('contact', id, { ...c.data, deactivatedAt: iso(), deactivatedBy: me.id })),
       )
     },
+    acceptPersonSuggestion: (id, suggestionId) => decide(id, suggestionId, true),
+    rejectPersonSuggestion: (id, suggestionId) => decide(id, suggestionId, false),
     reactivatePerson: (id) => {
       const c = contact(id)
       if (!c) return fail(404, 'not_found', `person ${id} not found`)

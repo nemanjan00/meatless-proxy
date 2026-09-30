@@ -1,4 +1,4 @@
-import { NotFoundError } from '@mp/core'
+import { DeniedError, NotFoundError } from '@mp/core'
 import type { GuardContext, GuardRule } from '../auth/guard.ts'
 import { canSeeMemoryRecord } from './memory-access.ts'
 
@@ -6,6 +6,12 @@ import { canSeeMemoryRecord } from './memory-access.ts'
 const visibleMemory = async ({ principal, params, s }: GuardContext) => {
   const m = await s.records.get('memory', params.id ?? '')
   if (m && !(await canSeeMemoryRecord(s, principal, m))) throw new NotFoundError('memory', params.id ?? '')
+}
+
+/** An admin, or the person the route is about (`:id`), whatever their access. */
+const selfOrAdmin = async ({ principal, params }: GuardContext) => {
+  if (principal.access !== 'admin' && principal.contactId !== params.id)
+    throw new DeniedError('only an admin or the person themself decides on suggestions about them')
 }
 
 /**
@@ -36,4 +42,7 @@ export const KNOWLEDGE_GUARD_RULES: GuardRule[] = [
   { method: 'POST', path: '/api/people/:id/sign-in-link', need: 'admin' },
   { method: 'POST', path: '/api/people/:id/deactivate', need: 'admin' },
   { method: 'POST', path: '/api/people/:id/reactivate', need: 'admin' },
+  // What employees suggest about a person: that person (any access) or an admin accepts or rejects it.
+  { method: 'POST', path: '/api/people/:id/suggestions/:suggestionId/accept', need: 'viewer', check: selfOrAdmin },
+  { method: 'POST', path: '/api/people/:id/suggestions/:suggestionId/reject', need: 'viewer', check: selfOrAdmin },
 ]

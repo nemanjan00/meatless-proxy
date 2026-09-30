@@ -1105,6 +1105,8 @@ Core fields:
 | `team`     | string, optional      |                                                  |
 | `manager`  | contact id, optional  |                                                  |
 | `permissions` | string, optional   | what this person may ask for, in plain words; see [permissions](#permissions) |
+| `bio`      | text, optional        | free text; employees append dated notes to it ([what employees learn](#what-employees-learn-about-people)) |
+| `learned`  | list, optional        | where learned fields and bio notes came from: employee, source, time, who accepted |
 
 Extension:
 
@@ -1183,6 +1185,56 @@ When an event's actor handle (`slack:<id>`, `gitlab:<username>`,
   All three are for admins only.
 - **Replaceable.** Each integration has a small identity lookup (look up,
   find mentions, render names), next to the integration's definition.
+
+#### What employees learn about people
+
+Employees meet people at work long before anyone fills in their profile, so
+they keep the directory current as they go, with
+`directory.update_contact { contactId, role?, team?, manager?, bio_note?, source }`.
+
+- **What.** Only `role`, `team`, `manager` (a contact id, of a person, not
+  themself) and short bio notes. Never `permissions`, `email`, `handles`,
+  `status`, `kind` or `name`: the tool refuses them by name, since people change
+  those in the web UI. Only people's contacts: AI employees and agents keep their
+  own. Expertise, how someone likes to be reached and who they work with go in
+  [memory](#memory) with a contact scope instead.
+- **Only work facts, only stated ones.** The prompt and the tool's description
+  say: check the directory first; record only what the person said or what's
+  clearly stated at work, never a guess; never personal or sensitive details
+  (health, family, religion, politics, salary, performance judgments) or gossip.
+- **A source is required**: a message, thread or ticket reference, or a
+  one-line quote (cut at 200 characters). It's shown on the contact page to
+  everyone who can see it, so the description says not to quote a private
+  conversation.
+- **An empty field is filled**, and the contact's `learned` list records who
+  (the employee), when, from what source. A field that **already has a value is
+  never overwritten**: the value becomes a **suggestion** (a `contact_suggestion`
+  record: current and proposed value, the employee, the source, `pending`).
+  Saying the same value again as the same employee updates that suggestion
+  (its source, time and count) instead of adding one; its record key is the
+  contact, field, employee and normalised value. A rejected suggestion stays
+  rejected when the employee says it again; an accepted one opens again if the
+  field was changed back since. The same value as now changes nothing.
+- **Bio notes** are appended as dated lines, `- 2026-09-30: <note> [source:
+  <source>]`, one short line each (280 characters). A note the bio already says
+  (the same words, ignoring case and punctuation, or one containing the other)
+  isn't added again, and the bio stops at 4000 characters: then the tool points
+  to memory.
+- **Provenance stays honest.** A learned fact counts only while it still holds:
+  when someone edits the field or removes the line, the contact page and
+  `directory.get_contact` stop attributing it to the employee.
+- **Deciding.** On the person's page, pending suggestions show with **Accept**
+  and **Reject**, for admins and the person themself (whatever their access);
+  everyone else sees them without the buttons. Accepting applies the value and
+  records who accepted it (and settles other employees' pending suggestions of
+  the same value); rejecting dismisses it. `POST
+  /api/people/:id/suggestions/:suggestionId/{accept,reject}`; a suggestion
+  already decided is a conflict.
+- **Idempotent.** A retried tool call returns the first result and writes
+  nothing again. Concurrent updates to one contact are compare-and-swap writes,
+  retried.
+- **Routers don't have it.** It's work for the session the router starts, which
+  has the conversation to cite.
 
 Open questions:
 
@@ -3027,8 +3079,11 @@ All of these update live over the WebSocket.
   **Send a sign-in link** (on by default): the one-time link is shown to copy
   (valid 15 minutes) and, when they have a Slack handle and Slack is set up, sent
   to them as a Slack DM; the dialog says which. A double submit adds one person.
-- **A person's page**: their profile (email, handles, manager, reports, what
-  they may ask for), projects, how many memories are about them (with a link to
+- **A person's page**: their profile (email, handles, role, team, manager,
+  reports, what they may ask for; a field an employee learned says "learned by
+  <employee> from <source>, <when>"), the changes employees suggested, with
+  **Accept** and **Reject** for admins and the person themself, their bio (notes
+  employees added show their source), projects, how many memories are about them (with a link to
   the filtered Memory page; only for themselves and admins), their recent
   requests (sessions they asked for), and their API tokens (admins and
   themselves: list and revoke; new ones in Settings › API tokens). The side
@@ -3037,8 +3092,10 @@ All of these update live over the WebSocket.
   (admins, with a confirmation).
 - Everyone reads the directory; members edit people's profiles (not AI
   employees or agents); admins add people, change access, send sign-in links
-  and deactivate. The API is `GET/POST /api/people`, `GET/PATCH
-  /api/people/:id` and `POST /api/people/:id/{sign-in-link,deactivate,reactivate}`.
+  and deactivate; admins and the person decide on suggestions about them. The
+  API is `GET/POST /api/people`, `GET/PATCH /api/people/:id`, `POST
+  /api/people/:id/{sign-in-link,deactivate,reactivate}` and `POST
+  /api/people/:id/suggestions/:suggestionId/{accept,reject}`.
 
 #### Knowledge
 

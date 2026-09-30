@@ -363,6 +363,48 @@ describe('person page', () => {
     })
   })
 
+  it('shows what employees learned with its source, and accepts a suggested change', async () => {
+    const user = userEvent.setup()
+    const data = renderAt(`/contacts/${PEOPLE.gus}`)
+    const profile = await screen.findByTestId('person-profile')
+    expect(within(profile).getByTestId('person-provenance')).toHaveTextContent(
+      /learned by Infra Bot from MR !42 description, 2d ago/,
+    )
+    const bio = screen.getByTestId('person-bio')
+    expect(bio).toHaveTextContent('Maintains the staging cluster Terraform.')
+    expect(within(bio).getByTestId('person-provenance')).toHaveTextContent(/from thread in #platform about the staging outage/)
+    expect(bio).not.toHaveTextContent('[source:')
+
+    const row = await screen.findByTestId('person-suggestion')
+    expect(row).toHaveTextContent(/RolePlatform engineerSenior platform engineer/)
+    expect(row).toHaveTextContent(/suggested by Infra Bot from Gus in #platform/)
+    await user.click(within(row).getByRole('button', { name: /Accept/ }))
+    await waitFor(() => expect(screen.queryByTestId('person-suggestions')).toBeNull())
+    expect(await within(screen.getByTestId('person-profile')).findByText('Senior platform engineer')).toBeInTheDocument()
+    expect(screen.getByTestId('person-profile')).toHaveTextContent(/accepted by Ana Novak/)
+    const p = await data.api.person(PEOPLE.gus)
+    expect(p.contact.data.role).toBe('Senior platform engineer')
+    expect(p.learned.find((f) => f.field === 'role')).toMatchObject({ acceptedBy: { contactId: CON.ana } })
+  })
+
+  it('lets the person themself reject a suggestion, and shows others no buttons', async () => {
+    const user = userEvent.setup()
+    const data = renderAt(`/contacts/${PEOPLE.gus}`, { id: PEOPLE.gus, name: 'Gus Lee', access: 'member' })
+    const row = await screen.findByTestId('person-suggestion')
+    await user.click(within(row).getByRole('button', { name: /Reject/ }))
+    await waitFor(() => expect(screen.queryByTestId('person-suggestion')).toBeNull())
+    expect((await data.api.person(PEOPLE.gus)).contact.data.role).toBe('Platform engineer')
+  })
+
+  it('shows other members the suggestion without Accept or Reject, and the mock refuses them', async () => {
+    const data = renderAt(`/contacts/${PEOPLE.gus}`, { id: CON.bob, name: 'Bob Smith', access: 'member' })
+    const section = await screen.findByTestId('person-suggestions')
+    expect(section).toHaveTextContent(/Only Gus or an admin can accept these/)
+    expect(within(section).queryByRole('button')).toBeNull()
+    const [x] = (await data.api.person(PEOPLE.gus)).suggestions
+    await expect(data.api.acceptPersonSuggestion(PEOPLE.gus, x!.id)).rejects.toMatchObject({ status: 403 })
+  })
+
   it("hides someone else's memories, sign-ins and tokens from members", async () => {
     renderAt(`/contacts/${CON.ana}`, { id: CON.bob, name: 'Bob Smith', access: 'member' })
     const memories = await screen.findByTestId('person-memories')

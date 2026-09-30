@@ -473,6 +473,63 @@ function knowledgeSuite(backend: Backend) {
       expect((await q('text=mia%20member')).map((p) => p.contact.id)).toEqual([mia])
       expect((await t.req('GET', '/api/people/con_missing')).status).toBe(404)
     })
+
+    it('shows what employees learned, and lets only admins and the person decide on suggestions', async () => {
+      const s = t.a.services
+      const pat = (await s.directory.contacts.create({ name: `Pat ${uniq()}`, kind: 'person', role: 'Designer' })).id
+      const self = await t.as(pat, { access: 'viewer' })
+      const learned = await s.directory.learning.learn({
+        contactId: pat,
+        employeeId,
+        source: 'thread in #design, 2026-09-29',
+        role: 'Design lead',
+        team: 'Growth',
+        bioNote: 'Owns the onboarding redesign.',
+      })
+      expect(learned.filled).toEqual([{ field: 'team', value: 'Growth' }])
+      const sid = learned.suggested[0]!.suggestionId
+      const url = (id: string, action: string) => `/api/people/${pat}/suggestions/${id}/${action}`
+
+      // Everyone sees what was learned and what's suggested; only the person and admins may decide.
+      const seen = (await t.req<Api.PersonDetail>('GET', `/api/people/${pat}`, undefined, viewer)).body
+      expect(seen.canReview).toBe(false)
+      expect(seen.learned).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'team', value: 'Growth', source: 'thread in #design, 2026-09-29' }),
+          expect.objectContaining({ field: 'bio', value: 'Owns the onboarding redesign.' }),
+        ]),
+      )
+      expect(seen.learned[0]!.employee).toEqual({ employeeId, name: expect.any(String) })
+      expect(seen.suggestions).toEqual([
+        expect.objectContaining({ id: sid, field: 'role', current: 'Designer', proposed: 'Design lead', times: 1 }),
+      ])
+      expect((await t.req('POST', url(sid, 'accept'), {}, member)).status).toBe(403)
+      expect((await t.req('POST', url(sid, 'reject'), {}, member)).status).toBe(403)
+      expect((await t.req('POST', url(sid, 'accept'), {}, viewer)).status).toBe(403)
+      expect((await t.req('POST', url(sid, 'reject'), {}, viewer)).status).toBe(403)
+
+      // The person themself (a viewer) accepts: the value is applied, with who accepted it.
+      expect((await t.req<Api.PersonDetail>('GET', `/api/people/${pat}`, undefined, self)).body.canReview).toBe(true)
+      const accepted = await t.req<Api.PersonDetail>('POST', url(sid, 'accept'), {}, self)
+      expect(accepted.status).toBe(200)
+      expect(accepted.body.contact.data.role).toBe('Design lead')
+      expect(accepted.body.suggestions).toEqual([])
+      expect(accepted.body.learned.find((f) => f.field === 'role')).toMatchObject({
+        value: 'Design lead',
+        acceptedBy: { contactId: pat },
+      })
+      expect((await t.req('POST', url(sid, 'reject'), {}, self)).status).toBe(409)
+
+      // An admin rejects one; a suggestion is only reached through its own person.
+      const again = await s.directory.learning.learn({ contactId: pat, employeeId, source: 'org chart doc', team: 'Platform' })
+      const sid2 = again.suggested[0]!.suggestionId
+      expect((await t.req('POST', `/api/people/${mia}/suggestions/${sid2}/reject`, {})).status).toBe(404)
+      const rejected = await t.req<Api.PersonDetail>('POST', url(sid2, 'reject'), {})
+      expect(rejected.status).toBe(200)
+      expect(rejected.body.contact.data.team).toBe('Growth')
+      expect(rejected.body.suggestions).toEqual([])
+      expect((await s.directory.learning.getSuggestion(sid2))?.data).toMatchObject({ status: 'rejected' })
+    })
   })
 }
 

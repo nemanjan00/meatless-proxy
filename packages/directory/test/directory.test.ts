@@ -321,3 +321,47 @@ describe('employee network setting', () => {
     expect(invalidNetwork(['a'])).toMatch(/network must be/)
   })
 })
+
+describe('what employees learn about people', () => {
+  it('accepts and rejects suggestions once, and reopens an accepted one when the field changed since', async () => {
+    const bot = await dir.employees.create({ name: 'Learner' })
+    const ana = await dir.contacts.create({ name: 'Ana', role: 'Designer' })
+    const bo = await dir.contacts.create({ name: 'Bo' })
+    const r = await dir.learning.learn({ contactId: ana.id, employeeId: bot.id, source: 'msg 1', role: 'Design lead' })
+    const id = r.suggested[0]!.suggestionId
+    const accepted = await dir.learning.accept(id, bo.id)
+    expect(accepted.data).toMatchObject({ status: 'accepted', decidedBy: bo.id })
+    const c = await dir.contacts.require(ana.id)
+    expect(c.data.role).toBe('Design lead')
+    expect(dir.learning.facts(c)).toEqual([
+      expect.objectContaining({ field: 'role', value: 'Design lead', employeeId: bot.id, source: 'msg 1', acceptedBy: bo.id }),
+    ])
+    await expect(dir.learning.accept(id, bo.id)).rejects.toBeInstanceOf(ConflictError)
+    await expect(dir.learning.reject(id, bo.id)).rejects.toBeInstanceOf(ConflictError)
+
+    // Someone changed it back; the employee says it again: the same suggestion is pending again.
+    await dir.contacts.update(ana.id, { role: 'Designer' })
+    const again = await dir.learning.learn({ contactId: ana.id, employeeId: bot.id, source: 'msg 2', role: 'Design lead' })
+    expect(again.suggested[0]).toMatchObject({ suggestionId: id, repeated: true })
+    expect((await dir.learning.getSuggestion(id))?.data).toMatchObject({ status: 'pending', times: 2, source: 'msg 2' })
+    expect((await dir.learning.getSuggestion(id))?.data.decidedBy).toBeUndefined()
+    await dir.learning.reject(id, ana.id)
+    expect(await dir.learning.suggestions(ana.id)).toEqual([])
+    expect(await dir.learning.suggestions(ana.id, { status: 'all' })).toHaveLength(1)
+  })
+
+  it('refuses unknown employees and a manager suggestion whose manager is gone', async () => {
+    const bot = await dir.employees.create({ name: 'Learner' })
+    const ana = await dir.contacts.create({ name: 'Ana' })
+    const bo = await dir.contacts.create({ name: 'Bo' })
+    const cy = await dir.contacts.create({ name: 'Cy' })
+    await expect(
+      dir.learning.learn({ contactId: ana.id, employeeId: 'emp_missing', source: 'x', team: 'A' }),
+    ).rejects.toBeInstanceOf(NotFoundError)
+    await dir.learning.learn({ contactId: ana.id, employeeId: bot.id, source: 'x', manager: bo.id })
+    const r = await dir.learning.learn({ contactId: ana.id, employeeId: bot.id, source: 'y', manager: cy.id })
+    await records.delete('contact', cy.id)
+    await expect(dir.learning.accept(r.suggested[0]!.suggestionId, bo.id)).rejects.toThrow(/no longer in the directory/)
+    expect((await dir.contacts.require(ana.id)).data.manager).toBe(bo.id)
+  })
+})

@@ -29,6 +29,9 @@ const procedureView = (p: Procedure): Json => ({
   ...(p.data.ownerId ? { ownerId: p.data.ownerId } : {}),
 })
 
+/** What directory.update_contact takes. Anything else (permissions, email, handles, status, kind, name…) is refused. */
+const UPDATE_CONTACT_ARGS = new Set(['contactId', 'role', 'team', 'manager', 'bio_note', 'source'])
+
 export function registerDirectoryTools(kit: Kit): void {
   const { deps } = kit
   const { directory, records, sessions } = deps
@@ -68,14 +71,24 @@ export function registerDirectoryTools(kit: Kit): void {
     {
       name: 'directory.get_contact',
       description:
-        'A contact: role, team, manager, handles, permissions (what they may ask for), bio and the projects they are on.',
+        'A contact: role, team, manager, handles, permissions (what they may ask for), bio, the projects they are on, which fields an employee learned, and pending suggestions.',
       effect: 'read',
       params: { properties: { id: { type: 'string' } }, required: ['id'] },
     },
     async (a) => {
       const c = await directory.contacts.require(a.id)
       const projects = await directory.projects.forContact(c.id)
-      const { name, kind, handles, email, role, team, manager, permissions, bio, status, ...extra } = c.data
+      const { name, kind, handles, email, role, team, manager, permissions, bio, status, learned: _learned, ...extra } = c.data
+      const learned = directory.learning
+        .facts(c)
+        .filter((f) => f.field !== 'bio')
+        .map((f) => ({
+          field: f.field,
+          employeeId: f.employeeId,
+          at: f.at,
+          ...(f.acceptedBy ? { acceptedBy: f.acceptedBy } : {}),
+        }))
+      const pending = kind === 'person' ? await directory.learning.suggestions(c.id) : []
       return ok({
         id: c.id,
         name,
@@ -88,6 +101,16 @@ export function registerDirectoryTools(kit: Kit): void {
         ...(permissions ? { permissions } : {}),
         ...(bio ? { bio: clip(bio, 1000) } : {}),
         ...(status ? { status } : {}),
+        ...(learned.length ? { learned } : {}),
+        ...(pending.length
+          ? {
+              pendingSuggestions: pending.map((p) => ({
+                field: p.data.field,
+                proposed: p.data.proposed,
+                employeeId: p.data.employeeId,
+              })),
+            }
+          : {}),
         ...(Object.keys(extra).length
           ? {
               extra:
@@ -96,6 +119,63 @@ export function registerDirectoryTools(kit: Kit): void {
           : {}),
         projects: projects.map((m) => ({ id: m.project.id, name: m.project.data.name, roles: m.roles })),
       })
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'directory.update_contact',
+      description: [
+        "Record work-relevant facts about a person when you learn them: role, team, manager (a contact id) or a short bio note. Check directory.get_contact first. Only what the person said, or what's clearly stated at work: never a guess, and never personal or sensitive details (health, family, religion, politics, salary, performance judgments) or gossip.",
+        'An empty field is filled; a field that already has a value is never overwritten: your value becomes a suggestion the person or an admin accepts or rejects. bio_note is appended as a dated line (one short line; a note the bio already says is skipped).',
+        'source says where you learned it (a message, thread or ticket reference, or a one-line quote) and is shown on the contact page to everyone who can see it: never quote a private conversation.',
+        'Only people (not AI employees), and only these fields: permissions, email, handles, status and name are changed by people in the web UI. Expertise, how they like to be reached and who they work with go in memory.remember with scope {type: contact, id}.',
+      ].join(' '),
+      effect: 'idempotent',
+      params: {
+        properties: {
+          contactId: { type: 'string' },
+          role: { type: 'string', description: 'Job title, e.g. "Backend engineer".' },
+          team: { type: 'string' },
+          manager: { type: 'string', description: "The manager's contact id (directory.find_contact)." },
+          bio_note: { type: 'string', description: 'A short, work-relevant note appended to the bio.' },
+          source: {
+            type: 'string',
+            description: 'Where you learned it: a message, thread or ticket reference, or a one-line quote.',
+          },
+        },
+        required: ['contactId', 'source'],
+      },
+    },
+    async (a, ctx) => {
+      const forbidden = Object.keys(a ?? {}).filter((k) => !UPDATE_CONTACT_ARGS.has(k))
+      if (forbidden.length)
+        return fail(
+          `directory.update_contact records only role, team, manager and bio notes, not ${forbidden.join(', ')}. Permissions, email, handles, status, kind and name are changed by people in the web UI: ask an admin.`,
+        )
+      const contactId = str(a.contactId)
+      if (!contactId) return fail('contactId is required')
+      const output = await kit.once('directory.update_contact', ctx, async () => {
+        const r = await directory.learning.learn(
+          {
+            contactId,
+            employeeId: ctx.employeeId,
+            source: a.source,
+            role: a.role,
+            team: a.team,
+            manager: a.manager,
+            bioNote: a.bio_note,
+          },
+          { actor: kit.actor(ctx) },
+        )
+        return {
+          ...(r as unknown as Record<string, Json>),
+          ...(r.suggested.length
+            ? { note: 'Suggested, not changed: the person or an admin accepts or rejects it on the contact page.' }
+            : {}),
+        }
+      })
+      return ok(output)
     },
   )
 
