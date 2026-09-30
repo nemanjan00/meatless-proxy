@@ -21,12 +21,34 @@ const PATTERNS: [string, RegExp][] = [
 
 const ALLOW = [/example/i, /\bxxx+/i, /<[^>]+>/]
 
+/**
+ * Private terms: names, workspace and user ids, message text and the like from a live deployment, which must
+ * never be copied into tests, comments or docs. One per line (# comments), in `.private-terms`, which is
+ * git-ignored and never committed (the list itself is private). Matched case-insensitively.
+ */
+const PRIVATE_TERMS_FILE = '.private-terms'
+const privateTerms = (() => {
+  try {
+    return readFileSync(join(root, PRIVATE_TERMS_FILE), 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#'))
+      .map((l) => l.toLowerCase())
+  } catch {
+    return []
+  }
+})()
+
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8' })
   .split('\n')
   .filter(Boolean)
 
 const problems: string[] = []
 for (const f of files) {
+  if (f === PRIVATE_TERMS_FILE) {
+    problems.push(`${f}: the private terms list must not be committed`)
+    continue
+  }
   if (f.endsWith('package-lock.json') || f.startsWith('scripts/check-secrets')) continue
   const p = join(root, f)
   let text: string
@@ -43,6 +65,9 @@ for (const f of files) {
       const m = re.exec(line)
       if (m && !ALLOW.some((a) => a.test(m[0]))) problems.push(`${f}:${i + 1}: looks like a ${what}`)
     }
+    const lower = line.toLowerCase()
+    for (const term of privateTerms)
+      if (lower.includes(term)) problems.push(`${f}:${i + 1}: contains a private term (${PRIVATE_TERMS_FILE})`)
   })
 }
 

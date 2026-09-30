@@ -48,6 +48,12 @@ docs/                the spec and design documents
 - **No secrets in the repo.** It's public and pushed automatically.
   `npm run check:secrets` scans every tracked file. Use fake values in tests
   and examples (`sk-test`, `ana@example.com`). `.env` is never committed.
+- **No real people or conversations in the repo.** Never copy anything from a
+  live deployment (message text, names, user, channel or workspace ids,
+  project or company names, file names) into tests, comments, docs or commit
+  messages. Describe what happened in general terms and use made-up examples
+  (`Ana`, `Bo`, `U0TEST0001`, `lunch anyone?`). `npm run check:secrets` also
+  fails on any term listed in `.private-terms`, a git-ignored local file.
 
 ## Commands
 

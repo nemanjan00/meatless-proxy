@@ -7,3 +7,6 @@ coverage/
 .DS_Store
 .env.*
 !.env.example
+
+# Private names, ids and text from a live deployment: checked against by check:secrets, never committed.
+.private-terms
