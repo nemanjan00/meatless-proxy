@@ -497,6 +497,36 @@ describe('bootstrap', () => {
   })
 })
 
+describe('bootstrap with a deactivated admin', () => {
+  it('starts anyway: a deactivated ADMIN_EMAIL contact is left alone and an active admin is used', async () => {
+    const store = memoryStore()
+    const env = { ADMIN_EMAIL: 'boss@example.com' }
+    const t1 = await make({ env, overrides: { store } })
+    const s = t1.a.services
+    const boss = (await s.records.query<any>('contact', { where: { access: 'admin' } })).items[0]!
+    const other = await s.directory.contacts.create({
+      name: 'Ana',
+      kind: 'person',
+      access: 'admin',
+      email: 'ana@example.com',
+    } as any)
+    await s.directory.contacts.update(boss.id, { deactivatedAt: '2026-09-30T10:00:00.000Z' } as any)
+    await t1.close()
+    apps.splice(apps.indexOf(t1), 1)
+
+    // This start used to crash: the sign-in link for the deactivated admin threw.
+    const logs: any[] = []
+    const t2 = await make({ env, overrides: { store, logger: memoryLogger(logs) } })
+    expect(logs.some((l) => l.msg.startsWith('bootstrap: the ADMIN_EMAIL contact is deactivated'))).toBe(true)
+    const line = logs.find((l) => l.msg.startsWith('bootstrap: sign in as the admin'))
+    expect(line?.fields.contactId).toBe(other.id)
+    // Nothing changed hands: no new admin, and the email stays where it was.
+    const admins = (await t2.a.services.records.query<any>('contact', { where: { access: 'admin' } })).items
+    expect(admins).toHaveLength(2)
+    expect((await t2.a.services.directory.contacts.require(other.id)).data.email).toBe('ana@example.com')
+  })
+})
+
 describe('ADMIN_EMAIL set after the first start', () => {
   it('gives the first-start admin the email, and makes an existing contact with it an admin', async () => {
     const store = memoryStore()

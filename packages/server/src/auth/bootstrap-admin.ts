@@ -1,7 +1,8 @@
 import type { ContactData } from '@mp/directory'
 import type { StoredRecord } from '@mp/store'
 import type { Services } from '../services.ts'
-import { defineAuthKinds } from './access.ts'
+import { errorMessage } from '@mp/core'
+import { accessOf, defineAuthKinds } from './access.ts'
 import { contactByEmail, createLoginLink, hasSignedIn } from './sessions.ts'
 
 export interface AdminBootstrap {
@@ -34,13 +35,18 @@ export async function ensureAdmin(s: Services): Promise<AdminBootstrap> {
       orderBy: { field: 'createdAt', dir: 'asc' },
       limit: 1000,
     })
-  ).items.filter((c) => c.data.status !== 'left') as StoredRecord<ContactData>[]
+  ).items.filter((c) => accessOf(c as StoredRecord<ContactData>) === 'admin') as StoredRecord<ContactData>[] // not deactivated or left
 
   let admin: StoredRecord<ContactData> | undefined
   let created = false
   if (email) {
     const byEmail = await contactByEmail(s, email)
-    if (byEmail && byEmail.data.status !== 'left') {
+    if (byEmail?.data.deactivatedAt) {
+      // An admin deactivated the ADMIN_EMAIL contact: respect it, change nothing, and use an active admin.
+      admin = admins[0]
+      s.logger.warn('bootstrap: the ADMIN_EMAIL contact is deactivated; not signing it in', { contactId: byEmail.id })
+      if (!admin) return { adminId: byEmail.id, created }
+    } else if (byEmail && byEmail.data.status !== 'left') {
       admin = byEmail
       if (byEmail.data.access !== 'admin') {
         admin = (await s.directory.contacts.update(byEmail.id, { access: 'admin' }, { actor })) as StoredRecord<ContactData>
@@ -75,7 +81,14 @@ export async function ensureAdmin(s: Services): Promise<AdminBootstrap> {
   // With ADMIN_EMAIL, the link is for that person; without, for the first admin, until any admin has signed in.
   const candidates = email ? [admin] : admins.length ? admins : [admin]
   for (const a of candidates) if (await hasSignedIn(s, a.id)) return { adminId: admin.id, created }
-  const link = await createLoginLink(s, admin.id, { createdBy: 'bootstrap' })
+  // A sign-in link that can't be made (the contact was deactivated meanwhile) must never stop the harness from starting.
+  let link: Awaited<ReturnType<typeof createLoginLink>>
+  try {
+    link = await createLoginLink(s, admin.id, { createdBy: 'bootstrap' })
+  } catch (err) {
+    s.logger.warn('bootstrap: could not make an admin sign-in link', { contactId: admin.id, err: errorMessage(err) })
+    return { adminId: admin.id, created }
+  }
   s.logger.info('bootstrap: sign in as the admin with this one-time link (valid 15 minutes)', {
     url: link.url,
     contactId: admin.id,
