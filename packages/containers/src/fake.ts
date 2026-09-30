@@ -12,6 +12,7 @@ import {
   type ExecOptions,
   type ExecResult,
   type FileEntry,
+  type ImageInfo,
   type PreviewTarget,
   type Process,
   type RuntimeFeatures,
@@ -168,6 +169,18 @@ export interface FakeRuntime extends ContainerRuntime {
   setScreenshot(envId: string, png: Uint8Array | Error): void
   /** Overrides metrics of one container (`main`, a service, `desktop`) in the next `stats` samples. */
   setStats(envId: string, name: string, stats: Partial<Omit<ContainerStats, 'name' | 'role'>>): void
+  inspectImage(ref: string): Promise<ImageInfo | null>
+  /** Sets what `inspectImage` reports for an image (by reference or ID), or `null` for no such image. */
+  setImage(ref: string, info: Partial<Omit<ImageInfo, 'ref'>> | null): void
+  /** How many times `inspectImage` was called. */
+  readonly imageInspections: number
+}
+
+/** The fake's made-up, stable image ID for a reference. */
+export function fakeImageId(ref: string): string {
+  let h = 0x811c9dc5
+  for (const ch of ref) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0
+  return `sha256:${h.toString(16).padStart(8, '0').repeat(8)}`
 }
 
 /** A valid 1x1 PNG, what a fake desktop's screenshot shows. */
@@ -192,6 +205,8 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
   const spawns: FakeSpawnCall[] = []
   const screenshots = new Map<string, Uint8Array | Error>()
   const statOverrides = new Map<string, Partial<ContainerStats>>()
+  const images = new Map<string, Partial<Omit<ImageInfo, 'ref'>> | null>()
+  let imageInspections = 0
   let live_ = 0
   let lastMtime = 0
   /** Distinct, increasing modification times, even when the clock stands still. */
@@ -205,7 +220,12 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
     if (!env) throw new NotFoundError('environment', envId)
     return env
   }
-  const copy = (info: EnvInfo): EnvInfo => ({ ...info, labels: { ...info.labels } })
+  const copy = (info: EnvInfo): EnvInfo => ({
+    ...info,
+    labels: { ...info.labels },
+    ...(info.built ? { built: { ...info.built } } : {}),
+    ...(info.limits ? { limits: { ...info.limits } } : {}),
+  })
 
   const runtime: FakeRuntime = {
     calls,
@@ -245,6 +265,19 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
         createdAt: clock.iso(),
         ...(spec.desktop ? { desktop: true } : {}),
       }
+      // Like Docker: a built image is tagged `build/<name>:latest`, and the container knows its image.
+      const image = spec.image ?? `build/${spec.name}:latest`.toLowerCase()
+      info.image = image
+      info.imageId = images.get(image)?.id ?? fakeImageId(image)
+      if (spec.build) info.built = {}
+      info.startedAt = info.createdAt
+      const l = spec.limits
+      if (l && (l.cpus || l.memoryMb || l.pids))
+        info.limits = {
+          ...(l.cpus ? { cpus: l.cpus } : {}),
+          ...(l.memoryMb ? { memoryBytes: l.memoryMb * 1024 * 1024 } : {}),
+          ...(l.pids ? { pids: l.pids } : {}),
+        }
       const files = new Map<string, FakeFile>()
       for (const p of ['/', ...(spec.volumes ?? []), ...Object.keys(spec.tmpfs ?? {})]) mkdirs(files, p, 0)
       envs.set(info.id, { info, spec: structuredClone(spec), logs: [], egress: [], files })
@@ -478,6 +511,39 @@ export function fakeRuntime(opts: FakeRuntimeOptions = {}): FakeRuntime {
           ...statOverrides.get(`${envId}:${name}`),
         })),
       }
+    },
+
+    get imageInspections() {
+      return imageInspections
+    },
+
+    async inspectImage(ref) {
+      imageInspections++
+      // Images of live environments exist; any other reference only when set. By reference or ID.
+      const used = [...envs.values()].find((e) => e.info.image === ref || e.info.imageId === ref)
+      const name = used?.info.image ?? ref
+      const set = images.has(ref)
+        ? images.get(ref)
+        : images.has(name)
+          ? images.get(name)
+          : [...images.entries()].find(([k, v]) => v?.id === ref || fakeImageId(k) === ref)?.[1]
+      if (set === null) return null
+      if (!set && !used) return null
+      return {
+        ref,
+        id: set?.id ?? used?.info.imageId ?? fakeImageId(ref),
+        repoDigests: set?.repoDigests ?? (used?.info.built ? [] : [`${name.split(':')[0]}@${fakeImageId(name)}`]),
+        repoTags: set?.repoTags ?? [name],
+        sizeBytes: set?.sizeBytes ?? 512 * 1024 * 1024,
+        createdAt: set?.createdAt ?? '2026-09-01T00:00:00.000Z',
+        os: set?.os ?? 'linux',
+        architecture: set?.architecture ?? 'amd64',
+        labels: { ...set?.labels },
+      }
+    },
+
+    setImage(ref, info) {
+      images.set(ref, info === null ? null : { ...images.get(ref), ...info })
     },
 
     setStats(envId, name, stats) {

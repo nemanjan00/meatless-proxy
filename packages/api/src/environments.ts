@@ -50,6 +50,35 @@ export interface EnvironmentNetwork {
   reason?: string
 }
 
+/** The image an environment runs, as the container runtime reports it (image inspect, cached briefly). */
+export interface EnvironmentImage {
+  /** The reference the container was created from, e.g. `nemanjan00/dev:scraper` or `mp-build/<name>:latest`. */
+  ref: string
+  /** The image ID, short: `sha256:` and 12 hex digits. Null when the runtime didn't tell. */
+  id: string | null
+  /** A registry digest (`name@sha256:…`), for pulled images. */
+  digest: string | null
+  sizeBytes: number | null
+  /** When the image was built. */
+  createdAt: string | null
+  /** `linux/amd64`, `linux/arm64/v8`. */
+  platform: string | null
+  /** `org.opencontainers.image.*` labels, when the image has them. */
+  source?: string
+  description?: string
+  version?: string
+  revision?: string
+  /** What it's built on: a built image's Dockerfile FROM, or the image's base-name label. */
+  base?: string
+}
+
+/** Resource limits of the main container. Null values: no limit. */
+export interface EnvironmentLimits {
+  cpus: number | null
+  memoryBytes: number | null
+  pids: number | null
+}
+
 /** A running (or stopped, not yet removed) environment, joined with its session. */
 export interface Environment {
   envId: string
@@ -61,10 +90,27 @@ export interface Environment {
   employee: EmployeeSummary | null
   /** Who the session's work is for. */
   requester?: { id: string; name: string }
-  /** The profile it runs, when env.up picked one by name. */
+  /** The profile it runs: what env.up picked, or the profile whose image it runs. */
   profile?: string
-  /** The image it runs (or `build` when it was built from the checkout's Dockerfile). */
+  /** The profile's one line: what it's for and its main tools. */
+  profileDescription?: string
+  /** The image reference it runs, from the container runtime (a built one is `mp-build/<name>:latest`). */
   image?: string
+  /** More about the image, when the runtime can inspect it. */
+  imageInfo: EnvironmentImage | null
+  /** Set when the image was built from a Dockerfile: "built from payments-api's Dockerfile". */
+  build?: string
+  /** The main container's limits, when the runtime tells. */
+  limits: EnvironmentLimits | null
+  /** When the main container started (for its uptime), when the runtime tells. */
+  startedAt: string | null
+  /**
+   * When it last did something: the end of its last `env.exec` this server saw, else its session's
+   * last run, else when it started. Idle time counts from here.
+   */
+  lastActiveAt: string
+  /** Busy now: an `env.exec` in progress, or its session has a run queued, running or suspended. */
+  busy: boolean
   /** Checkouts: `/workspace` and `/repos/<name>`, with their repository keys. */
   checkouts: { key: string; path: string }[]
   network: EnvironmentNetwork | null
@@ -89,6 +135,22 @@ export interface EnvironmentQuery {
   desktop?: boolean
 }
 
+/** `POST /api/environments/stop-idle`: which environments count as idle. */
+export interface StopIdleRequest {
+  /** Idle at least this long (default 60, at least 5). */
+  idleMinutes?: number
+  /** Only list what would be stopped. */
+  dryRun?: boolean
+}
+
+export interface StopIdleResult {
+  /** Stopped (or, with `dryRun`, would be). */
+  stopped: string[]
+  /** Idle ones that could not be stopped, with why. */
+  failed: { envId: string; error: string }[]
+  dryRun: boolean
+}
+
 /** One container's processes, from `docker top` (the host's `ps`). */
 export interface EnvContainerProcesses {
   name: string
@@ -108,6 +170,7 @@ export interface DesktopToken extends PreviewToken {
 export const ENVIRONMENT_ROUTES = {
   environments: ['GET', '/api/environments'],
   stopEnvironment: ['POST', '/api/environments/:id/stop'],
+  stopIdleEnvironments: ['POST', '/api/environments/stop-idle'],
   environmentLogs: ['GET', '/api/environments/:id/logs'],
   environmentProcesses: ['GET', '/api/environments/:id/processes'],
   desktopToken: ['POST', '/api/environments/:id/desktop'],
@@ -122,6 +185,11 @@ export interface EnvironmentsApi {
    * history who stopped it. Admins, and the session's requester.
    */
   stopEnvironment(envId: string): Promise<{ stopped: true; envId: string; sessionId: string | null }>
+  /**
+   * `POST /api/environments/stop-idle` body `{ idleMinutes?, dryRun? }` → stops every running environment
+   * that isn't busy and has been idle that long, each like Stop (its session gets the note). Admins only.
+   */
+  stopIdleEnvironments(req?: StopIdleRequest): Promise<StopIdleResult>
   /** `GET /api/environments/:id/logs?tail=` → the main container's latest log lines. */
   environmentLogs(envId: string, tail?: number): Promise<{ envId: string; logs: string }>
   /** `GET /api/environments/:id/processes` → what runs in each of its containers (members). */
@@ -146,6 +214,7 @@ export function environmentsMethods(call: Call): EnvironmentsApi {
   return {
     environments: (q = {}) => call('environments', undefined, { ...q }),
     stopEnvironment: (id) => call('stopEnvironment', { id }, undefined, {}),
+    stopIdleEnvironments: (req = {}) => call('stopIdleEnvironments', undefined, undefined, req),
     environmentLogs: (id, tail) => call('environmentLogs', { id }, { tail }),
     environmentProcesses: (id) => call('environmentProcesses', { id }),
     desktopToken: (id, o = {}) => call('desktopToken', { id }, undefined, o),

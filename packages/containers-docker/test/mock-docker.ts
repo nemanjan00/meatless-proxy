@@ -67,6 +67,13 @@ export class MockDocker implements DockerLike {
   failures: Record<string, Error> = {}
   pullOutput: any[] = [{ status: 'Pulling' }, { status: 'Done' }]
   apiVersion = '1.47'
+  /** Labels of images, as `image.inspect` reports them. */
+  imageLabels = new Map<string, Record<string, string>>()
+
+  /** A made-up, stable image ID for a reference. */
+  imageIdOf(ref: string | undefined): string | undefined {
+    return ref ? `sha256:${Buffer.from(ref).toString('hex').padEnd(64, '0').slice(0, 64)}` : undefined
+  }
   private seq = 0
 
   modem = {
@@ -196,8 +203,10 @@ export class MockDocker implements DockerLike {
           Id: c.id,
           Name: `/${c.name}`,
           Created: c.created,
-          State: { Running: c.running },
-          Config: { Labels: c.opts.Labels ?? {} },
+          Image: self.imageIdOf(c.opts.Image),
+          State: { Running: c.running, StartedAt: c.running ? c.created : '0001-01-01T00:00:00Z' },
+          Config: { Labels: c.opts.Labels ?? {}, Image: c.opts.Image },
+          HostConfig: c.opts.HostConfig ?? {},
           NetworkSettings: { Networks: self.networksOf(c) },
         }
       },
@@ -324,6 +333,8 @@ export class MockDocker implements DockerLike {
         Created: Date.parse(c.created) / 1000,
         State: c.running ? 'running' : 'exited',
         Labels: c.opts.Labels ?? {},
+        Image: c.opts.Image,
+        ImageID: this.imageIdOf(c.opts.Image),
       }))
   }
 
@@ -336,8 +347,19 @@ export class MockDocker implements DockerLike {
     return {
       inspect: async () => {
         this.record('image.inspect', name)
-        if (!this.images.has(name)) throw new HttpError(404, 'no such image')
-        return {}
+        const ref = [...this.images].find((i) => i === name || this.imageIdOf(i) === name)
+        if (!ref) throw new HttpError(404, 'no such image')
+        return {
+          Id: this.imageIdOf(ref),
+          RepoTags: [ref],
+          RepoDigests: ref.includes('build/') ? [] : [`${ref.split(':')[0]}@sha256:${'ab'.repeat(32)}`],
+          Size: 123_456_789,
+          Created: '2026-09-01T10:00:00.000000000Z',
+          Os: 'linux',
+          Architecture: 'arm',
+          Variant: 'v8',
+          Config: { Labels: this.imageLabels.get(ref) ?? null },
+        }
       },
     }
   }

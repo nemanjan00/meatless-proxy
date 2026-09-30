@@ -1,8 +1,18 @@
 import type * as Api from '@mp/api'
-import { DESKTOP_PORTS, type EnvInfo, type EnvStats } from '@mp/containers'
-import { ConflictError, DeniedError, NotFoundError, UnavailableError, errorMessage, isMpError, type Json } from '@mp/core'
+import { DESKTOP_PORTS, type EnvInfo, type EnvStats, type ImageInfo } from '@mp/containers'
+import {
+  ConflictError,
+  DeniedError,
+  NotFoundError,
+  UnavailableError,
+  ValidationError,
+  errorMessage,
+  isMpError,
+  type Json,
+} from '@mp/core'
 import { LABEL_SANDBOX } from '@mp/sandbox'
-import type { Session } from '@mp/sessions'
+import type { Run, Session } from '@mp/sessions'
+import { DEFAULT_ENV_PROFILES, type EnvProfile } from '@mp/stdlib'
 import type { Actor } from '@mp/store'
 import { Hono } from 'hono'
 import { type Principal, principalOf, viewerOf } from '../auth/guard.ts'
@@ -14,6 +24,13 @@ export { mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
 
 /** How often metrics are sampled while someone watches. */
 export const STATS_INTERVAL_MS = 5000
+/** How long an image inspection is reused: images don't change often. */
+export const IMAGE_CACHE_MS = 5 * 60_000
+/** `POST /api/environments/stop-idle`: the default idle time, and the least one may ask for. */
+export const STOP_IDLE_DEFAULT_MINUTES = 60
+export const STOP_IDLE_MIN_MINUTES = 5
+/** Run states in which a session may still use its environment. */
+const BUSY_RUN_STATES = new Set(['queued', 'running', 'suspended', 'paused'])
 
 /** What the monitor needs from the live hub: which channels someone is subscribed to. */
 export interface ChannelWatch {
@@ -29,6 +46,8 @@ export interface ChannelWatch {
 export class EnvironmentMonitor {
   private execs = new Map<string, Api.EnvironmentExec & { callId?: string }>()
   private latest = new Map<string, EnvStats>()
+  /** When each environment last started or finished an `env.exec` (this process only). */
+  private lastExec = new Map<string, string>()
   /** Environment id → its session, as of the last round (null: not watching). */
   private known: Map<string, string | undefined> | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -47,6 +66,7 @@ export class EnvironmentMonitor {
         (m) => {
           const p = m.payload
           if (typeof p.envId !== 'string' || !Array.isArray(p.cmd)) return
+          this.lastExec.set(p.envId, new Date(m.at).toISOString())
           this.execs.set(p.envId, {
             cmd: p.cmd.map(String),
             startedAt: p.startedAt ?? new Date(m.at).toISOString(),
@@ -56,6 +76,7 @@ export class EnvironmentMonitor {
         },
       ),
       bus.subscribe<{ envId?: string; callId?: string }>('env.exec.finished', (m) => {
+        if (typeof m.payload.envId === 'string') this.lastExec.set(m.payload.envId, new Date(m.at).toISOString())
         const cur = typeof m.payload.envId === 'string' ? this.execs.get(m.payload.envId) : undefined
         // A later command in the same environment may have started meanwhile.
         if (cur && (!m.payload.callId || cur.callId === m.payload.callId)) this.execs.delete(m.payload.envId!)
@@ -79,9 +100,15 @@ export class EnvironmentMonitor {
     return this.latest.get(envId) ?? null
   }
 
+  /** When the environment last started or finished an `env.exec`, as far as this process saw. */
+  lastExecOf(envId: string): string | null {
+    return this.lastExec.get(envId) ?? null
+  }
+
   forget(envId: string) {
     this.execs.delete(envId)
     this.latest.delete(envId)
+    this.lastExec.delete(envId)
   }
 
   start() {
@@ -158,6 +185,9 @@ export class EnvironmentMonitor {
 
 /** Environments as the Environments page shows them. */
 export class EnvironmentViews {
+  /** Image inspections by image ID (or reference), reused for `IMAGE_CACHE_MS`. */
+  private images = new Map<string, { at: number; info: Promise<ImageInfo | null> }>()
+
   constructor(
     private s: Services,
     private visibility: ChatVisibility,
@@ -168,17 +198,21 @@ export class EnvironmentViews {
   async list(p: Principal, q: Api.EnvironmentQuery = {}): Promise<Api.Environment[]> {
     const rt = this.s.containers
     if (!rt) return []
+    // Main containers only: service containers belong to their environment, and code.run's sandbox isn't one.
     const infos = (await rt.listEnvs()).filter((e) => !e.labels[LABEL_SANDBOX])
-    const out: Api.Environment[] = []
-    for (const info of infos) {
-      const view = await this.view(p, info)
-      if (!view) continue
-      if (q.employeeId && view.employee?.id !== q.employeeId) continue
-      if (q.sessionId && view.session?.id !== q.sessionId) continue
-      if (q.desktop && !view.desktop) continue
-      out.push(view)
-    }
-    return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const views = await Promise.all(
+      infos.map(async (info) => {
+        // The list is a summary; one inspect gives the image ID, start time and limits.
+        const full = await rt.getEnv(info.id).catch(() => null)
+        return this.view(p, full ? { ...info, ...full } : info)
+      }),
+    )
+    return views
+      .filter((view): view is Api.Environment => !!view)
+      .filter((view) => !q.employeeId || view.employee?.id === q.employeeId)
+      .filter((view) => !q.sessionId || view.session?.id === q.sessionId)
+      .filter((view) => !q.desktop || view.desktop)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
 
   /** The environment and its session, when the viewer may see it; else null. */
@@ -197,6 +231,30 @@ export class EnvironmentViews {
     const hit = await this.find(p, envId)
     if (!hit) throw new NotFoundError('environment', envId)
     return hit
+  }
+
+  /** The configured profile catalog. */
+  private profiles(): readonly EnvProfile[] {
+    const configured = this.s.config.ENV_PROFILES
+    return configured?.length ? configured : DEFAULT_ENV_PROFILES
+  }
+
+  /** What the runtime says about an image, cached briefly. Null when it can't tell. */
+  private inspectImage(key: string): Promise<ImageInfo | null> {
+    const rt = this.s.containers
+    if (!rt?.inspectImage) return Promise.resolve(null)
+    const now = this.s.clock.now()
+    const hit = this.images.get(key)
+    if (hit && now - hit.at < IMAGE_CACHE_MS) return hit.info
+    if (this.images.size > 500) this.images.clear()
+    const info = rt.inspectImage(key).catch((err) => {
+      // Not cached: the next look tries again.
+      this.images.delete(key)
+      this.s.logger.debug('image inspect failed', { image: key, err: errorMessage(err) })
+      return null
+    })
+    this.images.set(key, { at: now, info })
+    return info
   }
 
   /** The session that runs this environment now (its meta points at it), or null when none does. */
@@ -229,6 +287,11 @@ export class EnvironmentViews {
             ...(typeof net.reason === 'string' ? { reason: net.reason } : {}),
           }
         : null
+    const image = imageOf(info, meta?.image)
+    const imageInfo = await this.imageView(info, image)
+    const profile = profileOf(this.profiles(), meta?.profile, image)
+    const exec = this.monitor.execOf(info.id)
+    const lastRun = runs.at(-1)
     return {
       envId: info.id,
       name: info.name,
@@ -240,23 +303,121 @@ export class EnvironmentViews {
             title: session.data.title,
             slug: session.data.slug,
             status: session.data.status,
-            runState: runs.at(-1)?.data.state ?? null,
+            runState: lastRun?.data.state ?? null,
           }
         : null,
       employee: employee ? { id: employee.id, name: employee.data.name } : null,
       ...(requester ? { requester: { id: requester.id, name: requester.data.name } } : {}),
-      ...(meta?.profile ? { profile: meta.profile } : {}),
-      ...(meta?.image ? { image: meta.image } : {}),
+      ...(profile ? { profile: profile.name, ...(profile.description ? { profileDescription: profile.description } : {}) } : {}),
+      ...(image ? { image } : {}),
+      imageInfo,
+      ...(info.built || meta?.image === 'build' ? { build: buildLabel(meta?.checkouts) } : {}),
+      limits: info.limits
+        ? { cpus: info.limits.cpus ?? null, memoryBytes: info.limits.memoryBytes ?? null, pids: info.limits.pids ?? null }
+        : null,
+      startedAt: info.startedAt ?? null,
+      lastActiveAt: latest([this.monitor.lastExecOf(info.id), runActivity(lastRun), info.startedAt ?? info.createdAt]),
+      busy: !!exec || (!!lastRun && BUSY_RUN_STATES.has(lastRun.data.state)),
       checkouts: Array.isArray(meta?.checkouts) ? meta.checkouts.map((c) => ({ key: String(c.key), path: String(c.path) })) : [],
       network,
       ports: Array.isArray(meta?.expose) ? meta.expose.filter((x) => Number.isInteger(x)) : [],
       desktop: info.desktop === true,
-      exec: this.monitor.execOf(info.id),
+      exec,
       stats: this.monitor.statsOf(info.id) as Api.EnvironmentStats | null,
       canStop: control,
       canControl: control && info.desktop === true,
     }
   }
+
+  /** The image as the page shows it, from a (cached) inspection. */
+  private async imageView(info: EnvInfo, ref: string | undefined): Promise<Api.EnvironmentImage | null> {
+    const key = info.imageId ?? ref
+    if (!key || !ref) return null
+    const img = await this.inspectImage(key)
+    const labels = img?.labels ?? {}
+    const oci = (k: string) => labels[`org.opencontainers.image.${k}`] || undefined
+    const base = info.built?.base ?? oci('base.name')
+    const source = oci('source') ?? oci('url')
+    const description = oci('description')
+    const version = oci('version')
+    const revision = oci('revision')
+    const platform = img?.os ? [img.os, img.architecture].filter(Boolean).join('/') : null
+    return {
+      ref,
+      id: shortId(img?.id ?? info.imageId ?? null),
+      digest: img?.repoDigests[0] ?? null,
+      sizeBytes: img?.sizeBytes ?? null,
+      createdAt: img?.createdAt ?? null,
+      platform,
+      ...(source ? { source } : {}),
+      ...(description ? { description } : {}),
+      ...(version ? { version } : {}),
+      ...(revision ? { revision } : {}),
+      ...(base ? { base } : {}),
+    }
+  }
+}
+
+/** The image an environment runs: what the runtime reports, else what its session recorded. */
+function imageOf(info: EnvInfo, recorded: string | undefined): string | undefined {
+  if (info.image) return info.image
+  return recorded && recorded !== 'build' ? recorded : undefined
+}
+
+/** `sha256:` and the first 12 hex digits of an image ID. */
+export function shortId(id: string | null): string | null {
+  if (!id) return null
+  const m = /^(sha256:)?([0-9a-f]{12})/.exec(id)
+  return m ? `sha256:${m[2]}` : id
+}
+
+/** Reference forms Docker treats as the same image: `docker.io/library/node:latest` is `node`. */
+function normalRef(ref: string): string {
+  let r = ref
+    .replace(/^docker\.io\//, '')
+    .replace(/^index\.docker\.io\//, '')
+    .replace(/^library\//, '')
+  if (!/:[^/]+$/.test(r) && !r.includes('@')) r = `${r}:latest`
+  return r
+}
+
+/** The profile an environment came from: the recorded one, else the profile whose image it runs. */
+export function profileOf(
+  profiles: readonly EnvProfile[],
+  recorded: string | undefined,
+  image: string | undefined,
+): { name: string; description?: string } | null {
+  if (recorded) {
+    const p = profiles.find((x) => x.name === recorded)
+    return p ? { name: p.name, description: p.description } : { name: recorded }
+  }
+  if (!image) return null
+  const p = profiles.find((x) => normalRef(x.image) === normalRef(image))
+  return p ? { name: p.name, description: p.description } : null
+}
+
+/** "built from payments-api's Dockerfile", from the checkout at /workspace when the session recorded it. */
+export function buildLabel(checkouts: { key: string; path: string }[] | undefined): string {
+  const repo = Array.isArray(checkouts) ? (checkouts.find((c) => c.path === '/workspace') ?? checkouts[0])?.key : undefined
+  return repo ? `built from ${repo}'s Dockerfile` : "built from a checkout's Dockerfile"
+}
+
+/** When a run last did something. */
+function runActivity(run: Run | undefined): string | null {
+  if (!run) return null
+  return run.data.endedAt ?? run.updatedAt ?? run.data.startedAt ?? run.createdAt
+}
+
+/** The latest of some ISO times. */
+function latest(times: (string | null | undefined)[]): string {
+  return times
+    .filter((t): t is string => typeof t === 'string' && !Number.isNaN(Date.parse(t)))
+    .reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a))
+}
+
+/** Whether an environment counts as idle for Stop idle: running, not busy, and quiet for `idleMs`. */
+export function isIdle(e: Api.Environment, now: number, idleMs: number): boolean {
+  return e.status === 'running' && !e.busy && now - Date.parse(e.lastActiveAt) >= idleMs
 }
 
 /** The note a session gets when someone stops its environment. */
@@ -318,7 +479,8 @@ async function noteInSession(s: Services, sessionId: string, text: string, key: 
 
 /**
  * The Environments page's API (docs/spec.md "Environments"): `GET /api/environments`,
- * `POST /api/environments/:id/stop`, `GET /api/environments/:id/logs` and `…/processes`.
+ * `POST /api/environments/:id/stop`, `POST /api/environments/stop-idle` (admins),
+ * `GET /api/environments/:id/logs` and `…/processes`.
  * The desktop token is in src/previews (it belongs to the preview origin).
  */
 export function environmentRoutes(s: Services, views: EnvironmentViews): Hono {
@@ -341,6 +503,39 @@ export function environmentRoutes(s: Services, views: EnvironmentViews): Hono {
       throw new DeniedError("only admins and the person the session's work is for can stop its environment")
     await stopEnvironment(s, p, hit)
     return c.json({ stopped: true, envId: hit.info.id, sessionId: hit.session?.id ?? null })
+  })
+
+  app.post('/api/environments/stop-idle', async (c) => {
+    const p = principalOf(c)
+    if (p.access !== 'admin') throw new DeniedError('only admins can stop idle environments')
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Api.StopIdleRequest
+    const minutes = body.idleMinutes ?? STOP_IDLE_DEFAULT_MINUTES
+    if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < STOP_IDLE_MIN_MINUTES)
+      throw new ValidationError(`idleMinutes must be a number, at least ${STOP_IDLE_MIN_MINUTES}`)
+    const dryRun = body.dryRun === true
+    const now = s.clock.now()
+    const idle = (await views.list(p)).filter((e) => isIdle(e, now, minutes * 60_000))
+    const out: Api.StopIdleResult = { stopped: [], failed: [], dryRun }
+    for (const e of idle) {
+      if (dryRun) {
+        out.stopped.push(e.envId)
+        continue
+      }
+      try {
+        const hit = await views.find(p, e.envId)
+        if (hit) await stopEnvironment(s, p, hit)
+        out.stopped.push(e.envId)
+      } catch (err) {
+        out.failed.push({ envId: e.envId, error: errorMessage(err) })
+      }
+    }
+    if (!dryRun && idle.length)
+      s.logger.info('idle environments stopped from the UI', {
+        by: p.contactId,
+        stopped: out.stopped.length,
+        idleMinutes: minutes,
+      })
+    return c.json(out)
   })
 
   app.get('/api/environments/:id/logs', async (c) => {

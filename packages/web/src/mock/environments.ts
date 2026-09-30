@@ -32,7 +32,14 @@ interface MockEnv {
   sessionId: string
   createdAt: number
   profile?: string
+  profileDescription?: string
   image?: string
+  imageInfo: Environment['imageInfo']
+  build?: string
+  limits: Environment['limits']
+  /** Minutes since it last did something (an env.exec or a run). */
+  idleMin: number
+  busy: boolean
   checkouts: Environment['checkouts']
   network: Environment['network']
   ports: number[]
@@ -65,6 +72,11 @@ function seed(db: MockDb): { envs: MockEnv[]; tick: number } {
       createdAt: now - 42 * min,
       profile: 'default',
       image: 'nemanjan00/dev:default',
+      profileDescription: 'general work: git, Node.js, Python, the usual CLI tools',
+      imageInfo: devImage('default', 1.9 * GIB),
+      limits: { cpus: 4, memoryBytes: 4 * GIB, pids: 4096 },
+      idleMin: 0,
+      busy: true,
       checkouts: [
         { key: 'payments-api', path: '/workspace' },
         { key: 'payments-api', path: '/repos/payments-api' },
@@ -102,6 +114,12 @@ function seed(db: MockDb): { envs: MockEnv[]; tick: number } {
       createdAt: now - 3 * 3600_000 - 12 * min,
       profile: 'scraper',
       image: 'nemanjan00/dev:scraper',
+      profileDescription:
+        'web scraping: cloakbrowser (a stealth Chromium) is installed; Playwright/Puppeteer need their browser installed first',
+      imageInfo: devImage('scraper', 3.4 * GIB),
+      limits: { cpus: 2, memoryBytes: 2 * GIB, pids: 4096 },
+      idleMin: 4,
+      busy: false,
       checkouts: [{ key: 'payments-api', path: '/workspace' }],
       network: { via: 'proxy', allow: ['staging.payments.example.com'] },
       ports: [],
@@ -125,6 +143,12 @@ function seed(db: MockDb): { envs: MockEnv[]; tick: number } {
       createdAt: now - 26 * min,
       profile: 'analyst',
       image: 'nemanjan00/dev:analyst',
+      profileDescription:
+        'data and infra: psql, mariadb, sqlite, duckdb, mongosh, valkey-cli, aws-cli, rclone, httpie, yq, ffmpeg',
+      imageInfo: devImage('analyst', 2.6 * GIB),
+      limits: null,
+      idleMin: 0,
+      busy: true,
       checkouts: [],
       network: { via: 'direct' },
       ports: [],
@@ -138,10 +162,58 @@ function seed(db: MockDb): { envs: MockEnv[]; tick: number } {
       net: { rx: 1.4 * MIB, tx: 0.2 * MIB },
       stats: null,
     },
+    {
+      // Left running by a session that finished yesterday: built from the checkout's Dockerfile.
+      envId: 'mp-billing-bot-pay-131-rounding',
+      name: 'billing-bot-pay-131-rounding',
+      sessionId: SES.pay131,
+      createdAt: now - 26 * 3600_000,
+      image: 'mp-build/billing-bot-pay-131-rounding:latest',
+      imageInfo: {
+        ref: 'mp-build/billing-bot-pay-131-rounding:latest',
+        id: 'sha256:4f9c2a7d31e0',
+        digest: null,
+        sizeBytes: 612 * MIB,
+        createdAt: new Date(now - 26 * 3600_000 - 3 * min).toISOString(),
+        platform: 'linux/amd64',
+        base: 'node:22-bookworm-slim',
+      },
+      build: "built from payments-api's Dockerfile",
+      limits: { cpus: null, memoryBytes: null, pids: 4096 },
+      idleMin: 23 * 60 + 12,
+      busy: false,
+      checkouts: [{ key: 'payments-api', path: '/workspace' }],
+      network: { via: 'proxy', allow: ['registry.npmjs.org'] },
+      ports: [],
+      desktop: false,
+      services: [],
+      exec: null,
+      canStop: true,
+      canControl: true,
+      load: { main: { cpu: 0.1, mem: 38 * MIB, limit: null, pids: 2 } },
+      logs: ['> vitest run invoices/rounding', ' ✓ 41 tests passed'],
+      net: { rx: 22 * MIB, tx: 0.4 * MIB },
+      stats: null,
+    },
   ]
   const s = { envs, tick: 0 }
   for (const e of envs) e.stats = sample(db, e, 0)
   return s
+}
+
+/** A nemanjan00/dev profile image as the runtime would describe it. */
+function devImage(profile: string, size: number): Environment['imageInfo'] {
+  return {
+    ref: `nemanjan00/dev:${profile}`,
+    id: 'sha256:9e1b7c0f5a2d',
+    digest: `nemanjan00/dev@sha256:${'9e1b7c0f5a2d'.repeat(5)}3c4d`,
+    sizeBytes: Math.round(size),
+    createdAt: '2026-09-21T04:12:00.000Z',
+    platform: 'linux/amd64',
+    source: 'https://github.com/nemanjan00/dev-environment',
+    description: `Arch Linux development environment, ${profile} profile`,
+    base: 'archlinux:latest',
+  }
 }
 
 const stateOf = (db: MockDb) => {
@@ -260,7 +332,14 @@ export function createMockEnvironmentsApi(h: MockEnvironmentsHelpers): Environme
       employee: emp ? { id: emp.id, name: emp.data.name } : s ? { id: s.data.employeeId, name: s.data.employeeId } : null,
       ...(requester ? { requester: { id: requesterId, name: requester.data.name } } : {}),
       ...(e.profile ? { profile: e.profile } : {}),
+      ...(e.profileDescription ? { profileDescription: e.profileDescription } : {}),
       ...(e.image ? { image: e.image } : {}),
+      imageInfo: e.imageInfo,
+      ...(e.build ? { build: e.build } : {}),
+      limits: e.limits,
+      startedAt: new Date(e.createdAt).toISOString(),
+      lastActiveAt: new Date(db.now() - e.idleMin * 60_000).toISOString(),
+      busy: e.busy || !!e.exec,
       checkouts: e.checkouts,
       network: e.network,
       ports: e.ports,
@@ -293,6 +372,17 @@ export function createMockEnvironmentsApi(h: MockEnvironmentsHelpers): Environme
       s.envs = s.envs.filter((x) => x !== e)
       h.emit?.('env.changed', { sessionId: e.sessionId, envId: e.envId, op: 'down' })
       return delay({ stopped: true as const, envId: e.envId, sessionId: e.sessionId })
+    },
+    stopIdleEnvironments: (req = {}) => {
+      const minutes = req.idleMinutes ?? 60
+      if (minutes < 5) return Promise.reject(new ApiRequestError(422, 'validation', 'idleMinutes must be at least 5'))
+      const s = stateOf(db)
+      const idle = s.envs.filter((e) => !e.busy && !e.exec && e.idleMin >= minutes)
+      if (!req.dryRun) {
+        s.envs = s.envs.filter((e) => !idle.includes(e))
+        for (const e of idle) h.emit?.('env.changed', { sessionId: e.sessionId, envId: e.envId, op: 'down' })
+      }
+      return delay({ stopped: idle.map((e) => e.envId), failed: [], dryRun: req.dryRun === true })
     },
     environmentLogs: (id, tail = 200) => {
       const e = find(id)

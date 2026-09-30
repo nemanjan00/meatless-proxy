@@ -197,21 +197,28 @@ commit now and then.
 ### Environments and desktops
 
 `src/pages/environments.tsx` is `/environments` (sidebar, `G` `V`): every running environment the
-viewer may see (`GET /api/environments`), grouped by employee, with its session, what it runs
-(profile or image), network, previews, desktop, uptime, the `env.exec` in progress with its elapsed
+viewer may see (`GET /api/environments`), grouped by employee, with its session, what it runs (the
+profile badge or a build badge, the image and its size, and on wide screens the profile's description;
+the full image in a tooltip), its session's state and idle time (`done · idle 23h`), network, previews,
+desktop, uptime, the `env.exec` in progress with its elapsed
 time, and live metrics (CPU, memory used / limit, network, PIDs), updated from `env.stats` on the
 `environments` channel (`env.changed` reloads the list). Filters (employee, following the switcher,
 and "With desktop") live in the URL. Each row opens a drawer (`src/components/environment.tsx`) with
-the logs (refreshed every 3 s), the processes per container (on demand), per-container metrics and the
-details; Stop (only with `canStop`) asks first. Desktop environments get a live view-only thumbnail
+the logs (refreshed every 3 s), the processes per container (on demand), per-container metrics, the
+image (reference, profile and what it has, how it was built and on what, ID, digest, size, build date,
+platform, source) and the details (session state, activity, limits); Stop (only with `canStop`) asks
+first. Admins get **Stop idle** in the filter bar: it lists what has been idle an hour or more (a dry
+run of `POST /api/environments/stop-idle`) and stops those after a confirmation. On a phone the row
+keeps the title, state icon and actions. Desktop environments get a live view-only thumbnail
 card that opens the full viewer. `src/components/desktop-viewer.tsx` is `<DesktopViewer>`: it mints a
 single-use desktop token (`POST /api/environments/:id/desktop`) and frames the viewer on the preview
 origin with the preview sandbox, view-only by default, with **Take control** for admins and the
 session's requester (`canControl`), Reload and New tab (a fresh token). The session page has an
 **Environment** card in its properties panel, and its Preview tab shows the desktop
 (`?tab=preview&desktop=1`, or a Desktop / App switch when there are ports too). The mock
-(`src/mock/environments.ts`) has three environments (a dev server with a database behind the proxy, a
-desktop, a direct network) whose metrics move every 5 s.
+(`src/mock/environments.ts`) has four environments (a dev server with a database behind the proxy, a
+desktop, a direct network, and one built from a Dockerfile, left running by a session that finished
+yesterday) whose metrics move every 5 s.
 
 ### Schedules
 

@@ -31,6 +31,10 @@ The containers port (L1): isolated project environments and commands run in them
 - `screenshot?(envId)`: a PNG of the desktop (`NotFoundError` without one). `stats?(envId)`: `EnvStats` with one
   `ContainerStats` per working container (main, services, desktop): CPU %, memory and its limit, network rx/tx, pids,
   start time; null where unknown. `processes?(envId)`: `ContainerProcesses[]`, each container's top processes.
+- `EnvInfo.image` / `imageId`: the image the main container runs, as the runtime reports it; `built` (with its `base`
+  when known) when it was built from a Dockerfile. `getEnv` also fills `startedAt` and `limits` (`EnvLimits`: `cpus`,
+  `memoryBytes`, `pids`); `listEnvs` may not. `inspectImage?(ref)` (by reference or ID): `ImageInfo` `{ ref, id,
+  repoDigests, repoTags, sizeBytes, createdAt, os, architecture, labels }`, or null when there is no such image.
 - `egressLog?(envId)` (optional on `ContainerRuntime`): the proxy's log, `EgressLogEntry[]` (`{ at, method, host, port,
   allowed, reason? }`).
 - Allowlist helpers: `checkEgress(allow, host, port)` (the decision, before DNS), `intersectEgress(a, b)` (what both lists
@@ -64,6 +68,9 @@ The containers port (L1): isolated project environments and commands run in them
   acting as a process would (modification times always increase). The `features` option sets `features()`.
   Desktops: `screenshot` returns `FAKE_PNG` (or what `setScreenshot(envId, png | Error)` set), `stats` made-up numbers
   per container (`setStats(envId, name, partial)` overrides), `processes` one row per container.
+  Images: environments report `image` (`build/<name>:latest` for a build, like Docker), `imageId` (`fakeImageId(ref)`),
+  `startedAt` and `limits`; `inspectImage` describes the images of live environments and whatever `setImage(ref, partial
+  | null)` set (null: no such image), and counts calls in `imageInspections`.
 
 ## Tests
 

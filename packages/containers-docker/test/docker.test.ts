@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ExecAbortedError, TIMEOUT_EXIT_CODE } from '@mp/containers'
 import { ConflictError, DeniedError, NotFoundError, UnavailableError, ValidationError, memoryLogger } from '@mp/core'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { NotImplementedError, demuxBuffer, dockerRuntime, mapError } from '../src/index.ts'
+import { NotImplementedError, baseImageOf, demuxBuffer, dockerRuntime, mapError } from '../src/index.ts'
 import { HttpError, MockDocker, frame } from './mock-docker.ts'
 
 let docker: MockDocker
@@ -95,6 +95,9 @@ describe('createEnv', () => {
       expect(opts).toMatchObject({ t: 'mp-build/built:latest', dockerfile: 'Dockerfile' })
       expect((docker.callsTo('createContainer')[0]![0] as any).Image).toBe('mp-build/built:latest')
       expect(env.status).toBe('running')
+      // Labelled as built, with the Dockerfile's base, so the Environments page can say so.
+      expect(env).toMatchObject({ image: 'mp-build/built:latest', built: { base: 'scratch' } })
+      expect((await rt().listEnvs())[0]).toMatchObject({ image: 'mp-build/built:latest', built: { base: 'scratch' } })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -160,6 +163,54 @@ describe('getEnv / listEnvs', () => {
     expect((await r.listEnvs({ session: 's2' })).map((e) => e.name)).toEqual(['b'])
     const filter = (docker.callsTo('listContainers').at(-1)![0] as any).filters.label
     expect(filter).toEqual(['mp.managed=true', 'mp.role=main', 'session=s2'])
+  })
+
+  it('reports the image, its ID, when it started and its limits', async () => {
+    const r = rt()
+    await r.createEnv({ name: 'a', image: 'node:22', limits: { cpus: 1.5, memoryMb: 512, pids: 300 } })
+    const got = (await r.getEnv('mp-a'))!
+    expect(got).toMatchObject({
+      image: 'node:22',
+      imageId: docker.imageIdOf('node:22'),
+      startedAt: '2026-01-01T00:00:00.000Z',
+      limits: { cpus: 1.5, memoryBytes: 512 * 1024 * 1024, pids: 300 },
+    })
+    expect(got.built).toBeUndefined()
+    const [listed] = await r.listEnvs()
+    expect(listed).toMatchObject({ image: 'node:22', imageId: docker.imageIdOf('node:22') })
+    // Default hardening still limits processes.
+    await r.createEnv({ name: 'b', image: 'node:22' })
+    expect((await r.getEnv('mp-b'))!.limits).toEqual({ pids: 4096 })
+  })
+
+  it('tells a built image by its name when the container predates the build label', async () => {
+    const r = rt()
+    await r.createEnv({ name: 'old', image: 'mp-build/old:latest' })
+    expect((await r.getEnv('mp-old'))!.built).toEqual({})
+  })
+
+  it('inspects images: ID, digests, size, build date, platform and labels; null when missing', async () => {
+    const r = rt()
+    await r.createEnv({ name: 'a', image: 'nemanjan00/dev:scraper' })
+    docker.imageLabels.set('nemanjan00/dev:scraper', {
+      'org.opencontainers.image.source': 'https://github.com/nemanjan00/dev-environment',
+    })
+    const byRef = await r.inspectImage!('nemanjan00/dev:scraper')
+    expect(byRef).toEqual({
+      ref: 'nemanjan00/dev:scraper',
+      id: docker.imageIdOf('nemanjan00/dev:scraper'),
+      repoDigests: [`nemanjan00/dev@sha256:${'ab'.repeat(32)}`],
+      repoTags: ['nemanjan00/dev:scraper'],
+      sizeBytes: 123_456_789,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      os: 'linux',
+      architecture: 'arm/v8',
+      labels: { 'org.opencontainers.image.source': 'https://github.com/nemanjan00/dev-environment' },
+    })
+    expect((await r.inspectImage!(docker.imageIdOf('nemanjan00/dev:scraper')!))?.id).toBe(byRef!.id)
+    expect(await r.inspectImage!('nope:1')).toBeNull()
+    docker.failures['image.inspect'] = new HttpError(500, 'daemon down')
+    await expect(r.inspectImage!('nemanjan00/dev:scraper')).rejects.toBeInstanceOf(UnavailableError)
   })
 
   it('reports stopped containers', async () => {
@@ -347,6 +398,20 @@ describe('destroyEnv', () => {
       .catch((e) => e)
     expect(missing).toBeInstanceOf(ValidationError)
     expect(missing.message).toMatch(/Docker socket isn't there.*DOCKER_SOCKET/)
+  })
+})
+
+describe('baseImageOf', () => {
+  it("finds the last stage's FROM, following stage names", () => {
+    expect(baseImageOf('FROM node:22\nRUN npm ci\n')).toBe('node:22')
+    expect(
+      baseImageOf(
+        '# syntax=docker/dockerfile:1\nfrom --platform=$BUILDPLATFORM golang:1.25 AS build\nRUN go build\nFROM gcr.io/distroless/static\nCOPY --from=build /app /app\n',
+      ),
+    ).toBe('gcr.io/distroless/static')
+    expect(baseImageOf('FROM python:3.13 AS base\nFROM base AS final\n')).toBe('python:3.13')
+    expect(baseImageOf('FROM \\\n  alpine:3\n')).toBe('alpine:3')
+    expect(baseImageOf('RUN echo no from\n')).toBeNull()
   })
 })
 

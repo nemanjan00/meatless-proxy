@@ -68,8 +68,12 @@ export interface ContainerInspectLike {
   Id: string
   Name: string
   Created: string
+  /** The image ID. */
+  Image?: string
   State: { Running: boolean; Status?: string; StartedAt?: string }
-  Config: { Labels: Record<string, string> | null }
+  /** `Image`: the reference the container was created from. */
+  Config: { Labels: Record<string, string> | null; Image?: string }
+  HostConfig?: { NanoCpus?: number; Memory?: number; PidsLimit?: number | null }
   NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> }
 }
 
@@ -79,4 +83,20 @@ export interface ContainerSummaryLike {
   Created: number
   State: string
   Labels: Record<string, string>
+  /** The reference the container was created from (Docker shows the ID once that tag is gone). */
+  Image?: string
+  ImageID?: string
+}
+
+/** The fields of Docker's image inspect this adapter reads. */
+export interface ImageInspectLike {
+  Id: string
+  RepoTags?: string[] | null
+  RepoDigests?: string[] | null
+  Size?: number
+  Created?: string
+  Os?: string
+  Architecture?: string
+  Variant?: string
+  Config?: { Labels?: Record<string, string> | null } | null
 }

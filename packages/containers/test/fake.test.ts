@@ -1,6 +1,6 @@
 import { ConflictError, ManualClock, NotFoundError, ValidationError } from '@mp/core'
 import { describe, expect, it } from 'vitest'
-import { ExecAbortedError, TIMEOUT_EXIT_CODE, fakeRuntime } from '../src/index.ts'
+import { ExecAbortedError, TIMEOUT_EXIT_CODE, fakeImageId, fakeRuntime } from '../src/index.ts'
 
 const spec = { name: 'ses-1', image: 'node:22', labels: { session: 'ses_1' } }
 
@@ -150,5 +150,29 @@ describe('fakeRuntime exec', () => {
     rt.on(/sleep (\d+)/, (call) => ({ delayMs: Number(call.cmd[1]), stdout: call.cmd[1] }))
     const results = await Promise.all([rt.exec(env.id, ['sleep', '20']), rt.exec(env.id, ['sleep', '1'])])
     expect(results.map((r) => r.stdout)).toEqual(['20', '1'])
+  })
+})
+
+describe('fakeRuntime images', () => {
+  it('reports the image, whether it was built, and its limits, and inspects images by reference or ID', async () => {
+    const rt = fakeRuntime()
+    const env = await rt.createEnv({ ...spec, limits: { memoryMb: 256, pids: 100 } })
+    expect(env).toMatchObject({
+      image: 'node:22',
+      imageId: fakeImageId('node:22'),
+      limits: { memoryBytes: 256 * 1024 * 1024, pids: 100 },
+    })
+    expect(env.built).toBeUndefined()
+    const built = await rt.createEnv({ name: 'Built', build: { context: '/src' } })
+    expect(built).toMatchObject({ image: 'build/built:latest', built: {} })
+    expect(await rt.inspectImage('node:22')).toMatchObject({ ref: 'node:22', id: fakeImageId('node:22'), os: 'linux' })
+    expect((await rt.inspectImage(fakeImageId('node:22')))?.repoTags).toEqual(['node:22'])
+    expect((await rt.inspectImage('build/built:latest'))?.repoDigests).toEqual([])
+    expect(await rt.inspectImage('never:1')).toBeNull()
+    rt.setImage('never:1', { labels: { 'org.opencontainers.image.source': 'https://example.com/x' } })
+    expect((await rt.inspectImage('never:1'))?.labels).toEqual({ 'org.opencontainers.image.source': 'https://example.com/x' })
+    rt.setImage('node:22', null)
+    expect(await rt.inspectImage('node:22')).toBeNull()
+    expect(rt.imageInspections).toBe(6)
   })
 })

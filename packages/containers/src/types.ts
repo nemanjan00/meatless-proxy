@@ -195,6 +195,41 @@ export interface EnvInfo {
   createdAt: string
   /** Whether it was created with a desktop. */
   desktop?: boolean
+  /** The image reference the main container runs, as the runtime reports it (e.g. `node:22`). */
+  image?: string
+  /** The image's ID (`sha256:…`), when the runtime tells. */
+  imageId?: string
+  /** Set when the image was built from a Dockerfile (`EnvSpec.build`): its base image, when known. */
+  built?: { base?: string }
+  /** When the main container last started. `getEnv` fills it; `listEnvs` may not. */
+  startedAt?: string
+  /** The main container's resource limits. `getEnv` fills it; `listEnvs` may not. */
+  limits?: EnvLimits
+}
+
+/** Resource limits of a container, as the runtime enforces them. Missing: no limit. */
+export interface EnvLimits {
+  cpus?: number
+  memoryBytes?: number
+  pids?: number
+}
+
+/** What the runtime knows about an image. Values it can't tell are null. */
+export interface ImageInfo {
+  /** The reference it was asked about. */
+  ref: string
+  /** The image ID (`sha256:…`). */
+  id: string
+  /** Its repository digests (`name@sha256:…`), for images pulled from a registry. */
+  repoDigests: string[]
+  repoTags: string[]
+  sizeBytes: number | null
+  /** When the image was built. */
+  createdAt: string | null
+  os: string | null
+  architecture: string | null
+  /** The image's labels, e.g. `org.opencontainers.image.source`. */
+  labels: Record<string, string>
 }
 
 export interface ExecOptions {
@@ -300,6 +335,11 @@ export interface ContainerRuntime {
   stats?(envId: string): Promise<EnvStats>
   /** What runs in each of the environment's containers, busiest first. Optional. */
   processes?(envId: string): Promise<ContainerProcesses[]>
+  /**
+   * What the runtime knows about an image (an environment's `image` or `imageId`): its ID, digests,
+   * size, build date, platform and labels. Null when there is no such image. Optional.
+   */
+  inspectImage?(ref: string): Promise<ImageInfo | null>
   /** Removes the environment's containers, network and volumes. Idempotent. */
   destroyEnv(envId: string): Promise<void>
 }

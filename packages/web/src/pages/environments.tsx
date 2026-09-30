@@ -1,5 +1,5 @@
 import type { Environment } from '@mp/api'
-import { Container, ExternalLink, Monitor, ScrollText, Square } from 'lucide-react'
+import { Container, ExternalLink, Hammer, Monitor, ScrollText, Square, TimerOff } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { DesktopThumbnail, DesktopViewer } from '@/components/desktop-viewer.tsx'
@@ -11,6 +11,7 @@ import {
   MetricsInline,
   NetworkBadge,
   StopEnvironmentDialog,
+  StopIdleDialog,
   useEnvironmentsLive,
   useNow,
 } from '@/components/environment.tsx'
@@ -20,9 +21,11 @@ import { StatusIcon } from '@/components/status-icon.tsx'
 import { Checkbox } from '@/components/ui/checkbox.tsx'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
+import { Button } from '@/components/ui/button.tsx'
 import { useLoad } from '@/lib/api.tsx'
+import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
-import { runsLabel } from '@/lib/environments.ts'
+import { formatBytes, idleMs, imageSummary, isIdle, sessionWord, shortDuration, shortImage } from '@/lib/environments.ts'
 import { duration, formatDateTime, pluralize } from '@/lib/format.ts'
 import { type StatusKey, sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
@@ -77,8 +80,79 @@ export interface EnvActions {
 /** Opens the app's live preview on the session page (it mints a token for whoever opens it). */
 const previewHref = (env: Environment) => (env.session ? `/sessions/${env.session.id}?tab=preview&port=${env.ports[0]}` : null)
 
+/** Shown as idle once it has been quiet this long. */
+const IDLE_SHOWN_MS = 10 * 60_000
+
+/** The image in a row: the profile (or build) badge, the image, its size, and on wide screens what the profile is for. */
+function ImageChip({ env }: { env: Environment }) {
+  const size = env.imageInfo?.sizeBytes ?? null
+  const summary = imageSummary(env)
+  const blurb = env.profileDescription ?? env.build
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="hidden min-w-0 max-w-80 items-center gap-1.5 md:inline-flex 2xl:max-w-[36rem]" data-testid="env-image">
+          {env.profile ? (
+            <span className="shrink-0 rounded-sm border px-1 text-tiny text-fg-secondary" data-testid="env-profile">
+              {env.profile}
+            </span>
+          ) : env.build ? (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-sm border px-1 text-tiny text-fg-secondary">
+              <Hammer className="size-2.5" />
+              build
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate font-mono text-micro text-fg-tertiary">{shortImage(env.image)}</span>
+          {size !== null && <span className="shrink-0 text-micro text-fg-quaternary tabular-nums">{formatBytes(size)}</span>}
+          {blurb && <span className="hidden min-w-0 truncate text-micro text-fg-quaternary 2xl:inline">{blurb}</span>}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="flex max-w-96 flex-col gap-0.5">
+        <span className="font-mono">{env.image ?? 'unknown image'}</span>
+        {env.profile && (
+          <span>
+            Profile {env.profile}
+            {env.profileDescription ? `: ${env.profileDescription}` : ''}
+          </span>
+        )}
+        {env.build && (
+          <span>
+            {env.build}
+            {env.imageInfo?.base ? `, on ${env.imageInfo.base}` : ''}
+          </span>
+        )}
+        {summary && <span>{summary}</span>}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** Its session's state and how long it has been idle: `done · idle 23h`. */
+function EnvState({ env, now, className }: { env: Environment; now: number; className?: string }) {
+  const idle = idleMs(env, now)
+  const word = sessionWord(env)
+  const parts = [...(word === 'active' ? [] : [word]), ...(idle >= IDLE_SHOWN_MS ? [`idle ${shortDuration(idle)}`] : [])]
+  if (!parts.length && env.busy) parts.push('working')
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn('truncate text-right text-micro text-fg-tertiary', className)} data-testid="env-state">
+          {parts.join(' · ') || 'active'}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {env.session ? `Session ${env.session.status}` : 'No session points at it any more'}
+        {env.busy
+          ? ': working now'
+          : `. Idle ${shortDuration(idle)}, since ${formatDateTime(env.lastActiveAt)} (its last env.exec or run)`}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function EnvironmentRow({ env, now, actions }: { env: Environment; now: number; actions: EnvActions }) {
   const preview = env.ports.length ? previewHref(env) : null
+  const started = env.startedAt ?? env.createdAt
   return (
     <div
       className="group flex h-9 min-w-0 items-center gap-3 px-4 transition-quick hover:bg-secondary sm:px-6"
@@ -88,19 +162,20 @@ function EnvironmentRow({ env, now, actions }: { env: Environment; now: number; 
       {env.session ? (
         <Link
           to={`/sessions/${env.session.id}`}
-          className="max-w-[45%] shrink-0 truncate text-fg-secondary hover:text-foreground"
+          className="min-w-0 flex-1 truncate text-fg-secondary hover:text-foreground md:max-w-[40%] md:flex-initial"
           data-testid="env-title"
         >
           {env.session.title}
         </Link>
       ) : (
-        <span className="min-w-0 truncate font-mono text-micro text-fg-tertiary" data-testid="env-title">
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-micro text-fg-tertiary md:max-w-[40%] md:flex-initial"
+          data-testid="env-title"
+        >
           {env.name}
         </span>
       )}
-      <span className="hidden shrink-0 rounded-sm border px-1 font-mono text-tiny text-fg-tertiary md:inline" title={env.image}>
-        {runsLabel(env)}
-      </span>
+      <ImageChip env={env} />
       {env.desktop && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -120,13 +195,14 @@ function EnvironmentRow({ env, now, actions }: { env: Environment; now: number; 
           <NetworkBadge env={env} compact />
         </span>
         <MetricsInline stats={env.stats} className="hidden md:flex" />
+        <EnvState env={env} now={now} className="hidden w-28 sm:inline" />
         <Tooltip>
           <TooltipTrigger asChild>
-            <time dateTime={env.createdAt} className="w-14 text-right text-micro text-fg-quaternary tabular-nums">
-              {duration(env.createdAt, undefined, now)}
+            <time dateTime={started} className="hidden w-14 text-right text-micro text-fg-quaternary tabular-nums sm:inline">
+              {duration(started, undefined, now)}
             </time>
           </TooltipTrigger>
-          <TooltipContent>Started {formatDateTime(env.createdAt)}</TooltipContent>
+          <TooltipContent>Started {formatDateTime(started)}</TooltipContent>
         </Tooltip>
         {env.employee && (
           <Tooltip>
@@ -138,7 +214,7 @@ function EnvironmentRow({ env, now, actions }: { env: Environment; now: number; 
             <TooltipContent>{env.employee.name}</TooltipContent>
           </Tooltip>
         )}
-        <span className="flex w-28 items-center justify-end">
+        <span className="flex shrink-0 items-center justify-end sm:w-28" data-testid="env-actions">
           <RowAction label="Logs and details" onClick={() => actions.logs(env)}>
             <ScrollText />
           </RowAction>
@@ -209,6 +285,8 @@ export function EnvironmentsPage() {
   const [logsOf, setLogsOf] = useState<string | null>(null)
   const [desktopOf, setDesktopOf] = useState<string | null>(null)
   const [stopOf, setStopOf] = useState<string | null>(null)
+  const [stopIdle, setStopIdle] = useState(false)
+  const admin = useAuth().can('admin')
   const items = list.data?.items ?? []
   const byId = (id: string | null) => (id ? (items.find((e) => e.envId === id) ?? null) : null)
 
@@ -232,6 +310,7 @@ export function EnvironmentsPage() {
     return [...m.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label))
   }, [items])
   const desktops = items.filter((e) => e.desktop && e.status === 'running')
+  const idleCount = items.filter((e) => isIdle(e, now)).length
   const actions: EnvActions = {
     logs: (e) => setLogsOf(e.envId),
     desktop: (e) => setDesktopOf(e.envId),
@@ -284,6 +363,18 @@ export function EnvironmentsPage() {
           <span className="ml-auto text-micro text-fg-quaternary tabular-nums" data-testid="env-count">
             {list.data ? pluralize(items.length, 'environment') : ''}
           </span>
+          {admin && list.data && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-micro"
+              onClick={() => setStopIdle(true)}
+              disabled={idleCount === 0}
+              title="Stop every environment that has been idle for an hour or more"
+            >
+              <TimerOff /> Stop idle{idleCount ? ` (${idleCount})` : ''}
+            </Button>
+          )}
         </div>
       }
     >
@@ -337,6 +428,7 @@ export function EnvironmentsPage() {
                     <span className="hidden w-36 text-right xl:inline">Network</span>
                     <span className="hidden w-12 text-right lg:inline">PIDs</span>
                   </span>
+                  <span className="w-28 text-right">State</span>
                   <span className="w-14 text-right">Up</span>
                   {/* Space for the employee avatar and the actions. */}
                   <span className="w-4" />
@@ -355,6 +447,7 @@ export function EnvironmentsPage() {
         {desktopEnv && <DesktopViewer env={desktopEnv} />}
       </DesktopDialog>
       <StopEnvironmentDialog env={byId(stopOf)} onOpenChange={(o) => !o && setStopOf(null)} onStopped={() => list.reload()} />
+      <StopIdleDialog open={stopIdle} onOpenChange={setStopIdle} onStopped={() => list.reload()} />
     </Page>
   )
 }

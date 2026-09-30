@@ -179,11 +179,19 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   integration users and their contacts (admins; see [Identity from integrations](#identity-from-integrations)).
 - `GET /auth/login`, `GET /auth/oidc/start`, `GET /auth/oidc/callback`: sign-in (see [Sign-in](#sign-in-and-access)).
 - `GET /api/sessions/:id/preview` and `POST /api/previews/token` are `@mp/api` routes, served by `src/previews` (see [Live previews](#live-previews)).
-- `GET /api/environments`, `POST /api/environments/:id/stop`, `GET /api/environments/:id/logs` and `…/processes`
+- `GET /api/environments`, `POST /api/environments/:id/stop`, `POST /api/environments/stop-idle`, `GET /api/environments/:id/logs` and `…/processes`
   (`@mp/api` `ENVIRONMENT_ROUTES`), served by `src/environments`: every environment the viewer may see (the sessions'
   visibility rule; ones no session points at are for admins), joined with its session, plus stopping (admins and the
-  session's requester; the session gets a note). `EnvironmentMonitor` follows `env.exec` and, while someone watches the
-  `environments` channel or a session's, samples metrics every 5 s and publishes `env.stats`.
+  session's requester; the session gets a note). Only the runtime's main containers are listed (service containers belong
+  to their environment; code.run's sandbox isn't one). Each carries the image the runtime reports (container inspect, so
+  also for built and left-behind ones), `imageInfo` from the runtime's image inspect (short ID, digest, size, build date,
+  platform, OCI source/description/base labels; cached 5 minutes), the profile it came from (recorded, or mapped back from
+  its image through `ENV_PROFILES`) with its description, `build` ("built from <repo>'s Dockerfile"), limits, start time,
+  `lastActiveAt` and `busy`. `POST /api/environments/stop-idle` `{ idleMinutes? (default 60, at least 5), dryRun? }` (admins)
+  stops every running environment that isn't busy (no `env.exec`, no run queued, running, suspended or paused) and has been
+  idle that long, each like Stop. Nothing stops idle environments by itself. `EnvironmentMonitor` follows `env.exec` (and when
+  each environment last ran one) and, while someone watches the `environments` channel or a session's, samples metrics
+  every 5 s and publishes `env.stats`.
   `POST /api/environments/:id/desktop` is in `src/previews` (see [Desktops](#desktops)).
 
 Errors are `{ error: { code, message, details? } }`: not found 404, validation

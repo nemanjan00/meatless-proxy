@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { readdirSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { Writable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 import {
@@ -20,11 +20,13 @@ import {
   type ContainerStats,
   type EgressLogEntry,
   type EnvInfo,
+  type EnvLimits,
   type EnvSpec,
   type EnvStats,
   type ExecOptions,
   type ExecResult,
   type FileEntry,
+  type ImageInfo,
   type PreviewTarget,
   type Process,
   type RuntimeFeatures,
@@ -48,6 +50,7 @@ import type {
   ContainerStatsLike,
   ContainerSummaryLike,
   DockerLike,
+  ImageInspectLike,
   NetworkInspectLike,
 } from './docker-like.ts'
 import { EGRESS_PROXY_PORT, EGRESS_PROXY_SOURCE } from './egress-proxy.ts'
@@ -120,6 +123,10 @@ export const LABEL_ROLE = 'mp.role'
 export const LABEL_SERVICE = 'mp.service'
 /** On the main container: the exposed ports, comma-separated. */
 export const LABEL_EXPOSE = 'mp.expose'
+/** On a main container whose image was built from a Dockerfile: `dockerfile`. */
+export const LABEL_BUILD = 'mp.build'
+/** On a main container whose image was built: the Dockerfile's base image (its last stage's FROM). */
+export const LABEL_BUILD_BASE = 'mp.build.base'
 /** The preview forwarder's name suffix (container and network), and the service name it takes. */
 export const PREVIEW_SUFFIX = 'preview'
 /** `mp.role` of a shared direct network (`EnvSpec.direct`). */
@@ -224,6 +231,8 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   let features: Promise<RuntimeFeatures> | null = null
 
   const envName = (id: string) => (id.startsWith(prefix) ? id.slice(prefix.length) : id)
+  /** How the images this runtime builds are named: `<prefix>build/<name>:latest`. */
+  const buildPrefix = `${prefix}build/`.toLowerCase()
   const mainName = (name: string) => `${prefix}${name}`
   const serviceName = (name: string, svc: string) => `${prefix}${name}-${svc}`
   const networkName = (name: string) => `${prefix}${name}`
@@ -244,11 +253,11 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
     Init: true,
   }
 
-  async function ensureImage(spec: EnvSpec): Promise<string> {
+  async function ensureImage(spec: EnvSpec): Promise<{ image: string; base?: string }> {
     if (spec.image) {
       try {
         await docker.getImage(spec.image).inspect()
-        return spec.image
+        return { image: spec.image }
       } catch (e) {
         if (statusOf(e) !== 404) throw mapError(e, `image ${spec.image}`)
       }
@@ -257,7 +266,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         throw mapError(e, `image ${spec.image}`)
       })
       await follow(docker, stream, `pull ${spec.image}`)
-      return spec.image
+      return { image: spec.image }
     }
     const build = spec.build!
     if (build.context.includes('://') || !isAbsolute(build.context)) {
@@ -280,7 +289,14 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         throw mapError(e, `build ${tag}`)
       })
     await follow(docker, stream, `build ${tag}`)
-    return tag
+    // What it's built on, for people looking at it later (cheap: the Dockerfile is right there).
+    let base: string | undefined
+    try {
+      base = baseImageOf(readFileSync(join(build.context, build.dockerfile ?? 'Dockerfile'), 'utf8')) ?? undefined
+    } catch {
+      base = undefined
+    }
+    return { image: tag, ...(base ? { base } : {}) }
   }
 
   async function pullIfMissing(image: string): Promise<void> {
@@ -477,7 +493,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
   }
 
   async function create(spec: EnvSpec, labels: Record<string, string>): Promise<void> {
-    const image = await ensureImage(spec)
+    const { image, base } = await ensureImage(spec)
     for (const svc of spec.services ?? []) await pullIfMissing(svc.image)
     if (spec.egress || spec.expose?.length || spec.desktop) await pullIfMissing(proxyImage)
     if (spec.desktop) await pullIfMissing(desktopImage)
@@ -522,6 +538,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
         [LABEL_ROLE]: 'main',
         ...(forwardedPorts(spec).length ? { [LABEL_EXPOSE]: forwardedPorts(spec).join(',') } : {}),
         ...(spec.desktop ? { [LABEL_DESKTOP]: 'true' } : {}),
+        ...(spec.build ? { [LABEL_BUILD]: 'dockerfile', ...(base ? { [LABEL_BUILD_BASE]: base.slice(0, 250) } : {}) } : {}),
       },
       HostConfig: {
         ...hardening,
@@ -706,7 +723,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       try {
         const c = await docker.getContainer(id).inspect()
         if (!owns(c.Config.Labels) || c.Config.Labels?.[LABEL_ROLE] !== 'main') return null
-        return infoFromInspect(c)
+        return infoFromInspect(c, buildPrefix)
       } catch (e) {
         if (statusOf(e) === 404) return null
         throw mapError(e, `environment ${id}`)
@@ -717,7 +734,7 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       const filters = [`${LABEL_MANAGED}=true`, `${LABEL_ROLE}=main`, ...Object.entries(labels).map(([k, v]) => `${k}=${v}`)]
       try {
         const list = await docker.listContainers({ all: true, filters: { label: filters } })
-        return list.filter((c) => owns(c.Labels)).map(infoFromSummary)
+        return list.filter((c) => owns(c.Labels)).map((c) => infoFromSummary(c, buildPrefix))
       } catch (e) {
         throw mapError(e, 'environments')
       }
@@ -1061,6 +1078,17 @@ export function dockerRuntime(opts: DockerRuntimeOptions = {}): ContainerRuntime
       return out
     },
 
+    async inspectImage(ref): Promise<ImageInfo | null> {
+      let raw: ImageInspectLike
+      try {
+        raw = (await docker.getImage(ref).inspect()) as ImageInspectLike
+      } catch (e) {
+        if (statusOf(e) === 404) return null
+        throw mapError(e, `image ${ref}`)
+      }
+      return imageInfoOf(ref, raw)
+    },
+
     async features(): Promise<RuntimeFeatures> {
       features ??= docker.version().then(
         (v) => ({ volumeSubpath: apiAtLeast(v.ApiVersion, VOLUME_SUBPATH_API), desktop: true }),
@@ -1157,8 +1185,32 @@ function envList(env?: Record<string, string>): string[] {
   })
 }
 
-function infoFromInspect(c: ContainerInspectLike): EnvInfo {
+/** The image fields of an environment: its reference and ID, and whether (and on what) it was built. */
+function imageFields(
+  labels: Record<string, string>,
+  image: string | undefined,
+  imageId: string | undefined,
+  buildPrefix: string,
+) {
+  // A container whose tag is gone shows the bare ID as its image.
+  const ref = image && image !== imageId ? image : undefined
+  const built = labels[LABEL_BUILD] === 'dockerfile' || (ref ? ref.toLowerCase().startsWith(buildPrefix) : false)
+  return {
+    ...(ref ? { image: ref } : imageId ? { image: imageId } : {}),
+    ...(imageId ? { imageId } : {}),
+    ...(built ? { built: labels[LABEL_BUILD_BASE] ? { base: labels[LABEL_BUILD_BASE] } : {} } : {}),
+  }
+}
+
+function infoFromInspect(c: ContainerInspectLike, buildPrefix: string): EnvInfo {
   const labels = c.Config.Labels ?? {}
+  const h = c.HostConfig ?? {}
+  const limits: EnvLimits = {
+    ...(h.NanoCpus ? { cpus: h.NanoCpus / 1e9 } : {}),
+    ...(h.Memory ? { memoryBytes: h.Memory } : {}),
+    ...(h.PidsLimit && h.PidsLimit > 0 ? { pids: h.PidsLimit } : {}),
+  }
+  const started = c.State.StartedAt && !c.State.StartedAt.startsWith('0001-') ? c.State.StartedAt : undefined
   return {
     id: c.Name.replace(/^\//, ''),
     name: labels[LABEL_ENV] ?? c.Name.replace(/^\//, ''),
@@ -1166,10 +1218,13 @@ function infoFromInspect(c: ContainerInspectLike): EnvInfo {
     labels,
     createdAt: new Date(c.Created).toISOString(),
     ...(labels[LABEL_DESKTOP] === 'true' ? { desktop: true } : {}),
+    ...imageFields(labels, c.Config.Image, c.Image, buildPrefix),
+    ...(started ? { startedAt: new Date(started).toISOString() } : {}),
+    limits,
   }
 }
 
-function infoFromSummary(c: ContainerSummaryLike): EnvInfo {
+function infoFromSummary(c: ContainerSummaryLike, buildPrefix: string): EnvInfo {
   const name = (c.Names[0] ?? c.Id).replace(/^\//, '')
   return {
     id: name,
@@ -1178,7 +1233,52 @@ function infoFromSummary(c: ContainerSummaryLike): EnvInfo {
     labels: c.Labels,
     createdAt: new Date(c.Created * 1000).toISOString(),
     ...(c.Labels[LABEL_DESKTOP] === 'true' ? { desktop: true } : {}),
+    ...imageFields(c.Labels, c.Image, c.ImageID, buildPrefix),
   }
+}
+
+/** Docker's image inspect as `ImageInfo`. */
+export function imageInfoOf(ref: string, raw: ImageInspectLike): ImageInfo {
+  const created = raw.Created && !raw.Created.startsWith('0001-') ? new Date(raw.Created) : null
+  return {
+    ref,
+    id: raw.Id,
+    repoDigests: raw.RepoDigests ?? [],
+    repoTags: raw.RepoTags ?? [],
+    sizeBytes: typeof raw.Size === 'number' ? raw.Size : null,
+    createdAt: created && !Number.isNaN(created.getTime()) ? created.toISOString() : null,
+    os: raw.Os || null,
+    architecture: raw.Architecture ? `${raw.Architecture}${raw.Variant ? `/${raw.Variant}` : ''}` : null,
+    labels: { ...raw.Config?.Labels },
+  }
+}
+
+/**
+ * The base image of a Dockerfile: its last stage's FROM, following stage names (`FROM build AS
+ * final` → what `build` is from). Null when there is no FROM. `--platform` flags are skipped;
+ * `ARG` values are not substituted.
+ */
+export function baseImageOf(dockerfile: string): string | null {
+  // Line continuations joined; comments dropped.
+  const lines = dockerfile
+    .replace(/\\\r?\n/g, ' ')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+  const stages = new Map<string, string>()
+  let last: string | null = null
+  for (const line of lines) {
+    const m = /^FROM\s+(.+)$/i.exec(line)
+    if (!m) continue
+    const words = m[1]!.split(/\s+/).filter((w) => !w.startsWith('--'))
+    const image = words[0]
+    if (!image) continue
+    const resolved = stages.get(image.toLowerCase()) ?? image
+    const as = words[1]?.toLowerCase() === 'as' ? words[2] : undefined
+    if (as) stages.set(as.toLowerCase(), resolved)
+    last = resolved
+  }
+  return last
 }
 
 function collector(

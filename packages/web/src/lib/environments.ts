@@ -32,6 +32,52 @@ export function runsLabel(e: Pick<Environment, 'profile' | 'image'>): string {
   return e.profile ? e.profile : (e.image ?? 'image')
 }
 
+/** The image without a registry host or `library/`: `ghcr.io/acme/app:1` → `acme/app:1`. */
+export function shortImage(ref: string | undefined): string {
+  if (!ref) return 'unknown image'
+  const parts = ref.split('/')
+  // A first part with a dot or a port is a registry host.
+  const rest = parts.length > 1 && /[.:]|^localhost$/.test(parts[0]!) ? parts.slice(1) : parts
+  return rest.join('/').replace(/^library\//, '')
+}
+
+/** `45s`, `12m`, `3h 20m`, `2d 4h`: a compact length of time. */
+export function shortDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+  const d = Math.floor(h / 24)
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`
+}
+
+/** How long it has been idle (0 while busy). */
+export function idleMs(e: Pick<Environment, 'busy' | 'lastActiveAt'>, now: number): number {
+  if (e.busy) return 0
+  const t = Date.parse(e.lastActiveAt)
+  return Number.isNaN(t) ? 0 : Math.max(0, now - t)
+}
+
+/** What Stop idle stops by default: running, not busy, idle at least an hour (the server's default). */
+export const STOP_IDLE_MINUTES = 60
+export function isIdle(e: Pick<Environment, 'busy' | 'lastActiveAt' | 'status'>, now: number, minutes = STOP_IDLE_MINUTES) {
+  return e.status === 'running' && !e.busy && idleMs(e, now) >= minutes * 60_000
+}
+
+/** Its session's state in a word: `active`, `waiting`, `done`, `abandoned`, or `left behind` without one. */
+export function sessionWord(e: Pick<Environment, 'session'>): string {
+  return e.session ? e.session.status : 'left behind'
+}
+
+/** `linux/amd64 · 1.9 GB`: the image's platform and size, where known. */
+export function imageSummary(e: Pick<Environment, 'imageInfo'>): string {
+  const i = e.imageInfo
+  if (!i) return ''
+  return [i.sizeBytes !== null ? formatBytes(i.sizeBytes) : null, i.platform].filter(Boolean).join(' · ')
+}
+
 /** An environment's totals over its containers: CPU and memory summed, the main container's network. */
 export function totals(stats: EnvironmentStats | null): {
   cpu: number | null

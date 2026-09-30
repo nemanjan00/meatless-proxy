@@ -41,6 +41,23 @@ describe.skipIf(!ENABLED)('docker runtime against a real daemon', () => {
     ]
   }
 
+  it('reports the image an environment runs, and inspects it', async () => {
+    const env = await runtime.createEnv({ name: 'imageinfo', image: IMAGE, limits: { memoryMb: 256 } })
+    created.push(env.id)
+    const got = (await runtime.getEnv(env.id))!
+    expect(got.image).toBe(IMAGE)
+    expect(got.imageId).toMatch(/^sha256:[0-9a-f]{64}$/)
+    expect(got.startedAt).toBeTruthy()
+    expect(got.limits?.memoryBytes).toBe(256 * 1024 * 1024)
+    const img = (await runtime.inspectImage!(got.imageId!))!
+    expect(img.id).toBe(got.imageId)
+    expect(img.os).toBe('linux')
+    expect(img.sizeBytes).toBeGreaterThan(0)
+    expect(img.repoTags).toContain(IMAGE)
+    expect(await runtime.inspectImage!(`${PREFIX}no-such-image:1`)).toBeNull()
+    await runtime.destroyEnv(env.id)
+  }, 120_000)
+
   it('starts an environment, runs commands, and cleans up completely', async () => {
     const env = await runtime.createEnv({ name: 'basic', image: IMAGE, env: { GREETING: 'hello' } })
     created.push(env.id)

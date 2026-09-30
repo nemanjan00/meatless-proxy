@@ -10,6 +10,7 @@ import {
   ShieldOff,
   Square,
   Terminal,
+  TimerOff,
 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
@@ -21,7 +22,17 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.tsx'
 import { type Loaded, useApi, useLive } from '@/lib/api.tsx'
-import { formatBytes, formatCpu, memoryHigh, networkLabel, runsLabel, totals } from '@/lib/environments.ts'
+import {
+  formatBytes,
+  formatCpu,
+  idleMs,
+  memoryHigh,
+  networkLabel,
+  runsLabel,
+  STOP_IDLE_MINUTES,
+  shortDuration,
+  totals,
+} from '@/lib/environments.ts'
 import { duration, formatDateTime } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -208,10 +219,27 @@ export function EnvironmentFacts({ env, now, showSession = true }: { env: Enviro
           )}
         </Fact>
       )}
+      {showSession && env.session && (
+        <Fact label="Session state">
+          <span data-testid="env-session-state">
+            {env.session.status}
+            {env.session.runState ? <span className="text-fg-tertiary"> · last run {env.session.runState}</span> : null}
+          </span>
+        </Fact>
+      )}
       {showSession && <Fact label="Employee">{env.employee?.name ?? '—'}</Fact>}
       {env.requester && <Fact label="Requested by">{env.requester.name}</Fact>}
-      <Fact label="Runs">
-        <span className="font-mono text-micro">{env.profile ? `${env.profile} · ${env.image ?? ''}` : runsLabel(env)}</span>
+      <Fact label="Activity">
+        <span data-testid="env-activity">
+          {env.busy ? (
+            'Working now'
+          ) : (
+            <>
+              Idle {shortDuration(idleMs(env, now))}
+              <span className="text-fg-tertiary"> · since {formatDateTime(env.lastActiveAt)}</span>
+            </>
+          )}
+        </span>
       </Fact>
       <Fact label="Checkouts">
         {env.checkouts.length ? (
@@ -261,14 +289,102 @@ export function EnvironmentFacts({ env, now, showSession = true }: { env: Enviro
         )}
       </Fact>
       <Fact label="Desktop">{env.desktop ? 'Yes (Xvfb :99, VNC)' : 'No'}</Fact>
+      <Fact label="Limits">
+        <span data-testid="env-limits">{limitsLabel(env)}</span>
+      </Fact>
       <Fact label="Started">
-        <span title={formatDateTime(env.createdAt)}>
-          {formatDateTime(env.createdAt)} · up {duration(env.createdAt, undefined, now)}
+        <span>
+          {formatDateTime(env.startedAt ?? env.createdAt)} · up {duration(env.startedAt ?? env.createdAt, undefined, now)}
         </span>
       </Fact>
       <Fact label="Name">
         <span className="font-mono text-micro">{env.envId}</span>
       </Fact>
+    </div>
+  )
+}
+
+/** `2 CPUs · 4.0 GB · 4096 pids`, or `none`. */
+function limitsLabel(env: Pick<Environment, 'limits'>): string {
+  const l = env.limits
+  if (!l) return 'unknown'
+  const parts = [
+    l.cpus !== null ? `${l.cpus} ${l.cpus === 1 ? 'CPU' : 'CPUs'}` : 'any CPU',
+    l.memoryBytes !== null ? `${formatBytes(l.memoryBytes)} memory` : 'no memory limit',
+    l.pids !== null ? `${l.pids} processes` : 'no process limit',
+  ]
+  return parts.join(' · ')
+}
+
+/** Everything known about the image it runs: reference, profile, build, digest, size, dates, platform, labels. */
+export function ImageFacts({ env }: { env: Environment }) {
+  const i = env.imageInfo
+  return (
+    <div className="flex flex-col" data-testid="env-image-facts">
+      <Fact label="Image">
+        <span className="break-all font-mono text-micro">{env.image ?? 'unknown'}</span>
+      </Fact>
+      {env.profile && (
+        <Fact label="Profile">
+          <span className="flex flex-col gap-0.5">
+            <span className="self-start rounded-sm border px-1 text-tiny">{env.profile}</span>
+            {env.profileDescription && <span className="text-micro text-fg-tertiary">{env.profileDescription}</span>}
+          </span>
+        </Fact>
+      )}
+      {env.build && (
+        <Fact label="Built">
+          <span>
+            {env.build}
+            {i?.base ? (
+              <span className="text-fg-tertiary">
+                {' '}
+                on <span className="font-mono text-micro">{i.base}</span>
+              </span>
+            ) : null}
+          </span>
+        </Fact>
+      )}
+      {!env.build && i?.base && (
+        <Fact label="Base">
+          <span className="font-mono text-micro">{i.base}</span>
+        </Fact>
+      )}
+      {i ? (
+        <>
+          {i.description && <Fact label="Description">{i.description}</Fact>}
+          <Fact label="Size">{formatBytes(i.sizeBytes)}</Fact>
+          <Fact label="Image built">{i.createdAt ? formatDateTime(i.createdAt) : '—'}</Fact>
+          <Fact label="Platform">{i.platform ?? '—'}</Fact>
+          {i.version && <Fact label="Version">{i.version}</Fact>}
+          <Fact label="ID">
+            <span className="font-mono text-micro">{i.id ?? '—'}</span>
+          </Fact>
+          <Fact label="Digest">
+            <span className="break-all font-mono text-micro" title={i.digest ?? undefined}>
+              {i.digest ?? (env.build ? 'none (built here)' : '—')}
+            </span>
+          </Fact>
+          {i.source && (
+            <Fact label="Source">
+              {/^https?:\/\//.test(i.source) ? (
+                <a href={i.source} target="_blank" rel="noopener noreferrer" className="break-all text-[#828fff] hover:underline">
+                  {i.source}
+                </a>
+              ) : (
+                <span className="break-all">{i.source}</span>
+              )}
+            </Fact>
+          )}
+          {i.revision && (
+            <Fact label="Revision">
+              <span className="font-mono text-micro">{i.revision.slice(0, 12)}</span>
+            </Fact>
+          )}
+        </>
+      ) : (
+        <p className="py-1 text-micro text-fg-quaternary">The container runtime couldn't describe this image.</p>
+      )}
     </div>
   )
 }
@@ -420,6 +536,9 @@ export function EnvironmentSheet({
                 <TabsTrigger value="metrics" className="flex-none px-0">
                   Metrics
                 </TabsTrigger>
+                <TabsTrigger value="image" className="flex-none px-0">
+                  Image
+                </TabsTrigger>
                 <TabsTrigger value="details" className="flex-none px-0">
                   Details
                 </TabsTrigger>
@@ -432,6 +551,9 @@ export function EnvironmentSheet({
               </TabsContent>
               <TabsContent value="metrics" className="pt-3">
                 <ContainerMetrics stats={env.stats} />
+              </TabsContent>
+              <TabsContent value="image" className="pt-3">
+                <ImageFacts env={env} />
               </TabsContent>
               <TabsContent value="details" className="pt-3">
                 <EnvironmentFacts env={env} now={now} />
@@ -493,6 +615,93 @@ export function StopEnvironmentDialog({
   )
 }
 
+/**
+ * Admins: stops every environment that has been idle for an hour or more (not busy: no env.exec, no
+ * run in progress). It asks the server which ones first, and lists them.
+ */
+export function StopIdleDialog({
+  open,
+  onOpenChange,
+  onStopped,
+}: {
+  open: boolean
+  onOpenChange(open: boolean): void
+  onStopped(): void
+}) {
+  const api = useApi()
+  const [busy, setBusy] = useState(false)
+  const [candidates, setCandidates] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!open) {
+      setCandidates(null)
+      return
+    }
+    let live = true
+    api.stopIdleEnvironments({ idleMinutes: STOP_IDLE_MINUTES, dryRun: true }).then(
+      (r) => live && setCandidates(r.stopped),
+      (e: unknown) => {
+        if (!live) return
+        toast.error("Couldn't list idle environments", { description: e instanceof Error ? e.message : String(e) })
+        onOpenChange(false)
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [api, open, onOpenChange])
+  const stop = async () => {
+    setBusy(true)
+    try {
+      const r = await api.stopIdleEnvironments({ idleMinutes: STOP_IDLE_MINUTES })
+      toast(`${r.stopped.length} idle ${r.stopped.length === 1 ? 'environment' : 'environments'} stopped`, {
+        description: r.failed.length
+          ? `${r.failed.length} could not be stopped: ${r.failed[0]!.error}`
+          : 'Noted in each session.',
+      })
+      onStopped()
+      onOpenChange(false)
+    } catch (e) {
+      toast.error("Couldn't stop them", { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+      <DialogContent className="sm:max-w-[480px]" data-testid="stop-idle-dialog">
+        <DialogHeader>
+          <DialogTitle className="text-title1">Stop idle environments?</DialogTitle>
+          <DialogDescription className="text-mini text-fg-tertiary">
+            Environments with nothing running and no run in progress for {STOP_IDLE_MINUTES} minutes or more are torn down, like
+            Stop. Each session's history notes it, and the employee can start a new one with env.up.
+          </DialogDescription>
+        </DialogHeader>
+        {candidates === null ? (
+          <LoadingRows rows={2} />
+        ) : candidates.length === 0 ? (
+          <p className="text-mini text-fg-tertiary">Nothing is idle that long.</p>
+        ) : (
+          <ul className="max-h-48 overflow-y-auto rounded-md border bg-level-2 px-3 py-2 font-mono text-micro text-fg-secondary">
+            {candidates.map((id) => (
+              <li key={id} className="truncate">
+                {id}
+              </li>
+            ))}
+          </ul>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="destructive" size="sm" onClick={stop} disabled={busy || !candidates?.length}>
+            <TimerOff /> {busy ? 'Stopping…' : candidates?.length ? `Stop ${candidates.length} idle` : 'Stop idle'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** The full desktop viewer in a large dialog. */
 export function DesktopDialog({
   env,
@@ -543,6 +752,7 @@ export function EnvironmentCard({
         {env.desktop ? <Monitor className="size-3.5 text-fg-tertiary" /> : <Terminal className="size-3.5 text-fg-tertiary" />}
         <span className="min-w-0 truncate font-mono text-micro text-fg-secondary" title={env.image}>
           {runsLabel(env)}
+          {env.build && <span className="text-fg-quaternary"> · build</span>}
         </span>
         <span className="ml-auto shrink-0 text-micro text-fg-quaternary tabular-nums">
           up {duration(env.createdAt, undefined, now)}

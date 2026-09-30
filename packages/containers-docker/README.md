@@ -79,6 +79,11 @@ Per environment `<name>`:
   and works out CPU from the previous sample it saw (Docker's own `precpu_stats` when it has them); memory leaves out
   the page cache, like `docker stats`. `processes` asks `container.top` (the host's `ps -eo pid,user,pcpu,pmem,etime,args`),
   busiest first, at most 25 per container.
+- images: `getEnv` and `listEnvs` report the main container's image (`Config.Image`, or the summary's `Image`) and its ID;
+  `getEnv` also the start time and limits (`NanoCpus`, `Memory`, `PidsLimit`). A main container built from a Dockerfile is
+  labelled `mp.build=dockerfile` and `mp.build.base=<the Dockerfile's last FROM>` (read from the context, following stage
+  names: `baseImageOf`); older ones are told by their `<prefix>build/` image name. `inspectImage` is Docker's image
+  inspect (`Id`, `RepoDigests`, `RepoTags`, `Size`, `Created`, `Os`, `Architecture`/`Variant`, `Config.Labels`), null on 404.
 - destroy: removes every container labelled `mp.env=<name>` (the desktop first) and this deployment (with anonymous volumes), the proxy, and
   the environment's networks (not a shared direct network). Idempotent, and also cleans up half-created environments. A
   failed `createEnv` cleans up after itself.

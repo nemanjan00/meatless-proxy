@@ -5,7 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.tsx'
 import { PREVIEW_SANDBOX } from '../src/components/preview-panel.tsx'
-import { formatBytes, formatCpu, networkLabel, totals } from '../src/lib/environments.ts'
+import { formatBytes, formatCpu, networkLabel, shortDuration, shortImage, totals } from '../src/lib/environments.ts'
 import { EMP, SES, createMockDataLayer } from '../src/mock/index.ts'
 import { tickMockEnvironments } from '../src/mock/environments.ts'
 
@@ -47,6 +47,18 @@ describe('environment metrics formatting', () => {
     expect(networkLabel(null)).toBe('No network')
     expect(networkLabel({ via: 'direct' })).toBe('Direct network')
     expect(networkLabel({ via: 'proxy', allow: ['a.example.com'] })).toBe('Proxy · 1 host')
+  })
+
+  it('shortens images and lengths of time', () => {
+    expect(shortImage('ghcr.io/acme/app:1')).toBe('acme/app:1')
+    expect(shortImage('localhost:5000/app')).toBe('app')
+    expect(shortImage('docker.io/library/node:22')).toBe('node:22')
+    expect(shortImage('nemanjan00/dev:scraper')).toBe('nemanjan00/dev:scraper')
+    expect(shortImage(undefined)).toBe('unknown image')
+    expect(shortDuration(42_000)).toBe('42s')
+    expect(shortDuration(12 * 60_000)).toBe('12m')
+    expect(shortDuration(3 * 3600_000 + 20 * 60_000)).toBe('3h 20m')
+    expect(shortDuration(52 * 3600_000)).toBe('2d 4h')
   })
 
   it('sums containers and counts the desktop, which shares the network, once', () => {
@@ -100,8 +112,8 @@ describe('environment metrics formatting', () => {
 describe('Environments page', () => {
   it('lists environments with their session, what they run, network, exec and metrics', async () => {
     renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
-    expect(screen.getByTestId('env-count')).toHaveTextContent('3 environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    expect(screen.getByTestId('env-count')).toHaveTextContent('4 environments')
     const pay = rowOf('PAY-123: refund a double charge')
     expect(within(pay).getByRole('link', { name: 'PAY-123: refund a double charge' })).toHaveAttribute(
       'href',
@@ -121,16 +133,93 @@ describe('Environments page', () => {
     expect(within(pay).queryByRole('button', { name: 'Open desktop' })).toBeNull()
   })
 
+  it('shows the image of every row: profile badge, image and size, or that it was built', async () => {
+    renderAt('/environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    const pay = within(rowOf('PAY-123: refund a double charge')).getByTestId('env-image')
+    expect(within(pay).getByTestId('env-profile')).toHaveTextContent('default')
+    expect(pay).toHaveTextContent('nemanjan00/dev:default')
+    expect(pay).toHaveTextContent('1.9 GB')
+    const built = within(rowOf('PAY-131: currency rounding in invoices')).getByTestId('env-image')
+    expect(built).toHaveTextContent('build')
+    expect(built).toHaveTextContent('mp-build/billing-bot-pay-131-rounding:latest')
+    expect(built).toHaveTextContent('612 MB')
+    expect(within(built).queryByTestId('env-profile')).toBeNull()
+  })
+
+  it("shows each environment's session state and idle time", async () => {
+    renderAt('/environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    expect(within(rowOf('PAY-131: currency rounding in invoices')).getByTestId('env-state')).toHaveTextContent(
+      'done · idle 23h 12m',
+    )
+    expect(within(rowOf('PAY-123: refund a double charge')).getByTestId('env-state')).toHaveTextContent('working')
+  })
+
+  it("details the image, limits and activity in the drawer's tabs", async () => {
+    renderAt('/environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    await userEvent.click(
+      within(rowOf('PAY-131: currency rounding in invoices')).getByRole('button', { name: 'Logs and details' }),
+    )
+    const sheet = await screen.findByTestId('env-sheet')
+    await userEvent.click(within(sheet).getByRole('tab', { name: 'Image' }))
+    const img = within(sheet).getByTestId('env-image-facts')
+    expect(img).toHaveTextContent("built from payments-api's Dockerfile on node:22-bookworm-slim")
+    expect(img).toHaveTextContent('sha256:4f9c2a7d31e0')
+    expect(img).toHaveTextContent('none (built here)')
+    expect(img).toHaveTextContent('linux/amd64')
+    await userEvent.click(within(sheet).getByRole('tab', { name: 'Details' }))
+    expect(within(sheet).getByTestId('env-session-state')).toHaveTextContent('done')
+    expect(within(sheet).getByTestId('env-activity')).toHaveTextContent('Idle 23h 12m')
+    expect(within(sheet).getByTestId('env-limits')).toHaveTextContent('any CPU · no memory limit · 4096 processes')
+  })
+
+  it('shows a profile image with its description, source and digest', async () => {
+    renderAt('/environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    await userEvent.click(within(rowOf('PAY-140: reproduce in staging')).getByRole('button', { name: 'Logs and details' }))
+    const sheet = await screen.findByTestId('env-sheet')
+    await userEvent.click(within(sheet).getByRole('tab', { name: 'Image' }))
+    const img = within(sheet).getByTestId('env-image-facts')
+    expect(img).toHaveTextContent('cloakbrowser')
+    expect(img).toHaveTextContent('nemanjan00/dev@sha256:')
+    expect(within(img).getByRole('link', { name: 'https://github.com/nemanjan00/dev-environment' })).toHaveAttribute(
+      'target',
+      '_blank',
+    )
+  })
+
+  it('lets admins stop idle environments after listing them', async () => {
+    const { data } = renderAt('/environments')
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    const call = vi.spyOn(data.api, 'stopIdleEnvironments')
+    await userEvent.click(screen.getByRole('button', { name: /Stop idle \(1\)/ }))
+    const dialog = await screen.findByTestId('stop-idle-dialog')
+    expect(await within(dialog).findByText('mp-billing-bot-pay-131-rounding')).toBeInTheDocument()
+    expect(call).toHaveBeenLastCalledWith({ idleMinutes: 60, dryRun: true })
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Stop 1 idle' }))
+    await waitFor(() => expect(call).toHaveBeenLastCalledWith({ idleMinutes: 60 }))
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(rows().some((r) => within(r).queryByText('PAY-131: currency rounding in invoices'))).toBe(false)
+  })
+
+  it('offers Stop idle to admins only', async () => {
+    renderAt('/environments', as('member'))
+    await waitFor(() => expect(rows()).toHaveLength(4))
+    expect(screen.queryByRole('button', { name: /Stop idle/ })).toBeNull()
+  })
+
   it('filters by employee and by desktop, in the URL', async () => {
     renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     await userEvent.click(screen.getByRole('combobox', { name: 'Employee' }))
     await userEvent.click(await screen.findByRole('option', { name: 'Infra Bot' }))
     await waitFor(() => expect(search().get('employee')).toBe(EMP.infra))
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(rowOf('INC-42: staging disk full')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     await userEvent.click(screen.getByRole('checkbox', { name: 'With desktop' }))
     await waitFor(() => expect(search().get('desktop')).toBe('1'))
     await waitFor(() => expect(rows()).toHaveLength(1))
@@ -139,7 +228,7 @@ describe('Environments page', () => {
 
   it('updates a row live from env.stats, including the running exec', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     const inc = () => rowOf('INC-42: staging disk full')
     expect(within(inc()).getByTestId('env-exec')).toHaveTextContent('du -xh')
     act(() => {
@@ -177,7 +266,7 @@ describe('Environments page', () => {
 
   it('opens the logs drawer, refreshes the logs, and loads processes on demand', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     const logs = vi.spyOn(data.api, 'environmentLogs')
     const procs = vi.spyOn(data.api, 'environmentProcesses')
     await userEvent.click(within(rowOf('PAY-123: refund a double charge')).getByRole('button', { name: 'Logs and details' }))
@@ -198,7 +287,7 @@ describe('Environments page', () => {
 
   it('shows Stop only where allowed, and stops after a confirmation', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     expect(within(rowOf('INC-42: staging disk full')).queryByRole('button', { name: 'Stop environment' })).toBeNull()
     const stop = vi.spyOn(data.api, 'stopEnvironment')
     await userEvent.click(within(rowOf('PAY-123: refund a double charge')).getByRole('button', { name: 'Stop environment' }))
@@ -206,13 +295,13 @@ describe('Environments page', () => {
     expect(stop).not.toHaveBeenCalled()
     await userEvent.click(within(dialog).getByRole('button', { name: /Stop environment/ }))
     await waitFor(() => expect(stop).toHaveBeenCalledWith('mp-billing-bot-pay-123-refund'))
-    await waitFor(() => expect(rows()).toHaveLength(2))
+    await waitFor(() => expect(rows()).toHaveLength(3))
     expect(rows().some((r) => within(r).queryByText('PAY-123: refund a double charge'))).toBe(false)
   })
 
   it('opens the desktop view-only in the sandboxed frame, and lets an allowed viewer take control', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     const mint = vi.spyOn(data.api, 'desktopToken')
     // The thumbnail is a view-only frame that takes no input.
     const thumb = await screen.findByTitle(/\(thumbnail\)/)
@@ -243,7 +332,7 @@ describe('Environments page', () => {
 
   it('offers no control toggle without canControl', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     const orig = data.api.environments
     data.api.environments = async (q) => {
       const r = await orig(q)
@@ -258,7 +347,7 @@ describe('Environments page', () => {
 
   it('tells viewers that only members open desktops', async () => {
     renderAt('/environments', as('viewer'))
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     await userEvent.click(within(rowOf('PAY-140: reproduce in staging')).getByRole('button', { name: 'Open desktop' }))
     const dialog = await screen.findByTestId('desktop-dialog')
     expect(within(dialog).getByText(/members can open them/)).toBeInTheDocument()
@@ -267,7 +356,7 @@ describe('Environments page', () => {
 
   it('reloads when an environment starts or stops', async () => {
     const { data } = renderAt('/environments')
-    await waitFor(() => expect(rows()).toHaveLength(3))
+    await waitFor(() => expect(rows()).toHaveLength(4))
     const list = vi.spyOn(data.api, 'environments')
     act(() => data.live.emit('env.changed', { sessionId: SES.pay123, envId: 'mp-x', op: 'up' }))
     await waitFor(() => expect(list).toHaveBeenCalled())

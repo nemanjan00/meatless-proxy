@@ -1701,7 +1701,8 @@ Open questions:
 - How long can an environment stay up, for example for someone to look at a
   running preview?
 - Housekeeping (TTLs for idle environments, pruning worktrees and unused
-  mirrors, dropping old ephemeral run entries) is left for later.
+  mirrors, dropping old ephemeral run entries) is left for later. For now an
+  admin stops idle environments by hand (Stop idle on the Environments page).
 
 ### Sessions
 
@@ -2753,10 +2754,24 @@ It is built with shadcn/ui and styled after Linear. See the
   a session to its parent, its children, and linked sessions, and see at a
   glance which branches are running, waiting, done or failed.
 - **Environments** (`/environments`): what the employees are running right now.
-  - Every environment, with its session (a link), employee, profile or image,
-    checkouts, network (none, proxy and its hosts, or direct), exposed ports,
-    whether it has a desktop, when it started and its uptime, and its status.
-    Environments no session points at any more are shown to admins only.
+  - Every environment the container runtime runs (its main containers: service
+    containers belong to their environment, and code.run's sandbox isn't one),
+    with its session (a link) and the session's state (active, waiting, done),
+    employee, checkouts, network (none, proxy and its hosts, or direct), exposed
+    ports, whether it has a desktop, when it started and its uptime, its status,
+    and how long it has been idle (since its last `env.exec`, else its session's
+    last run, else its start). Environments no session points at any more are
+    shown to admins only.
+  - **Its image**, always the one the runtime reports (also for environments
+    built from a checkout's Dockerfile, "built from payments-api's Dockerfile",
+    `mp-build/<name>:latest`, and for ones started before the session recorded
+    it): the row shows the profile (or a build badge), the image and its size;
+    the details drawer adds the profile's one-line description (what tools it
+    has; a profile's image maps back to its profile), the base image of a
+    build, the short image ID and digest, the build date, OS/architecture, the
+    image's `org.opencontainers.image` source and description, and the main
+    container's limits (CPU, memory, processes). Image inspections are cached
+    for a few minutes.
   - **What runs in it:** the `env.exec` in progress, with its elapsed time,
     and, on demand in the details drawer, the top processes of each container
     (`docker top`).
@@ -2768,7 +2783,11 @@ It is built with shadcn/ui and styled after Linear. See the
     `env.changed` tells when one starts or goes away.
   - **Desktops** show a live, view-only thumbnail that opens the full viewer.
   - Actions: logs (a drawer, refreshing), open the preview, open the desktop,
-    and **Stop**, for admins and the session's requester. Stopping tears the
+    and **Stop**, for admins and the session's requester. Admins also have
+    **Stop idle**: it lists every environment that is not busy (no `env.exec`,
+    no run in progress) and has been idle an hour or more, and stops them all
+    like Stop (`POST /api/environments/stop-idle`). Nothing stops idle
+    environments by itself yet. Stopping tears the
     environment down like `env.down`, and the session gets a note in its
     history ("… stopped this session's environment"): at once when it's idle,
     or as an inbox item its working run reads at its next step.
