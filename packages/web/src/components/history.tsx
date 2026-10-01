@@ -37,12 +37,16 @@ export function pairToolResults(entries: ApiEntry[]): TimelineItem[] {
       const item: TimelineItem = { entry: e, results: new Map() }
       for (const c of (e.content as unknown as AssistantContent).toolCalls ?? []) pending.set(c.id, item)
       items.push(item)
-    } else if (e.kind === 'tool_result') {
-      const c = e.content as unknown as ToolResultContent
-      const owner = pending.get(c.toolCallId)
+    } else if (e.kind === 'tool_result' || (e.kind === 'pointer' && (e.content as unknown as PointerContent).toolCallId)) {
+      // A pointer standing for an offloaded result pairs with its call like the result would.
+      const callId =
+        e.kind === 'tool_result'
+          ? (e.content as unknown as ToolResultContent).toolCallId
+          : (e.content as unknown as PointerContent).toolCallId!
+      const owner = pending.get(callId)
       if (owner) {
-        owner.results!.set(c.toolCallId, e)
-        pending.delete(c.toolCallId)
+        owner.results!.set(callId, e)
+        pending.delete(callId)
       } else items.push({ entry: e })
     } else items.push({ entry: e })
   }
@@ -89,7 +93,8 @@ function Output({ value }: { value: unknown }) {
 
 function ToolCall({ call, result }: { call: { id: string; name: string; arguments: string }; result?: ApiEntry }) {
   const [open, setOpen] = useState(false)
-  const r = result?.content as unknown as ToolResultContent | undefined
+  const offloaded = result?.kind === 'pointer' ? (result.content as unknown as PointerContent) : undefined
+  const r = offloaded ? undefined : (result?.content as unknown as ToolResultContent | undefined)
   let args: unknown = call.arguments
   try {
     args = JSON.parse(call.arguments)
@@ -112,7 +117,11 @@ function ToolCall({ call, result }: { call: { id: string; name: string; argument
         <Wrench className="size-3 shrink-0 text-fg-tertiary" />
         <span className="shrink-0">{call.name}</span>
         <span className="min-w-0 truncate text-fg-quaternary">({argText})</span>
-        {r ? (
+        {offloaded ? (
+          <span className="ml-auto shrink-0 font-sans text-fg-quaternary" data-testid="offloaded-result">
+            offloaded
+          </span>
+        ) : r ? (
           <span className={cn('ml-auto shrink-0 font-sans', r.isError ? 'text-[var(--red)]' : 'text-fg-quaternary')}>
             {r.isError ? 'error' : 'ok'}
           </span>
@@ -127,6 +136,16 @@ function ToolCall({ call, result }: { call: { id: string; name: string; argument
           <>
             <div className="text-micro text-fg-quaternary">Output</div>
             <Output value={r.output} />
+          </>
+        )}
+        {offloaded && (
+          <>
+            <div className="text-micro text-fg-quaternary">
+              {result?.meta.automatic
+                ? 'Too big to keep in the context: the model sees this preview'
+                : 'Offloaded: the model sees'}
+            </div>
+            <Output value={offloaded.text} />
           </>
         )}
       </CollapsibleContent>
@@ -232,7 +251,15 @@ export function TimelineEntry({ item, onShowBranch }: { item: TimelineItem; onSh
         <Row icon={<Undo2 />} label="Summary" time={time}>
           <div className="mt-1 rounded-lg border border-[var(--indigo)]/30 bg-accent-tint px-3 py-2" data-testid="summary-entry">
             <div className="mb-1 flex items-center gap-2 text-micro text-[#828fff]">
-              Rewound: the detailed branch is kept
+              {e.meta.automatic === true ? (
+                <span data-testid="auto-compaction">
+                  Compacted automatically near the context limit: the full history is kept
+                </span>
+              ) : e.meta.op === 'compact' ? (
+                'Compacted: the full history is kept'
+              ) : (
+                'Rewound: the detailed branch is kept'
+              )}
               {onShowBranch && c.replacesTip && (
                 <button type="button" className="ml-auto hover:underline" onClick={() => onShowBranch(c.replacesTip)}>
                   Show branch

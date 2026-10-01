@@ -24,9 +24,7 @@ export const UNTRUSTED_NOTE =
  */
 export function renderMessages(entries: Entry[]): ChatMessage[] {
   const out: ChatMessage[] = []
-  const answered = new Set(
-    entries.filter((e) => e.kind === 'tool_result').map((e) => (e.content as unknown as ToolResultContent).toolCallId),
-  )
+  const answered = new Set(entries.map(answeredCall).filter((id): id is string => !!id))
   for (const e of entries) {
     const c = e.content as any
     switch (e.kind) {
@@ -52,7 +50,7 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
           if (!answered.has(t.id)) {
             // Only synthesise when the result can't come later in this history.
             const later = entries.slice(entries.indexOf(e) + 1)
-            const hasLater = later.some((x) => x.kind === 'tool_result' && (x.content as any).toolCallId === t.id)
+            const hasLater = later.some((x) => answeredCall(x) === t.id)
             if (!hasLater)
               out.push({
                 role: 'tool',
@@ -77,13 +75,21 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
         out.push({ role: 'user', content: ev.trusted ? `${header}\n${ev.text}` : `${header}\n${UNTRUSTED_NOTE}\n\n${ev.text}` })
         break
       }
-      case 'summary':
-        out.push({ role: 'user', content: `[summary of earlier work in this session]\n${(c as SummaryContent).text}` })
+      case 'summary': {
+        const header =
+          e.meta.automatic === true
+            ? `[summary of earlier work in this session, written automatically when the context was nearly full. The full history is kept; the latest entries follow verbatim]`
+            : '[summary of earlier work in this session]'
+        out.push({ role: 'user', content: `${header}\n${(c as SummaryContent).text}` })
         break
+      }
       case 'pointer': {
         const p = c as PointerContent
         const where = p.doc ? ` (see doc ${p.doc.id}${p.doc.chapter ? `, chapter "${p.doc.chapter}"` : ''})` : ''
-        out.push({ role: 'user', content: `[offloaded message${where}] ${p.text}` })
+        // A pointer standing for a tool result answers that call, so the history stays a valid tool exchange.
+        if (p.toolCallId)
+          out.push({ role: 'tool', tool_call_id: p.toolCallId, content: `[offloaded tool result${where}] ${p.text}` })
+        else out.push({ role: 'user', content: `[offloaded message${where}] ${p.text}` })
         break
       }
       default:
@@ -108,6 +114,13 @@ export function imagePartOf(ref: ImageRef): ImagePart {
 function stringifyOutput(output: Json, isError?: boolean): string {
   const body = typeof output === 'string' ? output : JSON.stringify(output)
   return isError ? `ERROR: ${body}` : body
+}
+
+/** The tool call an entry answers: a tool result, or a pointer standing for one. */
+export function answeredCall(e: Entry): string | undefined {
+  if (e.kind === 'tool_result') return (e.content as unknown as ToolResultContent).toolCallId
+  if (e.kind === 'pointer') return (e.content as unknown as PointerContent).toolCallId
+  return undefined
 }
 
 /** The last assistant text in a history, used as a run's output and as a fallback summary. */

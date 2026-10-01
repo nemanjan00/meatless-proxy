@@ -36,6 +36,9 @@ export function registerChecklistTools(kit: Kit): void {
       if (path.some((e) => e.id === id)) return id
       const tr = path.find((e) => e.kind === 'tool_result' && (e.content as unknown as ToolResultContent).toolCallId === id)
       if (tr) return tr.id
+      // A result that was offloaded (e.g. too big to keep): its pointer stands for it.
+      const ptr = path.find((e) => e.kind === 'pointer' && (e.content as { toolCallId?: string }).toolCallId === id)
+      if (ptr) return ptr.id
       const ev = path.find((e) => e.kind === 'event' && (e.content as unknown as EventContent).eventId === id)
       return ev ? ev.id : id
     })

@@ -196,7 +196,7 @@ anything.
 | rewind    | a new `summary` entry whose parent is the earlier entry, and `head` moves to it. The detailed branch stays in the tree. |
 | offload   | a new `pointer` entry replaces the message. The entries after it are re-created on top with the same content hashes, so it's cheap, but the cached prefix is invalid from that point on. |
 | restore   | the same thing in reverse: the original entry goes back into the path |
-| compact   | the same as rewind to the root, with a summary of everything. It's done only when required and recorded like any other operation. |
+| compact   | the same as rewind to the root, with a summary of everything. It's done only when required and recorded like any other operation. It may keep the latest entries: they are re-created verbatim on top of the summary. |
 
 The web UI can show all of this as a tree. Every summary and pointer links to
 the branch or entry it stands for.
@@ -359,6 +359,62 @@ stays the same across calls, runs and forks:
   session or run starts, not re-injected in every call.
 - Entries are rendered to OpenAI messages the same way every time, byte for
   byte.
+
+### Context size and compaction
+
+The runner keeps each request inside the model's **context window**:
+
+- **The window** comes from `MODEL_CONTEXT_TOKENS` for the deployment's model,
+  else from a table of known models (`contextWindowOf` in `@mp/model`), else
+  128k.
+- **Measuring.** Each model call reports its prompt tokens. The runner stores
+  them on the run (`run.data.context`: tokens, window, characters of the
+  request), and estimates the next request from its characters with the ratio
+  that call measured. The estimate covers everything appended since (tool
+  results, inbox events) and any change to the history (a rewind, offload or
+  compaction).
+- **Notes.** Before a model call whose estimate crosses 50% or 75% of the
+  window, a `system` entry (`meta.contextNote`) tells the model its size and
+  its options. The run remembers the highest threshold noted; falling back
+  below one arms it again. A new run starts from the notes in its history
+  since the last summary, so a continuing session isn't told twice, and an
+  ephemeral run (whose notes went with it) is. Notes are only appended when no
+  tool call is open, like the toolset note when a run starts.
+- **Automatic compaction.** Before a model call whose estimate is at 85% of
+  the window (`CONTEXT_COMPACT_AT`; 0 turns it off), or after the provider
+  refused a request as too long:
+  1. The cut: the latest entries worth about 15% of the window (or of the
+     request, if that is smaller) are kept. A cut never separates a tool call
+     from its results: results whose call would be summarised are summarised
+     with it.
+  2. A model call without tools, on the history up to the cut plus an
+     instruction, writes the summary (`max_tokens` 8000). Its usage is recorded
+     like any model call. Providers that insist on tool definitions get a
+     second try with them.
+  3. `compact` with `keepFrom`: a `summary` entry on the first entry
+     (`meta.automatic`, `tokensBefore`, `window`, `keptEntries`) and the kept
+     entries re-created on top. `context.compacted` goes on the bus.
+  4. If any of this fails, `context.compact_failed` goes on the bus, it's
+     logged, and the run carries on. It pauses instead, with a `pauseReason`
+     starting "context full", when the request clearly can't fit: the estimate
+     is over the window, or the provider refused it again. Resuming tries to
+     compact again.
+
+  Compaction only moves the run's tip. In a **continuing** run the commit then
+  moves the session's head onto the compacted branch (or, if the head moved,
+  commits a summary as usual). In an **ephemeral** run the session's head
+  never moves, so the next run starts from the uncompacted history and may
+  compact again: the summary is a property of that run, not of the session.
+  The same holds for `sessions.compact` called by the model.
+- **Oversized tool results.** A result whose text is longer than 20,000
+  characters (`TOOL_RESULT_MAX_CHARS`) is appended in full and offloaded at
+  once: a `pointer` entry (`meta.automatic`) with its head and tail and how to
+  read the rest takes its place. The full result stays in its entry;
+  `sessions.restore` reads it in pieces (`offset`, `length`) or puts it back.
+  A pointer standing for a tool result records the call's id and is rendered
+  as that call's tool message, so the history stays a valid tool exchange and
+  the result still counts as checklist evidence. Results with images are left
+  alone.
 
 ## Limits, pause and kill
 

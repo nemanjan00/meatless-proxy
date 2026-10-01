@@ -91,6 +91,7 @@ export const runSchema: KindSchema = {
     { name: 'limitPaused', type: 'enum', values: ['steps', 'wall'] },
     { name: 'stepsFrom', type: 'number' },
     { name: 'committed', type: 'json' },
+    { name: 'context', type: 'json' },
   ],
 }
 

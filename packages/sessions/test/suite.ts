@@ -481,7 +481,11 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
           text: 'see Retry policy',
           original: b.id,
           doc: { id: 'doc_1', chapter: 'Retry policy' },
+          // A pointer standing for a tool result names its call, so it can answer it.
+          toolCallId: 'c1',
+          toolName: 'read',
         })
+        expect(ptr.meta).toMatchObject({ op: 'offload', offloadedKind: 'tool_result' })
         expect(tip.id).toBe(h[4]!.id)
         expect(tip.id).not.toBe(c.id)
         expect(tip.hash).toBe(c.hash)
@@ -534,6 +538,38 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
         const r2 = await started(empty.id)
         await expect(sessions.compact(r2.id, 'x')).rejects.toBeInstanceOf(ValidationError)
         expect(s).toBeTruthy()
+      })
+
+      it('compacts keeping the latest entries verbatim, with extra meta on the summary', async () => {
+        const { s, r, a, b, c } = await setup()
+        const before = await sessions.runHistory(r.id)
+        const tip = await sessions.compact(r.id, 'what came before', { keepFrom: a.id, meta: { automatic: true } })
+        const h = await sessions.runHistory(r.id)
+        expect(h.map((e) => e.kind)).toEqual(['system', 'summary', 'assistant', 'tool_result', 'assistant'])
+        expect(h[1]!.meta).toMatchObject({ op: 'compact', automatic: true, keptEntries: 3, keptFrom: a.id })
+        expect(h[1]!.content as unknown as SummaryContent).toEqual({
+          text: 'what came before',
+          rewoundTo: before[0]!.id,
+          replacesTip: c.id,
+        })
+        expect(h.slice(2).map((e) => e.meta.copiedFrom)).toEqual([a.id, b.id, c.id])
+        expect(h.slice(2).map((e) => e.content)).toEqual([a.content, b.content, c.content])
+        expect(tip.id).toBe(h[4]!.id)
+        // The detailed branch is still in the tree.
+        expect(await records.store.entries.path(c.id)).toEqual(before)
+        // Committing a continuing run moves the head onto the compacted branch.
+        await sessions.commit(r.id)
+        expect((await sessions.history(s.id)).map((e) => e.kind)).toEqual(h.map((e) => e.kind))
+      })
+
+      it('compacts with nothing kept, and refuses a keepFrom off the path or at the first entry', async () => {
+        const { r } = await setup()
+        const first = (await sessions.runHistory(r.id))[0]!
+        await expect(sessions.compact(r.id, 'x', { keepFrom: 'ent_nope' })).rejects.toBeInstanceOf(ValidationError)
+        await expect(sessions.compact(r.id, 'x', { keepFrom: first.id })).rejects.toBeInstanceOf(ValidationError)
+        await expect(sessions.compact(r.id, ' ', { meta: { automatic: true } })).rejects.toBeInstanceOf(ValidationError)
+        await sessions.compact(r.id, 'all of it', { meta: { automatic: true } })
+        expect(texts(await sessions.runHistory(r.id))).toEqual(['sys', 'all of it'])
       })
 
       it('refuses tree operations on terminal runs', async () => {

@@ -249,6 +249,21 @@ within two minutes is told so instead of posting it again.
 | `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached file or image |
 | `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | attachments per message |
 
+### Context size
+
+Each run knows how full its model's context window is (shown on the session
+page). The model is told at 50 % and 75 %, so it can rewind or offload, and
+the harness compacts automatically near the limit: a summary of the earlier
+work plus the latest messages verbatim, with the full history kept. Tool
+results that are too big are kept as a preview that the model can read in
+pieces. A run whose context can't be made to fit pauses with the reason.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `MODEL_CONTEXT_TOKENS` | from the model's name, else 128k | the context window of `MODEL`, in tokens |
+| `CONTEXT_COMPACT_AT` | 85 | percent of the window at which a run compacts by itself (`0`: never) |
+| `TOOL_RESULT_MAX_CHARS` | 20000 | longer tool results are stored in full and kept as a preview (`0`: never) |
+
 ### Limits and budgets
 
 Runaway protection works out of the box. Every employee gets these defaults,

@@ -14,7 +14,8 @@ the kind `checklist` (`chk_`, one per session, record key = session id).
 - `check(sessionId, itemId, evidenceEntryIds, { runId? })`: every evidence id
   must be on `sessions.runHistory(runId)` (the run must belong to the session)
   or, without a run, on the session's committed history, and must be a
-  `tool_result`, `event` or `user` entry (`EVIDENCE_KINDS`). Anything else is a
+  `tool_result`, `event` or `user` entry (`EVIDENCE_KINDS`), or a pointer
+  standing for one (an offloaded tool result). Anything else is a
   `ValidationError` naming each bad id. Checking again with new evidence
   clears an earlier review verdict.
 - `requestReview(sessionId, itemId)` (the item must be checked; it then needs

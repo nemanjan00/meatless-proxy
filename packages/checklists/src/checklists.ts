@@ -248,8 +248,10 @@ export function createChecklists(opts: ChecklistsOptions): Checklists {
     const problems: string[] = []
     for (const id of evidence) {
       const e = byId.get(id)
+      // A pointer counts as what it stands for (an offloaded tool result is still something observed).
+      const kind = e?.kind === 'pointer' && typeof e.meta.offloadedKind === 'string' ? e.meta.offloadedKind : e?.kind
       if (!e) problems.push(`${id} is not in ${where}`)
-      else if (!EVIDENCE_KINDS.includes(e.kind as EntryKind))
+      else if (!EVIDENCE_KINDS.includes(kind as EntryKind))
         problems.push(`${id} is a ${e.kind} entry; evidence must be something observed (${EVIDENCE_KINDS.join(', ')})`)
     }
     if (problems.length) throw new ValidationError('invalid evidence', problems)

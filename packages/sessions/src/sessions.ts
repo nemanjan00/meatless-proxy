@@ -652,15 +652,38 @@ export function createSessions(opts: SessionsOptions): Sessions {
 
     rewind: (runId, toEntry, summary) => atomic(async (t) => rewindIn(t, await liveRun(t, runId), toEntry, summary, 'rewind')),
 
-    compact: (runId, summary) =>
+    compact: (runId, summary, o = {}) =>
       atomic(async (t) => {
         const run = await liveRun(t, runId)
         const path = await runPath(t.store, run)
         if (!path.length) throw new ValidationError(`run ${runId} has no history to compact`)
-        return rewindIn(t, run, path[0]!.id, summary, 'compact')
+        if (o.keepFrom === undefined && !o.meta) return rewindIn(t, run, path[0]!.id, summary, 'compact')
+        if (!summary?.trim()) throw new ValidationError('a summary is required')
+        let kept: Entry[] = []
+        if (o.keepFrom !== undefined) {
+          const i = path.findIndex((e) => e.id === o.keepFrom)
+          if (i < 0) throw new ValidationError(`entry ${o.keepFrom} is not on the current path of run ${runId}`)
+          if (i === 0) throw new ValidationError("compaction can't keep the first entry: it stays anyway")
+          kept = path.slice(i)
+        }
+        const content: SummaryContent = { text: summary, rewoundTo: path[0]!.id, replacesTip: path[path.length - 1]!.id }
+        const entry = await appendOne(
+          t.store,
+          path[0]!.id,
+          { kind: 'summary', content: content as unknown as Json },
+          runWho(run),
+          {
+            ...(o.meta ?? {}),
+            op: 'compact',
+            ...(kept.length ? { keptEntries: kept.length, keptFrom: kept[0]!.id } : {}),
+          },
+        )
+        const tip = (await copyChain(t.store, entry.id, kept, runWho(run))) ?? entry
+        await moveTip(t, run, tip.id)
+        return tip
       }),
 
-    offload: (runId, entryId, pointer) =>
+    offload: (runId, entryId, pointer, o = {}) =>
       atomic(async (t) => {
         if (!pointer?.text?.trim()) throw new ValidationError('a pointer needs a text')
         const run = await liveRun(t, runId)
@@ -670,8 +693,16 @@ export function createSessions(opts: SessionsOptions): Sessions {
         if (i === 0) throw new ValidationError("the first entry of a history can't be offloaded")
         const target = path[i]!
         if (target.kind === 'pointer') throw new ValidationError(`entry ${entryId} is already a pointer`)
-        const content: PointerContent = { text: pointer.text, original: entryId, ...(pointer.doc ? { doc: pointer.doc } : {}) }
+        const result = target.kind === 'tool_result' ? (target.content as { toolCallId?: unknown; name?: unknown }) : null
+        const content: PointerContent = {
+          text: pointer.text,
+          original: entryId,
+          ...(pointer.doc ? { doc: pointer.doc } : {}),
+          ...(typeof result?.toolCallId === 'string' ? { toolCallId: result.toolCallId } : {}),
+          ...(typeof result?.name === 'string' ? { toolName: result.name } : {}),
+        }
         const p = await appendOne(t.store, target.parent, { kind: 'pointer', content: content as unknown as Json }, runWho(run), {
+          ...(o.meta ?? {}),
           op: 'offload',
           offloadedKind: target.kind,
         })

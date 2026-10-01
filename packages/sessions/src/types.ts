@@ -63,6 +63,12 @@ export interface PointerContent {
   /** The entry that was offloaded. */
   original: string
   doc?: { id: string; chapter?: string }
+  /**
+   * When the offloaded entry was a tool result: its call id and tool name. The pointer then answers that call
+   * (it's rendered as the call's tool message), so the assistant entry's calls stay paired with results.
+   */
+  toolCallId?: string
+  toolName?: string
 }
 
 // ─── Sessions ───────────────────────────────────────────────────────────────
@@ -186,6 +192,22 @@ export interface RunData extends Record<string, unknown> {
   stepsFrom?: number
   /** Set once the run was committed to its session: in full (head moved to the tip) or as a summary entry. */
   committed?: { as: 'full' | 'summary'; at: string; entryId: string | null }
+  /** The size of the run's context at its latest model call (set by the runner). */
+  context?: RunContextSize
+}
+
+/** How full a run's context was at its latest model call. */
+export interface RunContextSize {
+  /** Prompt tokens of the latest model call, as the provider counted them. */
+  tokens: number
+  /** The model's context window. */
+  window: number
+  /** Characters of that request (messages and tools), to estimate the next request's tokens from its characters. */
+  chars: number
+  model: string
+  at: string
+  /** The highest context threshold (percent) the model was told about since the context last fell below it. */
+  noted?: number
 }
 
 export type Run = StoredRecord<RunData>
@@ -400,11 +422,21 @@ export interface Sessions {
    * Replaces `entryId` (on the run's current path) with a pointer entry, and
    * re-creates the entries after it on top (same content). Returns the new tip.
    */
-  offload(runId: string, entryId: string, pointer: { text: string; doc?: { id: string; chapter?: string } }): Promise<Entry>
+  offload(
+    runId: string,
+    entryId: string,
+    pointer: { text: string; doc?: { id: string; chapter?: string } },
+    opts?: { meta?: Record<string, Json> },
+  ): Promise<Entry>
   /** Undoes an offload: the original entry goes back in place of the pointer. Returns the new tip. */
   restore(runId: string, pointerEntryId: string): Promise<Entry>
-  /** Real compaction: rewind to the first entry of the history with a summary of everything. */
-  compact(runId: string, summary: string): Promise<Entry>
+  /**
+   * Real compaction: rewind to the first entry of the history with a summary of everything. With `keepFrom`
+   * (an entry on the run's current path, after the first), the entries from it to the tip are re-created
+   * verbatim on top of the summary: the summary stands for what lies between the first entry and `keepFrom`.
+   * `meta` is added to the summary entry's meta (e.g. `automatic: true`). Returns the new tip.
+   */
+  compact(runId: string, summary: string, opts?: { keepFrom?: string; meta?: Record<string, Json> }): Promise<Entry>
 
   // waiting
   /** Suspends a running run with a wait condition. */

@@ -158,6 +158,9 @@ export interface PointerContent {
   /** The offloaded entry. */
   original: string
   doc?: { id: string; chapter?: string }
+  /** When it stands for a tool result: that call's id and tool. */
+  toolCallId?: string
+  toolName?: string
 }
 
 /** Token counts of one model call, as stored in `entry.meta.usage`. */
@@ -323,6 +326,8 @@ export interface RunData extends Record<string, unknown> {
   result?: RunResult
   startedAt?: string
   endedAt?: string
+  /** How full the run's context was at its latest model call: prompt tokens and the model's window. */
+  context?: { tokens: number; window: number; model: string; at: string }
 }
 export type Run = ApiRecord<RunData>
 

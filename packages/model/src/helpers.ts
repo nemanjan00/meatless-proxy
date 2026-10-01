@@ -97,3 +97,30 @@ const VISION_MODELS = [
 export function knownVisionModel(model: string): boolean {
   return VISION_MODELS.some((re) => re.test(model))
 }
+
+/** The context window assumed for a model the table below doesn't know. */
+export const DEFAULT_CONTEXT_TOKENS = 128_000
+
+/**
+ * Known context windows (prompt plus completion, in tokens), by model name pattern; the first match wins.
+ * A guess from the name: `MODEL_CONTEXT_TOKENS` overrides it for the deployment's model.
+ */
+export const CONTEXT_WINDOWS: readonly { pattern: RegExp; tokens: number }[] = [
+  // Kimi: K2 from 0905 on, K2.5 and later, K3 and the coding models have 256k; the first K2 had 128k.
+  { pattern: /kimi-k2[-.]?0711|kimi-k2$/i, tokens: 131_072 },
+  { pattern: /kimi-k3|kimi-k2|kimi-for-coding|kimi-latest|^k3/i, tokens: 262_144 },
+  // Claude (Sonnet, Opus, Haiku, Fable): 200k by default.
+  { pattern: /claude|sonnet|opus|haiku|fable/i, tokens: 200_000 },
+  { pattern: /gpt-4\.1/i, tokens: 1_047_576 },
+  { pattern: /gpt-5/i, tokens: 400_000 },
+  { pattern: /gpt-4o|gpt-4-turbo/i, tokens: 128_000 },
+  { pattern: /^o[34]/i, tokens: 200_000 },
+]
+
+/** The context window of a model: `override` when given, else the known table, else `DEFAULT_CONTEXT_TOKENS`. */
+export function contextWindowOf(model: string, override?: number): number {
+  if (override && override > 0) return override
+  const m = model.trim()
+  const name = m.slice(m.lastIndexOf('/') + 1)
+  return CONTEXT_WINDOWS.find((w) => w.pattern.test(name))?.tokens ?? DEFAULT_CONTEXT_TOKENS
+}

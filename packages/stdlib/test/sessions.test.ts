@@ -372,6 +372,62 @@ describe('run control', () => {
     ])
   })
 
+  it('offload and rewind take a tool call id; rewind keeps the whole turn', async () => {
+    const t = await stack()
+    const id1 = 'call_t1'
+    const id2 = 'call_t2'
+    const a = await t.sessions.append(t.run.id, {
+      kind: 'assistant',
+      content: {
+        text: null,
+        toolCalls: [
+          { id: id1, name: 'docs.read', arguments: '{}' },
+          { id: id2, name: 'docs.read', arguments: '{}' },
+        ],
+      },
+    })
+    const r1 = await t.sessions.append(t.run.id, {
+      kind: 'tool_result',
+      content: { toolCallId: id1, name: 'docs.read', output: 'one' },
+    })
+    const r2 = await t.sessions.append(t.run.id, {
+      kind: 'tool_result',
+      content: { toolCallId: id2, name: 'docs.read', output: 'two' },
+    })
+    await t.recordCall(t.run.id, 'docs.read', 'later')
+    // Rewinding to the first call of a turn lands after the turn's last result.
+    const rw = await t.call('sessions.rewind', { toEntry: id1, summary: 'read both' })
+    expect(rw.control).toEqual([{ type: 'rewind', toEntry: r2.id, summary: 'read both' }])
+    expect(a.id).toBeTruthy()
+    const off = await t.call('sessions.offload', { entryId: id1, text: 'doc one' })
+    expect((off.control![0] as any).entryId).toBe(r1.id)
+    expect((await t.call('sessions.offload', { entryId: 'call_nope', text: 'x' })).isError).toBe(true)
+    expect((await t.call('sessions.rewind', { toEntry: 'call_nope', summary: 'x' })).isError).toBe(true)
+  })
+
+  it('restore reads a piece of an offloaded result without changing anything', async () => {
+    const t = await stack()
+    const text = 'abcdefghij'.repeat(5000)
+    const big = await t.recordCall(t.run.id, 'docs.read', text)
+    await t.sessions.offload(t.run.id, big.entryId, { text: 'preview' })
+    const before = await t.sessions.runHistory(t.run.id)
+    const r = await t.call('sessions.restore', { entryId: big.entryId, offset: 10, length: 25 })
+    expect(r.control).toBeUndefined()
+    expect(r.output).toMatchObject({ entryId: big.entryId, offset: 10, end: 35, total: 50_000, text: text.slice(10, 35) })
+    // The default piece is capped; the last piece says it's done.
+    const all = (await t.call('sessions.restore', { entryId: big.callId, offset: 0 })).output as any
+    expect(all.text.length).toBe(20_000)
+    expect(all.next).toMatch(/offset 20000/)
+    expect(((await t.call('sessions.restore', { entryId: big.entryId, offset: 45_000 })).output as any).done).toBe(true)
+    expect(await t.sessions.runHistory(t.run.id)).toEqual(before)
+    // Only entries of this session.
+    const other = await t.newSession('Other')
+    expect(
+      (await t.call('sessions.restore', { entryId: (await t.sessions.history(other.id))[0]?.id ?? 'ent_nope', offset: 0 }))
+        .isError,
+    ).toBe(true)
+  })
+
   it('rewind checks the entry is on the current path', async () => {
     const t = await stack()
     const path = await t.sessions.runHistory(t.run.id)
@@ -391,7 +447,11 @@ describe('run control', () => {
     })
     expect(r.isError).toBeUndefined()
     const control = r.control![0] as any
-    expect(control).toMatchObject({ type: 'offload', entryId: big.entryId, pointer: { text: 'The retry policy doc' } })
+    expect(control).toMatchObject({ type: 'offload', entryId: big.entryId })
+    // The pointer names the original, so the model can read it back.
+    expect(control.pointer.text).toBe(
+      `The retry policy doc (the original is entry ${big.entryId}: sessions.restore reads it back)`,
+    )
     const docId = control.pointer.doc.id
     expect(await t.docs.chapter(docId, 'Retry policy')).toBe('Retry 3 times with backoff.')
     // Applying it (as the runner would) and restoring.
@@ -399,13 +459,19 @@ describe('run control', () => {
     const pointer = (await t.sessions.runHistory(t.run.id)).find((e) => e.kind === 'pointer')!
     const rr = await t.call('sessions.restore', { pointerEntryId: pointer.id })
     expect(rr.control).toEqual([{ type: 'restore', pointerEntryId: pointer.id }])
-    expect((await t.call('sessions.restore', { pointerEntryId: big.entryId })).isError).toBe(true)
+    // The original entry id and the tool call id name the same pointer.
+    expect((await t.call('sessions.restore', { entryId: big.entryId })).control).toEqual(rr.control)
+    expect((await t.call('sessions.restore', { entryId: big.callId })).control).toEqual(rr.control)
+    expect((await t.call('sessions.restore', { entryId: first0(await t.sessions.runHistory(t.run.id)) })).isError).toBe(true)
+    expect((await t.call('sessions.restore', {})).isError).toBe(true)
     // The first entry can't be offloaded; content needs a chapter.
     const first = (await t.sessions.runHistory(t.run.id))[0]!
     expect((await t.call('sessions.offload', { entryId: first.id, text: 'x' })).isError).toBe(true)
     expect((await t.call('sessions.offload', { entryId: big.entryId, text: 'x', content: 'y' })).isError).toBe(true)
   })
 })
+
+const first0 = (h: { id: string }[]) => h[0]!.id
 
 describe('sessions.message', () => {
   it('ingests a tagged event addressed to the target session', async () => {

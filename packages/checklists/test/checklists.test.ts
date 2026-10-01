@@ -91,6 +91,19 @@ describe('checklists', () => {
     expect((await checklists.status(s.id)).done).toBe(2)
   })
 
+  it('counts an offloaded tool result through its pointer, but not a pointer for something else', async () => {
+    const { s, run, tests, said } = await work()
+    await checklists.addItem(s.id, { text: 'tests pass' })
+    await sessions.offload(run.id, tests.id, { text: 'test output, offloaded' })
+    const ptr = (await sessions.runHistory(run.id)).find((e) => e.kind === 'pointer')!
+    expect((await checklists.check(s.id, 'i1', [ptr.id], { runId: run.id })).data.items[0]!.checked).toBe(true)
+    await sessions.offload(run.id, said.id, { text: 'what I said' })
+    const ptr2 = (await sessions.runHistory(run.id)).find((e) => e.kind === 'pointer' && e.meta.offloadedKind === 'assistant')!
+    await expect(checklists.check(s.id, 'i1', [ptr2.id], { runId: run.id })).rejects.toThrow(
+      'evidence must be something observed',
+    )
+  })
+
   it('refuses evidence that was not observed or is not on the visible history', async () => {
     const { s, run, said, tests, sys } = await work()
     await checklists.addItem(s.id, { text: 'tests pass' })

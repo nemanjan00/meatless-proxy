@@ -343,6 +343,8 @@ export function SessionDetailPage() {
     )
   const s = d.session.data
   const runState: RunState | null = activeRun?.data.state ?? runs.data?.[0]?.data.state ?? null
+  /** The run whose latest model call says how full the context is: the active one, else the newest that has it. */
+  const contextRun = activeRun?.data.context ? activeRun : (runs.data?.find((r) => r.data.context) ?? null)
   const status = sessionStatusKey(s.status, runState)
   const live = activeRun && !TERMINAL_RUN_STATES.includes(activeRun.data.state)
   const stats = tree.data ? treeStats(tree.data) : null
@@ -621,6 +623,21 @@ export function SessionDetailPage() {
                     <StatusIcon status={activeRun.data.state} className="size-3.5" />
                     {activeRun.data.mode} · {pluralize(activeRun.data.steps, 'step')}
                   </span>
+                </Prop>
+              )}
+              {contextRun?.data.context && (
+                <Prop label="Context">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="tabular-nums" data-testid="context-size">
+                        {formatTokens(contextRun.data.context.tokens)} / {formatTokens(contextRun.data.context.window)}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-72 text-micro">
+                      Prompt tokens at the latest model call ({contextRun.data.context.model}), against its context window. The
+                      model is told at 50% and 75%; near the limit the harness compacts automatically.
+                    </TooltipContent>
+                  </Tooltip>
                 </Prop>
               )}
               <Prop label="Tokens">

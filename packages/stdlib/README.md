@@ -167,7 +167,18 @@ Notes on behaviour:
   `employee.taskSystem` (`tool`, or `server` + `createTool`) once per item,
   then subscribe each child to its task. Without that config it's an error.
 - **Evidence** for `checklist.check` can be tool call ids (what the model
-  sees), event ids or entry ids; they're resolved to entries of the run.
+  sees), event ids or entry ids; they're resolved to entries of the run. A
+  result that was offloaded counts through its pointer.
+- **Context tools** name history points the way the model sees them: a tool
+  call id or an entry id. `sessions.rewind { toEntry }` with a call id
+  continues after that turn's last result (a turn stays whole);
+  `sessions.offload { entryId }` with a call id offloads its result, and the
+  pointer names the original entry. `sessions.restore { entryId }` takes the
+  original entry id, the pointer id or the call id: with `offset`/`length` it
+  returns that piece of the original text (at most 20,000 characters, any
+  entry of this session) and changes nothing; without them it puts the whole
+  original back. The runner's oversized-result pointers tell the model to use
+  it that way.
 - **Reviews** run in a new session (not a fork) with `REVIEWER_TOOLSET`; the
   reviewer is recorded in both sessions' meta (`reviews`, `reviewFor`), and
   only that session may call `checklist.record_review`.

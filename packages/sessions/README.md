@@ -40,7 +40,15 @@ extend them with `records.kinds.extend`.
   restore re-create the entries after the changed one with the same content
   (and `meta.copiedFrom`). `restore` reuses the original entry when it hangs
   off the same parent as the pointer, and re-creates it otherwise. The first
-  entry of a history can't be offloaded.
+  entry of a history can't be offloaded. A pointer for a tool result records
+  its `toolCallId` and `toolName`, so it can answer that call. `compact(run,
+  summary, { keepFrom?, meta? })` puts the summary on the first entry and, with
+  `keepFrom`, re-creates the entries from there to the tip verbatim on top
+  (summary meta: `op: 'compact'`, `keptEntries`, `keptFrom`, plus `meta`, e.g.
+  `automatic: true` from the runner). In a continuing run the commit then moves
+  the session's head onto the compacted branch; in an ephemeral run the
+  session's head never moves. `run.data.context` is the size of the run's
+  context at its latest model call (set by the runner).
 - **Waiting:** `suspend` (running → suspended; `runs` waits also create
   `waits_on` links run → run, removed when the run leaves `suspended`),
   `waitersOf`, `isWaitSatisfied` (a reached `timeoutAt` counts as satisfied),

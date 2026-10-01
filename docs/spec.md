@@ -1858,9 +1858,10 @@ The model has tools for working with sessions:
 | wait           | block until the given children (one, some or all) finish, and return their results |
 | follow up      | come back to this session later with a note, without waiting ([scheduled tasks](#scheduled-tasks)) |
 | commit         | keep the current run: add it to the session's history          |
-| rewind         | jump back to an earlier point and append a summary of what happened since |
-| offload        | replace a message in history with a pointer to a docs chapter, writing the chapter first if needed |
-| restore        | put an offloaded message back into the active history       |
+| rewind         | jump back to an earlier point (named by one of its tool call ids, or an entry id) and append a summary of what happened since |
+| offload        | replace a message in history with a pointer, optionally to a docs chapter written first |
+| restore        | put an offloaded message back into the active history, or read a piece of it without changing anything |
+| compact        | replace the whole history after the first entry with a summary of everything |
 
 #### Runs: ephemeral or committed
 
@@ -1915,6 +1916,41 @@ away. Sessions don't do that by default. Instead, a session **rewinds**:
   context would be too large. It is then done explicitly and recorded, and the
   full history is still kept in the database.
 
+##### Knowing the context size
+
+Every model has a **context window**. The harness knows it from the model's
+name (a table of known models, 128k for any other) or from the deployment's
+`MODEL_CONTEXT_TOKENS`, and after every model call it knows how big the prompt
+was. The session page shows it ("context 112k / 200k").
+
+- **The model is told.** When a session's context crosses **50%** and again
+  **75%** of the window, a short note goes into its history before the next
+  model call: the size, and what to do about it (rewind, offload, compact).
+  Each threshold is noted once per crossing: after a rewind, offload or
+  compaction brings the context back under it, it can be noted again later.
+  The note never goes between a tool call and its result.
+- **Automatic compaction is the safety net.** At **85%** of the window
+  (`CONTEXT_COMPACT_AT`), or when the provider says a request is too long,
+  the harness compacts by itself before the next model call. One model call,
+  without tools, writes a summary of the work so far (the goal and who asked,
+  decisions, the current state, open items, and every id, path, branch and
+  link still needed); the history becomes the first entry, that summary
+  (marked *automatic*), and the most recent entries verbatim (about 15% of the
+  window, a tool call always together with its results). It is recorded like
+  any compaction, and the detailed history stays in the database. If the
+  summary call fails the run carries on; if the request then can't fit, the
+  run pauses with a clear reason instead of failing.
+- **Compaction and run modes.** A compaction (the model's or the automatic
+  one) changes only the run's own history. A continuing run commits it, so the
+  session continues from the summary. An ephemeral run leaves the session as
+  it was, so the next run starts from the uncompacted history again (and may
+  compact again).
+- **Oversized tool results.** A tool result longer than 20,000 characters
+  (`TOOL_RESULT_MAX_CHARS`) is stored in full and kept in the history only as
+  a preview (its head and tail) with a pointer. The model reads the rest in
+  pieces, or puts the whole result back, with `restore`. Results with images
+  are left as they are.
+
 #### Waiting
 
 After a fork or a loop, **the parent decides whether to wait**:
@@ -1936,8 +1972,10 @@ Open questions:
   needs?
 - Is a run ephemeral by default and committed only on `commit`, or can a
   trigger or template set the default?
-- How does a session choose its rewind point: by itself, at run and task
-  boundaries, or when a context size threshold is reached?
+- How does a session choose its rewind point? By itself: the harness tells it
+  its context size at 50% and 75% and compacts automatically near the limit
+  ([knowing the context size](#knowing-the-context-size)). Rewinding at run
+  and task boundaries on its own is still open.
 
 ### Skills
 
@@ -3138,7 +3176,9 @@ the section it links to.
   pointer to a chapter in a docs file, written first if needed. The knowledge
   ends up in the project's docs instead of dying with the session.
 - **Real compaction only as a last resort**, recorded, and still reversible
-  from the stored history.
+  from the stored history. The model is told how full its context is, and the
+  harness compacts automatically near the limit, so a long session doesn't
+  just fail ([knowing the context size](#knowing-the-context-size)).
 
 ### Work that forks, fans out and folds back
 

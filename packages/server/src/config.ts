@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseEgressEntry } from '@mp/containers'
+import { contextWindowOf } from '@mp/model'
 import { z } from 'zod'
 
 /**
@@ -245,6 +246,12 @@ export const configSchema = z.object({
   BUDGET_WARN_PERCENT: numOr(80).refine((v) => v <= 100, 'must be at most 100'),
   /** max_tokens per model call (leave room for reasoning). */
   MAX_TOKENS: z.coerce.number().int().min(1).optional(),
+  /** The context window of MODEL, in tokens. Default: known from the model's name (`contextWindowOf`), else 128k. */
+  MODEL_CONTEXT_TOKENS: z.coerce.number().int().min(1000).optional(),
+  /** Percent of the context window at which a run compacts its context by itself before the next model call (0 = never). */
+  CONTEXT_COMPACT_AT: z.coerce.number().min(0).max(99).default(85),
+  /** Tool results longer than this many characters are stored in full and kept in the history as a preview (0 = never). */
+  TOOL_RESULT_MAX_CHARS: z.coerce.number().int().min(0).default(20_000),
   /**
    * Whether the model can see images (image.view): `auto` (default: what the provider's model list says,
    * else known vision model names), `true` or `false`.
@@ -404,6 +411,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   }
 }
 
+/**
+ * The context window of a model: `MODEL_CONTEXT_TOKENS` for the deployment's MODEL (or for every model when
+ * MODEL is unset), else what `contextWindowOf` knows from the name.
+ */
+export function contextWindowFor(c: Pick<Config, 'MODEL' | 'MODEL_CONTEXT_TOKENS'>): (model: string) => number {
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
+  return (model) =>
+    c.MODEL_CONTEXT_TOKENS && (!c.MODEL || same(model, c.MODEL)) ? c.MODEL_CONTEXT_TOKENS : contextWindowOf(model)
+}
+
 /** A summary of the configuration that is safe to log: secret values are replaced by whether they are set. */
 export function describeConfig(c: Config): Record<string, unknown> {
   return {
@@ -421,6 +438,11 @@ export function describeConfig(c: Config): Record<string, unknown> {
     directNetwork: c.DOCKER_DIRECT_NETWORK,
     files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
     vision: c.MODEL_VISION,
+    context: {
+      window: c.MODEL_CONTEXT_TOKENS ?? (c.MODEL ? contextWindowOf(c.MODEL) : null),
+      compactAt: c.CONTEXT_COMPACT_AT || 'off',
+      toolResultMaxChars: c.TOOL_RESULT_MAX_CHARS || 'off',
+    },
     imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },
     sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),

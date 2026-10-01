@@ -42,7 +42,7 @@ import { postgresStore, runMigrations } from '@mp/store-postgres'
 import { createToolRegistry, registerMcpTools, type ToolLists, type ToolRegistry } from '@mp/tools'
 import { createUsage, type UsageService } from '@mp/usage'
 import pg from 'pg'
-import type { Config } from './config.ts'
+import { contextWindowFor, type Config } from './config.ts'
 import { imageLoader, resolveVision, type VisionSettings } from './attachments.ts'
 import { buildDescriber, describedEvent, enqueueDescriptions } from './image-descriptions.ts'
 import { createControl, type Control } from './control.ts'
@@ -505,6 +505,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     maxSteps: config.MAX_STEPS,
     limitsFor: runLimitsFor(usage),
     ...(config.MAX_TOKENS ? { maxTokens: config.MAX_TOKENS } : {}),
+    contextWindow: contextWindowFor(config),
+    compactAt: config.CONTEXT_COMPACT_AT,
+    toolResultMaxChars: config.TOOL_RESULT_MAX_CHARS,
   })
 
   const control = createControl({

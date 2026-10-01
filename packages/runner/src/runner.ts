@@ -11,16 +11,50 @@ import {
   type Json,
   type Logger,
 } from '@mp/core'
-import type { ChatMessage, ImageRef, ModelClient, ModelResponse, ToolSpec } from '@mp/model'
+import { contextWindowOf, type ChatMessage, type ImageRef, type ModelClient, type ModelResponse, type ToolSpec } from '@mp/model'
 import type { Queue } from '@mp/queue'
 import { createRedactor, type SecretStore } from '@mp/secrets'
-import type { AssistantContent, Run, RunResult, Session, Sessions, ToolResultContent, WaitCondition } from '@mp/sessions'
+import type {
+  AssistantContent,
+  Run,
+  RunContextSize,
+  RunResult,
+  Session,
+  Sessions,
+  ToolResultContent,
+  WaitCondition,
+} from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import type { ControlSignal, ToolContext, ToolDefinition, ToolLists, ToolRegistry, ToolResult } from '@mp/tools'
-import { lastAssistantText, renderMessages } from './context.ts'
+import { answeredCall, lastAssistantText, renderMessages } from './context.ts'
+import {
+  COMPACTION_PROMPT,
+  compactionCut,
+  contextNoteDecision,
+  contextNoteText,
+  estimateTokens,
+  isContextOverflow,
+  kTokens,
+  notedInHistory,
+  oversizedPointerText,
+  requestChars,
+  tokensPerChar,
+} from './context-window.ts'
 import { createImageResolver, VISION_TAG, type LoadedImage } from './images.ts'
 
 export const RUNS_QUEUE = 'runs'
+
+/** Bus topics the runner publishes about context management. */
+export const ContextTopics = {
+  /** `{ runId, sessionId, automatic, tokensBefore, tokensAfter, window, keptEntries }` */
+  compacted: 'context.compacted',
+  /** `{ runId, sessionId, error }`: the summary call of an automatic compaction failed; the run carries on. */
+  compactFailed: 'context.compact_failed',
+  /** `{ runId, sessionId, tokens, window, percent }`: the model was told how full its context is. */
+  noted: 'context.noted',
+  /** `{ runId, sessionId, callId, name, chars, entryId }`: an oversized tool result was kept as a preview. */
+  resultOffloaded: 'context.result_offloaded',
+} as const
 
 // ─── Hook points (declared here, registered by higher layers) ──────────────
 
@@ -110,6 +144,24 @@ export interface RunnerOptions {
    * run starts; undefined keeps it. The model sees the current text in place of the stored one.
    */
   currentPrompt?: (session: Session, stored: string) => Promise<string | undefined>
+  /** The context window of a model, in tokens. Default: `contextWindowOf` (the known table, else 128k). */
+  contextWindow?: (model: string) => number
+  /** Context sizes (percent of the window) at which the model gets a note about it, once per crossing. Default [50, 75]. */
+  contextNotes?: number[]
+  /**
+   * Percent of the window at which the runner compacts the context by itself before the next model call
+   * (`CONTEXT_COMPACT_AT`). Default 85; 0 turns it off.
+   */
+  compactAt?: number
+  /** Share of the window kept verbatim after an automatic compaction (the latest entries). Default 0.15. */
+  compactKeep?: number
+  /** max_tokens of the summary call of an automatic compaction (reasoning included). Default 8000. */
+  compactSummaryMaxTokens?: number
+  /**
+   * Tool results whose text is longer than this many characters are stored in full and kept in the history as
+   * a preview (head and tail) with a pointer (`TOOL_RESULT_MAX_CHARS`). Default 20000; 0 turns it off.
+   */
+  toolResultMaxChars?: number
 }
 
 /** Limits of one run. Missing fields fall back to the runner's options. */
@@ -160,6 +212,12 @@ export function createRunner(opts: RunnerOptions): Runner {
     return m < 1 ? `${Math.round(ms / 1000)} seconds` : m === 1 ? '1 minute' : `${m} minutes`
   }
   const emit = (topic: string, payload: unknown) => opts.bus?.publish(topic, payload)
+  const windowOf = (m: string) => opts.contextWindow?.(m) ?? contextWindowOf(m)
+  const noteAt = [...(opts.contextNotes ?? [50, 75])].filter((t) => t > 0).sort((a, b) => a - b)
+  const compactAt = opts.compactAt ?? 85
+  const compactKeep = opts.compactKeep ?? 0.15
+  const summaryMaxTokens = opts.compactSummaryMaxTokens ?? 8000
+  const resultMaxChars = opts.toolResultMaxChars ?? 20_000
 
   const enqueue: Runner['enqueue'] = async (runId, o = {}) => {
     await queue.add(
@@ -353,13 +411,118 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
     if (lastAssistant < 0) return []
     const a = history[lastAssistant]!.content as unknown as AssistantContent
+    // A pointer standing for an offloaded result answers its call too.
     const done = new Set(
       history
         .slice(lastAssistant + 1)
-        .filter((e) => e.kind === 'tool_result')
-        .map((e) => (e.content as any).toolCallId as string),
+        .map(answeredCall)
+        .filter(Boolean),
     )
     return (a.toolCalls ?? []).filter((t) => !done.has(t.id))
+  }
+
+  /**
+   * A tool result too long to keep in the context: the entry just appended keeps it in full, and the history
+   * gets a pointer in its place with a preview (head and tail) and how to read the rest. Images are left alone.
+   */
+  const offloadOversized = async (run: Run, entry: Entry, content: ToolResultContent, logger: Logger) => {
+    if (!resultMaxChars || content.images?.length) return
+    const body = typeof content.output === 'string' ? content.output : JSON.stringify(content.output)
+    if (body.length <= resultMaxChars) return
+    const head = Math.min(3000, Math.floor(resultMaxChars / 2))
+    const tail = Math.min(1500, Math.floor(resultMaxChars / 4))
+    const text = oversizedPointerText({
+      name: content.name,
+      text: body,
+      originalId: entry.id,
+      isError: !!content.isError,
+      head,
+      tail,
+    })
+    try {
+      await sessions.offload(run.id, entry.id, { text }, { meta: { automatic: true, chars: body.length } })
+      emit(ContextTopics.resultOffloaded, {
+        runId: run.id,
+        sessionId: run.data.sessionId,
+        callId: content.toolCallId,
+        name: content.name,
+        chars: body.length,
+        entryId: entry.id,
+      })
+      logger.info('oversized tool result kept as a preview', { tool: content.name, chars: body.length, entryId: entry.id })
+    } catch (err) {
+      logger.warn('could not offload an oversized tool result', { tool: content.name, err: errorMessage(err) })
+    }
+  }
+
+  /**
+   * Automatic compaction, the safety net near the end of the context window: a model call (no tools) writes a
+   * summary of the work so far, and the history becomes the first entry, that summary, and the latest entries
+   * verbatim (about `compactKeep` of the window, never splitting a call from its results). A failure is
+   * reported, never thrown: the run carries on and the caller decides what to do.
+   */
+  const autoCompact = async (a: {
+    run: Run
+    session: Session
+    history: Entry[]
+    prompt: string | undefined
+    specs: ToolSpec[]
+    modelName: string
+    window: number
+    tokens: number
+    logger: Logger
+  }): Promise<{ ok: true; kept: number } | { ok: false; error: string }> => {
+    const { run, session, history, logger } = a
+    // The kept tail is a share of the window, or of the request when it's smaller (the provider may have said
+    // a request too long for a window the table overestimates).
+    const budget = Math.floor(compactKeep * Math.min(a.window, a.tokens))
+    const cut = compactionCut(history, budget, tokensPerChar(run.data.context))
+    if (cut <= 1) return { ok: false, error: 'nothing to summarise: the latest entries alone fill the context' }
+    const messages = renderMessages(history.slice(0, cut))
+    if (a.prompt !== undefined && history[0]?.kind === 'system' && messages[0]?.role === 'system')
+      messages[0] = { ...messages[0], content: a.prompt }
+    messages.push({ role: 'user', content: COMPACTION_PROMPT })
+    const ask = (withTools: boolean) =>
+      model.complete({
+        model: a.modelName,
+        messages,
+        ...(withTools && a.specs.length ? { tools: a.specs } : {}),
+        maxTokens: summaryMaxTokens,
+      })
+    let response: ModelResponse
+    try {
+      try {
+        response = await ask(false)
+      } catch (err) {
+        // Some providers want the tool definitions whenever the history has tool calls: try once more with them.
+        if (!isMpError(err, 'model_request') || isContextOverflow(err) || !a.specs.length) throw err
+        logger.warn('summary call without tools was refused; trying with them', { err: errorMessage(err) })
+        response = await ask(true)
+      }
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) }
+    }
+    await hooks.decide(afterModelCall, {
+      run,
+      session,
+      response,
+      step: run.data.steps,
+      model: response.model || a.modelName,
+    })
+    emit('usage.recorded', { runId: run.id, sessionId: session.id, usage: response.usage, purpose: 'compaction' })
+    const text = (response.message.content ?? '').trim()
+    if (!text) return { ok: false, error: `the summary call returned no text (finish reason ${response.finishReason})` }
+    const summary = text.length > 40_000 ? `${text.slice(0, 40_000)}\n[summary cut at 40,000 characters]` : text
+    const kept = history.length - cut
+    try {
+      await sessions.compact(run.id, summary, {
+        ...(kept ? { keepFrom: history[cut]!.id } : {}),
+        meta: { automatic: true, tokensBefore: a.tokens, window: a.window },
+      })
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) }
+    }
+    return { ok: true, kept }
   }
 
   const callTool = async (
@@ -502,6 +665,9 @@ export function createRunner(opts: RunnerOptions): Runner {
 
     let session = await sessions.require(run.data.sessionId)
     let finishBlocks = 0
+    /** The step at which automatic compaction was last tried, and the step at which the provider said the request is too long. */
+    let compactTried = -1
+    let overflowAt = -1
     const fresh = await refreshSession(run, session, logger)
     session = fresh.session
     const prompt = fresh.prompt
@@ -546,7 +712,8 @@ export function createRunner(opts: RunnerOptions): Runner {
           let control: ControlSignal[] = []
           for (const call of pending) {
             const r = await callTool(run, session, call, step, resumed, logger)
-            await sessions.append(runId, { kind: 'tool_result', content: r.content as unknown as Json })
+            const entry = await sessions.append(runId, { kind: 'tool_result', content: r.content as unknown as Json })
+            await offloadOversized(run, entry, r.content, logger)
             control = control.concat(r.control)
           }
           resumed = false
@@ -609,9 +776,68 @@ export function createRunner(opts: RunnerOptions): Runner {
           return { status: 'paused', runId, reason: 'wall clock' }
         }
 
-        const messages = renderMessages(history)
-        if (prompt !== undefined && history[0]?.kind === 'system' && messages[0]?.role === 'system')
-          messages[0] = { ...messages[0], content: prompt }
+        const { specs } = await toolSpecsFor(session)
+        const modelName = session.data.model ?? model.defaultModel
+        const window = windowOf(modelName)
+        const render = (h: Entry[]) => {
+          const m = renderMessages(h)
+          if (prompt !== undefined && h[0]?.kind === 'system' && m[0]?.role === 'system') m[0] = { ...m[0], content: prompt }
+          return m
+        }
+        const stepNow = run.data.steps
+        let messages = render(history)
+        let chars = requestChars(messages, specs)
+        let tokens = estimateTokens(chars, run.data.context)
+
+        // The safety net: compact near the end of the window, or when the provider said the request is too long.
+        let compactError: string | undefined
+        if (compactAt > 0 && compactTried !== stepNow && (overflowAt === stepNow || tokens >= (window * compactAt) / 100)) {
+          compactTried = stepNow
+          const before = tokens
+          const r = await autoCompact({ run, session, history, prompt, specs, modelName, window, tokens, logger })
+          if (r.ok) {
+            history = await sessions.runHistory(runId)
+            messages = render(history)
+            chars = requestChars(messages, specs)
+            tokens = estimateTokens(chars, run.data.context)
+            emit(ContextTopics.compacted, {
+              runId,
+              sessionId: session.id,
+              automatic: true,
+              tokensBefore: before,
+              tokensAfter: tokens,
+              window,
+              keptEntries: r.kept,
+            })
+            logger.info('context compacted automatically', { before, after: tokens, window, keptEntries: r.kept })
+          } else {
+            compactError = r.error
+            emit(ContextTopics.compactFailed, { runId, sessionId: session.id, error: r.error })
+            logger.warn('automatic compaction failed; carrying on', { err: r.error, tokens, window })
+          }
+        }
+        if (compactError !== undefined && (overflowAt === stepNow || tokens >= window))
+          return pauseForContext(run, tokens, window, `, and automatic compaction failed: ${compactError}`)
+
+        // Tell the model how full its context is, once per threshold per crossing. Never between a call and its result.
+        let noted = run.data.context?.noted ?? notedInHistory(history)
+        if (noteAt.length && !pendingCalls(history).length) {
+          const d = contextNoteDecision((tokens / window) * 100, noted, noteAt)
+          noted = d.noted
+          if (d.note !== undefined) {
+            await sessions.append(runId, {
+              kind: 'system',
+              content: { text: contextNoteText(tokens, window, compactAt || undefined) },
+              meta: { contextNote: d.note, contextTokens: tokens, contextWindow: window },
+            })
+            history = await sessions.runHistory(runId)
+            messages = render(history)
+            chars = requestChars(messages, specs)
+            emit(ContextTopics.noted, { runId, sessionId: session.id, tokens, window, percent: d.note })
+            logger.info('model told about its context size', { tokens, window, threshold: d.note })
+          }
+        }
+
         const pause = await hooks.decide(beforeModelCall, { run, session, messages, step: run.data.steps })
         if (pause) {
           await sessions.transition(runId, 'running', 'paused', { pauseReason: pause.pause, activeMs: activeMs(run) })
@@ -619,15 +845,29 @@ export function createRunner(opts: RunnerOptions): Runner {
           return { status: 'paused', runId, reason: pause.pause }
         }
 
-        const { specs } = await toolSpecsFor(session)
-        const modelName = session.data.model ?? model.defaultModel
-        const response = await model.complete({
-          model: modelName,
-          messages: await resolveImages(messages),
-          ...(specs.length ? { tools: specs } : {}),
-          ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
-          onDelta: (d) => emit('model.delta', { runId, sessionId: session.id, ...d }),
-        })
+        let response: ModelResponse
+        try {
+          response = await model.complete({
+            model: modelName,
+            messages: await resolveImages(messages),
+            ...(specs.length ? { tools: specs } : {}),
+            ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+            onDelta: (d) => emit('model.delta', { runId, sessionId: session.id, ...d }),
+          })
+        } catch (err) {
+          if (!isContextOverflow(err)) throw err
+          logger.warn('the request is longer than the context window', { tokens, window, err: errorMessage(err) })
+          if (compactAt > 0 && compactTried !== stepNow) {
+            overflowAt = stepNow
+            continue
+          }
+          return pauseForContext(
+            run,
+            tokens,
+            window,
+            compactAt > 0 ? ', even after automatic compaction' : ' (automatic compaction is off)',
+          )
+        }
         const step = run.data.steps
         await hooks.decide(afterModelCall, { run, session, response, step, model: response.model || modelName })
         emit('usage.recorded', { runId, sessionId: session.id, usage: response.usage })
@@ -647,7 +887,15 @@ export function createRunner(opts: RunnerOptions): Runner {
           content: content as unknown as Json,
           meta: { step, model: response.model || modelName, finishReason: response.finishReason },
         })
-        await sessions.updateRun(runId, { steps: step + 1 })
+        const context: RunContextSize = {
+          tokens: response.usage?.promptTokens || tokens,
+          window,
+          chars,
+          model: response.model || modelName,
+          at: clock.iso(),
+          noted,
+        }
+        await sessions.updateRun(runId, { steps: step + 1, context })
 
         if (calls.length) continue // executed at the top of the loop, so a crash between here and there is recoverable
 
@@ -679,6 +927,16 @@ export function createRunner(opts: RunnerOptions): Runner {
         await wakeWaiters(runId)
       }
       return { status: 'failed', runId }
+    }
+
+    /** Pauses a run whose context no longer fits the model's window, saying so plainly. */
+    async function pauseForContext(r: Run, tokens: number, window: number, why: string): Promise<ExecuteOutcome> {
+      const reason =
+        `context full: about ${kTokens(tokens)} tokens for a ${kTokens(window)}-token context window${why}. ` +
+        'Resuming tries to compact again; or fork the session from an earlier point.'
+      await sessions.transition(runId, 'running', 'paused', { pauseReason: reason, activeMs: activeMs(r) })
+      emit('run.paused', { runId, reason })
+      return { status: 'paused', runId, reason }
     }
 
     async function finishWithPolicies(

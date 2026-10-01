@@ -21,6 +21,9 @@ The model port: OpenAI-compatible Chat Completions shapes (`ChatMessage`, `ToolS
 - `parseToolArguments(call)` — safe JSON parse of a tool call's arguments: `{ ok: true, args } | { ok: false, error, raw }`.
 - `toolSpec(name, description, parameters?)` — a tool definition in the `tools` format.
 - `emptyUsage()`, `estimateTokens(text)`, `newToolCallId()`.
+- `contextWindowOf(model, override?)` — a model's context window in tokens from `CONTEXT_WINDOWS` (Kimi K2 from 0905,
+  K2.5+, K3 and the coding models 256k, the first K2 128k; Claude 200k; GPT-5 400k; GPT-4.1 1M; GPT-4o 128k), else
+  `DEFAULT_CONTEXT_TOKENS` (128k). A guess from the name; the deployment can override it (`MODEL_CONTEXT_TOKENS`).
 
 ## Tests
 

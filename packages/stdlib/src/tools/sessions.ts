@@ -5,6 +5,7 @@ import {
   TERMINAL_RUN_STATES,
   contentText,
   snippet,
+  type AssistantContent,
   type PointerContent,
   type Run,
   type RunMode,
@@ -16,6 +17,45 @@ import type { Entry, Ref } from '@mp/store'
 import { mcpToolName, type ToolContext } from '@mp/tools'
 import { RESERVED_META, Roles, checkRef, clip, fail, line, ok, pathValue, sessionBrief, str, type Kit } from '../kit.ts'
 import type { TaskSystemConfig } from '../types.ts'
+
+/** The most characters sessions.restore returns in one piece. */
+const PIECE_MAX = 20_000
+
+/** The tool call an entry answers: a tool result, or a pointer standing for one. */
+const answeredCall = (e: Entry): string | undefined =>
+  e.kind === 'tool_result' || e.kind === 'pointer' ? ((e.content as { toolCallId?: string }).toolCallId ?? undefined) : undefined
+
+/** An entry of a path by its id, or by the id of a tool call (the latest result of that call, or the pointer standing for it). */
+const entryOrCall = (path: Entry[], id: string): Entry | undefined =>
+  path.find((e) => e.id === id) ?? path.findLast((e) => answeredCall(e) === id)
+
+/**
+ * Where a rewind "to a tool call" lands: after the last result of the assistant turn that made the call, so
+ * the turn stays whole. An entry id is used as it is.
+ */
+const rewindPoint = (path: Entry[], id: string): Entry | undefined => {
+  const direct = path.find((e) => e.id === id)
+  if (direct) return direct
+  const i = path.findLastIndex(
+    (e) => e.kind === 'assistant' && ((e.content as unknown as AssistantContent).toolCalls ?? []).some((c) => c.id === id),
+  )
+  if (i < 0) return undefined
+  let j = i
+  while (j + 1 < path.length && answeredCall(path[j + 1]!)) j++
+  return path[j]
+}
+
+/** The text a model saw for an entry (a tool result's output as it is rendered). */
+const entryText = (e: Entry): string => {
+  const c = e.content as Record<string, unknown> | null
+  if (e.kind === 'tool_result') {
+    const out = c?.output as Json
+    const body = typeof out === 'string' ? out : JSON.stringify(out)
+    return c?.isError ? `ERROR: ${body}` : body
+  }
+  if (c && typeof c.text === 'string') return c.text
+  return JSON.stringify(c)
+}
 
 /** How far back sessions.message looks at the exchange between two sessions. */
 const MESSAGE_WINDOW_MS = 15 * 60_000
@@ -782,18 +822,25 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.rewind',
       description:
-        "Jump back to an earlier entry of this run's history and continue from there with a summary of everything since (what you tried, found, decided, and what is open). Nothing is lost: the detail stays in the database. Use it instead of letting the context grow.",
+        "Jump back to an earlier point of this run's history and continue from there with a summary of everything since (what you tried, found, decided, and what is open). Use it when you went down a dead end, or finished a sub-task whose detail you no longer need. Name the point by the id of one of your earlier tool calls (you continue right after its results) or by an entry id. Nothing is lost: the detail stays in the database.",
       effect: 'idempotent',
       params: {
-        properties: { toEntry: { type: 'string', description: 'Entry id to rewind to.' }, summary: { type: 'string' } },
+        properties: {
+          toEntry: {
+            type: 'string',
+            description: 'The id of an earlier tool call of yours (the history continues after its results), or an entry id.',
+          },
+          summary: { type: 'string' },
+        },
         required: ['toEntry', 'summary'],
       },
     },
     async (a, ctx) => {
       if (!str(a.summary)) return fail('summary is required')
       const path = await runPath(ctx)
-      if (!path.some((e) => e.id === a.toEntry)) return fail(`entry ${a.toEntry} is not in the current history`)
-      return { output: { rewindTo: a.toEntry }, control: [{ type: 'rewind', toEntry: a.toEntry, summary: a.summary }] }
+      const to = rewindPoint(path, String(a.toEntry ?? ''))
+      if (!to) return fail(`${a.toEntry} is not a tool call or entry in the current history`)
+      return { output: { rewindTo: to.id }, control: [{ type: 'rewind', toEntry: to.id, summary: a.summary }] }
     },
   )
 
@@ -801,11 +848,11 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.offload',
       description:
-        'Replace one big message in the history (a long doc, a big tool output, a finished discussion) with a pointer to a docs chapter. Give content to write the chapter first (into docId, or a new doc of this session). The original stays in the database and can be restored with sessions.restore.',
+        'Replace one big message in the history (a big tool result you have already used, a long doc, a finished discussion) with a short pointer. Name it by the id of the tool call whose result it is, or by an entry id. Optionally write what matters to a docs chapter first (content, into docId or a new doc of this session). The original stays in the database: sessions.restore reads it back.',
       effect: 'idempotent',
       params: {
         properties: {
-          entryId: { type: 'string' },
+          entryId: { type: 'string', description: 'The id of the tool call whose result to offload, or an entry id.' },
           text: { type: 'string', description: 'One line saying what the pointer stands for.' },
           docId: { type: 'string' },
           chapter: { type: 'string', description: 'Chapter heading in the doc.' },
@@ -818,9 +865,10 @@ export function registerSessionTools(kit: Kit): void {
       const text = str(a.text)
       if (!text) return fail('text is required')
       const path = await runPath(ctx)
-      const idx = path.findIndex((e) => e.id === a.entryId)
-      if (idx < 0) return fail(`entry ${a.entryId} is not in the current history`)
-      if (idx === 0) return fail("the first entry of a history can't be offloaded")
+      const target = entryOrCall(path, String(a.entryId ?? ''))
+      if (!target) return fail(`${a.entryId} is not a tool call or entry in the current history`)
+      if (target.id === path[0]?.id) return fail("the first entry of a history can't be offloaded")
+      if (target.kind === 'pointer') return fail(`${a.entryId} is already offloaded`)
       let docId: string | undefined = str(a.docId)
       const chapter = str(a.chapter)
       if (a.content !== undefined) {
@@ -835,9 +883,10 @@ export function registerSessionTools(kit: Kit): void {
         await deps.docs.writeChapter(docId, chapter, a.content, kit.actor(ctx))
       } else if (docId && !(await deps.docs.get(docId))) return fail(`doc ${docId} not found`)
       const pointer: PointerContent['doc'] | undefined = docId ? { id: docId, ...(chapter ? { chapter } : {}) } : undefined
+      const pointerText = `${text} (the original is entry ${target.id}: sessions.restore reads it back)`
       return {
-        output: { offloaded: a.entryId, ...(pointer ? { doc: pointer } : {}) },
-        control: [{ type: 'offload', entryId: a.entryId, pointer: { text, ...(pointer ? { doc: pointer } : {}) } }],
+        output: { offloaded: target.id, ...(pointer ? { doc: pointer } : {}) },
+        control: [{ type: 'offload', entryId: target.id, pointer: { text: pointerText, ...(pointer ? { doc: pointer } : {}) } }],
       }
     },
   )
@@ -845,15 +894,50 @@ export function registerSessionTools(kit: Kit): void {
   kit.tool(
     {
       name: 'sessions.restore',
-      description: 'Put an offloaded message back into the history, in place of its pointer.',
+      description:
+        'Read back something offloaded (by you, or by the harness when a tool result was too big). With offset and length: returns that piece of the original text and changes nothing, to read a big result in parts. Without them: puts the whole original back into the history in place of its pointer (it costs context).',
       effect: 'idempotent',
-      params: { properties: { pointerEntryId: { type: 'string' } }, required: ['pointerEntryId'] },
+      params: {
+        properties: {
+          entryId: {
+            type: 'string',
+            description:
+              'The original entry id (pointers name it), the pointer entry id, or the id of the tool call whose result was offloaded.',
+          },
+          pointerEntryId: { type: 'string', description: 'The pointer entry id (same as entryId; kept for older calls).' },
+          offset: { type: 'number', description: 'Character to start reading at (0 is the start).' },
+          length: { type: 'number', description: `Characters to read (at most ${PIECE_MAX.toLocaleString('en-US')}).` },
+        },
+      },
     },
     async (a, ctx) => {
+      const id = str(a.entryId) ?? str(a.pointerEntryId)
+      if (!id) return fail('entryId is required')
       const path = await runPath(ctx)
-      const p = path.find((e) => e.id === a.pointerEntryId)
-      if (p?.kind !== 'pointer') return fail(`${a.pointerEntryId} is not a pointer in the current history`)
-      return { output: { restoring: (p!.content as any).original }, control: [{ type: 'restore', pointerEntryId: p!.id }] }
+      const pointer =
+        path.find((e) => e.kind === 'pointer' && (e.id === id || (e.content as unknown as PointerContent).original === id)) ??
+        path.findLast((e) => e.kind === 'pointer' && answeredCall(e) === id)
+      const piece = a.offset !== undefined || a.length !== undefined
+      if (piece) {
+        const originalId = pointer ? (pointer.content as unknown as PointerContent).original : id
+        const original = await records.store.entries.get(originalId)
+        if (!original || original.meta.sessionId !== ctx.sessionId) return fail(`${id} is not an entry of this session`)
+        const text = entryText(original)
+        const offset = Math.max(0, Math.floor(Number(a.offset ?? 0)) || 0)
+        const length = Math.min(PIECE_MAX, Math.max(1, Math.floor(Number(a.length ?? PIECE_MAX)) || PIECE_MAX))
+        const end = Math.min(text.length, offset + length)
+        return ok({
+          entryId: original.id,
+          offset,
+          end,
+          total: text.length,
+          ...(end < text.length ? { next: `call again with offset ${end} for more` } : { done: true }),
+          text: text.slice(offset, end),
+        })
+      }
+      if (!pointer) return fail(`${id} is not offloaded in the current history`)
+      const original = (pointer.content as unknown as PointerContent).original
+      return { output: { restoring: original }, control: [{ type: 'restore', pointerEntryId: pointer.id }] }
     },
   )
 
@@ -861,7 +945,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.compact',
       description:
-        'Real compaction, only when even a rewound context is too big: replace the whole history after the first entry with a summary of everything. Prefer sessions.rewind or sessions.offload.',
+        'Replace the whole history after the first entry with your summary of everything, for a long session that must go on. Prefer sessions.rewind (a dead end) or sessions.offload (a big result you have used). The harness also compacts automatically near the end of the context window.',
       effect: 'idempotent',
       params: { properties: { summary: { type: 'string' } }, required: ['summary'] },
     },
