@@ -135,12 +135,17 @@ export const employeeHookUrl = (publicUrl: string, employeeId: string) =>
   `${publicUrl.replace(/\/+$/, '')}/webhooks/gitlab/${employeeId}`
 
 /** A message a person can act on. GitLab's own text is kept for everything else. */
-export function hookErrorMessage(err: unknown, project: string): string {
+export function hookErrorMessage(err: unknown, project: string, usedHooksToken = false): string {
   const status = isMpError(err) ? (err.details?.status as number | undefined) : undefined
+  // Say which token GitLab answered for: the deployment's hooks token, or the employee's own.
+  const which = usedHooksToken ? HOOKS_TOKEN_SECRET : `the employee's ${TOKEN_SECRET}`
   if (status === 403)
     return `the token needs Maintainer on ${project} to register webhooks; set ${HOOKS_TOKEN_SECRET} (a Maintainer or group Owner) or give the service account Maintainer`
   if (status === 401) return `GitLab rejected the token (401): check ${HOOKS_TOKEN_SECRET} or the employee's ${TOKEN_SECRET}`
-  if (status === 404) return `GitLab project ${project} was not found, or the token can't see it (404)`
+  if (status === 404)
+    return usedHooksToken
+      ? `GitLab project ${project} was not found, or ${which} can't see it (404): its account must be a Maintainer of the project or its group (a group access token with the Maintainer role works)`
+      : `GitLab project ${project} was not found, or ${which} can't see it (404)`
   return errorMessage(err)
 }
 
@@ -246,12 +251,13 @@ export function createHookProvisioning(deps: ProvisioningDeps, opts: Provisionin
     if (!values[TOKEN_SECRET])
       return { employeeId, outcome: 'not_set_up', reason: `${TOKEN_SECRET} is not set for this employee`, hooks: [] }
     const baseUrl = values[BASE_URL_SECRET] || deps.baseUrl || DEFAULT_BASE_URL
+    const hooksTokenUsed = !!values[HOOKS_TOKEN_SECRET]
     const secret = await ensureWebhookSecret(employeeId)
     const version = tokenVersionOf(secret)
     const url = employeeHookUrl(publicUrl, employeeId)
     const client = createGitlabClient({
       baseUrl,
-      token: values[HOOKS_TOKEN_SECRET] || values[TOKEN_SECRET]!,
+      token: hooksTokenUsed ? values[HOOKS_TOKEN_SECRET]! : values[TOKEN_SECRET]!,
       logger: log,
       clock: deps.clock,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
@@ -310,7 +316,7 @@ export function createHookProvisioning(deps: ProvisioningDeps, opts: Provisionin
           }),
         )
       } catch (err) {
-        const error = hookErrorMessage(err, path)
+        const error = hookErrorMessage(err, path, hooksTokenUsed)
         log.warn('gitlab hook could not be provisioned', { employeeId, project: path, error })
         out.push(await saveStatus(rec, `${employeeId}:${path}`, { ...base, status: 'error', error, lastAction: 'failed' }))
       }
@@ -324,7 +330,7 @@ export function createHookProvisioning(deps: ProvisioningDeps, opts: Provisionin
         await deps.records.delete(GITLAB_HOOK_KIND, rec.id)
         log.info('gitlab hook removed: the repository is no longer linked', { employeeId, project: path })
       } catch (err) {
-        const error = `no longer linked, and the hook could not be removed: ${hookErrorMessage(err, path)}`
+        const error = `no longer linked, and the hook could not be removed: ${hookErrorMessage(err, path, hooksTokenUsed)}`
         out.push(
           await saveStatus(rec, rec.key ?? `${employeeId}:${path}`, {
             ...rec.data,

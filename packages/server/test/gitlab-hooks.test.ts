@@ -360,3 +360,14 @@ describe('gitlab webhook provisioning', () => {
     expect(denied.status).toBe(403)
   })
 })
+
+describe('gitlab hook errors', () => {
+  it("say which token GitLab answered for, and how to fix a hooks token that can't see the project", async () => {
+    const { hookErrorMessage } = await import('../src/integrations/provisioning.ts')
+    const { NotFoundError } = await import('@mp/core')
+    const notFound = new NotFoundError('project', 'acme/app', { status: 404 })
+    expect(hookErrorMessage(notFound, 'acme/app', true)).toContain("GITLAB_HOOKS_TOKEN can't see it (404)")
+    expect(hookErrorMessage(notFound, 'acme/app', true)).toContain('Maintainer of the project or its group')
+    expect(hookErrorMessage(notFound, 'acme/app', false)).toContain("the employee's GITLAB_TOKEN can't see it")
+  })
+})
