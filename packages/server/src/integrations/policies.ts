@@ -6,6 +6,24 @@ import type { Entry } from '@mp/store'
 import type { IntegrationInstance } from './instances.ts'
 import type { IntegrationSpec } from './specs.ts'
 
+/** The project path of a GitLab repository URL (ssh or https), or null for anything else (local: repositories). */
+export function gitlabProjectPath(url: string): string | null {
+  const ssh = /^[\w.-]+@[^:/]+:(.+?)(?:\.git)?\/?$/.exec(url.trim())
+  if (ssh) return ssh[1]!
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'https:' && u.protocol !== 'http:' && u.protocol !== 'ssh:') return null
+    return (
+      u.pathname
+        .replace(/^\/+/, '')
+        .replace(/\.git\/?$/, '')
+        .replace(/\/+$/, '') || null
+    )
+  } catch {
+    return null
+  }
+}
+
 /** A router's decision log, not an answer (the stdlib's ROUTER_LOG_RE; this package doesn't depend on it). */
 const ROUTER_LOG_RE =
   /\bNO_REPLY\b|(→|->)\s*(started|forwarded|ran|answered|noted|ignored|skipped)\b|^\s*decision (recorded|logged|committed)\b|^\s*(logged|noted|recorded|done|committed)\.?\s*$/i
@@ -221,6 +239,22 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
 
   const gitlab = deps.specs.gitlab
   if (gitlab) {
+    // A push to a GitLab repository subscribes the session to its branch, so the branch's pipelines and pushes
+    // reach it directly (they used to fall through to the router, which forwarded them with a model call).
+    offs.push(
+      deps.hooks.onTransform(afterToolCall, async (p) => {
+        if (p.tool.name !== 'git.push' || p.result.isError) return p
+        const out = (p.result.output ?? {}) as { url?: unknown; pushed?: unknown }
+        const path = typeof out.url === 'string' ? gitlabProjectPath(out.url) : null
+        if (!path || typeof out.pushed !== 'string') return p
+        try {
+          await subscribeOnce(events, p.session, { system: 'gitlab', id: `${path}@${out.pushed}` }, true)
+        } catch (err) {
+          logger.warn('could not subscribe to the pushed branch', { sessionId: p.session.id, err: errorMessage(err) })
+        }
+        return p
+      }),
+    )
     const tool = `mcp.${gitlab.name}.create_merge_request`
     offs.push(
       deps.hooks.onTransform(afterToolCall, async (p) => {

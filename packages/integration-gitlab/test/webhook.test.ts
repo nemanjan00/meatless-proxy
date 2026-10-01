@@ -111,6 +111,14 @@ describe('dedupe', () => {
     const b = await one(p.pipeline('failed'))
     expect(a.dedupeKey).not.toBe(b.dedupeKey)
   })
+
+  it('one event per pipeline and status, though GitLab sends a hook on every job change', async () => {
+    // Two deliveries (each with its own event UUID) for the same running pipeline: one key.
+    const first = await one(p.pipeline('running'))
+    const again = await one(p.pipeline('running'))
+    expect(again.dedupeKey).toBe(first.dedupeKey)
+    expect(first.dedupeKey).toMatch(/^gitlab:pipeline:.+:pipeline\.running$/)
+  })
 })
 
 describe('merge request events', () => {

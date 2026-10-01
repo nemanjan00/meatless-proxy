@@ -28,6 +28,16 @@ export function dedupeKey(headers: Record<string, string>, body: string, kind: s
   return `gitlab:${kind}:${hook ? `${hook}:` : ''}${sha256(body).slice(0, 32)}`
 }
 
+/**
+ * Pipelines: one event per pipeline and status. GitLab sends a pipeline hook on every job change, so a running
+ * pipeline arrived as "running" several times (each with its own event UUID) and woke the session each time.
+ */
+function pipelineKey(event: Omit<IntegrationEvent, 'dedupeKey'>): string | null {
+  const p = event.payload as { project?: unknown; pipeline_id?: unknown } | undefined
+  if (!event.type.startsWith('pipeline.') || p?.pipeline_id === undefined || p.pipeline_id === null) return null
+  return `gitlab:pipeline:${String(p.project ?? '')}:${String(p.pipeline_id)}:${event.type}`
+}
+
 const json = (status: number, value: unknown): Pick<WebhookResult, 'status' | 'body' | 'headers'> => ({
   status,
   body: JSON.stringify(value),
@@ -47,7 +57,7 @@ export function handleGitlabWebhook(req: WebhookRequest, secret: string): Webhoo
   if (!body || typeof body !== 'object') return { ...json(400, { error: 'invalid payload' }), events: [] }
   const kind = String(body.object_kind ?? body.event_name ?? 'unknown')
   const event = mapGitlabEvent(body)
-  const events = event ? [{ ...event, dedupeKey: dedupeKey(req.headers, req.body, kind) }] : []
+  const events = event ? [{ ...event, dedupeKey: pipelineKey(event) ?? dedupeKey(req.headers, req.body, kind) }] : []
   return { ...json(200, { ok: true, events: events.length }), events }
 }
 

@@ -803,6 +803,28 @@ function integrationSuite(backend: Backend) {
     expect(events.map((e) => e.data.employeeId).sort()).toEqual([meatless, vee].sort())
   })
 
+  it('a push to a GitLab repository subscribes the session to its branch; a local one does not', async () => {
+    const s = t.a.services
+    const { afterToolCall } = await import('@mp/runner')
+    const session = await s.sessions.create({ employeeId: meatless, title: 'Branch work', entries: [] })
+    // The hook only reads the run for logging: a stand-in, so no real run is left queued for later tests.
+    const run = { id: 'run_test_push', data: { employeeId: meatless, sessionId: session.id } } as any
+    const push = (output: Record<string, unknown>) =>
+      s.hooks.transform(afterToolCall, { run, session, tool: { name: 'git.push' } as any, result: { output } as any })
+    await push({ key: 'gitlab.com/acme/app', url: 'git@gitlab.com:acme/app.git', pushed: 'mp/meatless/fix' })
+    await push({ key: 'harness/notes', url: 'local:notes', pushed: 'mp/meatless/notes' })
+    const subs = await s.events.subscriptions.forSession(session.id)
+    expect(subs.map((x) => `${x.data.subject.system}:${x.data.subject.id}`)).toEqual(['gitlab:acme/app@mp/meatless/fix'])
+  })
+
+  it('reads GitLab project paths from repository URLs', async () => {
+    const { gitlabProjectPath } = await import('../src/integrations/policies.ts')
+    expect(gitlabProjectPath('git@gitlab.com:acme/platform/app.git')).toBe('acme/platform/app')
+    expect(gitlabProjectPath('https://gitlab.com/acme/app.git')).toBe('acme/app')
+    expect(gitlabProjectPath('ssh://git@gitlab.example.com/acme/app.git')).toBe('acme/app')
+    expect(gitlabProjectPath('local:notes')).toBeNull()
+  })
+
   it('a bad signature gets 401 and nothing is ingested', async () => {
     const s = t.a.services
     const before = (await s.rawEvents.query({ source: 'integration:slack' })).length
