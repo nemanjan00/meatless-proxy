@@ -1906,7 +1906,7 @@ The model has tools for working with sessions:
 | wait           | block until the given children (one, some or all) finish, and return their results |
 | follow up      | come back to this session later with a note, without waiting ([scheduled tasks](#scheduled-tasks)) |
 | commit         | keep the current run: add it to the session's history          |
-| rewind         | jump back to an earlier point (named by one of its tool call ids, or an entry id) and append a summary of what happened since |
+| rewind         | collapse a stretch of history (`from` and `to`, tool call ids or entry ids, in this run or earlier ones) into a summary, keeping everything after it word for word; or, with only `from`, jump back to an earlier point and continue from a summary of what happened since |
 | offload        | replace a message in history with a pointer, optionally to a docs chapter written first |
 | restore        | put an offloaded message back into the active history, or read a piece of it without changing anything |
 | compact        | replace the whole history after the first entry with a summary of everything |
@@ -1932,14 +1932,39 @@ carrying forward.
 #### Context management: rewind, not compaction
 
 Classic compaction summarises the whole conversation and throws the original
-away. Sessions don't do that by default. Instead, a session **rewinds**:
+away. Sessions don't do that by default. Instead, a session **rewinds**, in
+one of two ways:
 
-1. It jumps back to an earlier point in its own history, e.g. the start of the
-   current task, or the last point where its context was in good shape.
-2. It appends a **summary** of everything it did after that point: what it
-   tried, what it found, what it decided, and what's still open.
-3. It carries on from there. Its active context is now the history up to that
-   point plus the summary.
+- **Collapse a stretch** (the common case). A stretch of work it's done with,
+  e.g. reading many files, is replaced by a **summary** of what it learned,
+  and everything after the stretch (later messages from people, replies it
+  already posted, its current turn) stays word for word. It names the stretch
+  by two of its tool calls: `from` (the stretch starts with the turn that made
+  it) and `to` (the stretch ends after its results).
+- **Jump back** after a dead end. With only `from`, everything after that
+  point is dropped and replaced by a summary of what it tried, found and
+  decided, and what's still open. That includes messages after the point, so
+  what still matters goes into the summary.
+
+Either way, its active context is now the history before the stretch, the
+summary, and (when collapsing) what came after.
+
+- **Points are tool call ids.** Every tool result the model sees starts with
+  `[call <id>]`, the id of its call: providers don't reliably show models their
+  own tool call ids (live, a model asked to rewind couldn't find any and gave
+  up). Entry ids work too.
+- **Any point of the history.** The stretch may lie in earlier runs of a
+  continuing session, not only in the current run.
+- **Tool calls stay whole.** A stretch never separates a tool call from its
+  results: `to` in an earlier turn takes that turn's other results with it. A
+  `to` in the current turn (the one calling rewind) collapses up to its result,
+  and the calls after it, rewind's own included, stay after the summary with
+  their results. A call still waiting for its result can't be rewound away.
+- **The result says what happened:** the stretch collapsed (from, to, how many
+  entries and tool calls), how many entries stay after it, the context size
+  before and after (estimated), and a reminder that the summary is all that's
+  left of the stretch. In an ephemeral run it adds that the change lasts only
+  for the run unless it commits.
 
 - **No context is lost.** Everything before the rewind point is kept word for
   word, and everything after it is still stored in full in the database. The
@@ -1973,7 +1998,8 @@ was. The session page shows it ("context 112k / 200k").
 
 - **The model is told.** When a session's context crosses **50%** and again
   **75%** of the window, a short note goes into its history before the next
-  model call: the size, and what to do about it (rewind, offload, compact).
+  model call: the size, and what to do about it (collapse a finished stretch
+  with rewind from/to, offload a big result, compact as the last resort).
   Each threshold is noted once per crossing: after a rewind, offload or
   compaction brings the context back under it, it can be noted again later.
   The note never goes between a tool call and its result.
@@ -1988,11 +2014,13 @@ was. The session page shows it ("context 112k / 200k").
   any compaction, and the detailed history stays in the database. If the
   summary call fails the run carries on; if the request then can't fit, the
   run pauses with a clear reason instead of failing.
-- **Compaction and run modes.** A compaction (the model's or the automatic
-  one) changes only the run's own history. A continuing run commits it, so the
-  session continues from the summary. An ephemeral run leaves the session as
-  it was, so the next run starts from the uncompacted history again (and may
-  compact again).
+- **Compaction and run modes.** A rewind or compaction (the model's or the
+  automatic one) changes only the run's own history, even when it reaches into
+  earlier runs. A continuing run commits it, so the session continues from the
+  summary; if someone else moved the session's head meanwhile, the run commits
+  a summary on top of the new head instead, as any run does. An ephemeral run
+  leaves the session as it was, so the next run starts from the uncompacted
+  history again (and may compact again), unless it commits.
 - **Oversized tool results.** A tool result longer than 20,000 characters
   (`TOOL_RESULT_MAX_CHARS`) is stored in full and kept in the history only as
   a preview (its head and tail) with a pointer. The model reads the rest in

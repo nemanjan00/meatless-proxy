@@ -17,11 +17,13 @@ import {
   RUN_TRANSITIONS,
   SessionTopics,
   TERMINAL_RUN_STATES,
+  type AssistantContent,
   type CreateSessionInput,
   type EntryKind,
   type InboxItem,
   type InboxItemData,
   type PointerContent,
+  type RewindOptions,
   type Run,
   type RunData,
   type RunState,
@@ -67,6 +69,25 @@ const MAX_ATTEMPTS = 10
 const ALL = 1_000_000
 
 const isTerminal = (s: RunState) => TERMINAL_RUN_STATES.includes(s)
+
+/** The ids of the tool calls an assistant entry makes (none for other entries). */
+const callIds = (e: Entry): string[] =>
+  e.kind === 'assistant' ? ((e.content as unknown as AssistantContent).toolCalls ?? []).map((c) => c.id) : []
+
+/** The tool call an entry answers: a tool result, or a pointer standing for one. */
+const answeredBy = (e: Entry): string | undefined => {
+  if (e.kind !== 'tool_result' && e.kind !== 'pointer') return undefined
+  const id = (e.content as { toolCallId?: unknown } | null)?.toolCallId
+  return typeof id === 'string' ? id : undefined
+}
+
+/** The calls of a path's last assistant entry that have no result after it, and that entry's index. */
+function openCallsOf(path: Entry[]): { index: number; calls: string[] } {
+  const index = path.findLastIndex((e) => e.kind === 'assistant')
+  if (index < 0) return { index, calls: [] }
+  const done = new Set(path.slice(index + 1).map(answeredBy))
+  return { index, calls: callIds(path[index]!).filter((id) => !done.has(id)) }
+}
 const runRef = (id: string): Ref => ({ kind: RUN_KIND, id })
 const sessionRef = (id: string): Ref => ({ kind: SESSION_KIND, id })
 
@@ -357,15 +378,81 @@ export function createSessions(opts: SessionsOptions): Sessions {
 
   const runWho = (run: Run): Attribution => ({ sessionId: run.data.sessionId, employeeId: run.data.employeeId, runId: run.id })
 
-  async function rewindIn(t: Tx, run: Run, toEntry: string, text: string, op: 'rewind' | 'compact'): Promise<Entry> {
+  /**
+   * A summary entry on `toEntry`, then the kept part of the path (from `keepFrom`/after `keepAfter`, to the tip)
+   * re-created on top. With neither, nothing is kept (a jump back). Shared by rewind and compact.
+   */
+  async function rewindIn(t: Tx, run: Run, toEntry: string, text: string, op: 'rewind' | 'compact', o: RewindOptions = {}) {
     if (!text?.trim()) throw new ValidationError('a summary is required')
+    if (o.keepFrom !== undefined && o.keepAfter !== undefined) throw new ValidationError('give keepFrom or keepAfter, not both')
     const path = await runPath(t.store, run)
-    if (!path.some((e) => e.id === toEntry))
-      throw new ValidationError(`entry ${toEntry} is not on the current path of run ${run.id}`)
+    const indexOf = (id: string) => {
+      const i = path.findIndex((e) => e.id === id)
+      if (i < 0) throw new ValidationError(`entry ${id} is not on the current path of run ${run.id}`)
+      return i
+    }
+    const at = indexOf(toEntry)
+    const collapsing = o.keepFrom !== undefined || o.keepAfter !== undefined
+    let keep = path.length
+    if (o.keepFrom !== undefined) keep = indexOf(o.keepFrom)
+    if (o.keepAfter !== undefined) keep = indexOf(o.keepAfter) + 1
+    if (collapsing && keep <= at && op === 'rewind')
+      throw new ValidationError(`the kept part must come after entry ${toEntry}, the point the summary hangs on`)
+    if (collapsing && keep === at + 1 && op === 'rewind')
+      throw new ValidationError('nothing to collapse: the stretch between the rewind point and the kept part is empty')
+    const dropped = path.slice(at + 1, keep)
+    const kept = path.slice(keep)
+
+    // Never cut between a tool call and its results.
+    const callsUpTo = new Set(path.slice(0, at + 1).flatMap(callIds))
+    const firstCall = dropped[0] ? answeredBy(dropped[0]) : undefined
+    if (firstCall !== undefined && callsUpTo.has(firstCall))
+      throw new ValidationError(
+        `entry ${toEntry} is between a tool call and its results: rewind to the last result of that turn, or before the call`,
+      )
+    // Never drop a tool call that is still waiting for its result.
+    const open = openCallsOf(path)
+    if (open.calls.length && open.index > at && open.index < keep)
+      throw new ValidationError(`tool call ${open.calls[0]} is still waiting for its result; it can't be rewound away`)
+
+    // Kept results whose call is collapsed bring a copy of their assistant entry, with only those calls.
+    const leading: string[] = []
+    for (const e of kept) {
+      const id = answeredBy(e)
+      if (id === undefined) break
+      leading.push(id)
+    }
+    const owner = leading.length ? dropped.findLast((e) => callIds(e).some((id) => leading.includes(id))) : undefined
+    const carriedCalls = owner ? callIds(owner).filter((id) => leading.includes(id)) : []
+
+    const who = runWho(run)
     const content: SummaryContent = { text, rewoundTo: toEntry, replacesTip: path[path.length - 1]!.id }
-    const entry = await appendOne(t.store, toEntry, { kind: 'summary', content: content as unknown as Json }, runWho(run), { op })
-    await moveTip(t, run, entry.id)
-    return entry
+    const droppedCalls = dropped.flatMap(callIds).length - carriedCalls.length
+    const summary = await appendOne(t.store, toEntry, { kind: 'summary', content: content as unknown as Json }, who, {
+      ...(o.meta ?? {}),
+      op,
+      ...(collapsing && op === 'rewind'
+        ? {
+            collapsedEntries: dropped.length,
+            collapsedToolCalls: droppedCalls,
+            collapsedFrom: dropped[0]!.id,
+            collapsedTo: dropped[dropped.length - 1]!.id,
+          }
+        : {}),
+      ...(kept.length ? { keptEntries: kept.length, keptFrom: kept[0]!.id } : {}),
+    })
+    let tip = summary
+    if (owner) {
+      const a = owner.content as unknown as AssistantContent
+      const trimmed: AssistantContent = { ...a, toolCalls: (a.toolCalls ?? []).filter((c) => carriedCalls.includes(c.id)) }
+      tip = await appendOne(t.store, tip.id, { kind: 'assistant', content: trimmed as unknown as Json, meta: owner.meta }, who, {
+        copiedFrom: owner.id,
+        trimmedCalls: true,
+      })
+    }
+    tip = (await copyChain(t.store, tip.id, kept, who)) ?? tip
+    await moveTip(t, run, tip.id)
+    return tip
   }
 
   async function headMoved(t: Tx, session: Session, to: string | null, runId: string) {
@@ -652,37 +739,20 @@ export function createSessions(opts: SessionsOptions): Sessions {
         return updated
       }),
 
-    rewind: (runId, toEntry, summary) => atomic(async (t) => rewindIn(t, await liveRun(t, runId), toEntry, summary, 'rewind')),
+    rewind: (runId, toEntry, summary, o = {}) =>
+      atomic(async (t) => rewindIn(t, await liveRun(t, runId), toEntry, summary, 'rewind', o)),
 
     compact: (runId, summary, o = {}) =>
       atomic(async (t) => {
         const run = await liveRun(t, runId)
         const path = await runPath(t.store, run)
         if (!path.length) throw new ValidationError(`run ${runId} has no history to compact`)
-        if (o.keepFrom === undefined && !o.meta) return rewindIn(t, run, path[0]!.id, summary, 'compact')
-        if (!summary?.trim()) throw new ValidationError('a summary is required')
-        let kept: Entry[] = []
-        if (o.keepFrom !== undefined) {
-          const i = path.findIndex((e) => e.id === o.keepFrom)
-          if (i < 0) throw new ValidationError(`entry ${o.keepFrom} is not on the current path of run ${runId}`)
-          if (i === 0) throw new ValidationError("compaction can't keep the first entry: it stays anyway")
-          kept = path.slice(i)
-        }
-        const content: SummaryContent = { text: summary, rewoundTo: path[0]!.id, replacesTip: path[path.length - 1]!.id }
-        const entry = await appendOne(
-          t.store,
-          path[0]!.id,
-          { kind: 'summary', content: content as unknown as Json },
-          runWho(run),
-          {
-            ...(o.meta ?? {}),
-            op: 'compact',
-            ...(kept.length ? { keptEntries: kept.length, keptFrom: kept[0]!.id } : {}),
-          },
-        )
-        const tip = (await copyChain(t.store, entry.id, kept, runWho(run))) ?? entry
-        await moveTip(t, run, tip.id)
-        return tip
+        if (o.keepFrom !== undefined && o.keepFrom === path[0]!.id)
+          throw new ValidationError("compaction can't keep the first entry: it stays anyway")
+        return rewindIn(t, run, path[0]!.id, summary, 'compact', {
+          ...(o.keepFrom !== undefined ? { keepFrom: o.keepFrom } : {}),
+          ...(o.meta ? { meta: o.meta } : {}),
+        })
       }),
 
     offload: (runId, entryId, pointer, o = {}) =>

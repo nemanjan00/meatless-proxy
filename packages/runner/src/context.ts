@@ -63,7 +63,11 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
       }
       case 'tool_result': {
         const r = c as ToolResultContent
-        const msg: ChatMessage = { role: 'tool', tool_call_id: r.toolCallId, content: stringifyOutput(r.output, r.isError) }
+        const msg: ChatMessage = {
+          role: 'tool',
+          tool_call_id: r.toolCallId,
+          content: `${callTag(r.toolCallId)}${stringifyOutput(r.output, r.isError)}`,
+        }
         if (r.images?.length) msg.images = (r.images as unknown as ImageRef[]).map(imagePartOf)
         out.push(msg)
         break
@@ -88,7 +92,11 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
         const where = p.doc ? ` (see doc ${p.doc.id}${p.doc.chapter ? `, chapter "${p.doc.chapter}"` : ''})` : ''
         // A pointer standing for a tool result answers that call, so the history stays a valid tool exchange.
         if (p.toolCallId)
-          out.push({ role: 'tool', tool_call_id: p.toolCallId, content: `[offloaded tool result${where}] ${p.text}` })
+          out.push({
+            role: 'tool',
+            tool_call_id: p.toolCallId,
+            content: `${callTag(p.toolCallId)}[offloaded tool result${where}] ${p.text}`,
+          })
         else out.push({ role: 'user', content: `[offloaded message${where}] ${p.text}` })
         break
       }
@@ -110,6 +118,12 @@ export function imagePartOf(ref: ImageRef): ImagePart {
     ...(ref.height ? { height: ref.height } : {}),
   }
 }
+
+/**
+ * The handle a tool result shows the model: the id of its call. Providers don't reliably show models their own
+ * tool call ids, and sessions.rewind, offload and restore name calls by them.
+ */
+export const callTag = (toolCallId: string) => `[call ${toolCallId}] `
 
 function stringifyOutput(output: Json, isError?: boolean): string {
   const body = typeof output === 'string' ? output : JSON.stringify(output)

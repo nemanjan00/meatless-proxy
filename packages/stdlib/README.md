@@ -170,8 +170,15 @@ Notes on behaviour:
   sees), event ids or entry ids; they're resolved to entries of the run. A
   result that was offloaded counts through its pointer.
 - **Context tools** name history points the way the model sees them: a tool
-  call id or an entry id. `sessions.rewind { toEntry }` with a call id
-  continues after that turn's last result (a turn stays whole);
+  call id (every tool result starts with `[call <id>]`) or an entry id.
+  `sessions.rewind { from, to, summary }` collapses the stretch from `from`'s
+  turn through `to`'s results into the summary and keeps everything after it
+  (in the current turn, up to `to`'s own result: later calls, rewind's
+  included, stay); the result gives the stretch (from, to, entries, tool
+  calls), the entries kept, the context before and after, a reminder for the
+  summary, and for an ephemeral run that the change lasts only for the run.
+  With only `from` (or the older `toEntry`) it jumps back, continuing after
+  that turn's last result (a turn stays whole; not into the current turn);
   `sessions.offload { entryId }` with a call id offloads its result, and the
   pointer names the original entry. `sessions.restore { entryId }` takes the
   original entry id, the pointer id or the call id: with `offset`/`length` it

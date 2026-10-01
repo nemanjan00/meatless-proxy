@@ -367,6 +367,24 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
   }
 
+  /**
+   * A change to the history asked for by a tool. The tool checked it, but the history may have changed since
+   * (another call of the same turn): a change that no longer applies leaves the history as it is and tells
+   * the model, instead of failing the run.
+   */
+  const historyOp = async (run: Run, tool: string, op: () => Promise<unknown>) => {
+    try {
+      await op()
+    } catch (err) {
+      if (!isMpError(err, 'validation')) throw err
+      await sessions.append(run.id, {
+        kind: 'system',
+        content: { text: `[harness] ${tool} was not applied: ${errorMessage(err)}. The history is unchanged.` },
+        meta: { historyOpFailed: tool },
+      })
+    }
+  }
+
   const applyControl = async (run: Run, signals: ControlSignal[]): Promise<{ suspend?: WaitCondition; end?: RunResult }> => {
     const out: { suspend?: WaitCondition; end?: RunResult } = {}
     for (const c of signals) {
@@ -381,16 +399,18 @@ export function createRunner(opts: RunnerOptions): Runner {
           await sessions.updateRun(run.id, { commit: false })
           break
         case 'rewind':
-          await sessions.rewind(run.id, c.toEntry, c.summary)
+          await historyOp(run, 'sessions.rewind', () =>
+            sessions.rewind(run.id, c.toEntry, c.summary, c.keepAfter ? { keepAfter: c.keepAfter } : {}),
+          )
           break
         case 'offload':
-          await sessions.offload(run.id, c.entryId, c.pointer)
+          await historyOp(run, 'sessions.offload', () => sessions.offload(run.id, c.entryId, c.pointer))
           break
         case 'restore':
-          await sessions.restore(run.id, c.pointerEntryId)
+          await historyOp(run, 'sessions.restore', () => sessions.restore(run.id, c.pointerEntryId))
           break
         case 'compact':
-          await sessions.compact(run.id, c.summary)
+          await historyOp(run, 'sessions.compact', () => sessions.compact(run.id, c.summary))
           break
         case 'end':
           out.end = { status: c.status, ...(c.output !== undefined ? { output: c.output } : {}) }

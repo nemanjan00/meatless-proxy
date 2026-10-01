@@ -12,7 +12,13 @@ type Step = (req: ModelRequest) => ScriptResult
 const text = (m: { content?: string | null } | undefined) => (typeof m?.content === 'string' ? m.content : '')
 const lastTool = (req: ModelRequest): any => {
   const m = [...req.messages].reverse().find((x) => x.role === 'tool')
-  return m ? JSON.parse(text(m).replace(/^ERROR: /, '')) : null
+  return m
+    ? JSON.parse(
+        text(m)
+          .replace(/^\[call [^\]]*\] /, '')
+          .replace(/^ERROR: /, ''),
+      )
+    : null
 }
 const lastText = (req: ModelRequest) => text(req.messages.at(-1))
 

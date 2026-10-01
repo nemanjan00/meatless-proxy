@@ -69,8 +69,9 @@ export function contextNoteText(tokens: number, window: number, compactAt: numbe
   const pct = Math.round((tokens / window) * 100)
   const auto = compactAt ? ` At ${compactAt}% the harness compacts automatically.` : ''
   return (
-    `[context: about ${kTokens(tokens)} of ${kTokens(window)} tokens (${pct}%)] Keep it lean: sessions.rewind to a good point ` +
-    'with a summary of what happened since, sessions.offload big tool results you no longer need verbatim, or sessions.compact.' +
+    `[context: about ${kTokens(tokens)} of ${kTokens(window)} tokens (${pct}%)] Keep it lean: sessions.rewind with from and to ` +
+    'collapses a stretch you are done with (e.g. from your first read call to your last) into a summary of what you learned, ' +
+    'keeping everything after it; sessions.offload drops one big tool result you no longer need verbatim; sessions.compact is the last resort.' +
     auto
   )
 }

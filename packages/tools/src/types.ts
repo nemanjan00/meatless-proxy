@@ -46,7 +46,8 @@ export type ControlSignal =
   | { type: 'suspend'; wait: WaitCondition }
   | { type: 'commit'; summary?: string }
   | { type: 'discard' }
-  | { type: 'rewind'; toEntry: string; summary: string }
+  /** Rewind to `toEntry` with a summary; with `keepAfter` (the last entry collapsed), what follows it is kept verbatim. */
+  | { type: 'rewind'; toEntry: string; summary: string; keepAfter?: string }
   | { type: 'offload'; entryId: string; pointer: { text: string; doc?: { id: string; chapter?: string } } }
   | { type: 'restore'; pointerEntryId: string }
   | { type: 'compact'; summary: string }

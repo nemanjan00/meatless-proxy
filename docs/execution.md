@@ -193,7 +193,7 @@ anything.
 | loop      | *n* forks from the same entry, each with one `user` entry for its item on top |
 | commit    | the session's `head` moves to the run's last entry ([compare-and-swap](#commit)) |
 | ephemeral | the run's entries stay in the tree for the log and the UI, but `head` never moves to them |
-| rewind    | a new `summary` entry whose parent is the earlier entry, and `head` moves to it. The detailed branch stays in the tree. |
+| rewind    | a new `summary` entry whose parent is the earlier entry, and the run's `tip` moves to it (a jump back). Collapsing a stretch (`keepFrom`/`keepAfter`) also re-creates the entries after the stretch verbatim on top of the summary, like offload; kept results whose call was collapsed bring a copy of their assistant entry with only those calls. The point may be anywhere on the run's path, earlier runs included. The detailed branch stays in the tree. |
 | offload   | a new `pointer` entry replaces the message. The entries after it are re-created on top with the same content hashes, so it's cheap, but the cached prefix is invalid from that point on. |
 | restore   | the same thing in reverse: the original entry goes back into the path |
 | compact   | the same as rewind to the root, with a summary of everything. It's done only when required and recorded like any other operation. It may keep the latest entries: they are re-created verbatim on top of the summary. |
@@ -335,6 +335,12 @@ Commit moves the session's `head` from the run's `base` to its `tip`, as a
   **summary** instead: it produces a `summary` entry (one extra model call) and
   appends it on top of the new head. Its full branch stays in the tree.
 - Committing a run as a summary on purpose uses the same path.
+- The tip doesn't have to descend from `base`: a rewind or compaction may
+  reach into entries of earlier runs, so the run's path no longer contains
+  `base`. The compare is still on `head` = `base`: if nobody moved the head,
+  it moves onto the rewritten branch (the next run sees the collapsed
+  history); if somebody did, the summary fallback above applies and the
+  rewrite stays a property of the run.
 
 ## Context assembly
 
@@ -358,7 +364,9 @@ stays the same across calls, runs and forks:
 - Relevant memories and linked docs are loaded **once**, as entries when the
   session or run starts, not re-injected in every call.
 - Entries are rendered to OpenAI messages the same way every time, byte for
-  byte.
+  byte. A tool result's message starts with `[call <id>] `, the id of its
+  call, so the model can name it to `sessions.rewind`, `offload` and
+  `restore` (providers don't reliably show models their tool call ids).
 
 ### Context size and compaction
 
@@ -405,7 +413,21 @@ The runner keeps each request inside the model's **context window**:
   commits a summary as usual). In an **ephemeral** run the session's head
   never moves, so the next run starts from the uncompacted history and may
   compact again: the summary is a property of that run, not of the session.
-  The same holds for `sessions.compact` called by the model.
+  The same holds for `sessions.compact` and `sessions.rewind` called by the
+  model (unless the ephemeral run commits).
+- **Collapsing with `sessions.rewind`.** The tool resolves `from` to the
+  turn that made the call (its assistant entry) and `to` to the end of its
+  turn's results, or, when `to` is in the current turn, to its own result. It
+  checks the points (on the path, `to` finished, not the rewind call itself,
+  `to` not before `from`, not the first entry) and returns the stretch, the
+  entries kept, the context before (`run.data.context`) and after (estimated
+  by characters, at the run's measured tokens per character) and a reminder
+  for the summary. The runner applies the `rewind` control signal (`toEntry`,
+  `summary`, `keepAfter`) after the turn's results are appended, so rewind's
+  own result is among the kept entries. A history change that no longer
+  applies when the runner gets to it (another call of the same turn changed
+  the history) leaves the history as it is and appends a `system` note saying
+  so (`meta.historyOpFailed`); the run goes on.
 - **Oversized tool results.** A result whose text is longer than 20,000
   characters (`TOOL_RESULT_MAX_CHARS`) is appended in full and offloaded at
   once: a `pointer` entry (`meta.automatic`) with its head and tail and how to

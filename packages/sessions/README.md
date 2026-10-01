@@ -49,6 +49,16 @@ extend them with `records.kinds.extend`.
   the session's head onto the compacted branch; in an ephemeral run the
   session's head never moves. `run.data.context` is the size of the run's
   context at its latest model call (set by the runner).
+  `rewind(run, toEntry, summary, { keepFrom? | keepAfter?, meta? })` hangs the
+  summary on `toEntry` (anywhere on the run's path, earlier runs included).
+  Without a kept part it's a jump back; with one it collapses the stretch in
+  between and re-creates the rest verbatim on top (meta `collapsedEntries`,
+  `collapsedToolCalls`, `collapsedFrom`, `collapsedTo`, `keptEntries`,
+  `keptFrom`). Kept results whose call was collapsed bring a copy of their
+  assistant entry with only those calls (`meta.trimmedCalls`). Refused: a cut
+  between a call and its results, an empty stretch, or dropping a call still
+  waiting for its result. `compact` uses the same code. Committing a run whose
+  path no longer contains its `base` still moves the head when it's at `base`.
 - **Waiting:** `suspend` (running → suspended; `runs` waits also create
   `waits_on` links run → run, removed when the run leaves `suspended`),
   `waitersOf`, `isWaitSatisfied` (a reached `timeoutAt` counts as satisfied),

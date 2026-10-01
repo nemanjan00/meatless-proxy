@@ -87,7 +87,8 @@ const lastToolName = (req: ModelRequest): string | undefined => {
   return undefined
 }
 const lastToolOutput = (req: ModelRequest): any => {
-  const c = lastMsg(req).content ?? ''
+  // Tool results start with the id of their call (`[call …] `).
+  const c = (lastMsg(req).content ?? '').replace(/^\[call [^\]]*\] /, '')
   try {
     return JSON.parse(c)
   } catch {
@@ -589,7 +590,7 @@ export function scenarioSuite(backend: Backend) {
       if (text.includes('PROVIDER')) return reply('Recovered after the outage.')
       if (text.includes('FLAKY')) return callTools([{ name: 'test.flaky', args: {} }])
       if (text.includes('SEND')) return callTools([{ name: 'test.send', args: {} }])
-      if (last.role === 'tool') return reply(`tool said: ${text}`)
+      if (last.role === 'tool') return reply(`tool said: ${text.replace(/^\[call [^\]]*\] /, '')}`)
       return reply('?')
     }
     const t = await make({

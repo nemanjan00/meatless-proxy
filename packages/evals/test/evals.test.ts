@@ -54,7 +54,7 @@ const lastToolName = (req: ModelRequest): string | undefined => {
 }
 const lastOutput = (req: ModelRequest): any => {
   try {
-    return JSON.parse(lastMsg(req).content ?? '')
+    return JSON.parse((lastMsg(req).content ?? '').replace(/^\[call [^\]]*\] /, ''))
   } catch {
     return {}
   }

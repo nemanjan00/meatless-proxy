@@ -29,21 +29,43 @@ const answeredCall = (e: Entry): string | undefined =>
 const entryOrCall = (path: Entry[], id: string): Entry | undefined =>
   path.find((e) => e.id === id) ?? path.findLast((e) => answeredCall(e) === id)
 
-/**
- * Where a rewind "to a tool call" lands: after the last result of the assistant turn that made the call, so
- * the turn stays whole. An entry id is used as it is.
- */
-const rewindPoint = (path: Entry[], id: string): Entry | undefined => {
-  const direct = path.find((e) => e.id === id)
-  if (direct) return direct
-  const i = path.findLastIndex(
-    (e) => e.kind === 'assistant' && ((e.content as unknown as AssistantContent).toolCalls ?? []).some((c) => c.id === id),
-  )
-  if (i < 0) return undefined
+/** The tool calls an assistant entry makes (none for other entries). */
+const callsOf = (e: Entry): { id: string; name: string }[] =>
+  e.kind === 'assistant' ? ((e.content as unknown as AssistantContent).toolCalls ?? []) : []
+
+/** The index of the assistant entry that made a call, or -1. */
+const callIndex = (path: Entry[], callId: string): number => path.findLastIndex((e) => callsOf(e).some((c) => c.id === callId))
+
+/** The last index of the turn that starts at the assistant entry `i`: its results follow it. */
+const turnEnd = (path: Entry[], i: number): number => {
   let j = i
   while (j + 1 < path.length && answeredCall(path[j + 1]!)) j++
-  return path[j]
+  return j
 }
+
+/** The index of an entry named by its id or by a tool call id (the assistant entry that made the call), or -1. */
+const turnIndex = (path: Entry[], id: string): number => {
+  const i = path.findIndex((e) => e.id === id)
+  if (i < 0) return callIndex(path, id)
+  // A result stands for its call: the turn starts at the assistant entry.
+  const answers = answeredCall(path[i]!)
+  if (!answers) return i
+  const j = callIndex(path.slice(0, i), answers)
+  return j < 0 ? i : j
+}
+
+/**
+ * Where a jump back "to a tool call" lands: after the last result of the assistant turn that made the call, so
+ * the turn stays whole. An entry id lands on that entry, or on the end of its turn when it's part of one.
+ */
+const rewindPoint = (path: Entry[], id: string): Entry | undefined => {
+  const i = turnIndex(path, id)
+  if (i < 0) return undefined
+  return path[callsOf(path[i]!).length ? turnEnd(path, i) : i]
+}
+
+/** Characters of an entry in a request, roughly: what the context estimates use. */
+const entryChars = (e: Entry): number => JSON.stringify(e.content).length
 
 /** The text a model saw for an entry (a tool result's output as it is rendered). */
 const entryText = (e: Entry): string => {
@@ -829,25 +851,120 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.rewind',
       description:
-        "Jump back to an earlier point of this run's history and continue from there with a summary of everything since (what you tried, found, decided, and what is open). Use it when you went down a dead end, or finished a sub-task whose detail you no longer need. Name the point by the id of one of your earlier tool calls (you continue right after its results) or by an entry id. Nothing is lost: the detail stays in the database.",
+        'Shrink your context by replacing part of your history with a summary. The detail stays in the database. ' +
+        'Collapse a stretch you are done with (the common case): give from and to, and everything from the turn of from through the results of to becomes your summary, while everything after it (later messages, your replies) stays word for word. ' +
+        'E.g. you read many files: from = the id of your first read call, to = the id of the last one, summary = what you learned from them. ' +
+        'Jump back after a dead end: give only from, and everything after it (after its results, for a tool call) is dropped, replaced by your summary; that includes messages after it, so put what still matters in the summary. ' +
+        'from and to are ids of your earlier tool calls, in this run or earlier ones: each tool result starts with [call <id>] (entry ids work too). ' +
+        "The summary is all that's left of the stretch: put in every fact, id, path, decision and open item you still need.",
       effect: 'idempotent',
       params: {
         properties: {
-          toEntry: {
+          from: {
             type: 'string',
-            description: 'The id of an earlier tool call of yours (the history continues after its results), or an entry id.',
+            description:
+              'The id of an earlier tool call of yours, as in the [call <id>] its result starts with (or an entry id): where the stretch starts, or where to jump back to.',
           },
-          summary: { type: 'string' },
+          to: {
+            type: 'string',
+            description:
+              'The id of a later tool call of yours (or an entry id): the stretch ends after its results. Leave it out to jump back instead.',
+          },
+          summary: { type: 'string', description: 'What the stretch did and found: everything from it you still need.' },
+          toEntry: { type: 'string', description: 'Older name of from, for a jump back.' },
         },
-        required: ['toEntry', 'summary'],
+        required: ['summary'],
       },
     },
     async (a, ctx) => {
-      if (!str(a.summary)) return fail('summary is required')
+      const summary = str(a.summary)
+      if (!summary) return fail('summary is required')
+      const fromId = str(a.from) ?? str(a.toEntry)
+      if (!fromId) return fail('from is required: the id of one of your earlier tool calls, or an entry id')
+      const toId = str(a.to)
+      if (fromId === ctx.callId || toId === ctx.callId)
+        return fail('that is this sessions.rewind call; name an earlier tool call')
+      const run = await sessions.getRun(ctx.runId)
       const path = await runPath(ctx)
-      const to = rewindPoint(path, String(a.toEntry ?? ''))
-      if (!to) return fail(`${a.toEntry} is not a tool call or entry in the current history`)
-      return { output: { rewindTo: to.id }, control: [{ type: 'rewind', toEntry: to.id, summary: a.summary }] }
+      // The turn making this call (-1 when the call isn't in the history, e.g. called from outside a turn).
+      const current = callIndex(path, ctx.callId)
+      const last = run?.data.context
+      const perChar = last && last.chars > 0 && last.tokens > 0 ? last.tokens / last.chars : 1 / 3.5
+      const total = path.reduce((n, e) => n + entryChars(e), 0)
+      const before = last?.tokens ?? Math.ceil(total * perChar)
+      const context = (removed: Entry[]) => ({
+        tokensBefore: before,
+        tokensAfter: Math.max(
+          0,
+          before - Math.round((removed.reduce((n, e) => n + entryChars(e), 0) - summary.length) * perChar),
+        ),
+        ...(last?.window ? { window: last.window } : {}),
+      })
+      const ephemeral: Record<string, Json> =
+        run?.data.mode === 'ephemeral' && run.data.commit !== true
+          ? {
+              ephemeral:
+                "This run is ephemeral: the change lasts for the rest of this run only, and the session's history stays as it was unless the run commits (sessions.commit).",
+            }
+          : {}
+      const reminder =
+        'Your summary is all that is left of what was replaced: it must hold every fact, id, path, decision and open item from it you still need.'
+      const unknown = (id: string) => fail(`${id} is not a tool call or entry in this run's history`)
+
+      if (!toId) {
+        const point = rewindPoint(path, fromId)
+        if (!point) return unknown(fromId)
+        const i = path.indexOf(point)
+        if (current >= 0 && i >= current)
+          return fail(`${fromId} is in this turn: jump back to a tool call of an earlier turn, or collapse with from and to`)
+        const dropped = path.slice(i + 1)
+        return {
+          output: {
+            rewindTo: point.id,
+            dropped: { entries: dropped.length, toolCalls: dropped.flatMap(callsOf).filter((c) => c.id !== ctx.callId).length },
+            note: 'Everything after that point is dropped, including this call and its result.',
+            context: context(dropped),
+            reminder,
+            ...ephemeral,
+          },
+          control: [{ type: 'rewind', toEntry: point.id, summary }],
+        }
+      }
+
+      const start = turnIndex(path, fromId)
+      if (start < 0) return unknown(fromId)
+      if (start === 0) return fail('the first entry of the history stays; start the stretch at a later tool call')
+      const toAt = turnIndex(path, toId)
+      if (toAt < 0) return unknown(toId)
+      // The end: the results of `to`'s turn. In the current turn (the one making this call), only up to `to`'s
+      // own result: the calls after it, this one included, stay after the summary with their results.
+      let end = callsOf(path[toAt]!).length ? turnEnd(path, toAt) : toAt
+      if (toAt === current && current >= 0) {
+        const isCall = callsOf(path[current]!).some((c) => c.id === toId)
+        const named = isCall ? toId : answeredCall(path.find((e) => e.id === toId) ?? path[current]!)
+        if (named) {
+          const r = path.findLastIndex((e) => answeredCall(e) === named)
+          if (r < 0) return fail(`${toId} has no result yet; name a call that has finished`)
+          end = r
+        }
+      } else if (callsOf(path[toAt]!).some((c) => c.id === toId) && !path.some((e) => answeredCall(e) === toId))
+        return fail(`${toId} has no result yet; name a call that has finished`)
+      if (end < start) return fail(`${toId} comes before ${fromId}: from is where the stretch starts, to where it ends`)
+      const stretch = path.slice(start, end + 1)
+      const answeredLater = new Set(path.slice(end + 1).map(answeredCall))
+      const toolCalls = stretch.flatMap(callsOf).filter((c) => c.id !== ctx.callId && !answeredLater.has(c.id)).length
+      return {
+        output: {
+          collapsed: { from: stretch[0]!.id, to: stretch[stretch.length - 1]!.id, entries: stretch.length, toolCalls },
+          // What follows the stretch, plus this call's result (and, when the stretch ends in this turn, a copy of it).
+          keptEntries: path.length - end + (current >= 0 && end >= current ? 1 : 0),
+          note: 'Everything after the stretch stays word for word, this call and its result included.',
+          context: context(stretch),
+          reminder,
+          ...ephemeral,
+        },
+        control: [{ type: 'rewind', toEntry: path[start - 1]!.id, summary, keepAfter: stretch[stretch.length - 1]!.id }],
+      }
     },
   )
 
@@ -855,7 +972,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.offload',
       description:
-        'Replace one big message in the history (a big tool result you have already used, a long doc, a finished discussion) with a short pointer. Name it by the id of the tool call whose result it is, or by an entry id. Optionally write what matters to a docs chapter first (content, into docId or a new doc of this session). The original stays in the database: sessions.restore reads it back.',
+        'Replace one big message in the history (a big tool result you have already used, a long doc, a finished discussion) with a short pointer. Name it by the id of the tool call whose result it is (each tool result starts with [call <id>]), or by an entry id. Optionally write what matters to a docs chapter first (content, into docId or a new doc of this session). The original stays in the database: sessions.restore reads it back.',
       effect: 'idempotent',
       params: {
         properties: {
@@ -952,7 +1069,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.compact',
       description:
-        'Replace the whole history after the first entry with your summary of everything, for a long session that must go on. Prefer sessions.rewind (a dead end) or sessions.offload (a big result you have used). The harness also compacts automatically near the end of the context window.',
+        'Replace the whole history after the first entry with your summary of everything, for a long session that must go on. Prefer sessions.rewind (collapse a stretch you are done with, from and to, or jump back after a dead end) or sessions.offload (a big result you have used). The harness also compacts automatically near the end of the context window.',
       effect: 'idempotent',
       params: { properties: { summary: { type: 'string' } }, required: ['summary'] },
     },

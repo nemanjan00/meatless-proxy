@@ -337,7 +337,8 @@ npx tsx packages/web/scripts/screenshots.ts --base http://localhost:3113 --all -
 
 `test/*.test.ts(x)` (vitest, jsdom, Testing Library): tree layout (no overlaps,
 centring, collapse), lineage builder (columns, longest path, cycles, origin chain),
-entry tree rows (lanes, rewound/offloaded/run branches), schema form generation and
+entry tree rows (lanes, rewound/offloaded/run branches), history summaries (a collapsed
+stretch shows "Collapsed N entries"), schema form generation and
 parsing, the API and live clients (mock WebSocket), the mock API (contract
 behaviour, CAS conflicts, live events, simulator), and page renders against the mock
 (Now streaming, Sessions filters, Session detail and tree collapse, Branches,

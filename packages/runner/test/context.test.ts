@@ -332,7 +332,7 @@ describe('oversized tool results', () => {
     const toolMsgs = second.filter((m) => m.role === 'tool')
     expect(toolMsgs.map((m) => m.tool_call_id)).toEqual(['call_big', 'call_small'])
     const preview = toolMsgs[0]!.content!
-    expect(preview.startsWith('[offloaded tool result]')).toBe(true)
+    expect(preview.startsWith('[call call_big] [offloaded tool result]')).toBe(true)
     expect(preview).toContain('HEAD-')
     expect(preview).toContain('-TAIL')
     expect(preview).toContain('sessions.restore')
@@ -349,7 +349,7 @@ describe('oversized tool results', () => {
 
     // After the restore the model saw the whole result again.
     const third = h.model.calls[2]!.messages
-    expect(third.find((m) => m.role === 'tool' && m.tool_call_id === 'call_big')!.content).toBe(big)
+    expect(third.find((m) => m.role === 'tool' && m.tool_call_id === 'call_big')!.content).toBe(`[call call_big] ${big}`)
     expectPairsIntact(await h.sessions.history(s.id))
   })
 
@@ -378,8 +378,72 @@ describe('oversized tool results', () => {
       e('4', 'pointer', { text: 'old note', original: 'y' }),
     ])
     expect(msgs.slice(2)).toEqual([
-      { role: 'tool', tool_call_id: 'c1', content: '[offloaded tool result] preview' },
+      { role: 'tool', tool_call_id: 'c1', content: '[call c1] [offloaded tool result] preview' },
       { role: 'user', content: '[offloaded message] old note' },
     ])
+  })
+})
+
+describe('collapsing a stretch (rewind with keepAfter)', () => {
+  it('replaces the reading with a summary up to a result of the current turn; the rest of the turn stays', async () => {
+    const h = harness([
+      callTools([{ name: 'read', id: 'call_r1' }]),
+      callTools([
+        { name: 'read', id: 'call_r2' },
+        { name: 'read', id: 'call_r3' },
+      ]),
+      callTools([
+        { name: 'read', id: 'call_r4' },
+        { name: 'collapse', id: 'call_x' },
+        { name: 'read', id: 'call_r5' },
+      ]),
+      reply('done'),
+    ])
+    h.tool({ name: 'read' }, async (_a, ctx) => ({ output: `contents for ${ctx.callId}` }))
+    h.tool({ name: 'collapse', effect: 'idempotent' }, async (_a, ctx) => {
+      const path = await h.sessions.runHistory(ctx.runId)
+      const first = path.findIndex((e) => e.kind === 'assistant')
+      const r4 = path.find((e) => (e.content as any).toolCallId === 'call_r4')!
+      return {
+        output: 'collapsed',
+        control: [
+          { type: 'rewind', toEntry: path[first - 1]!.id, summary: 'read r1-r4: PAY-7 needs a refund', keepAfter: r4.id },
+        ],
+      }
+    })
+    const s = await h.session(['read', 'collapse'])
+    const run = await h.start(s.id)
+    expect((await h.runner.execute(run.id)).status).toBe('completed')
+
+    // The last model call saw the person's message, the summary, then the rest of the turn with its results.
+    const last = h.model.calls.at(-1)!.messages
+    expect(last.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'tool', 'tool'])
+    expect(last[2]!.content).toContain('read r1-r4: PAY-7 needs a refund')
+    expect(last[3]!.tool_calls!.map((c) => c.id)).toEqual(['call_x', 'call_r5'])
+    expect(last.slice(4).map((m) => m.tool_call_id)).toEqual(['call_x', 'call_r5'])
+
+    // The continuing run committed the collapsed branch.
+    const path = await h.sessions.history(s.id)
+    expectPairsIntact(path)
+    expect(kinds(path)).toEqual(['system', 'user', 'summary', 'assistant', 'tool_result', 'tool_result', 'assistant'])
+    expect(path[2]!.meta).toMatchObject({ op: 'rewind', collapsedEntries: 7, collapsedToolCalls: 4, keptEntries: 2 })
+    expect((path[2]!.content as unknown as SummaryContent).text).toBe('read r1-r4: PAY-7 needs a refund')
+  })
+
+  it('a history change that no longer applies leaves the history alone and tells the model; the run goes on', async () => {
+    const h = harness([callTools([{ name: 'collapse', id: 'call_x' }]), reply('done')])
+    h.tool({ name: 'collapse', effect: 'idempotent' }, async (_a, ctx) => {
+      const path = await h.sessions.runHistory(ctx.runId)
+      return { output: 'collapsed', control: [{ type: 'rewind', toEntry: path[0]!.id, summary: 'x', keepAfter: 'ent_gone' }] }
+    })
+    const s = await h.session(['collapse'])
+    const run = await h.start(s.id)
+    expect((await h.runner.execute(run.id)).status).toBe('completed')
+    const path = await h.sessions.history(s.id)
+    const note = path.find((e) => e.meta.historyOpFailed === 'sessions.rewind')!
+    expect((note.content as any).text).toMatch(
+      /^\[harness\] sessions\.rewind was not applied: .*ent_gone.*The history is unchanged\.$/,
+    )
+    expect(kinds(path)).toEqual(['system', 'user', 'assistant', 'tool_result', 'system', 'assistant'])
   })
 })

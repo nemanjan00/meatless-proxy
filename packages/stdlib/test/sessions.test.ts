@@ -467,6 +467,155 @@ describe('run control', () => {
     ).toBe(true)
   })
 
+  describe('sessions.rewind with from and to', () => {
+    /** Three reads over two turns, the answer and a new message, then the turn that calls sessions.rewind. */
+    async function readingThenRewind(t: Awaited<ReturnType<typeof stack>>, extraCalls: string[] = []) {
+      const c1 = await t.recordCall(t.run.id, 'docs.read', 'one')
+      const a2 = await t.sessions.append(t.run.id, {
+        kind: 'assistant',
+        content: {
+          text: null,
+          toolCalls: [
+            { id: 'call_r2', name: 'docs.read', arguments: '{}' },
+            { id: 'call_r3', name: 'docs.read', arguments: '{}' },
+          ],
+        },
+      })
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_r2', name: 'docs.read', output: 'two' },
+      })
+      const r3 = await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_r3', name: 'docs.read', output: 'three' },
+      })
+      await t.sessions.append(t.run.id, { kind: 'assistant', content: { text: 'PAY-7 needs a refund' } })
+      await t.sessions.append(t.run.id, { kind: 'user', content: { text: 'thanks, and the invoice?' } })
+      const callId = 'call_rewind'
+      const ids = [...extraCalls, callId]
+      const current = await t.sessions.append(t.run.id, {
+        kind: 'assistant',
+        content: {
+          text: null,
+          toolCalls: ids.map((id) => ({ id, name: id === callId ? 'sessions.rewind' : 'docs.read', arguments: '{}' })),
+        },
+      })
+      return { c1, a2, r3, current, callId, ctx: t.ctx({ callId }) }
+    }
+
+    it('collapses from the first read through the last one, keeping what follows', async () => {
+      const t = await stack()
+      const { c1, r3, callId, ctx } = await readingThenRewind(t)
+      await t.sessions.updateRun(t.run.id, {
+        context: { tokens: 10_000, window: 100_000, chars: 35_000, model: 'm', at: new Date(0).toISOString() },
+      })
+      const path = await t.sessions.runHistory(t.run.id)
+      const first = path.findIndex((e) => e.kind === 'assistant')
+      const r = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r3', summary: 'read one to three: a refund' }, ctx)
+      expect(r.isError).toBeFalsy()
+      expect(r.control).toEqual([
+        { type: 'rewind', toEntry: path[first - 1]!.id, summary: 'read one to three: a refund', keepAfter: r3.id },
+      ])
+      const o = r.output as any
+      expect(o.collapsed).toEqual({ from: path[first]!.id, to: r3.id, entries: 5, toolCalls: 3 })
+      // The answer, the message and this turn stay, plus this call's result.
+      expect(o.keptEntries).toBe(4)
+      expect(o.context.tokensBefore).toBe(10_000)
+      expect(o.context.tokensAfter).toBeLessThan(10_000)
+      expect(o.context.window).toBe(100_000)
+      expect(o.reminder).toMatch(/every fact, id, path, decision and open item/)
+      expect(o.ephemeral).toBeUndefined()
+
+      // Applied like the runner does it (after this call's result): the person's messages and the answer survive.
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: callId, name: 'sessions.rewind', output: o },
+      })
+      const c = r.control![0] as { toEntry: string; summary: string; keepAfter: string }
+      await t.sessions.rewind(t.run.id, c.toEntry, c.summary, { keepAfter: c.keepAfter })
+      const h = await t.sessions.runHistory(t.run.id)
+      expect(h.slice(first - 1).map((e) => e.kind)).toEqual(['user', 'summary', 'assistant', 'user', 'assistant', 'tool_result'])
+      expect((h[first + 1]!.content as any).text).toBe('PAY-7 needs a refund')
+      expect((h[first + 2]!.content as any).text).toBe('thanks, and the invoice?')
+    })
+
+    it('collapses up to a result in the current turn: the later calls, this one included, stay', async () => {
+      const t = await stack()
+      const { c1, callId, ctx } = await readingThenRewind(t, ['call_r4', 'call_r5'])
+      const r4 = await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_r4', name: 'docs.read', output: 'four' },
+      })
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_r5', name: 'docs.read', output: 'five' },
+      })
+      const r = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r4', summary: 'read one to four' }, ctx)
+      expect((r.control![0] as any).keepAfter).toBe(r4.id)
+      const o = r.output as any
+      // A1 r1, A2 r2 r3, the answer, the message, this turn's assistant entry and r4.
+      expect(o.collapsed).toMatchObject({ entries: 9, toolCalls: 4 })
+      // r5 and this call's result, with a copy of this turn's assistant entry carrying their calls.
+      expect(o.keptEntries).toBe(3)
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: callId, name: 'sessions.rewind', output: 'ok' },
+      })
+      const c = r.control![0] as { toEntry: string; summary: string; keepAfter: string }
+      await t.sessions.rewind(t.run.id, c.toEntry, c.summary, { keepAfter: c.keepAfter })
+      const h = await t.sessions.runHistory(t.run.id)
+      expect(h.slice(-4).map((e) => e.kind)).toEqual(['summary', 'assistant', 'tool_result', 'tool_result'])
+      expect((h.at(-3)!.content as any).toolCalls.map((x: { id: string }) => x.id)).toEqual(['call_r5', callId])
+    })
+
+    it('refuses bad ids, a call without a result, this call, and a stretch the wrong way round', async () => {
+      const t = await stack()
+      const { c1, ctx } = await readingThenRewind(t, ['call_r4'])
+      const err = async (args: Record<string, unknown>) => {
+        const r = await t.call('sessions.rewind', { summary: 's', ...args }, ctx)
+        expect(r.isError).toBe(true)
+        return (r.output as { error: string }).error
+      }
+      expect(await err({ from: 'call_nope', to: 'call_r3' })).toMatch(/call_nope is not a tool call or entry/)
+      expect(await err({ from: c1.callId, to: 'ent_nope' })).toMatch(/ent_nope is not a tool call or entry/)
+      // call_r4 is in this turn and has no result yet.
+      expect(await err({ from: c1.callId, to: 'call_r4' })).toMatch(/has no result yet/)
+      expect(await err({ from: c1.callId, to: 'call_rewind' })).toMatch(/this sessions\.rewind call/)
+      expect(await err({ from: 'call_r3', to: c1.callId })).toMatch(/comes before/)
+      const path = await t.sessions.runHistory(t.run.id)
+      expect(await err({ from: path[0]!.id, to: 'call_r3' })).toMatch(/first entry/)
+      expect(await err({ to: 'call_r3' })).toMatch(/from is required/)
+      expect((await t.call('sessions.rewind', { from: c1.callId, to: 'call_r3' }, ctx)).isError).toBe(true)
+      // Jumping back into this turn can't work: the turn's own results would be cut off from it.
+      expect(await err({ from: 'call_r4' })).toMatch(/in this turn/)
+    })
+
+    it('jumps back without to, and says what it drops', async () => {
+      const t = await stack()
+      const { c1, ctx } = await readingThenRewind(t)
+      const r = await t.call('sessions.rewind', { from: c1.callId, summary: 'dead end' }, ctx)
+      expect(r.control).toEqual([{ type: 'rewind', toEntry: c1.entryId, summary: 'dead end' }])
+      expect(r.output).toMatchObject({ rewindTo: c1.entryId, dropped: { entries: 6, toolCalls: 2 } })
+      expect((r.output as any).note).toMatch(/dropped/)
+    })
+
+    it('says an ephemeral run keeps the change only until it ends, unless it commits', async () => {
+      const t = await stack()
+      const run = await t.sessions.createRun({
+        sessionId: t.session.id,
+        mode: 'ephemeral',
+        cause: { type: 'manual' },
+        input: [{ kind: 'user', content: { text: 'look around' } }],
+      })
+      await t.sessions.transition(run.id, 'queued', 'running')
+      const c1 = await t.recordCall(run.id, 'docs.read', 'one')
+      const c2 = await t.recordCall(run.id, 'docs.read', 'two')
+      const ctx = t.ctx({ runId: run.id })
+      const r = await t.call('sessions.rewind', { from: c1.callId, to: c2.callId, summary: 'read two docs' }, ctx)
+      expect((r.output as any).ephemeral).toMatch(/unless the run commits/)
+    })
+  })
+
   it('rewind checks the entry is on the current path', async () => {
     const t = await stack()
     const path = await t.sessions.runHistory(t.run.id)

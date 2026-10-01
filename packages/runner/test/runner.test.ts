@@ -38,7 +38,9 @@ describe('runner', () => {
     expect(kinds(hist)).toEqual(['system', 'user', 'assistant', 'tool_result', 'assistant'])
     expect((hist[3]!.content as unknown as ToolResultContent).output).toBe(5)
     expect(h.model.calls[0]!.tools?.map((t) => t.function.name)).toEqual(['math__add'])
-    expect(h.model.calls[1]!.messages.at(-1)).toMatchObject({ role: 'tool', content: '5' })
+    // The result shows the model the id of its call: sessions.rewind, offload and restore name calls by it.
+    const callId = h.model.calls[1]!.messages.at(-2)!.tool_calls![0]!.id
+    expect(h.model.calls[1]!.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: callId, content: `[call ${callId}] 5` })
   })
 
   it('refuses tools outside the toolset or the allow list', async () => {

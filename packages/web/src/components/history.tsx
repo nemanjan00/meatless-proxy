@@ -257,6 +257,14 @@ export function TimelineEntry({ item, onShowBranch }: { item: TimelineItem; onSh
                 </span>
               ) : e.meta.op === 'compact' ? (
                 'Compacted: the full history is kept'
+              ) : typeof e.meta.collapsedEntries === 'number' ? (
+                <span data-testid="collapsed-stretch">
+                  Collapsed {e.meta.collapsedEntries} {e.meta.collapsedEntries === 1 ? 'entry' : 'entries'}
+                  {typeof e.meta.collapsedToolCalls === 'number' && e.meta.collapsedToolCalls > 0
+                    ? ` (${e.meta.collapsedToolCalls} tool ${e.meta.collapsedToolCalls === 1 ? 'call' : 'calls'})`
+                    : ''}
+                  : the detailed branch is kept
+                </span>
               ) : (
                 'Rewound: the detailed branch is kept'
               )}

@@ -572,6 +572,209 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
         expect(texts(await sessions.runHistory(r.id))).toEqual(['sys', 'all of it'])
       })
 
+      describe('collapsing a stretch with rewind', () => {
+        const call = (...ids: string[]) => ({
+          kind: 'assistant' as const,
+          content: { text: null, toolCalls: ids.map((id) => ({ id, name: 'files.read', arguments: '{}' })) },
+        })
+        const result = (id: string, output = `contents of ${id}`) => ({
+          kind: 'tool_result' as const,
+          content: { toolCallId: id, name: 'files.read', output },
+        })
+        const kinds = (h: { kind: string }[]) => h.map((e) => e.kind)
+
+        /** sys, task; the reading (two turns); the answer, a new message and a reply. */
+        async function reading(mode: 'continuing' | 'ephemeral' = 'continuing') {
+          const s = await sessions.create({
+            employeeId: EMP,
+            title: 'R',
+            entries: [{ kind: 'system', content: { text: 'sys' } }, user('what does PAY-7 need?')],
+          })
+          const r = await started(s.id, mode)
+          const a1 = await sessions.append(r.id, call('c1'))
+          const r1 = await sessions.append(r.id, result('c1'))
+          const a2 = await sessions.append(r.id, call('c2', 'c3'))
+          await sessions.append(r.id, result('c2'))
+          const r3 = await sessions.append(r.id, result('c3'))
+          const answer = await sessions.append(r.id, assistant('PAY-7 needs a refund'))
+          const msg = await sessions.append(r.id, user('thanks, and the invoice?'))
+          const reply = await sessions.append(r.id, assistant('invoice 9'))
+          const task = (await sessions.runHistory(r.id))[1]!
+          return { s, r, task, a1, r1, a2, r3, answer, msg, reply }
+        }
+
+        it('replaces the stretch with a summary and keeps everything after it verbatim, in order', async () => {
+          const { r, task, a1, r3, answer, msg, reply } = await reading()
+          const before = await sessions.runHistory(r.id)
+          const tip = await sessions.rewind(r.id, task.id, 'read c1-c3: PAY-7 needs a refund', { keepFrom: answer.id })
+          const h = await sessions.runHistory(r.id)
+          expect(texts(h)).toEqual([
+            'sys',
+            'what does PAY-7 need?',
+            'read c1-c3: PAY-7 needs a refund',
+            'PAY-7 needs a refund',
+            'thanks, and the invoice?',
+            'invoice 9',
+          ])
+          expect(h.slice(3).map((e) => e.content)).toEqual([answer.content, msg.content, reply.content])
+          expect(h.slice(3).map((e) => e.meta.copiedFrom)).toEqual([answer.id, msg.id, reply.id])
+          expect(h[2]!.parent).toBe(task.id)
+          expect(h[2]!.meta).toMatchObject({
+            op: 'rewind',
+            collapsedEntries: 5,
+            collapsedToolCalls: 3,
+            collapsedFrom: a1.id,
+            collapsedTo: r3.id,
+            keptEntries: 3,
+            keptFrom: answer.id,
+          })
+          expect(h[2]!.content as unknown as SummaryContent).toMatchObject({ rewoundTo: task.id, replacesTip: reply.id })
+          expect(tip.id).toBe(h[5]!.id)
+          expect((await sessions.requireRun(r.id)).data.tip).toBe(tip.id)
+          // The detailed branch is still in the tree.
+          expect(await records.store.entries.path(reply.id)).toEqual(before)
+        })
+
+        it('takes the last collapsed entry instead (keepAfter)', async () => {
+          const { r, task, r3 } = await reading()
+          await sessions.rewind(r.id, task.id, 'the reading', { keepAfter: r3.id })
+          expect(kinds(await sessions.runHistory(r.id))).toEqual(['system', 'user', 'summary', 'assistant', 'user', 'assistant'])
+        })
+
+        it('collapses up to a result in the middle of the latest turn: the later calls come along with their results', async () => {
+          const { r, answer } = await reading()
+          // The latest turn: read c4, read c5, then the call that collapses (c6), all answered.
+          const a = await sessions.append(r.id, call('c4', 'c5', 'c6'))
+          const r4 = await sessions.append(r.id, result('c4'))
+          const r5 = await sessions.append(r.id, result('c5'))
+          const r6 = await sessions.append(r.id, result('c6', 'collapsed'))
+          await sessions.rewind(r.id, answer.id, 'read c4: nothing new', { keepAfter: r4.id })
+          const h = await sessions.runHistory(r.id)
+          expect(kinds(h.slice(-5))).toEqual(['assistant', 'summary', 'assistant', 'tool_result', 'tool_result'])
+          const carried = h[h.length - 3]!
+          expect((carried.content as any).toolCalls.map((c: { id: string }) => c.id)).toEqual(['c5', 'c6'])
+          expect(carried.meta).toMatchObject({ copiedFrom: a.id, trimmedCalls: true })
+          expect(h.slice(-2).map((e) => e.content)).toEqual([r5.content, r6.content])
+          expect(h[h.length - 4]!.meta).toMatchObject({ collapsedEntries: 4, collapsedToolCalls: 1, keptEntries: 2 })
+        })
+
+        it('still jumps back without a kept part', async () => {
+          const { r, a1, r1, reply } = await reading()
+          const tip = await sessions.rewind(r.id, r1.id, 'dead end after c1')
+          expect(texts(await sessions.runHistory(r.id)).slice(-1)).toEqual(['dead end after c1'])
+          expect(tip.parent).toBe(r1.id)
+          expect(tip.meta.collapsedEntries).toBeUndefined()
+          expect((tip.content as unknown as SummaryContent).replacesTip).toBe(reply.id)
+          expect(a1).toBeTruthy()
+        })
+
+        it('never separates a tool call from its results, and refuses bad points', async () => {
+          const { r, task, a1, a2, r1, answer } = await reading()
+          const refused = (p: Promise<unknown>) => expect(p).rejects.toBeInstanceOf(ValidationError)
+          // Between a call and its results, in both modes.
+          await refused(sessions.rewind(r.id, a2.id, 'x', { keepFrom: answer.id }))
+          await refused(sessions.rewind(r.id, a1.id, 'x'))
+          // Off the path, both options, kept part before the point, nothing collapsed.
+          await refused(sessions.rewind(r.id, 'ent_nope', 'x', { keepFrom: answer.id }))
+          await refused(sessions.rewind(r.id, task.id, 'x', { keepFrom: 'ent_nope' }))
+          await refused(sessions.rewind(r.id, task.id, 'x', { keepFrom: answer.id, keepAfter: r1.id }))
+          await refused(sessions.rewind(r.id, answer.id, 'x', { keepFrom: a1.id }))
+          await refused(sessions.rewind(r.id, task.id, 'x', { keepFrom: a1.id }))
+          await refused(sessions.rewind(r.id, task.id, ' ', { keepFrom: answer.id }))
+          // Nothing changed.
+          expect((await sessions.runHistory(r.id)).length).toBe(10)
+        })
+
+        it('refuses to drop a tool call still waiting for its result', async () => {
+          const { r, task, answer } = await reading()
+          const open = await sessions.append(r.id, call('c8', 'c9'))
+          await sessions.append(r.id, result('c8'))
+          const refused = (p: Promise<unknown>) => expect(p).rejects.toBeInstanceOf(ValidationError)
+          await refused(sessions.rewind(r.id, task.id, 'x', { keepAfter: open.id }))
+          await refused(sessions.rewind(r.id, task.id, 'x'))
+          // A collapse before the open turn leaves it alone (kept verbatim).
+          await sessions.rewind(r.id, task.id, 'the reading', { keepFrom: answer.id })
+          const h = await sessions.runHistory(r.id)
+          expect(kinds(h.slice(-2))).toEqual(['assistant', 'tool_result'])
+        })
+
+        it('collapses entries of earlier runs of a continuing session; the commit moves the head and the next run sees it', async () => {
+          const { s, r, task, answer, reply } = await reading()
+          await sessions.commit(r.id)
+          await sessions.transition(r.id, 'running', 'completed')
+          const r2 = await started(s.id)
+          const m2 = await sessions.append(r2.id, user('is it paid?'))
+          await sessions.append(r2.id, assistant('not yet'))
+          const base = (await sessions.requireRun(r2.id)).data.base
+          expect(base).toBe(reply.id)
+          // The stretch lies in the first run; the run's base is no longer on its path afterwards.
+          await sessions.rewind(r2.id, task.id, 'read c1-c3', { keepFrom: answer.id })
+          const h = await sessions.runHistory(r2.id)
+          expect(h.some((e) => e.id === base)).toBe(false)
+          expect(texts(h)).toEqual([
+            'sys',
+            'what does PAY-7 need?',
+            'read c1-c3',
+            'PAY-7 needs a refund',
+            'thanks, and the invoice?',
+            'invoice 9',
+            'is it paid?',
+            'not yet',
+          ])
+          expect(h[6]!.meta.copiedFrom).toBe(m2.id)
+          const session = await sessions.commit(r2.id)
+          expect(session.data.head).toBe(h[h.length - 1]!.id)
+          expect((await sessions.requireRun(r2.id)).data.committed).toMatchObject({ as: 'full', entryId: session.data.head })
+          await sessions.transition(r2.id, 'running', 'completed')
+          const r3 = await started(s.id)
+          expect(texts(await sessions.runHistory(r3.id))).toEqual(texts(h))
+        })
+
+        it('when the head moved meanwhile, the commit is refused and a summary goes on the new head', async () => {
+          const { s, r, task, answer } = await reading()
+          await sessions.commit(r.id)
+          await sessions.transition(r.id, 'running', 'completed')
+          const r2 = await started(s.id)
+          await sessions.append(r2.id, assistant('working'))
+          await sessions.rewind(r2.id, task.id, 'read c1-c3', { keepFrom: answer.id })
+          // Someone else moves the head: an ephemeral run that commits.
+          const e = await started(s.id, 'ephemeral')
+          await sessions.append(e.id, assistant('side note'))
+          await sessions.commit(e.id)
+          await expect(sessions.commit(r2.id)).rejects.toBeInstanceOf(ConflictError)
+          const after = await sessions.commitSummary(r2.id, 'worked; collapsed the reading')
+          const h = await sessions.history(s.id)
+          expect(texts(h).slice(-2)).toEqual(['side note', 'worked; collapsed the reading'])
+          expect(after.data.head).toBe(h[h.length - 1]!.id)
+          // The committed history keeps the detail: the collapse was the run's.
+          expect(h.length).toBe(12)
+        })
+
+        it('in an ephemeral run, collapses only the run: the head stays unless it commits', async () => {
+          // A session whose history holds the reading.
+          const base = await sessions.create({
+            employeeId: EMP,
+            title: 'E',
+            entries: [{ kind: 'system', content: { text: 'sys' } }, user('q'), call('c1'), result('c1'), assistant('a')],
+          })
+          const head = base.data.head
+          const hist = await sessions.history(base.id)
+          const e = await started(base.id, 'ephemeral')
+          await sessions.append(e.id, user('more'))
+          await sessions.rewind(e.id, hist[1]!.id, 'read c1', { keepFrom: hist[4]!.id })
+          expect(texts(await sessions.runHistory(e.id))).toEqual(['sys', 'q', 'read c1', 'a', 'more'])
+          expect((await sessions.require(base.id)).data.head).toBe(head)
+          await sessions.transition(e.id, 'running', 'completed')
+          const next = await started(base.id, 'ephemeral')
+          expect((await sessions.runHistory(next.id)).length).toBe(5)
+          // Committing an ephemeral run that collapsed moves the head onto the collapsed branch.
+          await sessions.append(next.id, user('again'))
+          await sessions.rewind(next.id, hist[1]!.id, 'read c1', { keepFrom: hist[4]!.id })
+          await sessions.commit(next.id)
+          expect(texts(await sessions.history(base.id))).toEqual(['sys', 'q', 'read c1', 'a', 'again'])
+        })
+      })
+
       it('refuses tree operations on terminal runs', async () => {
         const { r, a } = await setup()
         await sessions.transition(r.id, 'running', 'cancelled')

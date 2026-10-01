@@ -21,8 +21,12 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   - `beforeToolCall` (can deny)
   - secret variables injected at call time and redacted from outputs
   - `afterToolCall` (transform)
-  - control signals: suspend, commit, discard, rewind, offload, restore,
-    compact, end
+  - control signals: suspend, commit, discard, rewind (with `keepAfter`, a
+    collapse), offload, restore, compact, end. A history change that no
+    longer applies leaves the history alone and appends a `system` note
+    (`meta.historyOpFailed`) instead of failing the run
+  - each tool result is rendered starting with `[call <id>] `, so the model
+    can name its calls to the context tools
 - **Context window** (`src/context-window.ts`):
   - The window comes from `contextWindow(model)` (the server passes
     `MODEL_CONTEXT_TOKENS`), else `contextWindowOf` in `@mp/model` (a table of
@@ -109,5 +113,6 @@ cap. `test/context.test.ts` covers context management: notes once each and
 never between a call and its result, automatic compaction (kept turns, pairs
 never split, the summary recorded, ephemeral versus continuing runs), a
 failing summary call, overflow from the provider, pauses when nothing fits,
-and oversized tool results (preview, pointer, restore). An opt-in live check
-is `packages/server/test/context-live.test.ts` (`MP_LIVE_MODEL_TEST=1`).
+oversized tool results (preview, pointer, restore), and a collapse with
+`keepAfter` up to a result of the current turn. An opt-in live check
+is `packages/server/test/context-live.test.ts`, and `rewind-live.test.ts` has a real model collapse its reading with `sessions.rewind` from/to (`MP_LIVE_MODEL_TEST=1`).

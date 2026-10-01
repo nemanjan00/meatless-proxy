@@ -196,6 +196,16 @@ export interface RunData extends Record<string, unknown> {
   context?: RunContextSize
 }
 
+/** Options of `Sessions.rewind`: give at most one of `keepFrom` and `keepAfter`. */
+export interface RewindOptions {
+  /** The first entry kept verbatim after the summary: the stretch collapsed ends just before it. */
+  keepFrom?: string
+  /** The last entry collapsed: everything after it is kept verbatim after the summary. */
+  keepAfter?: string
+  /** Added to the summary entry's meta. */
+  meta?: Record<string, Json>
+}
+
 /** How full a run's context was at its latest model call. */
 export interface RunContextSize {
   /** Prompt tokens of the latest model call, as the provider counted them. */
@@ -420,8 +430,23 @@ export interface Sessions {
   /** Appends a summary entry on top of the session's *current* head and moves the head to it. */
   commitSummary(runId: string, summary: string): Promise<Session>
 
-  /** Rewind within a run: a summary entry whose parent is `toEntry` becomes the run's tip. */
-  rewind(runId: string, toEntry: string, summary: string): Promise<Entry>
+  /**
+   * Rewinds the run's history to `toEntry` (any entry on its current path, root to tip, so also entries of
+   * earlier runs) and appends a summary entry on it.
+   *
+   * - Without `keepFrom`/`keepAfter` (jump back): everything after `toEntry` is left on a side branch and the
+   *   summary becomes the tip.
+   * - With `keepFrom` (the first entry kept) or `keepAfter` (the last entry collapsed): collapses a stretch.
+   *   The entries between `toEntry` and the kept part are replaced by the summary, and the kept part (to the
+   *   tip) is re-created verbatim on top of it. Kept tool results whose call was collapsed bring a copy of their
+   *   assistant entry with only those calls, so a call is never separated from its results.
+   *
+   * Refused (`ValidationError`): an entry off the path, an empty summary, a cut between a tool call and its
+   * results, a collapse with nothing in it, or one that would drop a tool call still waiting for its result.
+   * The summary records `op: 'rewind'`, and for a collapse `collapsedEntries`, `collapsedToolCalls`,
+   * `collapsedFrom`, `collapsedTo`, `keptEntries`, `keptFrom`; `meta` is added. Returns the new tip.
+   */
+  rewind(runId: string, toEntry: string, summary: string, opts?: RewindOptions): Promise<Entry>
   /**
    * Replaces `entryId` (on the run's current path) with a pointer entry, and
    * re-creates the entries after it on top (same content). Returns the new tip.
