@@ -133,6 +133,151 @@ describe('git tools', () => {
   })
 })
 
+describe('git.sync', () => {
+  const path = (t: { session: { id: string } }) => `/wt/${t.session.id}/github.com/acme/billing`
+
+  it('status says the base moved (fetching at most every few minutes), and sync merges it', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.write_file', { path: 'own.txt', content: 'mine' })
+    await t.out('git.commit', { message: 'own work' })
+    expect((await t.out('git.status', {})).behind).toBeUndefined()
+
+    t.git.addRemoteCommit(REPO, 'main', 'upstream 1', { 'b.txt': 'b' })
+    t.git.addRemoteCommit(REPO, 'main', 'upstream 2', { 'c.txt': 'c' })
+    // The checkout's fetch is recent: no network, so nothing is known yet.
+    expect((await t.out('git.status', {})).behind).toBeUndefined()
+    const fetches = () => t.git.calls.filter((c) => c.method === 'fetch').length
+    const before = fetches()
+    t.clock.advance(6 * 60_000)
+    const st = await t.out('git.status', {})
+    expect(fetches()).toBe(before + 1)
+    expect(st.behind).toBe(
+      'your base main has 2 new commits since you branched (as of the last fetch): git.sync to bring them in.',
+    )
+    // Within a few minutes, no new fetch.
+    await t.out('git.status', {})
+    expect(fetches()).toBe(before + 1)
+    // The existing-checkout note says it too.
+    expect((await t.out('git.checkout', { projectId: t.project.id })).behind).toContain('git.sync to bring them in')
+
+    const r = await t.out('git.sync', {})
+    expect(r).toMatchObject({
+      merged: [{ from: 'origin/main', commits: 2, mode: 'merge' }],
+      base: { ref: 'main', ahead: 2, behind: 0 },
+    })
+    expect(r.conflict).toBeUndefined()
+    const sync = t.git.calls.find((c) => c.method === 'sync')!
+    expect(sync.args[1]).toMatchObject({
+      base: 'main',
+      author: { name: 'Billing Bot', email: 'billing-bot@example.com' },
+      trailers: { Session: t.session.id, 'Requested-by': t.ana.id },
+    })
+    expect((await t.out('git.status', {})).behind).toBeUndefined()
+    // The diff since the (new) base shows only the session's own work.
+    const diff = (await t.out('git.diff', {})).diff
+    expect(diff).toContain('own.txt')
+    expect(diff).not.toContain('b.txt')
+    expect((await t.out('git.sync', {})).note).toContain('already up to date')
+    expect(await t.out('git.push', {})).toMatchObject({ pushed: expect.any(String) })
+  })
+
+  it('leaves conflicts for the model: guidance, status, push refused, commit finishes the merge', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.write_file', { path: 'README.md', content: 'ours' })
+    await t.out('git.commit', { message: 'ours' })
+    t.git.addRemoteCommit(REPO, 'main', 'theirs', { 'README.md': 'theirs' })
+
+    const r = await t.out('git.sync', {})
+    expect(r.conflict).toEqual({ from: 'origin/main', files: ['README.md'] })
+    expect(r.guidance).toBe(
+      'fix them with git.edit_file or in the environment, then git.commit to finish the merge; git.sync { abort: true } to back out',
+    )
+    const st = await t.out('git.status', {})
+    expect(st).toMatchObject({ merging: true, conflicts: ['README.md'], note: expect.stringContaining('git.commit to finish') })
+
+    const push = await t.call('git.push', {})
+    expect(push.isError).toBe(true)
+    expect(JSON.stringify(push.output)).toContain('merge is in progress')
+    expect(t.git.pushes).toEqual([])
+    const again = await t.call('git.sync', {})
+    expect(JSON.stringify(again.output)).toContain('already in progress')
+    const partial = await t.call('git.commit', { message: 'x', paths: ['README.md'] })
+    expect(partial.isError).toBe(true)
+    expect(JSON.stringify(partial.output)).toContain('without paths')
+
+    // The markers are in the file: an edit that leaves them is refused at commit.
+    const marked = t.git.worktree(path(t))!.dirty.get('README.md')!
+    t.worktreeFs.files.set(`${path(t)}/README.md`, marked)
+    const early = await t.call('git.commit', { message: 'merge' })
+    expect(early.isError).toBe(true)
+    expect(JSON.stringify(early.output)).toContain('conflict markers remain in README.md')
+
+    await t.out('git.write_file', { path: 'README.md', content: 'both' })
+    const c = await t.out('git.commit', { message: 'Merge main' })
+    expect(c.note).toContain('merge finished')
+    expect((await t.out('git.status', {})).merging).toBeUndefined()
+    await t.out('git.push', {})
+    const pushed = t.git.remote(REPO).commits.get(c.sha)!
+    expect(pushed.secondParent).toBe(t.git.remote(REPO).branches.get('main'))
+    const s = await t.sessions.require(t.session.id)
+    const w = (s.data.meta!.worktrees as unknown as { baseSha: string; pendingBaseSha?: string }[])[0]!
+    expect(w.baseSha).toBe(t.git.remote(REPO).branches.get('main'))
+    expect(w.pendingBaseSha).toBeUndefined()
+  })
+
+  it('aborts a merge, and refuses to sync over uncommitted changes', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    expect(await t.out('git.sync', { abort: true })).toMatchObject({ aborted: false, note: 'no merge in progress' })
+    await t.out('git.write_file', { path: 'README.md', content: 'ours' })
+    const dirty = await t.call('git.sync', {})
+    expect(dirty.isError).toBe(true)
+    expect(JSON.stringify(dirty.output)).toContain('uncommitted changes')
+    const ours = (await t.out('git.commit', { message: 'ours' })).sha
+    t.git.addRemoteCommit(REPO, 'main', 'theirs', { 'README.md': 'theirs' })
+    expect((await t.out('git.sync', {})).conflict).toBeDefined()
+    expect(await t.out('git.sync', { abort: true })).toMatchObject({ aborted: true })
+    expect(t.git.worktree(path(t))!.head).toBe(ours)
+    expect((await t.out('git.status', {})).clean).toBe(true)
+  })
+
+  it('a rejected push points to git.sync', async () => {
+    const t = await stack()
+    const w = await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.write_file', { path: 'a.txt', content: 'a' })
+    await t.out('git.commit', { message: 'a' })
+    await t.out('git.push', {})
+    t.git.addRemoteCommit(REPO, w.branch, 'pushed from elsewhere', { 'x.txt': 'x' })
+    await t.out('git.write_file', { path: 'b.txt', content: 'b' })
+    await t.out('git.commit', { message: 'b' })
+    const r = await t.call('git.push', {})
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r.output)).toContain('git.sync merges them')
+    t.clock.advance(6 * 60_000)
+    expect((await t.out('git.status', {})).behind).toContain(`your branch ${w.branch} on the remote has 1 new commit`)
+    expect((await t.out('git.sync', {})).merged).toMatchObject([{ from: `origin/${w.branch}`, mode: 'merge' }])
+    await t.out('git.push', {})
+  })
+
+  it('commits only the given paths; refuses unchanged and outside paths', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    await t.out('git.write_file', { path: 'src/a.ts', content: 'a' })
+    await t.out('git.write_file', { path: 'notes.txt', content: 'n' })
+    const c = await t.out('git.commit', { message: 'src', paths: ['src/'] })
+    expect(c.uncommitted).toEqual(['notes.txt'])
+    expect(t.git.calls.filter((x) => x.method === 'commitAll').at(-1)!.args[1]).toMatchObject({ paths: ['src'] })
+    const none = await t.call('git.commit', { message: 'x', paths: ['README.md'] })
+    expect(none.isError).toBe(true)
+    expect(JSON.stringify(none.output)).toContain('no changes in README.md')
+    await expect(t.call('git.commit', { message: 'x', paths: ['../../etc/passwd'] })).rejects.toThrow(/outside the worktree/)
+    expect((await t.call('git.commit', { message: 'x', paths: [] })).isError).toBe(true)
+    expect((await t.out('git.commit', { message: 'rest' })).uncommitted).toBeUndefined()
+  })
+})
+
 describe('env tools', () => {
   it("picks a profile by name, the project's profile, or refuses an unknown one", async () => {
     const t = await stack()

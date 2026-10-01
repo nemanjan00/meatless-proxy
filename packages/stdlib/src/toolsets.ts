@@ -62,6 +62,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'git.push',
   'git.read_file',
   'git.status',
+  'git.sync',
   'git.write_file',
   'image.view',
   'memory.forget',

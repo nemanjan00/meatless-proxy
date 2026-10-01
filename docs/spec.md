@@ -1428,6 +1428,39 @@ and can run it.
   in a new session. Live, a model asked for an unmerged branch this way, got
   its own (empty) branch back without a word, and searched for the files for
   many steps.
+- **Pulling: `git.sync { repo?, abort? }`.** A checkout fetches only when it
+  is made, so without this its branch never sees new commits on its base or
+  on its own remote branch. `git.sync` fetches (with the employee's key, as
+  `git.checkout` does; a local project needs none), then **merges, never
+  rebases**: first the session's own branch from the remote if it moved
+  (pushed from another run; a fast-forward when possible), then the
+  checkout's base (the ref it was made from, else the default branch; a
+  commit or tag doesn't move, so there is nothing to merge from it). Merge
+  commits are by the employee, with the usual trailers. Nothing is rewritten
+  or forced: the branch stays pushable with a plain `git.push`. It needs no
+  uncommitted changes. The result says what was merged (commits, from where,
+  fast-forward or merge), the new HEAD and how far the branch is from its
+  base and its remote branch. After a merge from the base, `git.diff` (which
+  defaults to "since the base") shows only the session's own work.
+- **Conflicts** are left to the model: the merge stays in progress with
+  conflict markers in the files, and `git.sync` returns the files with "fix
+  them with git.edit_file or in the environment, then git.commit to finish
+  the merge; git.sync { abort: true } to back out". `git.status` reports the
+  merge and the conflicted files; `git.commit` completes it as a merge commit
+  with both parents, and refuses while a conflicted file still has markers;
+  `git.push` refuses during a merge, and refuses conflict markers committed
+  from one. `abort: true` is `git merge --abort`. A held git index lock
+  (another git process) is reported as such.
+- **Telling the model it's behind.** `git.status`, and `git.checkout` of an
+  existing checkout, say "your base main has N new commits since you
+  branched (as of the last fetch): git.sync to bring them in" (and likewise
+  for commits on its own remote branch). To keep a status call cheap they
+  fetch only when the last fetch is older than five minutes. A push rejected
+  as not a fast-forward points to `git.sync` too.
+- **Partial commits.** `git.commit { paths }` commits only those files or
+  directories (relative to the repository root, refused outside it); the
+  rest stays uncommitted and is listed. A path with no changes is an error.
+  During a merge `paths` is refused: a merge commit includes everything.
 - Worktrees are removed with `git worktree remove` when the session ends, and
   `git worktree prune` cleans up after crashes. Fetching into the mirror is
   shared by every worktree of that remote.
@@ -2319,7 +2352,9 @@ Built-in policies, each configurable per deployment, employee or project:
 - **Checklist gate.** A run can't finish as successful while required
   [checklist](#checklists) items are unchecked.
 - **Commit on stop.** Uncommitted changes in a session's worktree are
-  committed to its branch when the run ends, so no work is lost.
+  committed to its branch when the run ends, so no work is lost. A merge
+  left in progress by `git.sync` is finished this way only once no conflict
+  markers remain; otherwise it stays in progress for the next run.
 - **Evidence before claims.** A checklist item can't be checked without
   evidence from the session's own history.
 - **Tool gates.** The allow and deny lists, and secret injection, run as

@@ -99,5 +99,10 @@ export function employeeGit(opts: EmployeeGitOptions): EmployeeGit {
     diff: async (path, base) => (await current()).diff(path, base),
     log: async (path, limit) => (await current()).log(path, limit),
     status: async (path) => (await current()).status(path),
+    lastFetch: async (url) => (await current()).lastFetch(url),
+    divergence: async (path, o) => (await current()).divergence(path, o),
+    // `auth` (the employee's SSH key) must reach the cache here too: sync fetches first.
+    sync: async (path, o) => (await current()).sync(path, o),
+    abortMerge: async (path) => (await current()).abortMerge(path),
   }
 }

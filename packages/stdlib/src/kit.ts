@@ -46,8 +46,10 @@ export interface WorktreeMeta {
   branch: string
   /** The commit the worktree started from. */
   baseSha: string
-  /** The ref it started from (as asked, else the default branch), when known. */
+  /** The ref it started from (as asked, else the default branch), when known. git.sync merges from it. */
   base?: string
+  /** The base commit of a merge git.sync left in progress: the new `baseSha` once git.commit finishes it. */
+  pendingBaseSha?: string
 }
 
 /**

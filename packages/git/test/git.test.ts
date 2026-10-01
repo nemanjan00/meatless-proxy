@@ -102,16 +102,16 @@ describe('fakeGitCache', () => {
     const main = git.remote(url).branches.get('main')!
     const wt = await git.createWorktree(url, { path: '/wt/a', newBranch: 'mp/ana/a' })
     expect(wt).toEqual({ path: '/wt/a', branch: 'mp/ana/a', head: main })
-    expect(await git.status('/wt/a')).toEqual({ clean: true, files: [] })
+    expect(await git.status('/wt/a')).toEqual({ clean: true, files: [], merging: false, conflicts: [] })
     expect(await git.commitAll('/wt/a', { message: 'nothing', author })).toBeNull()
 
     git.writeFile('/wt/a', 'src/b.ts', 'b')
     git.writeFile('/wt/a', 'src/a.ts', 'a')
-    expect(await git.status('/wt/a')).toEqual({ clean: false, files: ['src/a.ts', 'src/b.ts'] })
+    expect(await git.status('/wt/a')).toMatchObject({ clean: false, files: ['src/a.ts', 'src/b.ts'] })
     expect(await git.diff('/wt/a')).toContain('a/src/a.ts')
     const sha = await git.commitAll('/wt/a', { message: 'Fix billing\n\nbody', author, trailers: { 'Mp-Session': 'ses_1' } })
     expect(sha).toMatch(/^[0-9a-f]{40}$/)
-    expect(await git.status('/wt/a')).toEqual({ clean: true, files: [] })
+    expect(await git.status('/wt/a')).toEqual({ clean: true, files: [], merging: false, conflicts: [] })
     expect(await git.log('/wt/a')).toEqual([
       { sha, subject: 'Fix billing', author: 'Ana <ana@example.com>' },
       { sha: main, subject: 'initial commit', author: 'Origin <origin@example.com>' },
@@ -166,5 +166,83 @@ describe('fakeGitCache', () => {
     await git.commitAll('/wt/y', { message: 'mine', author })
     git.addRemoteCommit(url, 'mp/y', 'someone else pushed')
     await expect(git.push('/wt/y', 'mp/y', policy)).rejects.toBeInstanceOf(ConflictError)
+  })
+
+  it('syncs: base commits arriving, a clean merge, a conflict finished by a commit, and abort', async () => {
+    const now = { t: 1000 }
+    const git = fakeGitCache({ now: () => now.t })
+    await git.createWorktree(url, { path: '/wt/a', newBranch: 'mp/a' })
+    expect(await git.lastFetch(url)).toBe(1000)
+    git.writeFile('/wt/a', 'own.txt', 'mine')
+    const own = await git.commitAll('/wt/a', { message: 'own', author })
+    const up = git.addRemoteCommit(url, 'main', 'upstream', { 'b.txt': 'b' })
+    // Unknown until a fetch.
+    expect((await git.divergence('/wt/a')).base).toEqual({ ref: 'main', ahead: 1, behind: 0 })
+    now.t = 2000
+    await git.fetch(url)
+    expect(await git.lastFetch(url)).toBe(2000)
+    expect(await git.divergence('/wt/a')).toEqual({ base: { ref: 'main', ahead: 1, behind: 1 }, remote: null })
+
+    const r = await git.sync('/wt/a', { author, trailers: { Session: 'ses_1' } })
+    expect(r).toMatchObject({ merged: [{ from: 'origin/main', commits: 1, mode: 'merge' }], conflict: null })
+    expect(r.divergence.base).toEqual({ ref: 'main', ahead: 2, behind: 0 })
+    expect(git.worktree('/wt/a')!.head).toBe(r.head)
+    expect(git.remote(url).commits.get(up)).toBeDefined()
+    expect(await git.diff('/wt/a', own!)).toContain('b.txt')
+
+    // Both sides change one file: the merge stops, with markers.
+    git.writeFile('/wt/a', 'README.md', 'ours')
+    const ours = await git.commitAll('/wt/a', { message: 'ours', author })
+    git.addRemoteCommit(url, 'main', 'theirs', { 'README.md': 'theirs', 'c.txt': 'c' })
+    const c = await git.sync('/wt/a', { author })
+    expect(c.conflict).toMatchObject({ from: 'origin/main', files: ['README.md'] })
+    expect(c.head).toBe(ours)
+    expect(await git.status('/wt/a')).toMatchObject({ merging: true, conflicts: ['README.md'], clean: false })
+    expect(git.worktree('/wt/a')!.dirty.get('README.md')).toMatch(/^<{7} HEAD\nours\n={7}\ntheirs\n>{7} origin\/main\n$/)
+    await expect(git.push('/wt/a', 'mp/a', policy)).rejects.toBeInstanceOf(ConflictError)
+    await expect(git.sync('/wt/a', { author })).rejects.toBeInstanceOf(ConflictError)
+    await expect(git.commitAll('/wt/a', { message: 'm', author, paths: ['README.md'] })).rejects.toThrow(/merge is in progress/)
+    await expect(git.commitAll('/wt/a', { message: 'm', author })).rejects.toThrow(/conflict markers remain in README.md/)
+    git.writeFile('/wt/a', 'README.md', 'both')
+    const m = await git.commitAll('/wt/a', { message: 'merge', author })
+    const commit = git.remote(url).commits.get(m!) ?? null
+    expect(commit).toBeNull() // not pushed yet
+    expect(await git.status('/wt/a')).toEqual({ clean: true, files: [], merging: false, conflicts: [] })
+    await git.push('/wt/a', 'mp/a', policy)
+    const pushed = git.remote(url).commits.get(m!)!
+    expect([pushed.parent, pushed.secondParent]).toEqual([ours, git.remote(url).branches.get('main')])
+
+    // Abort.
+    git.writeFile('/wt/a', 'README.md', 'again')
+    await git.commitAll('/wt/a', { message: 'again', author })
+    git.addRemoteCommit(url, 'main', 'theirs again', { 'README.md': 'other' })
+    expect((await git.sync('/wt/a', { author })).conflict).not.toBeNull()
+    expect(await git.abortMerge('/wt/a')).toBe(true)
+    expect(await git.abortMerge('/wt/a')).toBe(false)
+    expect((await git.status('/wt/a')).clean).toBe(true)
+
+    // Uncommitted changes first.
+    git.writeFile('/wt/a', 'wip', 'x')
+    await expect(git.sync('/wt/a', { author })).rejects.toBeInstanceOf(ValidationError)
+  })
+
+  it('fast-forwards its own remote branch, and makes partial commits', async () => {
+    const git = fakeGitCache()
+    await git.createWorktree(url, { path: '/wt/a', newBranch: 'mp/a' })
+    git.writeFile('/wt/a', 'f', '1')
+    await git.commitAll('/wt/a', { message: 'one', author })
+    await git.push('/wt/a', 'mp/a', policy)
+    const theirs = git.addRemoteCommit(url, 'mp/a', 'pushed elsewhere', { g: '2' })
+    const r = await git.sync('/wt/a', { author })
+    expect(r.merged).toMatchObject([{ from: 'origin/mp/a', commits: 1, mode: 'fast-forward' }])
+    expect(r.head).toBe(theirs)
+
+    git.writeFile('/wt/a', 'src/a.ts', 'a')
+    git.writeFile('/wt/a', 'src/b.ts', 'b')
+    git.writeFile('/wt/a', 'notes.txt', 'n')
+    await git.commitAll('/wt/a', { message: 'src', author, paths: ['src/'] })
+    expect((await git.status('/wt/a')).files).toEqual(['notes.txt'])
+    await expect(git.commitAll('/wt/a', { message: 'x', author, paths: ['src'] })).rejects.toThrow(/no changes in src/)
+    await expect(git.commitAll('/wt/a', { message: 'x', author, paths: ['../x'] })).rejects.toBeInstanceOf(DeniedError)
   })
 })

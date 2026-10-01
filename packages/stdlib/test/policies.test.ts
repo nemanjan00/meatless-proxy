@@ -8,7 +8,7 @@ import {
   registerRouterPolicies,
   registerUsagePolicies,
 } from '../src/index.ts'
-import { checkoutPath, type Stack, stack } from './helpers.ts'
+import { checkoutPath, REPO, type Stack, stack } from './helpers.ts'
 
 const finish = async (t: Stack, output?: string, status: 'completed' | 'failed' = 'completed') =>
   t.hooks.decide(beforeFinish, {
@@ -137,6 +137,24 @@ describe('commit on stop', () => {
     })
     await t.hooks.decide(afterRun, { run, session: t.session, result: { status: 'failed' } })
     expect(t.logger.lines.some((l) => l.msg === 'auto-commit failed')).toBe(true)
+  })
+
+  it('leaves a merge with conflict markers in progress, and finishes it once they are fixed', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    await t.out('git.checkout', { projectId: t.project.id })
+    const path = await checkoutPath(t, t.session.id)
+    await t.out('git.write_file', { path: 'README.md', content: 'ours' })
+    await t.out('git.commit', { message: 'ours' })
+    t.git.addRemoteCommit(REPO, 'main', 'theirs', { 'README.md': 'theirs' })
+    expect((await t.out('git.sync', {})).conflict).toBeDefined()
+    const run = await t.sessions.requireRun(t.run.id)
+    await t.hooks.decide(afterRun, { run, session: t.session, result: { status: 'completed' } })
+    expect((await t.git.status(path)).merging).toBe(true)
+    await t.out('git.write_file', { path: 'README.md', content: 'both' })
+    await t.hooks.decide(afterRun, { run, session: t.session, result: { status: 'completed' } })
+    expect((await t.git.status(path)).merging).toBe(false)
+    expect(t.git.worktree(path)!.dirty.size).toBe(0)
   })
 })
 

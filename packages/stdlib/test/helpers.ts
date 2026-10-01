@@ -113,7 +113,7 @@ export async function stack(opts: StackOptions = {}) {
   const skills = createSkills({ records })
   const checklists = createChecklists({ records, sessions, clock, bus })
   const usage = createUsage({ records, clock, bus, ...(opts.usageDefaults ? { defaults: opts.usageDefaults } : {}) })
-  const git = fakeGitCache()
+  const git = fakeGitCache({ now: () => clock.now() })
   const containers = fakeRuntime({ clock })
   const sandboxRuntime = fakeSandboxRuntime({ clock })
   const sandbox = createSandbox({ runtime: sandboxRuntime, files, image: 'mp-sandbox:test', clock, reapIntervalMs: 0 })

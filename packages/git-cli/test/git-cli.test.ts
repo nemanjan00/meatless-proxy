@@ -181,7 +181,12 @@ describe('commits, status, diff and log', () => {
     const w = await t.cache.createWorktree(t.url, { path: t.wt('a'), newBranch: 'mp/a' })
     writeFileSync(join(t.wt('a'), 'new.txt'), 'new\n')
     writeFileSync(join(t.wt('a'), 'README.md'), '# billing v2\n')
-    expect(await t.cache.status(t.wt('a'))).toEqual({ clean: false, files: ['README.md', 'new.txt'] })
+    expect(await t.cache.status(t.wt('a'))).toEqual({
+      clean: false,
+      files: ['README.md', 'new.txt'],
+      merging: false,
+      conflicts: [],
+    })
     const sha = await t.cache.commitAll(t.wt('a'), {
       message: 'Fix the invoice total\n\nIt was off by one.',
       author,
@@ -195,7 +200,7 @@ describe('commits, status, diff and log', () => {
       'Fix the invoice total\n\nIt was off by one.\n\nMp-Session: ses_01TEST\nCo-authored-by: Someone <someone@example.com>',
     )
     expect(run(['log', '-1', '--format=%(trailers:key=Mp-Session,valueonly)'], t.wt('a'))).toBe('ses_01TEST')
-    expect(await t.cache.status(t.wt('a'))).toEqual({ clean: true, files: [] })
+    expect(await t.cache.status(t.wt('a'))).toEqual({ clean: true, files: [], merging: false, conflicts: [] })
     expect(await t.cache.log(t.wt('a'))).toEqual([
       { sha, subject: 'Fix the invoice total', author: 'Ana Bot <ana@example.com>' },
       { sha: w.head, subject: 'initial', author: 'Seed <seed@example.com>' },
@@ -252,7 +257,7 @@ describe('commits, status, diff and log', () => {
     const t = setup()
     await t.cache.createWorktree(t.url, { path: t.wt('a'), newBranch: 'mp/a' })
     run(['mv', 'README.md', 'README2.md'], t.wt('a'))
-    expect(await t.cache.status(t.wt('a'))).toEqual({ clean: false, files: ['README2.md'] })
+    expect(await t.cache.status(t.wt('a'))).toEqual({ clean: false, files: ['README2.md'], merging: false, conflicts: [] })
   })
 })
 

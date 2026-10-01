@@ -18,8 +18,18 @@ path (no auth; a missing repository is a `NotFoundError`); without it such urls 
   branch, then `origin/<ref>`, then any rev; default is the remote's HEAD.
 - `removeWorktree`: `git worktree remove --force` + `git worktree prune`; idempotent, also after a crash.
 - `commitAll`: `add -A` + `commit` with author and committer from the options (env + `-c user.*`, never global config),
-  the clock's time, and trailers appended as `Key: value` lines. Returns null when there is nothing to commit.
-- `push`: `assertPushAllowed` first, then pushes `refs/heads/<b>` to the cache repo's `remote.origin.url` and updates
+  the clock's time, and trailers appended as `Key: value` lines. Returns null when there is nothing to commit. With
+  `paths`: `reset` (index only), `add -A -- :(literal)<path>…`, commit, so nothing else gets in. With `MERGE_HEAD`
+  present it completes the merge (git records both parents), after checking the conflicted files for markers.
+- `sync`: refuses a dirty worktree or a merge in progress, fetches the mirror (with the auth), then `git merge
+  --ff-only` or `--no-ff -m <message with trailers>` from `origin/<own branch>` and then the base
+  (`origin/<base>`, else a local branch of that name, else nothing: a commit or tag doesn't move). A conflicted merge
+  is left in progress; its files are recorded in the worktree's git dir (`MP_CONFLICTS`) so `commitAll` and `push`
+  check them for markers. `abortMerge`: `git merge --abort`. A held `index.lock` (another git process) is a
+  `ConflictError` that says so.
+- `divergence`: `rev-list --left-right --count HEAD...<ref>` against the base and `origin/<own branch>`.
+  `lastFetch`: the clock's time of this instance's last clone or fetch of the mirror (in memory).
+- `push`: `assertPushAllowed` first, refuses while a merge is in progress or with committed conflict markers, then pushes `refs/heads/<b>` to the cache repo's `remote.origin.url` and updates
   `refs/remotes/origin/<b>` in the cache. Non-fast-forward -> `ConflictError`. Never forces.
 - `diff(path, base?)`: against HEAD, or against the merge base with `base`; includes new and deleted files (staged into a
   throwaway index, the real one is untouched). `log`, `status` (porcelain, untracked files included).
@@ -53,6 +63,10 @@ path (no auth; a missing repository is a `NotFoundError`); without it such urls 
 `test/local.test.ts` covers local repositories: slugs and path escapes, create, an employee's checkout and push (and
 protected branches refused), compare, fast-forward, merge commit, conflicts, concurrent merges, delete, browsing, and
 attaching a remote (an empty one, one with other history, refused credentials through a fake `ssh`).
+`test/sync.test.ts` covers `sync` with real repositories: a clean merge from the base (identity, trailers, still
+pushable), fast-forwards, its own remote branch first, a conflict left in progress and finished by `commitAll` with
+both parents, push refused during a merge or with committed markers, abort, a held index lock, a racing commit,
+`lastFetch`, partial commits (and bad paths), and a `local:<slug>` repository.
 `test/git-cli.test.ts` uses real git against local `file://` repositories in a temp dir, with
 `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. `test/ssh.test.ts` puts a fake `ssh` first on the PATH that
 records its arguments and the key file (mode, content, dir mode) and runs the remote command locally, so `ssh://`

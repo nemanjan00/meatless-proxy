@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { NotFoundError, ValidationError, type Json } from '@mp/core'
+import { ConflictError, NotFoundError, ValidationError, type Json } from '@mp/core'
 import {
   assertPushAllowed,
   isLocalRepoUrl,
@@ -8,6 +8,7 @@ import {
   localRepoSlug,
   mirrorKey,
   type Author,
+  type Divergence,
   type GitAuth,
   type GitCache,
 } from '@mp/git'
@@ -138,6 +139,28 @@ export const rememberInstructions = (kit: Kit, sessionId: string, key: string, f
 /** What git.checkout says when it was asked for a ref but the session already has a checkout of the repository. */
 export const refNotAppliedNote = (w: WorktreeMeta, ref: string) =>
   `Already checked out on your branch ${w.branch} (from ${w.base ?? w.baseSha.slice(0, 12)}); ref ${ref} was not applied: git.checkout never switches an existing checkout. To read ${ref}, use projects.read_file / projects.list_files { projectId, ref }, or env.up { repos: [{ project, ref }] } for a read-only copy in an environment (git log/show/diff work there too). To build on top of ${ref}, start a new session (sessions.create) and git.checkout { projectId, ref } there.`
+
+/** How old the last fetch may be before git.status (and git.checkout of an existing checkout) fetch again to tell whether the base moved. */
+export const BEHIND_FETCH_MS = 5 * 60_000
+
+/** What git.status, git.commit, git.push and git.sync say while a merge from git.sync is in progress. */
+export const MERGE_GUIDANCE =
+  'A merge from git.sync is in progress. Fix the conflicting files (between the <<<<<<< and >>>>>>> markers) with git.edit_file or in the environment, then git.commit to finish the merge; git.sync { abort: true } to back out.'
+
+/** What git.status and git.checkout say when the base branch or the session's own remote branch has commits the checkout lacks. */
+export function behindNote(d: Divergence): string | undefined {
+  const n = (k: number) => `${k} new commit${k === 1 ? '' : 's'}`
+  const parts: string[] = []
+  if (d.base && d.base.behind > 0)
+    parts.push(
+      `your base ${d.base.ref} has ${n(d.base.behind)} since you branched (as of the last fetch): git.sync to bring them in`,
+    )
+  if (d.remote && d.remote.behind > 0)
+    parts.push(
+      `your branch ${d.remote.ref} on the remote has ${n(d.remote.behind)} you don't have (pushed from elsewhere): git.sync merges them`,
+    )
+  return parts.length ? `${parts.join('; ')}.` : undefined
+}
 
 /** A project's repository by index, with its mirror key. */
 async function projectRepo(kit: Kit, projectId: string, index: number) {
@@ -275,6 +298,36 @@ export async function refWorktree(
   return { r, projectName: project.data.name }
 }
 
+/** Git auth for a checkout's remote: none for a local project. */
+const authForCheckout = async (kit: Kit, w: WorktreeMeta, employeeId: string) =>
+  isLocalRepoUrl(w.url) ? undefined : await gitAuthFor(kit.deps, employeeId)
+
+/** Updates one of the session's checkouts in its meta. */
+const patchWorktree = (kit: Kit, sessionId: string, key: string, fn: (w: WorktreeMeta) => WorktreeMeta) =>
+  kit.patchMeta(sessionId, (m) => ({
+    ...m,
+    worktrees: ((m.worktrees as unknown as WorktreeMeta[] | undefined) ?? []).map((w) =>
+      w.key === key ? fn(w) : w,
+    ) as unknown as Json,
+  }))
+
+/**
+ * Whether a checkout is behind its base or its own remote branch, fetching first when the last fetch is older than
+ * BEHIND_FETCH_MS (so a status call rarely hits the network). Never fails: a fetch or compare that doesn't work just
+ * leaves the note out.
+ */
+async function behindOf(kit: Kit, git: GitCache, w: WorktreeMeta, employeeId: string): Promise<string | undefined> {
+  try {
+    const last = await git.lastFetch(w.url)
+    if (last === null || kit.deps.clock.now() - last > BEHIND_FETCH_MS) {
+      await git.fetch(w.url, await authForCheckout(kit, w, employeeId)).catch(() => {})
+    }
+    return behindNote(await git.divergence(w.path, w.base ? { base: w.base } : {}))
+  } catch {
+    return undefined
+  }
+}
+
 /** Where read-only ref worktrees live under a session's worktrees directory (not a valid host name, so no checkout's key). */
 const REF_WORKTREES_DIR = 'refs@'
 
@@ -332,7 +385,8 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       })
       if ('failure' in r) return r.failure
       const { w } = r
-      if (r.existing)
+      if (r.existing) {
+        const behind = await behindOf(kit, git, w, ctx.employeeId)
         return ok({
           key: w.key,
           branch: w.branch,
@@ -340,7 +394,9 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
           existing: true,
           where: CHECKOUT_NOTE,
           ...(str(a.ref) ? { note: refNotAppliedNote(w, str(a.ref)!) } : {}),
+          ...(behind ? { behind } : {}),
         })
+      }
       return ok({
         key: w.key,
         branch: w.branch,
@@ -355,14 +411,26 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
   kit.tool(
     {
       name: 'git.status',
-      description: 'Uncommitted changes in your checkout.',
+      description:
+        'Uncommitted changes in your checkout, a merge in progress (from git.sync) with its conflicting files, and whether your base branch has new commits (git.sync brings them in).',
       effect: 'read',
       params: { properties: { repo: repoProp } },
     },
     async (a, ctx) => {
       const w = await worktree(ctx, a.repo)
       const st = await git.status(w.path)
-      return ok({ key: w.key, branch: w.branch, clean: st.clean, files: st.files.slice(0, 200) })
+      if (st.merging)
+        return ok({
+          key: w.key,
+          branch: w.branch,
+          clean: false,
+          files: st.files.slice(0, 200),
+          merging: true,
+          conflicts: st.conflicts.slice(0, 200),
+          note: MERGE_GUIDANCE,
+        })
+      const behind = await behindOf(kit, git, w, ctx.employeeId)
+      return ok({ key: w.key, branch: w.branch, clean: st.clean, files: st.files.slice(0, 200), ...(behind ? { behind } : {}) })
     },
   )
 
@@ -403,22 +471,147 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
     {
       name: 'git.commit',
       description:
-        'Commit every change in your checkout to your branch, as you (your git identity), with trailers linking the commit to this session and the requester. Write a tidy message: a short subject line, then why.',
+        'Commit the changes in your checkout to your branch, as you (your git identity), with trailers linking the commit to this session and the requester. Everything by default; paths commits only those files or directories (the rest stays uncommitted). During a merge from git.sync it finishes the merge (everything, no paths) once the conflicts are fixed. Write a tidy message: a short subject line, then why.',
       effect: 'idempotent',
-      params: { properties: { message: { type: 'string' }, repo: repoProp }, required: ['message'] },
+      params: {
+        properties: {
+          message: { type: 'string' },
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Only these files or directories (relative to the repository root). Default: everything.',
+          },
+          repo: repoProp,
+        },
+        required: ['message'],
+      },
     },
     async (a, ctx) => {
       const message = str(a.message)
       if (!message) return fail('message is required')
       const w = await worktree(ctx, a.repo)
-      const sha = await git.commitAll(w.path, {
-        message,
-        author: await authorFor(deps, ctx.employeeId),
-        trailers: trailersFor(ctx.sessionId, ctx.requesterId),
+      let paths: string[] | undefined
+      if (a.paths !== undefined && a.paths !== null) {
+        if (!Array.isArray(a.paths) || !a.paths.length || a.paths.some((p: unknown) => typeof p !== 'string'))
+          return fail('paths must be a non-empty list of file or directory paths')
+        // Outside the checkout or inside .git: DeniedError, as for the file tools.
+        paths = [...new Set((a.paths as string[]).map((p) => safeRelPath(w.path, p) || '.'))]
+      }
+      const before = await git.status(w.path)
+      if (before.merging && paths)
+        return fail(
+          'a merge from git.sync is in progress: a merge commit includes everything, so call git.commit without paths to finish it (or git.sync { abort: true } to back out)',
+          { conflicts: before.conflicts },
+        )
+      let sha: string | null
+      try {
+        sha = await git.commitAll(w.path, {
+          message,
+          author: await authorFor(deps, ctx.employeeId),
+          trailers: trailersFor(ctx.sessionId, ctx.requesterId),
+          ...(paths ? { paths } : {}),
+        })
+      } catch (err) {
+        if (err instanceof ValidationError || err instanceof ConflictError) {
+          const markers = /conflict markers/.test(err.message)
+          return fail(
+            markers ? `${err.message}: fix them with git.edit_file (or in the environment), then git.commit again` : err.message,
+            before.merging ? { conflicts: before.conflicts, note: MERGE_GUIDANCE } : {},
+          )
+        }
+        throw err
+      }
+      if (!sha) return ok({ key: w.key, branch: w.branch, sha: null, note: 'nothing to commit' })
+      if (before.merging && w.pendingBaseSha) {
+        const base = w.pendingBaseSha
+        await patchWorktree(kit, ctx.sessionId, w.key, ({ pendingBaseSha: _, ...rest }) => ({ ...rest, baseSha: base }))
+      }
+      const after = paths ? await git.status(w.path) : null
+      return ok({
+        key: w.key,
+        branch: w.branch,
+        sha,
+        ...(before.merging ? { note: 'merge finished: git.push when you are ready' } : {}),
+        ...(after?.files.length ? { uncommitted: after.files.slice(0, 200) } : {}),
       })
-      return ok(
-        sha ? { key: w.key, branch: w.branch, sha } : { key: w.key, branch: w.branch, sha: null, note: 'nothing to commit' },
-      )
+    },
+  )
+
+  kit.tool(
+    {
+      name: 'git.sync',
+      description:
+        'Bring new commits into your branch: fetches, then merges (never rebases) your own branch from the remote if it moved (pushed from elsewhere), then your base branch (the default branch, or the ref you checked out from). Merge commits are by you. Your branch stays pushable with a normal git.push. Needs no uncommitted changes. On conflicts the merge is left in progress with conflict markers in the files: fix them, then git.commit; abort: true backs out (git merge --abort).',
+      effect: 'idempotent',
+      params: {
+        properties: {
+          repo: repoProp,
+          abort: { type: 'boolean', description: 'Abort the merge in progress instead (git merge --abort).' },
+        },
+      },
+    },
+    async (a, ctx) => {
+      const w = await worktree(ctx, a.repo)
+      if (a.abort === true) {
+        const aborted = await git.abortMerge(w.path)
+        if (w.pendingBaseSha) await patchWorktree(kit, ctx.sessionId, w.key, ({ pendingBaseSha: _, ...rest }) => rest)
+        return ok({
+          key: w.key,
+          branch: w.branch,
+          aborted,
+          ...(aborted ? { note: 'merge aborted: your branch is back where it was' } : { note: 'no merge in progress' }),
+        })
+      }
+      const st = await git.status(w.path)
+      if (st.merging) return fail(`a merge is already in progress. ${MERGE_GUIDANCE}`, { conflicts: st.conflicts })
+      if (!st.clean)
+        return fail('you have uncommitted changes: commit them (git.commit) first, then git.sync', {
+          files: st.files.slice(0, 50),
+        })
+      const auth = await authForCheckout(kit, w, ctx.employeeId)
+      let r: Awaited<ReturnType<GitCache['sync']>>
+      try {
+        r = await git.sync(w.path, {
+          ...(w.base ? { base: w.base } : {}),
+          author: await authorFor(deps, ctx.employeeId),
+          trailers: trailersFor(ctx.sessionId, ctx.requesterId),
+          ...(auth ? { auth } : {}),
+        })
+      } catch (err) {
+        const why = accessFailure(err, w.url, !!auth)
+        if (why) return fail(why)
+        if (err instanceof ValidationError || err instanceof ConflictError) return fail(err.message)
+        throw err
+      }
+      const baseFrom = (from: string) => !!r.divergence.base && from.endsWith(`/${r.divergence.base.ref}`)
+      const baseMerge = r.merged.find((m) => baseFrom(m.from))
+      if (baseMerge) await patchWorktree(kit, ctx.sessionId, w.key, (x) => ({ ...x, baseSha: baseMerge.sha }))
+      if (r.conflict && baseFrom(r.conflict.from)) {
+        const sha = r.conflict.sha
+        await patchWorktree(kit, ctx.sessionId, w.key, (x) => ({ ...x, pendingBaseSha: sha }))
+      }
+      const merged = r.merged.map((m) => ({ from: m.from, commits: m.commits, mode: m.mode }))
+      const where = {
+        head: r.head,
+        ...(r.divergence.base ? { base: r.divergence.base } : {}),
+        ...(r.divergence.remote ? { remote: r.divergence.remote } : {}),
+      }
+      if (r.conflict)
+        return ok({
+          key: w.key,
+          branch: w.branch,
+          merged,
+          conflict: { from: r.conflict.from, files: r.conflict.files.slice(0, 200) },
+          guidance:
+            'fix them with git.edit_file or in the environment, then git.commit to finish the merge; git.sync { abort: true } to back out',
+          ...where,
+        })
+      const notes: string[] = []
+      if (!merged.length) notes.push('already up to date: nothing new on the remote')
+      if (!r.divergence.base && w.base)
+        notes.push(`your checkout started from ${w.base}, which is not a branch of the remote: there is no base to merge from`)
+      if (r.divergence.remote && r.divergence.remote.ahead > 0) notes.push('git.push to publish your branch')
+      return ok({ key: w.key, branch: w.branch, merged, ...where, ...(notes.length ? { note: notes.join('; ') } : {}) })
     },
   )
 
@@ -434,8 +627,22 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       const w = await worktree(ctx, a.repo)
       const branch = str(a.branch) ?? w.branch
       assertPushAllowed(branch, deps.config.pushPolicy)
+      const st = await git.status(w.path)
+      if (st.merging) return fail(`can't push while a merge is in progress. ${MERGE_GUIDANCE}`, { conflicts: st.conflicts })
       const slug = localRepoSlug(w.url)
-      await git.push(w.path, branch, deps.config.pushPolicy, slug ? undefined : await gitAuthFor(deps, ctx.employeeId))
+      try {
+        await git.push(w.path, branch, deps.config.pushPolicy, slug ? undefined : await gitAuthFor(deps, ctx.employeeId))
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          const behind = /rejected|fast-forward|fetch first/.test(err.message)
+          return fail(
+            behind
+              ? `${err.message}. Your branch on the remote has commits you don't have: git.sync merges them, then git.push again (never force).`
+              : err.message,
+          )
+        }
+        throw err
+      }
       if (!slug) return ok({ key: w.key, pushed: branch, url: w.url })
       // A local project: no merge request to open. A person merges it in the web UI; this session hears about it.
       const name = branch.replace(/^refs\/heads\//, '')
