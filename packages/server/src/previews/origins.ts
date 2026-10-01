@@ -10,16 +10,23 @@ import type { Config } from '../config.ts'
  *   wildcard DNS and a wildcard certificate.
  * - **Port mode**: one origin for every preview, the harness's host name on `PREVIEW_PORT`.
  */
-export type PreviewMode = { kind: 'domain'; domain: string; scheme: 'http' | 'https' } | { kind: 'port'; port: number }
+export type PreviewMode =
+  | { kind: 'domain'; domain: string; scheme: 'http' | 'https' }
+  | { kind: 'port'; port: number; publicOrigin?: string }
 
-export type PreviewConfig = Pick<Config, 'PREVIEW_DOMAIN' | 'PREVIEW_PORT' | 'PUBLIC_URL'>
+export type PreviewConfig = Pick<Config, 'PREVIEW_DOMAIN' | 'PREVIEW_PORT' | 'PUBLIC_URL'> & {
+  PREVIEW_PUBLIC_URL?: string | undefined
+}
 
 export function previewMode(config: PreviewConfig): PreviewMode {
   if (config.PREVIEW_DOMAIN) {
     const scheme = config.PUBLIC_URL?.startsWith('http:') ? 'http' : 'https'
     return { kind: 'domain', domain: config.PREVIEW_DOMAIN.toLowerCase(), scheme }
   }
-  return { kind: 'port', port: config.PREVIEW_PORT }
+  // Behind a tunnel or proxy, the preview listener is reached at an address of its own (e.g. a second tunnel to
+  // PREVIEW_PORT): links use it, and the harness refuses requests that arrive on it.
+  const publicOrigin = config.PREVIEW_PUBLIC_URL ? new URL(config.PREVIEW_PUBLIC_URL).origin : undefined
+  return { kind: 'port', port: config.PREVIEW_PORT, ...(publicOrigin ? { publicOrigin } : {}) }
 }
 
 /** `host[:port]` split, with IPv6 brackets kept on the name. */
@@ -49,6 +56,7 @@ export function isPreviewHost(mode: PreviewMode, host: string | undefined): bool
   if (!host) return false
   const { name, port } = splitHost(host)
   if (mode.kind === 'domain') return name === mode.domain || name.endsWith(`.${mode.domain}`)
+  if (mode.publicOrigin && name === new URL(mode.publicOrigin).hostname) return true
   return mode.port !== 0 && port === String(mode.port)
 }
 
@@ -62,6 +70,7 @@ export function isPreviewOrigin(mode: PreviewMode, origin: string | undefined): 
     return false
   }
   if (mode.kind === 'domain') return isPreviewHost(mode, u.hostname)
+  if (mode.publicOrigin && u.origin === mode.publicOrigin) return true
   const port = u.port || (u.protocol === 'https:' ? '443' : '80')
   return mode.port !== 0 && port === String(mode.port)
 }
@@ -78,6 +87,7 @@ export function previewOrigin(
 ): string {
   const mode = previewMode(config)
   if (mode.kind === 'domain') return `${mode.scheme}://${previewLabel(scope.envId, scope.port)}.${mode.domain}`
+  if (mode.publicOrigin) return mode.publicOrigin
   const pub = config.PUBLIC_URL ? new URL(config.PUBLIC_URL) : null
   const scheme = pub ? pub.protocol.replace(':', '') : 'http'
   const name = pub ? pub.hostname : splitHost(requestHost).name
@@ -91,6 +101,7 @@ export function previewOrigin(
 export function previewFrameSources(config: PreviewConfig, requestHost?: string, requestScheme = 'http'): string[] {
   const mode = previewMode(config)
   if (mode.kind === 'domain') return [`${mode.scheme}://*.${mode.domain}`]
+  if (mode.publicOrigin) return [mode.publicOrigin]
   if (!mode.port) return []
   if (config.PUBLIC_URL) {
     const u = new URL(config.PUBLIC_URL)

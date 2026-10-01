@@ -338,6 +338,14 @@ export const configSchema = z.object({
   METRICS_TOKEN: optStr.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters'),
   /** Domain of live previews (`<env>-<port>.<PREVIEW_DOMAIN>`): the only origins the UI may frame. */
   PREVIEW_DOMAIN: optStr.refine((v) => v === undefined || /^[a-z0-9.-]+$/i.test(v), 'must be a domain name'),
+  /**
+   * The public address of the live preview listener when it's reached through a tunnel or proxy of its own (e.g. a
+   * second ngrok tunnel to PREVIEW_PORT): preview links use it. Must be a different host from PUBLIC_URL.
+   */
+  PREVIEW_PUBLIC_URL: optStr.refine(
+    (v) => v === undefined || /^https?:\/\/[^/]+\/?$/.test(v),
+    'must be an origin, e.g. https://previews.example.com',
+  ),
   /** The live preview listener's port (src/previews). Without PREVIEW_DOMAIN it is also the previews' origin. */
   PREVIEW_PORT: z.coerce.number().int().min(0).max(65535).default(3001),
   /**
@@ -398,6 +406,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     issues.push(`OIDC: set all of ${oidc.join(', ')}, or none (missing ${oidc.filter((k) => !c[k]).join(', ')})`)
   const badEgress = c.DEFAULT_EGRESS.filter((e) => !parseEgressEntry(e))
   if (badEgress.length) issues.push(`DEFAULT_EGRESS: not hostname globs: ${badEgress.join(', ')}`)
+  if (c.PREVIEW_PUBLIC_URL && c.PUBLIC_URL && new URL(c.PREVIEW_PUBLIC_URL).hostname === new URL(c.PUBLIC_URL).hostname)
+    issues.push('PREVIEW_PUBLIC_URL: must be a different host from PUBLIC_URL (previews need their own origin)')
   if (c.PREVIEW_PORT !== 0 && c.PREVIEW_PORT === c.PORT)
     issues.push('PREVIEW_PORT: must differ from PORT (previews need their own origin)')
   if (issues.length) throw new ConfigError(issues)

@@ -1727,7 +1727,10 @@ being built.
   `SameSite`, so an admin opening a preview would hand it admin rights. Instead:
   - Each preview gets its own origin, `<env>-<port>.<PREVIEW_DOMAIN>` (wildcard
     DNS and certificate), or a dedicated port when no domain is set. It shares
-    no cookies with the harness.
+    no cookies with the harness. Behind a tunnel or proxy, the preview port
+    gets an address of its own, `PREVIEW_PUBLIC_URL` (e.g. a second tunnel;
+    a different host from `PUBLIC_URL`), and links use it: with only the
+    harness tunnelled, `<public host>:<preview port>` can't be reached.
   - **Access by preview token:** the UI asks the API for a short-lived token
     (about 5 minutes), signed and scoped to one environment, one port and one
     viewer, who must be able to read the environment's session. The preview origin exchanges it for its own cookie, scoped to that

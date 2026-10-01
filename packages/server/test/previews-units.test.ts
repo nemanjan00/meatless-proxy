@@ -171,6 +171,35 @@ describe('preview origins', () => {
   })
 })
 
+describe('previews behind a tunnel of their own (PREVIEW_PUBLIC_URL)', () => {
+  const config = {
+    PREVIEW_DOMAIN: undefined,
+    PREVIEW_PORT: 3001,
+    PUBLIC_URL: 'https://harness.example.com',
+    PREVIEW_PUBLIC_URL: 'https://previews.example.net/',
+  }
+  it('links, frames and refusals use the preview address', async () => {
+    const o = await import('../src/previews/origins.ts')
+    const mode = o.previewMode(config)
+    expect(o.previewOrigin(config, { envId: 'mp-ana-x', port: 5173 }, 'harness.example.com')).toBe('https://previews.example.net')
+    expect(o.previewFrameSources(config)).toEqual(['https://previews.example.net'])
+    // The harness never answers on the preview address, nor to requests from it.
+    expect(o.isPreviewHost(mode, 'previews.example.net')).toBe(true)
+    expect(o.isPreviewOrigin(mode, 'https://previews.example.net')).toBe(true)
+    expect(o.isPreviewHost(mode, 'harness.example.com')).toBe(false)
+  })
+
+  it('must be a different host from PUBLIC_URL', async () => {
+    const { loadConfig } = await import('../src/config.ts')
+    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.com', PREVIEW_PUBLIC_URL: 'https://a.example.com:8443' })).toThrow(
+      /PREVIEW_PUBLIC_URL: must be a different host/,
+    )
+    expect(
+      loadConfig({ PUBLIC_URL: 'https://a.example.com', PREVIEW_PUBLIC_URL: 'https://b.example.com' }).PREVIEW_PUBLIC_URL,
+    ).toBe('https://b.example.com')
+  })
+})
+
 describe('cookie stripping', () => {
   it("never passes the harness's cookies to a preview", () => {
     expect(previewRequestCookies('mp_session=s; app=1; mp_csrf=c; theme=dark; mp_preview=p; MP_OIDC=o')).toBe('app=1; theme=dark')
