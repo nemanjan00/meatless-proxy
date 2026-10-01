@@ -282,6 +282,22 @@ describe('browsing', () => {
       await expect(t.repos.readFile('billing', { path: bad }), bad).rejects.toThrow(ValidationError)
     await expect(t.repos.tree('billing', { path: '..' })).rejects.toThrow(ValidationError)
   })
+
+  it('reads a branch waiting for review while main is still empty', async () => {
+    const t = setup()
+    await t.repos.create('billing', { author: person })
+    await t.pushBranch('billing', 'mp/ana/docs', 'README.md', '# Billing\n')
+    expect((await t.repos.tree('billing')).entries).toEqual([])
+    await expect(t.repos.readFile('billing', { path: 'README.md' })).rejects.toThrow(NotFoundError)
+    expect(await t.repos.readFile('billing', { path: 'README.md', ref: 'mp/ana/docs' })).toMatchObject({
+      ref: 'mp/ana/docs',
+      content: '# Billing\n',
+    })
+    expect((await t.repos.tree('billing', { ref: 'mp/ana/docs' })).entries).toEqual([
+      { name: 'README.md', type: 'file', size: 10 },
+    ])
+    await expect(t.repos.readFile('billing', { path: 'README.md', ref: 'mp/nope' })).rejects.toThrow(/ref mp\/nope not found/)
+  })
 })
 
 describe('attaching a remote', () => {

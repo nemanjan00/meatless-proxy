@@ -48,7 +48,8 @@ Known differences from the in-memory store:
 - `contains` with nested arrays inside the value matches by jsonb containment
   (a subset, in any order), not exact array equality.
 - `text` search runs on Postgres' jsonb text form (`{"a": 1}`, with spaces), so
-  a search that spans JSON punctuation can differ.
+  a search that spans JSON punctuation can differ. Entry search with `allWords` is one `ilike` per word;
+  `excludeMeta` is the negation of the `meta` filter.
 - Postgres can't store `\u0000` in jsonb. Such writes fail with `ValidationError`.
 - Object key order in `data` isn't kept (jsonb normalises it).
 

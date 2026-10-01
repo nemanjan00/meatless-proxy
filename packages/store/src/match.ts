@@ -83,3 +83,14 @@ export function applyQuery<T>(records: StoredRecord<T>[], q: RecordQuery = {}): 
   items = items.slice(offset, q.limit === undefined ? undefined : offset + q.limit)
   return { items, total }
 }
+
+/**
+ * What an entry search matches, lowercased: `text` as one substring, or with `allWords` each of its
+ * whitespace-separated words (at most 16), all of which must appear.
+ */
+export function searchWords(text: string, allWords?: boolean): string[] {
+  const t = text.toLowerCase()
+  if (!allWords) return [t]
+  const words = [...new Set(t.split(/\s+/).filter(Boolean))].slice(0, 16)
+  return words.length ? words : [t]
+}

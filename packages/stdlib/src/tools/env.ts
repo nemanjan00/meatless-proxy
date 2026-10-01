@@ -1,24 +1,91 @@
 import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import type { Json } from '@mp/core'
 import { DESKTOP_DISPLAY, egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import type { Session } from '@mp/sessions'
 import type { ToolContext, ToolHandler } from '@mp/tools'
 import { DEFAULT_ENV_PROFILES, describeProfiles, envProfile } from '../env-profiles.ts'
-import { envOf, fail, ok, str, worktreesOf, type Kit } from '../kit.ts'
+import { envOf, fail, ok, str, worktreesOf, type Kit, type WorktreeMeta } from '../kit.ts'
 import { nodeWorktreeFs } from '../worktree-fs.ts'
 
-/** Where each checkout of a session is in its environment: /repos/<repository name>, made unique. */
-function repoMountsOf(worktrees: { key: string; path: string }[]): { key: string; path: string; containerPath: string }[] {
+/** One repository in an environment: a checkout of the session (writable, on its branch) or a read-only worktree of a ref. */
+interface RepoMount {
+  key: string
+  projectId: string
+  url: string
+  hostPath: string
+  /** /repos/<name>. */
+  containerPath: string
+  /** A checkout: the session's own branch. */
+  branch?: string
+  /** A read-only worktree: the ref asked for, and the commit it is at. */
+  ref?: string
+  sha?: string
+  writable: boolean
+}
+
+/** Where each repository is in an environment: /repos/<repository name>, made unique (a ref's copy gets `<name>@<ref>`). */
+function nameRepoMounts(list: Omit<RepoMount, 'containerPath'>[]): RepoMount[] {
   const used = new Set<string>()
-  return worktrees.map((w) => {
-    const base = (w.key.split('/').pop() || 'repo').replace(/[^A-Za-z0-9._-]/g, '-')
-    let name = base
-    for (let n = 2; used.has(name); n++) name = `${base}-${n}`
+  const clean = (x: string) => x.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '')
+  return list.map((m) => {
+    const base = clean(m.key.split('/').pop() || '') || 'repo'
+    const first = used.has(base) && m.ref ? `${base}@${clean(m.ref) || 'ref'}` : base
+    let name = first
+    for (let n = 2; used.has(name); n++) name = `${first}-${n}`
     used.add(name)
-    return { key: w.key, path: w.path, containerPath: `/repos/${name}` }
+    return { ...m, containerPath: `/repos/${name}` }
   })
+}
+
+/** What env.up lists for each repository of an environment. */
+const repoView = (m: { containerPath: string; key: string; branch?: string; ref?: string; sha?: string; writable: boolean }) => ({
+  path: m.containerPath,
+  key: m.key,
+  ...(m.branch ? { branch: m.branch } : {}),
+  ...(m.ref ? { ref: m.ref, ...(m.sha ? { sha: m.sha.slice(0, 12) } : {}) } : {}),
+  writable: m.writable,
+})
+
+/**
+ * Lets git inside the container read a checkout whose metadata is owned by another user (the harness):
+ * without it every git command there fails with "dubious ownership".
+ */
+const GIT_SAFE_ENV = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' }
+
+/** One entry of env.up `repos`: a project id or a checkout's key, or `{ project, ref?, repo?, primary? }`. */
+interface RepoRequest {
+  target: string
+  ref?: string
+  repoIndex?: number
+  primary: boolean
+}
+
+function parseRepoRequests(v: unknown): RepoRequest[] | string {
+  if (!Array.isArray(v)) return 'repos must be a list of project ids, checkout keys or { project, ref } objects'
+  const out: RepoRequest[] = []
+  for (const item of v as unknown[]) {
+    if (typeof item === 'string' && item.trim()) out.push({ target: item.trim(), primary: false })
+    else if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>
+      const target = [o.project, o.projectId, o.key].find((x): x is string => typeof x === 'string' && !!x.trim())
+      if (!target) return 'each entry of repos needs project (a project id or a checkout key)'
+      if (o.ref !== undefined && (typeof o.ref !== 'string' || !o.ref.trim() || o.ref.trim().startsWith('-')))
+        return `not a ref: ${JSON.stringify(o.ref)}`
+      if (o.repo !== undefined && !(Number.isInteger(o.repo) && (o.repo as number) >= 0))
+        return 'repo must be an index into the project repositories'
+      out.push({
+        target: target.trim(),
+        ...(typeof o.ref === 'string' ? { ref: o.ref.trim() } : {}),
+        ...(typeof o.repo === 'number' ? { repoIndex: o.repo } : {}),
+        primary: o.primary === true,
+      })
+    } else return 'repos must be a list of project ids, checkout keys or { project, ref } objects'
+  }
+  if (!out.length) return 'repos is empty'
+  if (out.filter((r) => r.primary).length > 1) return 'only one entry of repos can be primary'
+  return out
 }
 
 /** Where the employee's own files are in an environment (when the deployment keeps them on disk). */
@@ -28,7 +95,7 @@ const FILES_NOTE =
 
 /** Told with every environment: what it holds, and what it doesn't. */
 const ENV_NOTE =
-  'The checkout is at /workspace (and every checkout of this session at /repos/<name>): files only. Run git through the git.* tools (status, diff, log, commit, push), not inside the environment: its .git points outside it.'
+  "A checkout is at /workspace and every repository of the environment at /repos/<name> (repos says which: your checkouts are writable, a ref's copy is read-only). Read-only git works inside (git log, show, diff, grep, status, branch -a): the history is mounted read-only. Commit and push only with the git.* tools: git commit inside fails."
 
 /** Added to env.up's note when the environment has no network. */
 const NO_NETWORK_NOTE = 'It has no network: nothing can be installed, so pick an image that already has the tools you need.'
@@ -37,7 +104,8 @@ const NETWORK_NOTE =
   'It has network: install what the work needs (npm install, pip install), tools outside the checkout (e.g. in /tmp).'
 
 import { DIRECT_NOTE, PROXY_NOTE, directNetworkName, networkFor, type NetworkDecision } from '../network.ts'
-import { worktreeFor } from './git.ts'
+import { mirrorKey } from '@mp/git'
+import { checkoutRepo, refWorktree, worktreeFor } from './git.ts'
 
 /**
  * Longest environment name. The runtime prefixes it (`mp-`) and suffixes container and network
@@ -135,11 +203,46 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
 
   /** env.up's handler, so env.exec can start the default environment by itself. */
   let upEnv: ToolHandler = async () => fail('env.up is not ready')
+
+  /** A requested repository, identified without changing anything: an existing checkout, one to make, or a ref's copy. */
+  type Identified =
+    | { kind: 'checkout'; w: WorktreeMeta; id: string; primary: boolean }
+    | { kind: 'new' | 'ref'; projectId: string; repoIndex: number; key: string; ref?: string; id: string; primary: boolean }
+  const identify = async (session: Session, req: RepoRequest): Promise<Identified | string> => {
+    const w = worktreesOf(session).find(
+      (x) =>
+        x.key === req.target ||
+        x.url === req.target ||
+        (x.projectId === req.target && (req.repoIndex === undefined || x.repoIndex === req.repoIndex)),
+    )
+    if (w && !req.ref) return { kind: 'checkout', w, id: w.key, primary: req.primary }
+    const projectId = w?.projectId ?? req.target
+    const repoIndex = w?.repoIndex ?? req.repoIndex ?? 0
+    const project = await kit.deps.directory.projects.get(projectId)
+    if (!project)
+      return `no project or checkout ${req.target}: give a project id (directory.find_project) or the key of one of your checkouts`
+    const repo = project.data.repositories?.[repoIndex]
+    if (!repo) return `project ${project.data.name} has no repository #${repoIndex}`
+    const key = mirrorKey(repo.url)
+    const existing = worktreesOf(session).find((x) => x.key === key)
+    if (!req.ref && existing) return { kind: 'checkout', w: existing, id: key, primary: req.primary }
+    return req.ref
+      ? { kind: 'ref', projectId: project.id, repoIndex, key, ref: req.ref, id: `${key}@${req.ref}`, primary: req.primary }
+      : { kind: 'new', projectId: project.id, repoIndex, key, id: key, primary: req.primary }
+  }
+
+  /** The repositories in a running environment, as identities (`key`, or `key@ref` for a ref's copy). */
+  const mountedIds = (checkouts: { key: string; path: string; ref?: string }[] | undefined) =>
+    new Set((checkouts ?? []).map((c) => (c.ref ? `${c.key}@${c.ref}` : c.key)))
+
+  /** The exact env.up call that restarts an environment with these repositories. */
+  const restartCall = (a: Record<string, unknown>) => `env.up ${JSON.stringify({ ...a, restart: true })}`
+
   kit.tool(
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) for working on code: check the repository out first (git.checkout), then env.up gives you a container with that checkout at /workspace and every checkout of this session at /repos/<name>, from an image (any image: it's kept running for you) or built from the checkout's Dockerfile. It holds files only: run git through the git.* tools. One environment per session: env.down first to change its image or which checkout is at /workspace. Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's isolated environment (containers on a private network) for working on code. Every repository of the environment is at /repos/<name>, one of them also at /workspace (built from, the working directory). repos brings several projects up in one call: a project id checks it out first if you haven't (your own branch, writable, as git.checkout does); { project, ref } mounts a read-only copy of that branch or commit instead (e.g. an unmerged branch of another project, next to yours); primary: true picks /workspace (default: the first). Without repos: every checkout of this session, /workspace the one named by repo, else the most recent. Read-only git works inside (log, show, diff, grep, status); commit and push with the git.* tools. From an image (any image: it's kept running for you), a profile, or built from the checkout's Dockerfile. One environment per session: to add repositories or change its image, call env.up again with restart: true (it restarts; files outside the repositories and /files are lost). Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -152,10 +255,30 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             description: 'Any other image instead of a profile, e.g. node:22 or python:3.13.',
           },
           dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, when building.' },
+          repos: {
+            type: 'array',
+            description:
+              'Repositories to bring up together, each at /repos/<name>: { project } (a project id or checkout key; checked out first if needed, on your own branch), with ref to mount a read-only copy of that branch or commit instead. A plain project id string works too. Your other checkouts are mounted as well.',
+            items: {
+              type: 'object',
+              properties: {
+                project: { type: 'string', description: 'A project id, or the key of one of your checkouts.' },
+                ref: { type: 'string', description: 'A branch or commit to mount read-only instead of your checkout.' },
+                repo: { type: 'number', description: "Index into the project's repositories. Default 0." },
+                primary: { type: 'boolean', description: 'This one goes at /workspace.' },
+              },
+              required: ['project'],
+            },
+          },
           repo: {
             type: 'string',
             description:
-              'Which checkout goes at /workspace (and is built): its key, e.g. gitlab.com/group/repo, or its project id. Default: your only or first checkout.',
+              'Which checkout goes at /workspace (and is built), without repos: its key, e.g. gitlab.com/group/repo, or its project id. Default: your most recent checkout.',
+          },
+          restart: {
+            type: 'boolean',
+            description:
+              'Restart a running environment with this call (needed to add repositories: mounts are fixed while it runs).',
           },
           env: { type: 'object', description: 'Environment variables (no secrets: name secrets instead).' },
           services: {
@@ -187,17 +310,34 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       },
     },
     (upEnv = async (a, ctx) => {
-      const session = await kit.ownSession(undefined, ctx)
+      let session = await kit.ownSession(undefined, ctx)
+      if (a.restart !== undefined && typeof a.restart !== 'boolean') return fail('restart must be true or false')
+      // What was asked for, identified before anything changes.
+      const requests = a.repos === undefined ? null : parseRepoRequests(a.repos)
+      if (typeof requests === 'string') return fail(requests)
+      const wanted: Identified[] = []
+      for (const r of requests ?? []) {
+        const id = await identify(session, r)
+        if (typeof id === 'string') return fail(id)
+        if (!wanted.some((x) => x.id === id.id)) wanted.push(id)
+      }
+      let restarted: string | undefined
       const current = envOf(session)
       if (current) {
         const info = await runtime.getEnv(current.id)
-        if (info?.status === 'running') {
+        const missing = wanted.filter((x) => !mountedIds(current.checkouts).has(x.id)).map((x) => x.id)
+        if (info?.status === 'running' && a.restart !== true) {
           const exposed = exposedOf(current)
           // Running environments keep the network they started with.
           const started = current.networkKey
           const changed =
             typeof started === 'string' && started !== networkKey((await decideNetwork(session, ctx, current.projectId)).net)
           const notes = [
+            ...(missing.length
+              ? [
+                  `the environment is already running without ${missing.join(', ')}: mounts can't be added to a running environment. To restart it with them (files outside the repositories and /files are lost), call ${restartCall(a)}`,
+                ]
+              : []),
             ...(a.expose !== undefined && JSON.stringify(a.expose) !== JSON.stringify(exposed)
               ? ['the environment is already running with its own ports: env.down first to change them']
               : []),
@@ -215,11 +355,30 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             name: info.name,
             status: info.status,
             existing: true,
+            ...(current.checkouts?.length
+              ? {
+                  repos: current.checkouts
+                    .filter((c) => c.path !== '/workspace')
+                    .map((c) => ({ path: c.path, key: c.key, ...(c.ref ? { ref: c.ref } : {}), writable: c.writable !== false })),
+                }
+              : {}),
+            ...(missing.length ? { missing } : {}),
             ...(current.network ? { network: current.network } : {}),
             ...(exposed.length ? { previews: exposed.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
             ...(current.desktop ? { desktop: desktopOf(session.id) } : {}),
             ...(notes.length ? { note: notes.join('; ') } : {}),
           })
+        }
+        if (info?.status === 'running' && a.restart === true) {
+          await runtime.destroyEnv(current.id)
+          await kit.patchMeta(session.id, (m) => {
+            delete m.env
+            return m
+          })
+          kit.deps.bus?.publish('env.changed', { sessionId: session.id, envId: current.id, op: 'down' })
+          restarted = missing.length
+            ? `The environment was restarted to add ${missing.join(', ')}: anything outside the repositories and /files is gone.`
+            : 'The environment was restarted: anything outside the repositories and /files is gone.'
         }
       }
       const badExpose = invalidExpose(a.expose)
@@ -229,13 +388,34 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const desktop = a.desktop === true
       if (desktop && (!runtime.screenshot || !(await runtime.features?.())?.desktop))
         return fail('this deployment has no desktops: its container runtime cannot run one')
-      const w = worktreesOf(session).length ? worktreeFor(session, str(a.repo)) : null
-      if (!str(a.image) && !str(a.profile) && !w)
-        return fail('give an image or a profile, or check out a repository first (git.checkout)')
+      if (wanted.some((x) => x.kind !== 'checkout') && !kit.deps.git)
+        return fail('this deployment has no git: only existing checkouts can be mounted')
+
+      // Which repository goes at /workspace: the primary one, else the first asked for; without repos, the
+      // checkout named by repo, else the most recent one.
+      const all = worktreesOf(session)
+      const primary = wanted.find((x) => x.primary) ?? wanted[0]
+      let fallbackNote: string | undefined
+      let chosen: WorktreeMeta | null = null
+      if (!primary && all.length) {
+        if (str(a.repo)) chosen = worktreeFor(session, str(a.repo))
+        else {
+          chosen = all.at(-1)!
+          if (all.length > 1)
+            fallbackNote = `/workspace is ${chosen.key}, your most recent checkout: pass repo (or repos with primary) to choose another.`
+        }
+      }
+      if (!str(a.image) && !str(a.profile) && !primary && !chosen)
+        return fail('give an image or a profile, or check out a repository first (git.checkout, or env.up with repos)')
 
       // The employee's network setting with the project, or the deployment default. The model can
       // only narrow it: a direct network to proxied hosts, proxied hosts to fewer. Never to direct.
-      const { net, emp, projectId, project } = await decideNetwork(session, ctx, w?.projectId)
+      const workspaceProject = primary
+        ? primary.kind === 'checkout'
+          ? primary.w.projectId
+          : primary.projectId
+        : chosen?.projectId
+      const { net, emp, projectId, project } = await decideNetwork(session, ctx, workspaceProject)
 
       // What to run: an image, a named profile, the project's profile, the checkout's Dockerfile,
       // else the default profile (most repositories have no Dockerfile to build).
@@ -253,21 +433,6 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         if (p) {
           image = p.image
           profile = p.name
-        }
-      }
-      if (!image && !str(a.dockerfile)) {
-        const hasDockerfile = w
-          ? await (kit.deps.worktreeFs ?? nodeWorktreeFs()).read(w.path, 'Dockerfile').then(
-              () => true,
-              () => false,
-            )
-          : false
-        if (!hasDockerfile) {
-          const p = envProfile(profiles, kit.deps.config.envDefaultProfile ?? 'default') ?? profiles[0]
-          if (p) {
-            image = p.image
-            profile = p.name
-          }
         }
       }
       let egress: EnvSpec['egress'] = net.allow.length ? { allow: [...net.allow] } : undefined
@@ -288,29 +453,124 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           direct = false
         }
       }
+
+      // Make what isn't there yet: checkouts of the repositories asked for, read-only worktrees of refs.
+      const fs = kit.deps.worktreeFs ?? nodeWorktreeFs()
+      const made: Omit<RepoMount, 'containerPath'>[] = []
+      let workspaceIndex = -1
+      for (const x of wanted) {
+        if (x === primary) workspaceIndex = made.length
+        if (x.kind === 'checkout') {
+          made.push({
+            key: x.w.key,
+            projectId: x.w.projectId,
+            url: x.w.url,
+            hostPath: x.w.path,
+            branch: x.w.branch,
+            writable: true,
+          })
+        } else if (x.kind === 'new') {
+          const r = await checkoutRepo(kit, kit.deps.git!, fs, ctx, { projectId: x.projectId, repoIndex: x.repoIndex })
+          if ('failure' in r) return r.failure
+          made.push({
+            key: r.w.key,
+            projectId: r.w.projectId,
+            url: r.w.url,
+            hostPath: r.w.path,
+            branch: r.w.branch,
+            writable: true,
+          })
+        } else {
+          const r = await refWorktree(kit, kit.deps.git!, ctx, { projectId: x.projectId, repoIndex: x.repoIndex, ref: x.ref! })
+          if ('failure' in r) return r.failure
+          made.push({
+            key: r.r.key,
+            projectId: r.r.projectId,
+            url: r.r.url,
+            hostPath: r.r.path,
+            ref: r.r.ref,
+            sha: r.r.sha,
+            writable: false,
+          })
+        }
+      }
+      // Every other checkout of the session is there too: one environment works across them.
+      session = await kit.ownSession(undefined, ctx)
+      for (const w of worktreesOf(session)) {
+        if (made.some((m) => !m.ref && m.key === w.key)) continue
+        if (chosen && w.key === chosen.key) workspaceIndex = made.length
+        made.push({ key: w.key, projectId: w.projectId, url: w.url, hostPath: w.path, branch: w.branch, writable: true })
+      }
+      const repoMounts = nameRepoMounts(made)
+      const workspace = workspaceIndex >= 0 ? repoMounts[workspaceIndex]! : null
+
+      if (!image && !str(a.dockerfile)) {
+        const hasDockerfile = workspace
+          ? await fs.read(workspace.hostPath, 'Dockerfile').then(
+              () => true,
+              () => false,
+            )
+          : false
+        if (!hasDockerfile) {
+          const p = envProfile(profiles, kit.deps.config.envDefaultProfile ?? 'default') ?? profiles[0]
+          if (p) {
+            image = p.image
+            profile = p.name
+          }
+        }
+      }
+      if (!image && !workspace) return fail('nothing to build: give an image or a profile')
+
       const network: Json = direct
         ? { via: 'direct', note: DIRECT_NOTE }
         : egress
           ? { via: 'proxy', allow: egress.allow, note: PROXY_NOTE }
           : { via: 'none', reason: net.reason ?? 'no network: env.up was asked for no hosts' }
 
-      // Every checkout of the session is there too, at /repos/<name>: one environment works across them.
-      const repoMounts = repoMountsOf(worktreesOf(session))
-      const otherMounts = repoMounts.map((m) => ({ hostPath: m.path, containerPath: m.containerPath }))
+      // Each worktree's .git points into its mirror: mounted read-only at the same path, git log, show, diff,
+      // grep and status work inside, and nothing can be committed there (that goes through git.*, with its rules).
+      const mirrors = [
+        ...new Set(
+          repoMounts.flatMap((m) => {
+            try {
+              const dir = kit.deps.git?.mirrorPath(m.url)
+              return dir && isAbsolute(dir) && !dir.includes(':') ? [dir] : []
+            } catch {
+              return []
+            }
+          }),
+        ),
+      ]
       // The employee's own files, at /files: builds can leave their results there for fs.* and chat.
       const filesRoot = kit.deps.config.filesDir
       const ownFiles = filesRoot && /^[A-Za-z0-9_-]+$/.test(ctx.employeeId) ? resolve(filesRoot, ctx.employeeId) : null
       if (ownFiles) await mkdir(ownFiles, { recursive: true })
       const mounts = [
-        ...(w ? [{ hostPath: w.path, containerPath: '/workspace' }, ...otherMounts] : []),
+        ...(workspace
+          ? [
+              { hostPath: workspace.hostPath, containerPath: '/workspace', ...(workspace.writable ? {} : { readOnly: true }) },
+              ...repoMounts.map((m) => ({
+                hostPath: m.hostPath,
+                containerPath: m.containerPath,
+                ...(m.writable ? {} : { readOnly: true }),
+              })),
+              ...mirrors.map((dir) => ({ hostPath: dir, containerPath: dir, readOnly: true })),
+            ]
+          : []),
         ...(ownFiles ? [{ hostPath: ownFiles, containerPath: FILES_MOUNT }] : []),
       ]
+      const envVars = {
+        ...(workspace ? GIT_SAFE_ENV : {}),
+        ...(a.env ? Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) : {}),
+      }
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
-        ...(image ? { image } : { build: { context: w!.path, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
+        ...(image
+          ? { image }
+          : { build: { context: workspace!.hostPath, ...(str(a.dockerfile) ? { dockerfile: a.dockerfile } : {}) } }),
         ...(mounts.length ? { mounts } : {}),
-        ...(w ? { workdir: '/workspace' } : {}),
-        ...(a.env ? { env: Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) } : {}),
+        ...(workspace ? { workdir: '/workspace' } : {}),
+        ...(Object.keys(envVars).length ? { env: envVars } : {}),
         ...(a.services ? { services: a.services } : {}),
         ...(egress ? { egress } : {}),
         ...(direct ? { direct: { network: directNetworkName(emp.key ?? emp.data.name) } } : {}),
@@ -319,6 +579,12 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
+      const checkoutOf = (m: RepoMount, path: string) => ({
+        key: m.key,
+        path,
+        ...(m.ref ? { ref: m.ref } : {}),
+        ...(m.writable ? {} : { writable: false }),
+      })
       await kit.patchMeta(session.id, (m) => ({
         ...m,
         env: {
@@ -332,13 +598,8 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           ...(profile ? { profile } : {}),
           ...(desktop ? { desktop: true } : {}),
           ...(ownFiles ? { files: true } : {}),
-          ...(w
-            ? {
-                checkouts: [
-                  { key: w.key, path: '/workspace' },
-                  ...repoMounts.map((m) => ({ key: m.key, path: m.containerPath })),
-                ],
-              }
+          ...(workspace
+            ? { checkouts: [checkoutOf(workspace, '/workspace'), ...repoMounts.map((r) => checkoutOf(r, r.containerPath))] }
             : {}),
           ...(a.services ? { services: (a.services as { name: unknown }[]).map((x) => String(x.name)) } : {}),
         },
@@ -348,17 +609,22 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         envId: info.id,
         name: info.name,
         status: info.status,
-        ...(w ? { workspace: '/workspace', checkout: w.key } : {}),
+        ...(restarted ? { restarted: true } : {}),
+        ...(workspace ? { workspace: '/workspace', checkout: workspace.key, workspaceIs: workspace.containerPath } : {}),
         ...(image ? { image } : {}),
         ...(profile ? { profile } : {}),
-        ...(repoMounts.length ? { repos: Object.fromEntries(repoMounts.map((m) => [m.containerPath, m.key])) } : {}),
+        ...(repoMounts.length ? { repos: repoMounts.map(repoView) } : {}),
         network,
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
         ...(desktop ? { desktop: desktopOf(session.id) } : {}),
         ...(ownFiles ? { files: FILES_MOUNT } : {}),
-        note: [ENV_NOTE, net.direct || net.allow.length ? NETWORK_NOTE : NO_NETWORK_NOTE, ...(ownFiles ? [FILES_NOTE] : [])].join(
-          ' ',
-        ),
+        note: [
+          ...(restarted ? [restarted] : []),
+          ...(fallbackNote ? [fallbackNote] : []),
+          ...(workspace ? [ENV_NOTE] : []),
+          net.direct || net.allow.length ? NETWORK_NOTE : NO_NETWORK_NOTE,
+          ...(ownFiles ? [FILES_NOTE] : []),
+        ].join(' '),
       })
     }),
   )

@@ -279,9 +279,13 @@ export interface WaitResult {
 
 export interface SearchQuery {
   text: string
+  /** Match every word of `text`, in any order, instead of `text` as one phrase. */
+  allWords?: boolean
   employeeId?: string
   /** Only entries written in these sessions (entries inherited from a parent belong to the parent). */
   sessionIds?: string[]
+  /** Leave out entries written in these sessions (e.g. the searching session itself). */
+  excludeSessionIds?: string[]
   kinds?: EntryKind[]
   limit?: number
   offset?: number
@@ -292,7 +296,7 @@ export interface SearchHit {
   /** The session the entry was written in (`meta.sessionId`). */
   sessionId: string
   session: Session | null
-  /** About 160 characters of the entry's text around the first match. */
+  /** About 160 characters of the entry's text around the first match (tool call arguments decoded). */
   snippet: string
 }
 

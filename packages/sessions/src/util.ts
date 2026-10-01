@@ -67,3 +67,40 @@ export function snippet(text: string, needle: string, width = 160): string {
   start = Math.max(0, end - width)
   return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`
 }
+
+/** The most characters of an entry's text a search snippet looks through. */
+const SNIPPET_SCAN_MAX = 200_000
+
+/**
+ * An entry's text for search snippets: every string in it, with tool call arguments (JSON strings) decoded,
+ * so a snippet of a `git.write_file` call shows the file's text rather than escaped JSON.
+ */
+export function searchableText(content: Json): string {
+  const c = content as { toolCalls?: { name?: unknown; arguments?: unknown }[] } | null
+  if (!c || typeof c !== 'object' || Array.isArray(c) || !Array.isArray(c.toolCalls)) return contentText(content)
+  const { toolCalls, ...rest } = c as Record<string, Json> & { toolCalls: { name?: unknown; arguments?: unknown }[] }
+  const calls = toolCalls.map((t) => {
+    let args: Json = typeof t.arguments === 'string' ? t.arguments : null
+    if (typeof t.arguments === 'string') {
+      try {
+        args = JSON.parse(t.arguments) as Json
+      } catch {
+        // Not JSON: the raw string.
+      }
+    }
+    return `${typeof t.name === 'string' ? t.name : ''} ${contentText(args)}`
+  })
+  return [contentText(rest as Json), ...calls].join(' ').trim()
+}
+
+/** A snippet around the first match: the phrase, or with `allWords` the first of its words found. */
+export function searchSnippet(text: string, query: string, allWords?: boolean, width = 160): string {
+  const t = text.length > SNIPPET_SCAN_MAX ? text.slice(0, SNIPPET_SCAN_MAX) : text
+  if (!allWords) return snippet(t, query, width)
+  const lower = t.toLowerCase()
+  const word = query
+    .split(/\s+/)
+    .filter(Boolean)
+    .find((w) => lower.includes(w.toLowerCase()))
+  return snippet(t, word ?? query, width)
+}

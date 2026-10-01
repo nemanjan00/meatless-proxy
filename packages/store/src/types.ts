@@ -198,9 +198,16 @@ export interface EntryStore {
 
 export interface EntrySearch {
   text: string
+  /**
+   * Match every whitespace-separated word of `text`, anywhere in the content and in any order, instead
+   * of `text` as one substring.
+   */
+  allWords?: boolean
   kinds?: string[]
   /** Every listed meta field must equal the given value; an array value means "any of". */
   meta?: Record<string, Json | Json[]>
+  /** Leaves out entries whose meta field equals the given value (an array: any of them). */
+  excludeMeta?: Record<string, Json | Json[]>
   limit?: number
   offset?: number
 }

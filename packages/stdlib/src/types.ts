@@ -76,6 +76,16 @@ export interface StdlibDeps {
       defaultBranch: string
       branches: { name: string; sha: string; ahead: number; behind: number; subject: string; author: string; date: string }[]
     }>
+    /** A directory of a ref of a local repository (default: its default branch); `path` relative to the root. */
+    tree?(
+      slug: string,
+      opts?: { ref?: string; path?: string },
+    ): Promise<{ path: string; ref: string; entries: { name: string; type: 'file' | 'dir'; size?: number }[] }>
+    /** A file of a ref of a local repository. Binary files and files over `maxBytes` come without content. */
+    readFile?(
+      slug: string,
+      opts: { ref?: string; path: string; maxBytes?: number },
+    ): Promise<{ path: string; ref: string; size: number; binary: boolean; tooLarge: boolean; content: string | null }>
   }
   /**
    * The company timezone (an IANA name, the `timezone` setting), used by `time.now` when the call

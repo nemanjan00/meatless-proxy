@@ -286,9 +286,13 @@ describe('finding sessions', () => {
     expect((await t.out('sessions.list', {})).total).toBe(2)
     expect((await t.out('sessions.list', { rootId: t.session.id })).total).toBe(2)
 
-    const s = await t.out('sessions.search', { text: 'quarterly ledger' })
+    const s = await t.out('sessions.search', { text: 'quarterly ledger', includeThisSession: true })
     expect(s.entries[0]).toMatchObject({ sessionId: t.session.id, kind: 'tool_result' })
     expect(s.entries[0].snippet).toContain('quarterly ledger')
+    // By default this session's own entries are left out, and counted.
+    const others = await t.out('sessions.search', { text: 'quarterly ledger' })
+    expect(others.entries).toHaveLength(0)
+    expect(others).toMatchObject({ inThisSession: 1, note: expect.stringContaining('includeThisSession') })
 
     const tree = await t.out('sessions.tree', {})
     expect(tree.tree).toMatchObject({ id: t.session.id, self: true, children: [{ id: f.sessionId }] })
@@ -301,6 +305,41 @@ describe('finding sessions', () => {
     })
     expect(g.runs[0]).toMatchObject({ runId: t.run.id, state: 'running' })
     expect(g.links.some((l: any) => l.role === 'waiting_on')).toBe(true)
+  })
+
+  it('search finds what an earlier session wrote in tool call arguments and got in tool results', async () => {
+    const t = await stack()
+    // An earlier session wrote a README with git.write_file, and read a file back.
+    const old = await t.newSession('Write the parser docs')
+    const r = await t.startRun(old.id, 'write the README')
+    const readme = '# Invoice parser\n\nParses invoices from PDF into JSON.\n'
+    await t.sessions.append(r.id, {
+      kind: 'assistant',
+      content: {
+        text: null,
+        toolCalls: [{ id: 'call_w', name: 'git.write_file', arguments: JSON.stringify({ path: 'README.md', content: readme }) }],
+      },
+    })
+    await t.sessions.append(r.id, {
+      kind: 'tool_result',
+      content: { toolCallId: 'call_w', name: 'git.write_file', output: { path: 'README.md', size: readme.length } },
+    })
+    await t.recordCall(r.id, 'git.read_file', { path: 'CHANGELOG.md', content: 'v1: first parser release' })
+    // This session talks about the README a lot: newest first, its own entries would crowd the old ones out.
+    for (let i = 0; i < 12; i++) await t.recordCall(t.run.id, 'chat.read', { text: `read the README of the parser (${i})` })
+
+    const s = await t.out('sessions.search', { text: 'parser README', limit: 5 })
+    expect(s.entries.map((e: any) => e.sessionId)).toEqual([old.id])
+    expect(s.entries[0]).toMatchObject({ kind: 'assistant', sessionTitle: 'Write the parser docs' })
+    // The snippet shows the file's text, not escaped JSON.
+    expect(s.entries[0].snippet).toContain('git.write_file')
+    expect(s.entries[0].snippet).toContain('Parses invoices from PDF')
+    expect(s.inThisSession).toBeGreaterThan(0)
+    // Words in any order, across a newline of the file.
+    expect((await t.out('sessions.search', { text: 'JSON invoices' })).entries[0].sessionId).toBe(old.id)
+    // Tool results too.
+    const result = await t.out('sessions.search', { text: 'first parser release' })
+    expect(result.entries[0]).toMatchObject({ sessionId: old.id, kind: 'tool_result' })
   })
 
   it("search doesn't see other employees' sessions", async () => {

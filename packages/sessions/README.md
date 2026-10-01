@@ -61,8 +61,11 @@ extend them with `records.kinds.extend`.
   `updateTemplate`, `fromTemplate` (fills `{{param}}` in name, instructions and
   document; missing required params are a `ValidationError`). Copying the
   template's checklist is up to the caller (`@mp/checklists`).
-- **Search:** `search({ text, employeeId?, sessionIds?, kinds? })` searches
-  entry content. Every entry this package appends carries `meta.sessionId`,
+- **Search:** `search({ text, allWords?, employeeId?, sessionIds?, excludeSessionIds?, kinds? })` searches
+  entry content: the whole content, so tool call arguments and tool results too. `allWords` matches every
+  word in any order instead of one phrase; `excludeSessionIds` leaves sessions out (`sessions.search` leaves
+  out the caller's own). Snippets come from `searchableText` (tool call arguments decoded from their JSON
+  strings) around the first match (`searchSnippet`). Every entry this package appends carries `meta.sessionId`,
   `meta.employeeId` and, for run entries, `meta.runId` (these win over
   caller-supplied meta), so an entry inherited by a fork is attributed to the
   session that wrote it. Session titles and documents are searched separately
@@ -70,7 +73,7 @@ extend them with `records.kinds.extend`.
 - Bus topics (`SessionTopics`): `session.created`, `session.head`, `run.state`,
   `inbox.added`, published after the transaction commits.
 - Helpers: `slugify`, `fillPlaceholders`, `placeholders`, `snippet`,
-  `contentText`, the kind schemas and `SessionRoles`.
+  `contentText`, `searchableText`, `searchSnippet`, the kind schemas and `SessionRoles`.
 
 Operations that write more than one thing run in one store transaction. CAS
 writes that lose a race are retried from scratch, re-checking their

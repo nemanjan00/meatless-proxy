@@ -15,6 +15,7 @@ export const ONCE_KIND = 'stdlib_once'
 /** Session meta keys written by the stdlib itself. `sessions.save_metadata` can't overwrite them. */
 export const RESERVED_META = [
   'worktrees',
+  'refWorktrees',
   'env',
   'reviewFor',
   'reviews',
@@ -45,6 +46,24 @@ export interface WorktreeMeta {
   branch: string
   /** The commit the worktree started from. */
   baseSha: string
+  /** The ref it started from (as asked, else the default branch), when known. */
+  base?: string
+}
+
+/**
+ * A read-only worktree of one ref of a project repository (a branch or a commit, detached), made by
+ * env.up `repos: [{ project, ref }]` to read another branch next to the session's own checkouts.
+ * Recorded in `session.meta.refWorktrees`; never committed to or pushed.
+ */
+export interface RefWorktreeMeta {
+  key: string
+  projectId: string
+  repoIndex: number
+  url: string
+  path: string
+  ref: string
+  /** The commit it is at. */
+  sha: string
 }
 
 export interface EnvMeta {
@@ -65,8 +84,11 @@ export interface EnvMeta {
   desktop?: boolean
   /** Whether the employee's files are mounted at /files (environments started before that aren't). */
   files?: boolean
-  /** Its checkouts: `/workspace` and `/repos/<name>`. */
-  checkouts?: { key: string; path: string }[]
+  /**
+   * Its checkouts: `/workspace` and `/repos/<name>`. `ref` and `writable: false` for a read-only worktree
+   * of a ref (env.up `repos: [{ project, ref }]`).
+   */
+  checkouts?: { key: string; path: string; ref?: string; writable?: boolean }[]
   /** Its service containers' names. */
   services?: string[]
 }
@@ -160,6 +182,9 @@ export function checkRef(ref: unknown, kinds: string[], what = 'ref'): Ref {
 
 export const worktreesOf = (s: Session): WorktreeMeta[] =>
   Array.isArray(s.data.meta?.worktrees) ? (s.data.meta!.worktrees as unknown as WorktreeMeta[]) : []
+
+export const refWorktreesOf = (s: Session): RefWorktreeMeta[] =>
+  Array.isArray(s.data.meta?.refWorktrees) ? (s.data.meta!.refWorktrees as unknown as RefWorktreeMeta[]) : []
 
 export const envOf = (s: Session): EnvMeta | null => {
   const e = s.data.meta?.env as unknown as EnvMeta | undefined

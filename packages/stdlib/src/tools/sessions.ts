@@ -567,13 +567,14 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.search',
       description:
-        'Full-text search across the histories and documents of your sessions, to find how similar work was done before. Returns matching entries with snippets and matching sessions.',
+        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order. Newest first; this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get.",
       effect: 'read',
       params: {
         properties: {
-          text: { type: 'string' },
+          text: { type: 'string', description: 'Words to find, e.g. "README parser".' },
           kinds: { type: 'array', items: { type: 'string' }, description: 'Entry kinds, e.g. ["assistant", "tool_result"].' },
           limit: { type: 'number' },
+          includeThisSession: { type: 'boolean', description: "Also search this session's own entries." },
         },
         required: ['text'],
       },
@@ -582,7 +583,10 @@ export function registerSessionTools(kit: Kit): void {
       const text = str(a.text)
       if (!text) return fail('text is required')
       const limit = Math.min(Math.max(1, a.limit ?? 10), 50)
-      const hits = await sessions.search({ text, employeeId: ctx.employeeId, ...(a.kinds ? { kinds: a.kinds } : {}), limit })
+      const own = a.includeThisSession === true
+      const query = { text, allWords: true, employeeId: ctx.employeeId, ...(a.kinds ? { kinds: a.kinds } : {}) }
+      const hits = await sessions.search({ ...query, ...(own ? {} : { excludeSessionIds: [ctx.sessionId] }), limit })
+      const inThis = own ? 0 : (await sessions.search({ ...query, sessionIds: [ctx.sessionId], limit: 1 })).total
       const found = await sessions.searchSessions(text, { employeeId: ctx.employeeId, limit })
       return ok({
         entries: hits.items.map((h) => ({
@@ -593,6 +597,9 @@ export function registerSessionTools(kit: Kit): void {
           snippet: h.snippet,
         })),
         totalEntries: hits.total,
+        ...(inThis
+          ? { inThisSession: inThis, note: `${inThis} more in this session's own history: includeThisSession to list them` }
+          : {}),
         sessions: found.items.map((s) => ({ ...sessionBrief(s), snippet: snippet(s.data.document || s.data.title, text) })),
       })
     },

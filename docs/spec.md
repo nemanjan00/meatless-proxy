@@ -1421,6 +1421,13 @@ and can run it.
   (`Permission denied (publickey)` and the like) is explained: not a member
   of the project, or no SSH key, with what to do instead (ask an admin; read
   through the git host's tools).
+- `git.checkout` never switches an existing checkout. Called again with a
+  `ref`, it returns the checkout as it is with a note: the ref was not
+  applied, read it with `projects.read_file { ref }` or a read-only copy in an
+  environment (`env.up { repos: [{ project, ref }] }`), and build on top of it
+  in a new session. Live, a model asked for an unmerged branch this way, got
+  its own (empty) branch back without a word, and searched for the files for
+  many steps.
 - Worktrees are removed with `git worktree remove` when the session ends, and
   `git worktree prune` cleans up after crashes. Fetching into the mirror is
   shared by every worktree of that remote.
@@ -1445,8 +1452,8 @@ and work that has no GitLab project yet.
   directory.
 - **Only the harness uses it.** No git-over-SSH, no HTTP clone URL. Employees'
   checkouts fetch from it and push to it by path, with no credentials; the
-  directory is never mounted into environments (a checkout's `.git` points
-  outside the container, as for every checkout).
+  directory is never mounted into environments (only the employee's mirror of
+  it is, read-only, as for every checkout).
 - **Creating one.** An admin, with **New project → Local repository** (or
   `POST /api/projects/local` with a name, description, owner and members), or
   an employee with `projects.create_local { name, description? }`, which makes
@@ -1458,8 +1465,20 @@ and work that has no GitLab project yet.
   branches with their last commit and how far each is ahead of and behind the
   default branch, straight from the repository (no checkout, no environment),
   marking those waiting for review. Live, a status task checked out five
-  repositories and started an environment to run `git branch`, which doesn't
-  work inside one.
+  repositories and started an environment to run `git branch`.
+- **Reading any branch.** `projects.read_file { projectId, path, ref? }` and
+  `projects.list_files { projectId, path?, ref? }` read a local project's
+  repository at any branch or commit, straight from the bare repository (no
+  checkout, no environment). The default ref is the default branch, and a
+  local project's `main` is often empty: its work sits on branches waiting
+  for review until a person merges them. When the default branch is empty
+  (or lacks the file) and branches are waiting, the result says so and names
+  them (`main is empty; work is on mp/x (ahead 2), waiting for review: pass
+  ref`). Files over 1 MB come without content, binary files are flagged, and
+  ranges are read with `offset`/`limit`, numbered like `git.read_file`. For a
+  project on a git host they point to the host's tools
+  (`mcp.gitlab.get_file`, `list_tree`). Both are read-only and kept for
+  routers.
 - **Pushing.** `git.checkout` and `git.push` work as for any repository, under
   the same push policy: the employee's own `mp/**` branches, never `main`,
   `master`, `production` or `release/**`. The repository also refuses
@@ -1546,9 +1565,38 @@ person follows a project's contributing guide.
   `analyst`, `librarian`, `multimedia`, `reversing`, …), and `ENV_PROFILES`
   replaces it. Without network nothing can be installed in an environment,
   so the right profile matters. Whatever the image's entrypoint, the
-  container is kept running for `env.exec`. The checkout is at `/workspace`
-  and every checkout of the session at `/repos/<name>`; git runs through the
-  `git.*` tools, since the checkout's `.git` points outside the container.
+  container is kept running for `env.exec`.
+- **Repositories.** Every repository of an environment is at
+  `/repos/<name>`, and one of them also at `/workspace` (the working
+  directory, and the build context). `env.up { repos }` brings several up in
+  one call: a project id (or a checkout's key) mounts the session's checkout
+  of it, checking it out first when there is none (its own branch, writable,
+  as `git.checkout` does); `{ project, ref }` mounts a **read-only** worktree
+  of that branch or commit instead (detached, made fresh on each start, kept
+  in session meta `refWorktrees`, never committed to), so an unmerged branch
+  of one project can be read next to another in one call. `/workspace` is
+  the entry marked `primary`, else the first. Without `repos`, every checkout
+  of the session is mounted and `/workspace` is the one named by `repo`, else
+  the most recent, and the result says which. The session's other checkouts
+  are always mounted too. The result lists every repository with its path,
+  branch or ref, and whether it's writable.
+- **Git inside.** Each worktree's `.git` file points into the employee's
+  mirror (`<git cache>/<employee>/<key>/worktrees/<name>`), which is mounted
+  **read-only at the same absolute path** (the Docker runtime translates it
+  to a volume subpath or host path like any mount), and `safe.directory` is
+  set through `GIT_CONFIG_*`, since the files belong to the harness's user.
+  So `git log`, `show` (also `origin/<branch>:<file>`), `diff`, `grep`,
+  `status` and `branch -a` work in every repository of the environment.
+  `git status` refreshes the index only when it can, so a read-only gitdir
+  doesn't stop it. Commits and pushes still go only through the `git.*`
+  tools, with their policies: `git add` and `git commit` inside fail with
+  "Read-only file system". Live, models ran `git show origin/<branch>:README.md`
+  inside and got "not a git repository" in several sessions.
+- **Adding repositories to a running environment.** Docker can't add mounts
+  to a running container: `env.up` asked for repositories the running
+  environment lacks says which (`missing`) and gives the exact call with
+  `restart: true`, which tears it down and starts it again with them (files
+  outside the repositories and `/files` are lost).
 - **The employee's files at `/files`.** When the files are on disk here (the
   default `FILES_DIR` storage), every environment mounts the employee's own
   directory, `<FILES_DIR>/<employeeId>`, at `/files`, read-write: `/files` is
@@ -1850,7 +1898,7 @@ The model has tools for working with sessions:
 | fork           | fork a session at a given point                               |
 | loop           | split a session into *n* children, one per item               |
 | look up        | find sessions by id, title, status, any metadata field, link, or text in their document |
-| search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before |
+| search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before. Every word must appear, in any order, anywhere in an entry: text, tool call arguments (a file written with `git.write_file`) and tool results. The searching session's own entries are left out by default (it has them, and newest first they crowded out the older sessions: live, a search for files written in earlier sessions returned only the current run's own entries) and counted instead; `includeThisSession` lists them. Snippets show tool call arguments decoded, not as escaped JSON |
 | tree           | get a session's parent, children, or whole tree               |
 | save metadata  | set or update metadata fields and the session's document      |
 | link / unlink  | add or remove links to contacts, projects and other sessions  |

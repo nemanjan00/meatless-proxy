@@ -37,7 +37,7 @@ import {
   type WaitCondition,
   type WaitResult,
 } from './types.ts'
-import { checkRequiredParams, contentText, fillPlaceholders, slugify, snippet } from './util.ts'
+import { checkRequiredParams, fillPlaceholders, searchSnippet, searchableText, slugify } from './util.ts'
 
 export interface SessionsOptions {
   records: Records
@@ -501,8 +501,10 @@ export function createSessions(opts: SessionsOptions): Sessions {
       }
       const res = await store.entries.search({
         text: q.text,
+        ...(q.allWords ? { allWords: true } : {}),
         ...(q.kinds ? { kinds: q.kinds } : {}),
         meta,
+        ...(q.excludeSessionIds?.length ? { excludeMeta: { sessionId: q.excludeSessionIds } } : {}),
         ...(q.limit !== undefined ? { limit: q.limit } : {}),
         ...(q.offset !== undefined ? { offset: q.offset } : {}),
       })
@@ -512,7 +514,7 @@ export function createSessions(opts: SessionsOptions): Sessions {
         const sessionId = typeof entry.meta.sessionId === 'string' ? entry.meta.sessionId : ''
         if (sessionId && !cache.has(sessionId)) cache.set(sessionId, svc.get(sessionId))
         const session = sessionId ? await cache.get(sessionId)! : null
-        items.push({ entry, sessionId, session, snippet: snippet(contentText(entry.content), q.text) })
+        items.push({ entry, sessionId, session, snippet: searchSnippet(searchableText(entry.content), q.text, q.allWords) })
       }
       return { items, total: res.total }
     },

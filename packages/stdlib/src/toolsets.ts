@@ -72,6 +72,8 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'procedures.run',
   'projects.branches',
   'projects.create_local',
+  'projects.list_files',
+  'projects.read_file',
   'schedule.cancel',
   'schedule.create',
   'schedule.list',

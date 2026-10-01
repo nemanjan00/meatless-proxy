@@ -16,6 +16,7 @@ import {
   SYSTEM,
   StoreTopics,
   contentHash,
+  searchWords,
   type Actor,
   type AppendEntry,
   type Entry,
@@ -687,14 +688,16 @@ export async function postgresStore(opts: PostgresStoreOptions = {}): Promise<Po
         search: (q) =>
           x.read(async (db) => {
             const p = new Params()
-            const parts = [`b.content::text ilike ${p.add(likePattern(q.text ?? ''))}`]
+            const parts = searchWords(q.text ?? '', q.allWords).map((w) => `b.content::text ilike ${p.add(likePattern(w))}`)
             if (q.kinds) parts.push(`e.kind = any(${p.add(q.kinds)}::text[])`)
-            for (const [k, v] of Object.entries(q.meta ?? {})) {
-              if (Array.isArray(v))
-                parts.push(`coalesce(e.meta -> ${p.add(k)} = any(${p.add(v.map((x) => JSON.stringify(x)))}::jsonb[]), false)`)
-              else if (v === null || typeof v !== 'object') parts.push(`e.meta @> ${p.json({ [k]: v })}`)
-              else parts.push(`coalesce(e.meta -> ${p.add(k)} = ${p.json(v)}, false)`)
-            }
+            const metaEquals = (k: string, v: Json | Json[]) =>
+              Array.isArray(v)
+                ? `coalesce(e.meta -> ${p.add(k)} = any(${p.add(v.map((x) => JSON.stringify(x)))}::jsonb[]), false)`
+                : v === null || typeof v !== 'object'
+                  ? `e.meta @> ${p.json({ [k]: v })}`
+                  : `coalesce(e.meta -> ${p.add(k)} = ${p.json(v)}, false)`
+            for (const [k, v] of Object.entries(q.meta ?? {})) parts.push(metaEquals(k, v))
+            for (const [k, v] of Object.entries(q.excludeMeta ?? {})) parts.push(`not ${metaEquals(k, v)}`)
             const where = parts.join(' and ')
             const cp = p.values.length
             const page = pageSql(q, p)

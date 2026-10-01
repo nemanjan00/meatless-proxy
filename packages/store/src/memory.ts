@@ -1,6 +1,6 @@
 import { ConflictError, NotFoundError, ValidationError, newId, systemClock, type Clock, type EventBus, type Json } from '@mp/core'
 import { contentHash } from './hash.ts'
-import { applyQuery, fieldValue, normalizeWhere, matches } from './match.ts'
+import { applyQuery, fieldValue, normalizeWhere, matches, searchWords } from './match.ts'
 import {
   SYSTEM,
   StoreTopics,
@@ -361,16 +361,20 @@ export function memoryStore(opts: StoreOptions = {}): Store {
 
         async search(q) {
           const s = getState()
-          const text = q.text.toLowerCase()
+          const words = searchWords(q.text, q.allWords)
+          const equals = (meta: Record<string, Json>, k: string, v: Json | Json[]) =>
+            Array.isArray(v)
+              ? v.some((x) => JSON.stringify(x) === JSON.stringify(meta[k]))
+              : JSON.stringify(v) === JSON.stringify(meta[k])
           const metaOk = (meta: Record<string, Json>) =>
-            Object.entries(q.meta ?? {}).every(([k, v]) =>
-              Array.isArray(v)
-                ? v.some((x) => JSON.stringify(x) === JSON.stringify(meta[k]))
-                : JSON.stringify(v) === JSON.stringify(meta[k]),
-            )
+            Object.entries(q.meta ?? {}).every(([k, v]) => equals(meta, k, v)) &&
+            !Object.entries(q.excludeMeta ?? {}).some(([k, v]) => equals(meta, k, v))
           const all = [...s.entries.values()]
             .filter((e) => (!q.kinds || q.kinds.includes(e.kind)) && metaOk(e.meta))
-            .filter((e) => JSON.stringify(s.blobs.get(e.hash)).toLowerCase().includes(text))
+            .filter((e) => {
+              const text = JSON.stringify(s.blobs.get(e.hash)).toLowerCase()
+              return words.every((w) => text.includes(w))
+            })
             .sort((a, b) => (a.id < b.id ? 1 : -1))
           const offset = q.offset ?? 0
           const page = all.slice(offset, q.limit === undefined ? undefined : offset + q.limit)

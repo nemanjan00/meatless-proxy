@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { NotFoundError, ValidationError, type Json } from '@mp/core'
 import {
@@ -11,8 +12,8 @@ import {
   type GitCache,
 } from '@mp/git'
 import type { Session } from '@mp/sessions'
-import type { ToolContext } from '@mp/tools'
-import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type WorktreeMeta } from '../kit.ts'
+import type { ToolContext, ToolResult } from '@mp/tools'
+import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type RefWorktreeMeta, type WorktreeMeta } from '../kit.ts'
 import type { StdlibDeps, WorktreeFs } from '../types.ts'
 import { INSTRUCTIONS_NOTE, nestedInstructions, rootInstructions, type AgentInstructions } from '../agent-instructions.ts'
 import { safeRelPath } from '../worktree-fs.ts'
@@ -84,6 +85,30 @@ export const LOCAL_REVIEW_NOTE =
 /** git.read_file: the most lines one call returns. */
 const READ_MAX_LINES = 2000
 
+/** git.read_file and projects.read_file: the most characters one call returns. */
+const READ_MAX_CHARS = 30000
+
+/**
+ * What a file read returns: the whole content when it is small and no range was asked for, else numbered
+ * lines of the range (at most READ_MAX_LINES) and where to go on.
+ */
+export function readView(content: string, offset?: unknown, limit?: unknown): Record<string, Json> {
+  if (offset === undefined && limit === undefined && content.length <= READ_MAX_CHARS) return { size: content.length, content }
+  const lines = content.split('\n')
+  const start = Math.max(1, Math.floor(Number(offset) || 1))
+  const count = Math.min(Math.max(1, Math.floor(Number(limit) || READ_MAX_LINES)), READ_MAX_LINES)
+  const slice = lines.slice(start - 1, start - 1 + count)
+  let text = slice.map((l, i) => `${start + i}\t${l}`).join('\n')
+  if (text.length > READ_MAX_CHARS) text = clip(text, READ_MAX_CHARS)
+  const end = start + slice.length - 1
+  return {
+    totalLines: lines.length,
+    lines: slice.length ? `${start}-${end}` : 'none',
+    content: text,
+    ...(end < lines.length ? { next: `offset ${end + 1} reads on (${lines.length - end} lines left)` } : {}),
+  }
+}
+
 /** Git auth for an employee: its own SSH key (`StdlibDeps.sshKeyFor`), or none. */
 export async function gitAuthFor(deps: Pick<StdlibDeps, 'sshKeyFor'>, employeeId: string): Promise<GitAuth | undefined> {
   const key = await deps.sshKeyFor?.(employeeId)
@@ -94,9 +119,167 @@ export function trailersFor(sessionId: string, requesterId?: string): Record<str
   return { Session: sessionId, ...(requesterId ? { 'Requested-by': requesterId } : {}) }
 }
 
+/** The repo instructions a tool result hands over. */
+export const instructionView = (i: AgentInstructions) => ({
+  file: i.file,
+  content: i.content,
+  ...(i.truncated ? { truncated: true } : {}),
+  ...(i.includes ? { includes: i.includes } : {}),
+})
+
+/** Remembers instruction files handed to a session for a checkout (session meta `agentInstructions`). */
+export const rememberInstructions = (kit: Kit, sessionId: string, key: string, files: string[]) =>
+  kit.patchMeta(sessionId, (m) => {
+    const all = { ...((m.agentInstructions as Record<string, string[]>) ?? {}) }
+    all[key] = [...new Set([...(all[key] ?? []), ...files])]
+    return { ...m, agentInstructions: all as unknown as Json }
+  })
+
+/** What git.checkout says when it was asked for a ref but the session already has a checkout of the repository. */
+export const refNotAppliedNote = (w: WorktreeMeta, ref: string) =>
+  `Already checked out on your branch ${w.branch} (from ${w.base ?? w.baseSha.slice(0, 12)}); ref ${ref} was not applied: git.checkout never switches an existing checkout. To read ${ref}, use projects.read_file / projects.list_files { projectId, ref }, or env.up { repos: [{ project, ref }] } for a read-only copy in an environment (git log/show/diff work there too). To build on top of ${ref}, start a new session (sessions.create) and git.checkout { projectId, ref } there.`
+
+/** A project's repository by index, with its mirror key. */
+async function projectRepo(kit: Kit, projectId: string, index: number) {
+  const project = await kit.deps.directory.projects.require(projectId)
+  const repo = project.data.repositories?.[index]
+  if (!repo) return { failure: fail(`project ${project.data.name} has no repository #${index}`) }
+  return { project, repo, key: mirrorKey(repo.url) }
+}
+
+/** Fetches a repository for an employee: local repositories need no key. An access problem is a failure, explained. */
+async function fetchFor(kit: Kit, git: GitCache, url: string, employeeId: string, projectName: string) {
+  const auth = isLocalRepoUrl(url) ? undefined : await gitAuthFor(kit.deps, employeeId)
+  try {
+    await git.fetch(url, auth)
+  } catch (err) {
+    const why = accessFailure(err, url, !!auth)
+    if (why) return { failure: fail(why, { project: projectName }) }
+    throw err
+  }
+  return { auth }
+}
+
+/**
+ * The session's own checkout of a project repository (git.checkout, and env.up for repositories it isn't
+ * checked out yet): a worktree on a new branch of its own, from `ref` or the default branch. An existing
+ * checkout of the repository is returned as it is (`existing`), whatever `ref` says.
+ */
+export async function checkoutRepo(
+  kit: Kit,
+  git: GitCache,
+  fs: WorktreeFs,
+  ctx: ToolContext,
+  o: { projectId: string; repoIndex?: number; ref?: string },
+): Promise<
+  | { failure: ToolResult }
+  | { w: WorktreeMeta; existing: boolean; projectName: string; subdir?: string; root?: AgentInstructions | null }
+> {
+  const { deps } = kit
+  const session = await kit.ownSession(undefined, ctx)
+  const index = o.repoIndex ?? 0
+  const found = await projectRepo(kit, o.projectId, index)
+  if ('failure' in found) return { failure: found.failure! }
+  const { project, repo, key } = found
+  const existing = worktreesOf(session).find((w) => w.key === key)
+  if (existing) return { w: existing, existing: true, projectName: project.data.name }
+  const emp = await kit.employee(ctx.employeeId)
+  const branch = branchFor(emp, session.data.slug)
+  const path = join(deps.config.worktreesRoot, session.id, key)
+  const fetched = await fetchFor(kit, git, repo.url, ctx.employeeId, project.data.name)
+  if ('failure' in fetched) return { failure: fetched.failure! }
+  const { auth } = fetched
+  // Without a ref, the remote's own default branch (origin/HEAD), not a guessed `main`.
+  const ref = o.ref ?? repo.defaultBranch
+  const info = await git.createWorktree(repo.url, {
+    path,
+    ...(ref ? { ref } : {}),
+    newBranch: branch,
+    ...(auth ? { auth } : {}),
+  })
+  const w: WorktreeMeta = {
+    key,
+    projectId: project.id,
+    repoIndex: index,
+    url: repo.url,
+    path: info.path,
+    branch: info.branch ?? branch,
+    baseSha: info.head,
+    ...(ref ? { base: ref } : {}),
+  }
+  await kit.patchMeta(session.id, (m) => ({
+    ...m,
+    worktrees: [...((m.worktrees as Json[]) ?? []), w as unknown as Json],
+  }))
+  await deps.records.link(
+    { kind: 'session', id: session.id },
+    { kind: 'project', id: project.id },
+    Roles.worksOn,
+    {},
+    { actor: kit.actor(ctx) },
+  )
+  // The repo's instructions for coding agents (AGENTS.md, else CLAUDE.md), handed over once, with the checkout.
+  const root = await rootInstructions(fs, w.path)
+  if (root) await rememberInstructions(kit, session.id, key, [root.file, ...(root.includes ?? [])])
+  return { w, existing: false, projectName: project.data.name, ...(repo.path ? { subdir: repo.path } : {}), root }
+}
+
+/** A ref's directory name under the session's worktrees: readable, and unique per ref. */
+const refDirName = (ref: string) =>
+  `${
+    ref
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^[-.]+/, '')
+      .slice(0, 60) || 'ref'
+  }-${createHash('sha256').update(ref).digest('hex').slice(0, 8)}`
+
+/**
+ * A read-only worktree of one ref of a project repository (detached, no branch of its own), for reading
+ * another branch next to the session's checkouts in an environment. Made fresh each time (a branch moves),
+ * and recorded in `session.meta.refWorktrees`. Nothing is ever committed or pushed from it.
+ */
+export async function refWorktree(
+  kit: Kit,
+  git: GitCache,
+  ctx: ToolContext,
+  o: { projectId: string; repoIndex?: number; ref: string },
+): Promise<{ failure: ToolResult } | { r: RefWorktreeMeta; projectName: string }> {
+  const session = await kit.ownSession(undefined, ctx)
+  const index = o.repoIndex ?? 0
+  const found = await projectRepo(kit, o.projectId, index)
+  if ('failure' in found) return { failure: found.failure! }
+  const { project, repo, key } = found
+  const ref = o.ref.trim()
+  if (!ref || ref.startsWith('-')) return { failure: fail(`not a ref: ${JSON.stringify(o.ref)}`) }
+  const fetched = await fetchFor(kit, git, repo.url, ctx.employeeId, project.data.name)
+  if ('failure' in fetched) return { failure: fetched.failure! }
+  const path = join(kit.deps.config.worktreesRoot, session.id, REF_WORKTREES_DIR, key, refDirName(ref))
+  // A branch moves: start from where it is now.
+  await git.removeWorktree(repo.url, path).catch(() => {})
+  let info: Awaited<ReturnType<GitCache['createWorktree']>>
+  try {
+    info = await git.createWorktree(repo.url, { path, ref, ...(fetched.auth ? { auth: fetched.auth } : {}) })
+  } catch (err) {
+    if (err instanceof NotFoundError)
+      return { failure: fail(`${project.data.name} has no branch or commit ${ref}: projects.branches lists its branches`) }
+    throw err
+  }
+  const r: RefWorktreeMeta = { key, projectId: project.id, repoIndex: index, url: repo.url, path: info.path, ref, sha: info.head }
+  await kit.patchMeta(session.id, (m) => ({
+    ...m,
+    refWorktrees: [
+      ...((m.refWorktrees as unknown as RefWorktreeMeta[] | undefined) ?? []).filter((x) => !(x.key === key && x.ref === ref)),
+      r,
+    ] as unknown as Json,
+  }))
+  return { r, projectName: project.data.name }
+}
+
+/** Where read-only ref worktrees live under a session's worktrees directory (not a valid host name, so no checkout's key). */
+const REF_WORKTREES_DIR = 'refs@'
+
 export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void {
   const { deps } = kit
-  const { directory } = deps
 
   /** Instruction files already handed to a session, per checkout (session meta `agentInstructions`). */
   const loadedInstructions = async (sessionId: string, key: string): Promise<Set<string>> => {
@@ -104,28 +287,17 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
     const all = (s.data.meta?.agentInstructions ?? {}) as Record<string, string[]>
     return new Set(all[key] ?? [])
   }
-  const rememberInstructions = (sessionId: string, key: string, files: string[]) =>
-    kit.patchMeta(sessionId, (m) => {
-      const all = { ...((m.agentInstructions as Record<string, string[]>) ?? {}) }
-      all[key] = [...new Set([...(all[key] ?? []), ...files])]
-      return { ...m, agentInstructions: all as unknown as Json }
-    })
-  const view = (i: AgentInstructions) => ({
-    file: i.file,
-    content: i.content,
-    ...(i.truncated ? { truncated: true } : {}),
-    ...(i.includes ? { includes: i.includes } : {}),
-  })
   /** Nested AGENTS.md files this call reaches for the first time, as extra output fields. */
   const newInstructions = async (sessionId: string, w: WorktreeMeta, rel: string, isDirectory: boolean) => {
     const found = await nestedInstructions(fs, w.path, rel, await loadedInstructions(sessionId, w.key), { isDirectory })
     if (!found.length) return {}
     await rememberInstructions(
+      kit,
       sessionId,
       w.key,
       found.map((f) => f.file),
     )
-    return { instructions: { note: INSTRUCTIONS_NOTE, files: found.map(view) } }
+    return { instructions: { note: INSTRUCTIONS_NOTE, files: found.map(instructionView) } }
   }
 
   const worktree = async (ctx: ToolContext, repo?: string, sessionId?: string) => {
@@ -137,76 +309,45 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
     {
       name: 'git.checkout',
       description:
-        'Get your own checkout of a project repository: a worktree of the local mirror on a new branch of your own (from the default branch or ref). Calling it again returns the existing checkout. Edit with git.write_file, then git.commit and git.push; changes reach production only through a pull request.',
+        "Get your own checkout of a project repository: a worktree of the local mirror on a new branch of your own (from the default branch or ref). Calling it again returns the existing checkout and doesn't switch it: to read another branch use projects.read_file { ref }, or env.up { repos: [{ project, ref }] } for a read-only copy of it in an environment. Edit with git.write_file, then git.commit and git.push; changes reach production only through a pull request.",
       effect: 'idempotent',
       params: {
         properties: {
           projectId: { type: 'string' },
           repo: { type: 'number', description: "Index into the project's repositories. Default 0." },
-          ref: { type: 'string', description: 'Branch or commit to start from. Default: the default branch.' },
+          ref: {
+            type: 'string',
+            description:
+              'Branch or commit your new branch starts from. Default: the default branch. Ignored when you already have a checkout.',
+          },
         },
         required: ['projectId'],
       },
     },
     async (a, ctx) => {
-      const session = await kit.ownSession(undefined, ctx)
-      const project = await directory.projects.require(a.projectId)
-      const index = a.repo ?? 0
-      const repo = project.data.repositories?.[index]
-      if (!repo) return fail(`project ${project.data.name} has no repository #${index}`)
-      const key = mirrorKey(repo.url)
-      const existing = worktreesOf(session).find((w) => w.key === key)
-      if (existing) return ok({ key, branch: existing.branch, head: existing.baseSha, existing: true, where: CHECKOUT_NOTE })
-      const emp = await kit.employee(ctx.employeeId)
-      const branch = branchFor(emp, session.data.slug)
-      const path = join(deps.config.worktreesRoot, session.id, key)
-      // A repository the harness hosts itself (local:<slug>) is read from disk: no key needed.
-      const auth = isLocalRepoUrl(repo.url) ? undefined : await gitAuthFor(deps, ctx.employeeId)
-      try {
-        await git.fetch(repo.url, auth)
-      } catch (err) {
-        const why = accessFailure(err, repo.url, !!auth)
-        if (why) return fail(why, { project: project.data.name })
-        throw err
-      }
-      // Without a ref, the remote's own default branch (origin/HEAD), not a guessed `main`.
-      const ref = a.ref ?? repo.defaultBranch
-      const info = await git.createWorktree(repo.url, {
-        path,
-        ...(ref ? { ref } : {}),
-        newBranch: branch,
-        ...(auth ? { auth } : {}),
+      const r = await checkoutRepo(kit, git, fs, ctx, {
+        projectId: String(a.projectId ?? ''),
+        repoIndex: a.repo ?? 0,
+        ...(str(a.ref) ? { ref: str(a.ref)! } : {}),
       })
-      const w: WorktreeMeta = {
-        key,
-        projectId: project.id,
-        repoIndex: index,
-        url: repo.url,
-        path: info.path,
-        branch: info.branch ?? branch,
-        baseSha: info.head,
-      }
-      await kit.patchMeta(session.id, (m) => ({
-        ...m,
-        worktrees: [...((m.worktrees as Json[]) ?? []), w as unknown as Json],
-      }))
-      await deps.records.link(
-        { kind: 'session', id: session.id },
-        { kind: 'project', id: project.id },
-        Roles.worksOn,
-        {},
-        { actor: kit.actor(ctx) },
-      )
-      // The repo's instructions for coding agents (AGENTS.md, else CLAUDE.md), handed over once, with the checkout.
-      const root = await rootInstructions(fs, w.path)
-      if (root) await rememberInstructions(session.id, key, [root.file, ...(root.includes ?? [])])
+      if ('failure' in r) return r.failure
+      const { w } = r
+      if (r.existing)
+        return ok({
+          key: w.key,
+          branch: w.branch,
+          head: w.baseSha,
+          existing: true,
+          where: CHECKOUT_NOTE,
+          ...(str(a.ref) ? { note: refNotAppliedNote(w, str(a.ref)!) } : {}),
+        })
       return ok({
-        key,
+        key: w.key,
         branch: w.branch,
-        head: info.head,
+        head: w.baseSha,
         where: CHECKOUT_NOTE,
-        ...(repo.path ? { subdir: repo.path } : {}),
-        ...(root ? { instructions: { note: INSTRUCTIONS_NOTE, files: [view(root)] } } : {}),
+        ...(r.subdir ? { subdir: r.subdir } : {}),
+        ...(r.root ? { instructions: { note: INSTRUCTIONS_NOTE, files: [instructionView(r.root)] } } : {}),
       })
     },
   )
@@ -335,24 +476,7 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
       if (!rel) return fail('path is a directory')
       const content = await fs.read(w.path, rel)
       const extra = await newInstructions(ctx.sessionId, w, rel, false)
-      if (a.offset === undefined && a.limit === undefined && content.length <= 30000)
-        return ok({ path: rel, size: content.length, content, ...extra })
-      // A range, or a file too big to return whole: numbered lines, and where to go on.
-      const lines = content.split('\n')
-      const start = Math.max(1, Math.floor(Number(a.offset) || 1))
-      const count = Math.min(Math.max(1, Math.floor(Number(a.limit) || READ_MAX_LINES)), READ_MAX_LINES)
-      const slice = lines.slice(start - 1, start - 1 + count)
-      let text = slice.map((l, i) => `${start + i}\t${l}`).join('\n')
-      if (text.length > 30000) text = clip(text, 30000)
-      const end = start + slice.length - 1
-      return ok({
-        path: rel,
-        totalLines: lines.length,
-        lines: slice.length ? `${start}-${end}` : 'none',
-        content: text,
-        ...(end < lines.length ? { next: `offset ${end + 1} reads on (${lines.length - end} lines left)` } : {}),
-        ...extra,
-      })
+      return ok({ path: rel, ...readView(content, a.offset, a.limit), ...extra })
     },
   )
 

@@ -634,6 +634,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
           defaultBranch: await localRepos.defaultBranch(slug),
           branches: await localRepos.branches(slug),
         }),
+        // projects.read_file / list_files: any ref of a local repository, without a checkout.
+        tree: (slug: string, o?: { ref?: string; path?: string }) => localRepos.tree(slug, o),
+        readFile: (slug: string, o: { ref?: string; path: string; maxBytes?: number }) => localRepos.readFile(slug, o),
       },
       defaultTimezone: async () => (await settings.get<string>(SettingNames.timezone)) || DEFAULT_SETTINGS.timezone,
       scheduledTasks,

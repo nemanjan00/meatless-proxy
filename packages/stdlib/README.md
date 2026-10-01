@@ -62,15 +62,15 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 
 | Namespace | Tools |
 |-----------|-------|
-| `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search, tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
+| `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search (every word, in text, tool call arguments and results; the own session left out unless `includeThisSession`), tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
 | `chat.*` | post, reply, read, search, create_channel, add_member, remove_member, archive, invite |
 | `subscriptions.*` / `triggers.*` | subscribe, unsubscribe, list / list, create, update, disable |
 | `directory.*` / `procedures.run` | find_contact, get_contact (with `learned` and `pendingSuggestions`), update_contact (role, team, manager and bio notes an employee learned, with a source: fills empty fields, suggests changes to set ones, refuses every other field and AI contacts; idempotent; not in router contexts), find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
 | `docs.*` / `memory.*` / `skills.*` / `fs.*` | list, read, search, write, write_chapter, backlinks / remember, recall, link, forget, verify / list, load / list, read, write, move, delete, share |
 | `checklist.*` | show, add_item, check, request_review, record_review (reviewer sessions only) |
-| `git.*` | checkout, status, diff, log, commit, push, read_file, write_file, list_files |
-| `projects.create_local` | a project on a repository the harness hosts (docs/spec.md#local-projects), the employee a member (`deps.localProjects.create`, once per call). No tool merges |
-| `env.*` | up (with `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
+| `git.*` | checkout (called again it never switches: a `ref` it can't apply gets a note pointing to `projects.read_file` and `env.up { repos }`), status, diff, log, commit, push, read_file, write_file, list_files |
+| `projects.*` | create_local: a project on a repository the harness hosts (docs/spec.md#local-projects), the employee a member (`deps.localProjects.create`, once per call). branches, read_file, list_files: a local repository at any ref without a checkout (`deps.localProjects.branches` / `readFile` / `tree`); on the default branch, an empty result names the branches waiting for review; git host projects point to `mcp.gitlab.*`. No tool merges |
+| `env.*` | up (with `repos` for several repositories in one environment, `{ project, ref }` a read-only copy of a branch; `restart`; `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
 | `schedule.*` | create, list, update, cancel, run_now: scheduled tasks (docs/spec.md#scheduled-tasks). `create { instruction, at? \| in? \| every? \| cron?, timezone?, report?, session? }` reads times in the company time zone, creates the task's own session (employee prompt, full toolset, `requested_by`) and reports "here" by default (the conversation of the run, or the thread its session owns). `sessions.follow_up { in \| at, note }` leaves a note for the calling session. Routers get `schedule.list` only |
 | `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
 | `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
@@ -212,6 +212,17 @@ Notes on behaviour:
   at `/files` (`FILES_MOUNT`). The session meta records what the Environments
   page shows (`image`, `profile`, `desktop`, `checkouts`, `services`), and the
   bus hears `env.changed` (up, down) and `env.exec.started` / `env.exec.finished`.
+  Repositories: every one at `/repos/<name>` and one at `/workspace` (the
+  `primary` of `repos`, else its first; without `repos`, `repo` or the most
+  recent checkout). `repos` entries the session hasn't checked out are
+  checked out (`checkoutRepo`, as `git.checkout`); `{ project, ref }` makes a
+  detached worktree at `<worktreesRoot>/<sessionId>/refs@/<key>/<ref>`
+  (`refWorktree`, fresh on each start, `session.meta.refWorktrees`) mounted
+  read-only. Each repository's mirror (`git.mirrorPath(url)`, where its
+  worktrees' `.git` files point) is mounted read-only at the same path, and
+  `GIT_CONFIG_*` sets `safe.directory=*`: read-only git works inside, commits
+  fail there. A running environment asked for repositories it lacks returns
+  `missing` and the exact `env.up { …, restart: true }` call.
   `env.exec` keeps the head and tail of long output (`headAndTail`, 3000
   characters each for stdout) and then says to redirect it to a file (`cutNote`).
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
@@ -244,7 +255,12 @@ model can't ask for or widen to one, turned off by the deployment, running
 environments keep what they started with).
 `test/local-projects.test.ts` covers `projects.create_local` (membership, once per call, the toolsets), checkout and
 push of a local repository without the SSH key and the branch subscription, protected branches refused, and that no
-tool merges.
+tool merges. `test/project-files.test.ts` covers `projects.read_file` / `list_files` (a branch while main is empty,
+the empty-main hint, ranges, binary and big files, git host projects) and the `git.checkout` ref note.
+`test/env-repos.test.ts` covers `env.up { repos }`: missing checkouts made, read-only ref worktrees, the `/workspace`
+choice, several checkouts without `repos`, the read-only mirror mounts, a running environment and `restart`.
+`packages/server/test/env-git-docker.test.ts` (opt-in, `MP_DOCKER_TEST=1`) runs git log/show/status inside a real
+container and checks that commit fails there.
 `test/schedule.test.ts` covers `schedule.*` and `sessions.follow_up`: one-offs, recurring in words and cron, the
 company time zone, the task's session and requester, a retried call, bad input, "here" and other report targets,
 list/update/pause/run now/cancel on the employee's own tasks only, and the router's toolset.

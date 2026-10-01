@@ -155,12 +155,14 @@ describe('env tools', () => {
     const spec = t.containers.created[0]!
     expect(spec).toMatchObject({
       image: 'nemanjan00/dev:default',
-      // The checkout at /workspace, and every checkout of the session at /repos/<name>.
+      // The checkout at /workspace, every checkout of the session at /repos/<name>, and the mirror its .git
+      // points into, read-only at the same path (git log/show/diff work inside, commit doesn't).
       mounts: [
         { hostPath: w.path, containerPath: '/workspace' },
         { hostPath: w.path, containerPath: expect.stringMatching(/^\/repos\//) },
+        { hostPath: '/fake-git/github.com/acme/billing', containerPath: '/fake-git/github.com/acme/billing', readOnly: true },
       ],
-      env: { NODE_ENV: 'test' },
+      env: { NODE_ENV: 'test', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' },
       labels: { 'mp.session': t.session.id },
     })
     expect((await t.out('env.up', {})).existing).toBe(true)

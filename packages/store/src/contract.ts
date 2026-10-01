@@ -319,6 +319,35 @@ export function storeContract(name: string, make: (ctx: ContractContext) => Prom
         expect(page.items).toHaveLength(1)
         expect(page.total).toBe(3)
         expect((await store.entries.search({ text: 'nothing matches this' })).total).toBe(0)
+        // Every word, in any order, instead of one phrase.
+        expect((await store.entries.search({ text: 'service deploy' })).total).toBe(0)
+        expect((await store.entries.search({ text: 'service  DEPLOY', allWords: true })).items.map((e) => e.id)).toEqual([a.id])
+        expect((await store.entries.search({ text: 'billing nope', allWords: true })).total).toBe(0)
+        // Leaving out a session's entries.
+        expect(
+          (await store.entries.search({ text: 'billing', excludeMeta: { sessionId: 'ses_b' } })).items.map((e) => e.id),
+        ).toEqual([b.id, a.id])
+        expect((await store.entries.search({ text: 'billing', excludeMeta: { sessionId: ['ses_a', 'ses_b'] } })).total).toBe(0)
+      })
+
+      it('searches inside tool call arguments, which are JSON strings in the content', async () => {
+        await store.entries.append({
+          parent: null,
+          kind: 'assistant',
+          content: {
+            text: null,
+            toolCalls: [
+              {
+                id: 'c1',
+                name: 'git.write_file',
+                arguments: JSON.stringify({ path: 'README.md', content: '# Parser\nParses invoices.' }),
+              },
+            ],
+          },
+          meta: { sessionId: 'ses_a' },
+        })
+        expect((await store.entries.search({ text: 'parses invoices' })).total).toBe(1)
+        expect((await store.entries.search({ text: 'parser invoices', allWords: true })).total).toBe(1)
       })
 
       it('refuses a missing parent', async () => {

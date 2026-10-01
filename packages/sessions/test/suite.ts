@@ -802,6 +802,9 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
         expect((await sessions.search({ text: 'retry', kinds: ['assistant'] })).total).toBe(1)
         expect((await sessions.search({ text: 'retry', limit: 1 })).items.length).toBe(1)
         expect((await sessions.search({ text: 'retry', sessionIds: [] })).total).toBe(0)
+        expect((await sessions.search({ text: 'retry', excludeSessionIds: [f.id] })).total).toBe(2)
+        expect((await sessions.search({ text: 'policy fork', allWords: true })).items.map((h) => h.sessionId)).toEqual([f.id])
+        expect((await sessions.search({ text: 'policy fork' })).total).toBe(0)
         await expect(sessions.search({ text: '' })).rejects.toBeInstanceOf(ValidationError)
       })
 
