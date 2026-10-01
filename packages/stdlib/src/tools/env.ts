@@ -242,19 +242,24 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) for working on code. Every repository of the environment is at /repos/<name>, one of them also at /workspace (built from, the working directory). repos brings several projects up in one call: a project id checks it out first if you haven't (your own branch, writable, as git.checkout does); { project, ref } mounts a read-only copy of that branch or commit instead (e.g. an unmerged branch of another project, next to yours); primary: true picks /workspace (default: the first). Without repos: every checkout of this session, /workspace the one named by repo, else the most recent. Read-only git works inside (log, show, diff, grep, status); commit and push with the git.* tools. From an image (any image: it's kept running for you), a profile, or built from the checkout's Dockerfile. One environment per session: to add repositories or change its image, call env.up again with restart: true (it restarts; files outside the repositories and /files are lost). Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's isolated environment (containers on a private network) for working on code. Every repository of the environment is at /repos/<name>, one of them also at /workspace (built from, the working directory). repos brings several projects up in one call: a project id checks it out first if you haven't (your own branch, writable, as git.checkout does); { project, ref } mounts a read-only copy of that branch or commit instead (e.g. an unmerged branch of another project, next to yours); primary: true picks /workspace (default: the first). Without repos: every checkout of this session, /workspace the one named by repo, else the most recent. Read-only git works inside (log, show, diff, grep, status); commit and push with the git.* tools. From an image (any image: it's kept running for you) or a profile (the default); built from the checkout's Dockerfile only with build: true. One environment per session: to add repositories or change its image, call env.up again with restart: true (it restarts; files outside the repositories and /files are lost). Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
       effect: 'idempotent',
       params: {
         properties: {
           profile: {
             type: 'string',
-            description: `A ready-made toolkit to work in, by name (the usual choice): ${describeProfiles(kit.deps.config.envProfiles ?? DEFAULT_ENV_PROFILES)}. Without network nothing can be installed, so pick the one with the tools you need. Default: the project's profile, else the checkout's Dockerfile, else ${kit.deps.config.envDefaultProfile ?? 'default'}.`,
+            description: `A ready-made toolkit to work in, by name (the usual choice): ${describeProfiles(kit.deps.config.envProfiles ?? DEFAULT_ENV_PROFILES)}. Without network nothing can be installed, so pick the one with the tools you need. Default: the project's profile, else ${kit.deps.config.envDefaultProfile ?? 'default'} (the checkout's Dockerfile only with build: true).`,
           },
           image: {
             type: 'string',
             description: 'Any other image instead of a profile, e.g. node:22 or python:3.13.',
           },
-          dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, when building.' },
+          build: {
+            type: 'boolean',
+            description:
+              "Build the checkout's Dockerfile instead of using a profile. Usually that is the app's production image, not a place to work: only when you need exactly it.",
+          },
+          dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, to build (implies build).' },
           repos: {
             type: 'array',
             description:
@@ -504,19 +509,13 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const repoMounts = nameRepoMounts(made)
       const workspace = workspaceIndex >= 0 ? repoMounts[workspaceIndex]! : null
 
-      if (!image && !str(a.dockerfile)) {
-        const hasDockerfile = workspace
-          ? await fs.read(workspace.hostPath, 'Dockerfile').then(
-              () => true,
-              () => false,
-            )
-          : false
-        if (!hasDockerfile) {
-          const p = envProfile(profiles, kit.deps.config.envDefaultProfile ?? 'default') ?? profiles[0]
-          if (p) {
-            image = p.image
-            profile = p.name
-          }
+      // A repository's Dockerfile is usually its production image, not a place to work: build it only when asked
+      // (build: true or a dockerfile path). Live, an environment for reading code built a failing app image.
+      if (!image && !str(a.dockerfile) && a.build !== true) {
+        const p = envProfile(profiles, kit.deps.config.envDefaultProfile ?? 'default') ?? profiles[0]
+        if (p) {
+          image = p.image
+          profile = p.name
         }
       }
       if (!image && !workspace) return fail('nothing to build: give an image or a profile')
@@ -633,7 +632,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile, its Dockerfile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
+        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
       effect: 'non_idempotent',
       params: {
         properties: {

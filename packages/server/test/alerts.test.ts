@@ -78,6 +78,21 @@ describe('alerts', () => {
     expect(await s.records.query('alert', {})).toMatchObject({ total: 1 })
   })
 
+  it('after its last attempt, a run whose dependency stays down is paused with the reason, not left running', async () => {
+    const down = () => new UnavailableError('model provider unavailable after 1 attempts: 503')
+    const { s, request } = await make({
+      script: () => down(),
+      env: { RUN_ATTEMPTS: '2', RUN_BACKOFF_MS: '1', ALERT_UNAVAILABLE_COUNT: '9' },
+    })
+    await request('Anyone there?')
+    const paused = await until(async () => {
+      const runs = await s.sessions.runs({ state: 'paused' })
+      return runs.length ? runs : null
+    }, 'the run to pause')
+    expect(paused[0]!.data.pauseReason).toMatch(/stayed unavailable after 2 attempts: model provider unavailable/)
+    expect(await s.sessions.runs({ state: 'running' })).toHaveLength(0)
+  })
+
   it('does nothing when ALERTS_ENABLED is off', async () => {
     const { s, quiet, alertMessages, request } = await make({
       script: [new Error('boom')],

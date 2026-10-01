@@ -110,6 +110,14 @@ export function startWorkers(s: Services): Workers {
           log.debug('run job done', { runId, attempt: job.attempt, outcome: outcome.status })
         } catch (err) {
           await alerts?.reportUnavailable(runId, err)
+          // The last attempt: pause the run with the reason instead of leaving it "running" with nobody on it.
+          if (job.attempt >= s.config.RUN_ATTEMPTS) {
+            await s.sessions
+              .transition(runId, 'running', 'paused', {
+                pauseReason: `a dependency stayed unavailable after ${job.attempt} attempts: ${errorMessage(err).slice(0, 300)}. Resume to try again.`,
+              })
+              .catch((e) => log.warn('could not pause a run after its last attempt', { runId, err: errorMessage(e) }))
+          }
           throw err
         } finally {
           activeJobs.delete(key)

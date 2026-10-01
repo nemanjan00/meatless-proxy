@@ -1557,8 +1557,14 @@ person follows a project's contributing guide.
   network and volumes, mounted on the task's checkout. It's torn down when the
   task ends.
 - **What it runs.** `env.up` runs, in this order: an image it's given, a
-  **profile** it names, the project's profile (`envProfile`), the checkout's
-  `Dockerfile`, else the default profile (`ENV_DEFAULT_PROFILE`, `default`).
+  **profile** it names, the project's profile (`envProfile`), else the
+  default profile (`ENV_DEFAULT_PROFILE`, `default`). The checkout's
+  `Dockerfile` is built only when asked (`build: true` or a `dockerfile`
+  path): a repository's Dockerfile is usually its production image, not a
+  place to work, and building it by default failed live. A failed build or a
+  missing image is a tool error the model sees, never "unavailable" (which
+  retried the whole run); a run whose dependency stays unavailable through
+  its last attempt is paused with the reason, not left running.
   A profile is a ready-made toolkit image with a name and a one-line
   description the model sees; the built-in catalog is
   [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) (`default`,

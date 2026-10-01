@@ -1342,7 +1342,9 @@ function follow(docker: DockerLike, stream: NodeJS.ReadableStream, what: string)
     docker.modem.followProgress(stream, (err, output) => {
       if (err) return reject(mapError(err, what))
       const failed = (output ?? []).find((o) => o && (o.error || o.errorDetail))
-      if (failed) return reject(new UnavailableError(`${what} failed: ${failed.error ?? failed.errorDetail?.message}`))
+      // A failed build step or a missing image won't fix itself on retry: a plain error the caller sees (and the
+      // model can react to), not "unavailable", which made the runner rebuild the whole run five times.
+      if (failed) return reject(new ValidationError(`${what} failed: ${failed.error ?? failed.errorDetail?.message}`))
       resolve()
     })
   })

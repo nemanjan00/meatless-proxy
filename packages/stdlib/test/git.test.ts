@@ -192,6 +192,36 @@ describe('env tools', () => {
     expect(t.containers.created).toHaveLength(0)
   })
 
+  it('uses a profile even when the checkout has a Dockerfile, and builds it only when asked', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    const root = await checkoutPath(t, t.session.id)
+    t.worktreeFs.files.set(`${root}/Dockerfile`, 'FROM node:22\nRUN npm run build\n')
+    const up = await t.out('env.up', {})
+    expect(up).toMatchObject({ profile: 'default', image: 'nemanjan00/dev:default' })
+    expect(t.containers.created[0]!.build).toBeUndefined()
+    await t.out('env.up', { build: true, restart: true })
+    expect(t.containers.created.at(-1)!.build).toMatchObject({ context: root })
+  })
+
+  it('reports a failed build to the model instead of retrying the run', async () => {
+    const t = await stack()
+    await t.out('git.checkout', { projectId: t.project.id })
+    const { ValidationError } = await import('@mp/core')
+    const create = t.containers.createEnv.bind(t.containers)
+    t.containers.createEnv = async (spec) => {
+      if (spec.build)
+        throw new ValidationError(
+          "build mp-build/x:latest failed: The command '/bin/sh -c npm run build' returned a non-zero code: 1",
+        )
+      return create(spec)
+    }
+    const r = await t.call('env.up', { build: true }).catch((e: unknown) => ({ thrown: e }))
+    const text = JSON.stringify(r)
+    expect(text).toContain('build mp-build/x:latest failed')
+    expect((r as { thrown?: { code?: string } }).thrown?.code).not.toBe('unavailable')
+  })
+
   it('can run a plain image without a checkout', async () => {
     const t = await stack()
     await t.out('env.up', { image: 'node:22' })
