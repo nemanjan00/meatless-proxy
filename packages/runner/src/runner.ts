@@ -30,8 +30,10 @@ import { answeredCall, lastAssistantText, renderMessages } from './context.ts'
 import {
   COMPACTION_PROMPT,
   compactionCut,
+  contextNearText,
   contextNoteDecision,
   contextNoteText,
+  contextSuggestions,
   estimateTokens,
   isContextOverflow,
   kTokens,
@@ -39,6 +41,7 @@ import {
   oversizedPointerText,
   requestChars,
   tokensPerChar,
+  withCompactionLine,
 } from './context-window.ts'
 import { createImageResolver, VISION_TAG, type LoadedImage } from './images.ts'
 
@@ -50,7 +53,10 @@ export const ContextTopics = {
   compacted: 'context.compacted',
   /** `{ runId, sessionId, error }`: the summary call of an automatic compaction failed; the run carries on. */
   compactFailed: 'context.compact_failed',
-  /** `{ runId, sessionId, tokens, window, percent }`: the model was told how full its context is. */
+  /**
+   * `{ runId, sessionId, tokens, window, percent, near, suggestions }`: the model was told how full its context is
+   * (`near`: asked to free space in its next turn), with `suggestions` concrete things to free.
+   */
   noted: 'context.noted',
   /** `{ runId, sessionId, callId, name, chars, entryId }`: an oversized tool result was kept as a preview. */
   resultOffloaded: 'context.result_offloaded',
@@ -146,8 +152,17 @@ export interface RunnerOptions {
   currentPrompt?: (session: Session, stored: string) => Promise<string | undefined>
   /** The context window of a model, in tokens. Default: `contextWindowOf` (the known table, else 128k). */
   contextWindow?: (model: string) => number
-  /** Context sizes (percent of the window) at which the model gets a note about it, once per crossing. Default [50, 75]. */
+  /**
+   * Context sizes (percent of the window) at which the model gets a note about it, naming the biggest finished
+   * parts it could free. Each fires once, and again only after the context fell well below it. Default [50, 75].
+   */
   contextNotes?: number[]
+  /**
+   * Percent of the window at which the model is asked, in its next turn, to free space before it goes on
+   * (`CONTEXT_NEAR_AT`): collapse finished work or compact with its own summary. Only below `compactAt`, which
+   * stays the safety net. Default 80; 0 turns it off.
+   */
+  contextNearAt?: number
   /**
    * Percent of the window at which the runner compacts the context by itself before the next model call
    * (`CONTEXT_COMPACT_AT`). Default 85; 0 turns it off.
@@ -215,6 +230,10 @@ export function createRunner(opts: RunnerOptions): Runner {
   const windowOf = (m: string) => opts.contextWindow?.(m) ?? contextWindowOf(m)
   const noteAt = [...(opts.contextNotes ?? [50, 75])].filter((t) => t > 0).sort((a, b) => a - b)
   const compactAt = opts.compactAt ?? 85
+  const nearAt = opts.contextNearAt ?? 80
+  /** Every threshold the model is told about: the notes, and the near-limit instruction when it comes before compaction. */
+  const nearOn = nearAt > 0 && (!compactAt || nearAt < compactAt)
+  const thresholds = [...new Set([...noteAt, ...(nearOn ? [nearAt] : [])])].sort((a, b) => a - b)
   const compactKeep = opts.compactKeep ?? 0.15
   const summaryMaxTokens = opts.compactSummaryMaxTokens ?? 8000
   const resultMaxChars = opts.toolResultMaxChars ?? 20_000
@@ -385,6 +404,9 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
   }
 
+  /** What a summary records about the context notes so far, so the next run doesn't note the same thresholds again. */
+  const notedMeta = (run: Run): Record<string, Json> => ({ contextNoted: run.data.context?.noted ?? 0 })
+
   const applyControl = async (run: Run, signals: ControlSignal[]): Promise<{ suspend?: WaitCondition; end?: RunResult }> => {
     const out: { suspend?: WaitCondition; end?: RunResult } = {}
     for (const c of signals) {
@@ -400,7 +422,10 @@ export function createRunner(opts: RunnerOptions): Runner {
           break
         case 'rewind':
           await historyOp(run, 'sessions.rewind', () =>
-            sessions.rewind(run.id, c.toEntry, c.summary, c.keepAfter ? { keepAfter: c.keepAfter } : {}),
+            sessions.rewind(run.id, c.toEntry, c.summary, {
+              ...(c.keepAfter ? { keepAfter: c.keepAfter } : {}),
+              meta: notedMeta(run),
+            }),
           )
           break
         case 'offload':
@@ -410,7 +435,7 @@ export function createRunner(opts: RunnerOptions): Runner {
           await historyOp(run, 'sessions.restore', () => sessions.restore(run.id, c.pointerEntryId))
           break
         case 'compact':
-          await historyOp(run, 'sessions.compact', () => sessions.compact(run.id, c.summary))
+          await historyOp(run, 'sessions.compact', () => sessions.compact(run.id, c.summary, { meta: notedMeta(run) }))
           break
         case 'end':
           out.end = { status: c.status, ...(c.output !== undefined ? { output: c.output } : {}) }
@@ -537,12 +562,37 @@ export function createRunner(opts: RunnerOptions): Runner {
     try {
       await sessions.compact(run.id, summary, {
         ...(kept ? { keepFrom: history[cut]!.id } : {}),
-        meta: { automatic: true, tokensBefore: a.tokens, window: a.window },
+        meta: {
+          automatic: true,
+          tokensBefore: a.tokens,
+          window: a.window,
+          contextNoted: run.data.context?.noted ?? notedInHistory(history),
+        },
       })
     } catch (err) {
       return { ok: false, error: errorMessage(err) }
     }
+    await recordCompaction(run, session.id, { tokens: a.tokens, window: a.window, summary }, logger)
     return { ok: true, kept }
+  }
+
+  /**
+   * A line in the session document saying the context was compacted, with the summary (or its start), so a
+   * long-lived session keeps a trace outside the conversation. Only for runs whose history the session keeps.
+   */
+  const recordCompaction = async (
+    run: Run,
+    sessionId: string,
+    c: { tokens: number; window: number; summary: string },
+    logger: Logger,
+  ) => {
+    if (run.data.mode !== 'continuing' && run.data.commit !== true) return
+    try {
+      const current = await sessions.require(sessionId)
+      await sessions.update(sessionId, { document: withCompactionLine(current.data.document ?? '', { at: clock.iso(), ...c }) })
+    } catch (err) {
+      logger.warn('could not note the compaction in the session document', { err: errorMessage(err) })
+    }
   }
 
   const callTool = async (
@@ -839,22 +889,44 @@ export function createRunner(opts: RunnerOptions): Runner {
         if (compactError !== undefined && (overflowAt === stepNow || tokens >= window))
           return pauseForContext(run, tokens, window, `, and automatic compaction failed: ${compactError}`)
 
-        // Tell the model how full its context is, once per threshold per crossing. Never between a call and its result.
+        // Tell the model how full its context is and what is big, once per threshold. Never between a call and its result.
         let noted = run.data.context?.noted ?? notedInHistory(history)
-        if (noteAt.length && !pendingCalls(history).length) {
-          const d = contextNoteDecision((tokens / window) * 100, noted, noteAt)
+        if (thresholds.length && !pendingCalls(history).length) {
+          const d = contextNoteDecision((tokens / window) * 100, noted, thresholds)
           noted = d.noted
           if (d.note !== undefined) {
+            const near = nearOn && d.note === nearAt
+            const suggestions = contextSuggestions(history, tokensPerChar(run.data.context), {
+              minTokens: Math.max(200, Math.round(window * 0.02)),
+            })
+            const text = near
+              ? contextNearText(tokens, window, compactAt || undefined, suggestions)
+              : contextNoteText(tokens, window, compactAt || undefined, suggestions)
             await sessions.append(runId, {
-              kind: 'system',
-              content: { text: contextNoteText(tokens, window, compactAt || undefined) },
-              meta: { contextNote: d.note, contextTokens: tokens, contextWindow: window },
+              // Near the limit it is an instruction for the model's next turn, not an aside.
+              kind: near ? 'user' : 'system',
+              content: { text },
+              meta: {
+                contextNote: d.note,
+                contextTokens: tokens,
+                contextWindow: window,
+                transient: true,
+                ...(near ? { contextNear: true } : {}),
+              },
             })
             history = await sessions.runHistory(runId)
             messages = render(history)
             chars = requestChars(messages, specs)
-            emit(ContextTopics.noted, { runId, sessionId: session.id, tokens, window, percent: d.note })
-            logger.info('model told about its context size', { tokens, window, threshold: d.note })
+            emit(ContextTopics.noted, {
+              runId,
+              sessionId: session.id,
+              tokens,
+              window,
+              percent: d.note,
+              near,
+              suggestions: suggestions.length,
+            })
+            logger.info('model told about its context size', { tokens, window, threshold: d.note, near })
           }
         }
 

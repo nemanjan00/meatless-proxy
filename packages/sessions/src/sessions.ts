@@ -182,6 +182,12 @@ export function createSessions(opts: SessionsOptions): Sessions {
     return last
   }
 
+  /**
+   * Entries that describe the history as it was, not the work: context notes (`meta.contextNote`) and anything
+   * marked `meta.transient`. A rewind or compaction doesn't copy them into the kept part.
+   */
+  const isStaleOnRewrite = (e: Entry) => e.meta.transient === true || typeof e.meta.contextNote === 'number'
+
   /** Re-creates `entries` on top of `parent` with the same kind, content and meta (plus `copiedFrom`). */
   async function copyChain(s: Store, parent: string | null, entries: Entry[], who: Attribution): Promise<Entry | null> {
     let last: Entry | null = null
@@ -401,7 +407,8 @@ export function createSessions(opts: SessionsOptions): Sessions {
     if (collapsing && keep === at + 1 && op === 'rewind')
       throw new ValidationError('nothing to collapse: the stretch between the rewind point and the kept part is empty')
     const dropped = path.slice(at + 1, keep)
-    const kept = path.slice(keep)
+    // Notes about the context as it was (its size, what to free) are stale once it changes: they aren't kept.
+    const kept = path.slice(keep).filter((e) => !isStaleOnRewrite(e))
 
     // Never cut between a tool call and its results.
     const callsUpTo = new Set(path.slice(0, at + 1).flatMap(callIds))

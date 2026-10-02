@@ -262,6 +262,7 @@ pieces. A run whose context can't be made to fit pauses with the reason.
 |----------|---------|--------------|
 | `MODEL_CONTEXT_TOKENS` | from the model's name, else 128k | the context window of `MODEL`, in tokens |
 | `CONTEXT_COMPACT_AT` | 85 | percent of the window at which a run compacts by itself (`0`: never) |
+| `CONTEXT_NEAR_AT` | 80 | percent of the window at which a run is asked to free space itself first (`0`: never) |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | longer tool results are stored in full and kept as a preview (`0`: never) |
 
 ### Limits and budgets

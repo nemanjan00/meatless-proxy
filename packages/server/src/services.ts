@@ -507,6 +507,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     ...(config.MAX_TOKENS ? { maxTokens: config.MAX_TOKENS } : {}),
     contextWindow: contextWindowFor(config),
     compactAt: config.CONTEXT_COMPACT_AT,
+    contextNearAt: config.CONTEXT_NEAR_AT,
     toolResultMaxChars: config.TOOL_RESULT_MAX_CHARS,
   })
 

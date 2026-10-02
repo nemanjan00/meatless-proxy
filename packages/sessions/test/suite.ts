@@ -635,6 +635,31 @@ export function sessionsSuite(name: string, makeStore: (o: { bus: EventBus; cloc
           expect(await records.store.entries.path(reply.id)).toEqual(before)
         })
 
+        it('leaves stale context notes out of the kept part, in a collapse and a compaction', async () => {
+          const note = (pct: number) => ({
+            kind: 'system' as const,
+            content: { text: `[context: ${pct}%]` },
+            meta: { contextNote: pct },
+          })
+          const { r, task, r3 } = await reading()
+          await sessions.append(r.id, note(50))
+          await sessions.append(r.id, { kind: 'system', content: { text: 'tools changed' } })
+          await sessions.append(r.id, { ...note(80), kind: 'user', meta: { contextNote: 80, transient: true } })
+          await sessions.rewind(r.id, task.id, 'the reading', { keepAfter: r3.id })
+          let h = await sessions.runHistory(r.id)
+          expect(h.some((e) => e.meta.contextNote !== undefined)).toBe(false)
+          expect(texts(h)).toContain('tools changed')
+          expect(kinds(h)).toEqual(['system', 'user', 'summary', 'assistant', 'user', 'assistant', 'system'])
+          // A compaction keeping the tail drops the new note too.
+          await sessions.append(r.id, note(75))
+          await sessions.append(r.id, assistant('done'))
+          const keepFrom = h.at(-2)!.id
+          await sessions.compact(r.id, 'all of it', { keepFrom })
+          h = await sessions.runHistory(r.id)
+          expect(h.some((e) => e.meta.contextNote !== undefined)).toBe(false)
+          expect(texts(h)).toEqual(['sys', 'all of it', 'invoice 9', 'tools changed', 'done'])
+        })
+
         it('takes the last collapsed entry instead (keepAfter)', async () => {
           const { r, task, r3 } = await reading()
           await sessions.rewind(r.id, task.id, 'the reading', { keepAfter: r3.id })

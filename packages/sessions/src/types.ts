@@ -439,7 +439,8 @@ export interface Sessions {
    * - With `keepFrom` (the first entry kept) or `keepAfter` (the last entry collapsed): collapses a stretch.
    *   The entries between `toEntry` and the kept part are replaced by the summary, and the kept part (to the
    *   tip) is re-created verbatim on top of it. Kept tool results whose call was collapsed bring a copy of their
-   *   assistant entry with only those calls, so a call is never separated from its results.
+   *   assistant entry with only those calls, so a call is never separated from its results. Notes about the
+   *   context as it was (`meta.contextNote`, or `meta.transient`) are stale and not re-created.
    *
    * Refused (`ValidationError`): an entry off the path, an empty summary, a cut between a tool call and its
    * results, a collapse with nothing in it, or one that would drop a tool call still waiting for its result.
@@ -462,8 +463,8 @@ export interface Sessions {
   /**
    * Real compaction: rewind to the first entry of the history with a summary of everything. With `keepFrom`
    * (an entry on the run's current path, after the first), the entries from it to the tip are re-created
-   * verbatim on top of the summary: the summary stands for what lies between the first entry and `keepFrom`.
-   * `meta` is added to the summary entry's meta (e.g. `automatic: true`). Returns the new tip.
+   * verbatim on top of the summary (context notes left out, as in a collapse): the summary stands for what lies
+   * between the first entry and `keepFrom`. `meta` is added to the summary entry's meta (e.g. `automatic: true`). Returns the new tip.
    */
   compact(runId: string, summary: string, opts?: { keepFrom?: string; meta?: Record<string, Json> }): Promise<Entry>
 

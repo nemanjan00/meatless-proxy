@@ -250,6 +250,11 @@ export const configSchema = z.object({
   MODEL_CONTEXT_TOKENS: z.coerce.number().int().min(1000).optional(),
   /** Percent of the context window at which a run compacts its context by itself before the next model call (0 = never). */
   CONTEXT_COMPACT_AT: z.coerce.number().min(0).max(99).default(85),
+  /**
+   * Percent of the context window at which a run is asked, in its next turn, to free space (collapse finished work
+   * or compact with its own summary) before automatic compaction (0 = never; only below CONTEXT_COMPACT_AT).
+   */
+  CONTEXT_NEAR_AT: z.coerce.number().min(0).max(99).default(80),
   /** Tool results longer than this many characters are stored in full and kept in the history as a preview (0 = never). */
   TOOL_RESULT_MAX_CHARS: z.coerce.number().int().min(0).default(20_000),
   /**
@@ -451,6 +456,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     context: {
       window: c.MODEL_CONTEXT_TOKENS ?? (c.MODEL ? contextWindowOf(c.MODEL) : null),
       compactAt: c.CONTEXT_COMPACT_AT || 'off',
+      nearAt: c.CONTEXT_NEAR_AT || 'off',
       toolResultMaxChars: c.TOOL_RESULT_MAX_CHARS || 'off',
     },
     imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },

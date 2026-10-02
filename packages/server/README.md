@@ -70,6 +70,7 @@ first by a small built-in loader; variables already set win.
 | `MAX_TOKENS` | none | `max_tokens` per model call (leave room for reasoning) |
 | `MODEL_CONTEXT_TOKENS` | from the model's name, else 128k | the context window of `MODEL`, in tokens (Kimi K2.5+ and K3 256k, Claude 200k, …; see `contextWindowOf` in `@mp/model`) |
 | `CONTEXT_COMPACT_AT` | `85` | percent of the context window at which a run compacts its context by itself before the next model call; `0` turns it off |
+| `CONTEXT_NEAR_AT` | `80` | percent of the context window at which the model is asked, in its next turn, to free space itself (collapse finished work, or compact with its own summary); only below `CONTEXT_COMPACT_AT`; `0` turns it off |
 | `TOOL_RESULT_MAX_CHARS` | `20000` | tool results longer than this are stored in full and kept in the history as a preview with a pointer; `0` turns it off |
 | `ALERTS_ENABLED` | `true` | Post alerts in `#alerts` (see [Alerts](#alerts)) |
 | `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |

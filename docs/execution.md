@@ -382,12 +382,38 @@ The runner keeps each request inside the model's **context window**:
   results, inbox events) and any change to the history (a rewind, offload or
   compaction).
 - **Notes.** Before a model call whose estimate crosses 50% or 75% of the
-  window, a `system` entry (`meta.contextNote`) tells the model its size and
-  its options. The run remembers the highest threshold noted; falling back
-  below one arms it again. A new run starts from the notes in its history
-  since the last summary, so a continuing session isn't told twice, and an
-  ephemeral run (whose notes went with it) is. Notes are only appended when no
-  tool call is open, like the toolset note when a run starts.
+  window, a `system` entry (`meta.contextNote`, `meta.transient`) tells the
+  model its size and what to free, with ready calls:
+  - The biggest finished **stretches**: consecutive tool-call turns (notes
+    between them don't break one; a message, a reply or a summary does), at
+    least two calls, as `call_a … call_k (projects.read_file ×12) ≈ 30k
+    tokens` and `sessions.rewind { from: "call_a", to: "call_k", summary }`.
+  - The biggest single **result**: `call_x (env.exec) ≈ 9k` and
+    `sessions.offload { entryId: "call_x", text }`. A result inside a
+    suggested stretch is listed only when it is at least a third of it.
+  - At most three, each at least 2% of the window, tokens estimated from
+    characters at the run's measured ratio. Never the latest turn with tool
+    calls (the model hasn't seen its results yet), never a turn with a call
+    that has no result.
+- **The near-limit instruction.** At 80% (`CONTEXT_NEAR_AT`; only when below
+  `CONTEXT_COMPACT_AT`; 0 turns it off) the entry is a `user` message
+  (`meta.contextNear`) instead: "Context nearly full (≈Nk of Mk). Before
+  continuing, free space: …", with the same suggestions, asking to keep
+  verbatim what the rest of the work needs and to update the session
+  document. If the model's next calls don't free space and the estimate
+  reaches the compaction threshold, automatic compaction runs as below.
+- **Once per threshold.** The run keeps the highest threshold noted
+  (`run.data.context.noted`). A threshold is armed again only when the
+  estimate falls 15 points below it (a compaction or a big collapse), so a
+  small dip and rise (an offload) says nothing new. Summaries written by a
+  rewind or compaction record the level noted (`meta.contextNoted`); a new run
+  starts from the latest summary's level and the notes after it, so a
+  continuing session isn't told twice, and an ephemeral run (whose notes went
+  with it) is. At most one note per model call, and only when no tool call is
+  open, like the toolset note when a run starts.
+- **Notes aren't kept.** A rewind or compaction doesn't re-create context
+  notes (`meta.contextNote` or `meta.transient`) in the part it keeps: they
+  describe the context as it was.
 - **Automatic compaction.** Before a model call whose estimate is at 85% of
   the window (`CONTEXT_COMPACT_AT`; 0 turns it off), or after the provider
   refused a request as too long:
@@ -396,12 +422,20 @@ The runner keeps each request inside the model's **context window**:
      from its results: results whose call would be summarised are summarised
      with it.
   2. A model call without tools, on the history up to the cut plus an
-     instruction, writes the summary (`max_tokens` 8000). Its usage is recorded
+     instruction, writes the summary (`max_tokens` 8000). The instruction asks
+     for the goal and deliverable, decisions, the current state, what is
+     still to do, and verbatim everything the rest of the work needs (exact
+     line numbers, file paths, quotes, figures, ids, links). Its usage is recorded
      like any model call. Providers that insist on tool definitions get a
      second try with them.
   3. `compact` with `keepFrom`: a `summary` entry on the first entry
-     (`meta.automatic`, `tokensBefore`, `window`, `keptEntries`) and the kept
-     entries re-created on top. `context.compacted` goes on the bus.
+     (`meta.automatic`, `tokensBefore`, `window`, `keptEntries`,
+     `contextNoted`) and the kept entries re-created on top.
+     `context.compacted` goes on the bus. A continuing run (or an ephemeral
+     one that commits) also appends a line to the session document under
+     `## Compactions`: when, the size, and the summary (whole up to 600
+     characters, else its first 400); the section keeps the latest five
+     lines. A failure to write it is logged and ignored.
   4. If any of this fails, `context.compact_failed` goes on the bus, it's
      logged, and the run carries on. It pauses instead, with a `pauseReason`
      starting "context full", when the request clearly can't fit: the estimate

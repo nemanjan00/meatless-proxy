@@ -35,11 +35,21 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
     characters, calibrated by the ratio the previous call of the run measured
     (prompt tokens per character; 3.5 characters a token before the first).
   - **Notes:** at `contextNotes` (50% and 75%) a short `system` entry
-    (`meta.contextNote`) tells the model its size and what to do. Once per
-    threshold per crossing: `run.data.context.noted` keeps the highest one noted, and
-    falling back below it (a rewind, offload or compaction) arms it again. A
-    new run starts from the notes in its history since the last summary, so a
-    continuing session isn't told twice. Never added while tool calls are open.
+    (`meta.contextNote`, `meta.transient`) tells the model its size and names
+    what to free, with ready calls (`contextSuggestions`): the biggest
+    finished stretches of consecutive tool-call turns (`sessions.rewind
+    { from, to, summary }`) and the biggest single result (`sessions.offload
+    { entryId, text }`), at most three, estimated at the run's measured
+    tokens per character. Never the latest turn (its results are unseen) or a
+    call without a result. At `contextNearAt` (80%; `CONTEXT_NEAR_AT`; only
+    below `compactAt`) the entry is a `user` instruction instead
+    (`meta.contextNear`): free space now, keeping verbatim what the rest of
+    the work needs. Each threshold fires once: `run.data.context.noted` keeps
+    the highest one noted, and only falling well below it
+    (`NOTE_REARM_MARGIN`, 15 points) arms it again, so small dips don't.
+    Summaries record `meta.contextNoted`; a new run starts from that and the
+    notes after it. At most one per model call, never while tool calls are
+    open. Rewinds and compactions don't copy notes into the kept part.
   - **Automatic compaction** at `compactAt` (85%; 0 = off), or when the
     provider says the request is too long: one model call without tools asks
     for a summary (`COMPACTION_PROMPT`, `compactSummaryMaxTokens` 8000), then
@@ -49,7 +59,12 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
     of the summary call goes through `afterModelCall`. `context.compacted` or
     `context.compact_failed` on the bus. A failed summary never fails the run;
     if the request then can't fit (the estimate is over the window, or the
-    provider refuses it again) the run pauses with `context full: …`.
+    provider refuses it again) the run pauses with `context full: …`. The
+    summary prompt asks for the deliverable, what's still to do, and verbatim
+    line numbers, quotes, figures, ids, paths and links. A continuing run (or
+    one that commits) also adds a line to the session document under
+    `## Compactions` (`withCompactionLine`: the summary, or its start; the
+    latest five lines).
   - **Oversized tool results:** a result whose text is over
     `toolResultMaxChars` (20,000; 0 = off) is stored in full (its entry) and
     offloaded at once: a pointer (`meta.automatic`) with its head and tail and
@@ -98,8 +113,9 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   `afterToolCall`, `beforeFinish`, `afterRun`.
 - `renderMessages`, `lastAssistantText`, `answeredCall`, `RUNS_QUEUE`, `RunLimits`.
 - Context: `ContextTopics`, `contextNoteDecision`, `notedInHistory`,
-  `compactionCut`, `COMPACTION_PROMPT`, `isContextOverflow`, `requestChars`,
-  `estimateTokens`.
+  `contextSuggestions`, `contextNoteText`, `contextNearText`,
+  `withCompactionLine`, `compactionCut`, `COMPACTION_PROMPT`,
+  `isContextOverflow`, `requestChars`, `estimateTokens`.
 
 ## Tests
 
@@ -109,10 +125,16 @@ children and waits, budgets, policies, secrets, crash recovery, retries,
 inbox, max steps and bus events. `test/limits.test.ts` covers the wall clock
 (manual clock: paused between steps, not mid-tool; fresh allowance on resume;
 time across a suspend), step allowances from `limitsFor`, and the concurrency
-cap. `test/context.test.ts` covers context management: notes once each and
-never between a call and its result, automatic compaction (kept turns, pairs
+cap. `test/context.test.ts` covers context management: notes once each (no
+re-firing on small dips) and never between a call and its result, concrete
+suggestions (call ids, never the current turn or a pending call), the
+near-limit instruction followed by automatic compaction when the model goes on
+regardless versus none when it collapses, no stale notes kept, the summary
+prompt, the session document line, automatic compaction (kept turns, pairs
 never split, the summary recorded, ephemeral versus continuing runs), a
 failing summary call, overflow from the provider, pauses when nothing fits,
 oversized tool results (preview, pointer, restore), and a collapse with
 `keepAfter` up to a result of the current turn. An opt-in live check
-is `packages/server/test/context-live.test.ts`, and `rewind-live.test.ts` has a real model collapse its reading with `sessions.rewind` from/to (`MP_LIVE_MODEL_TEST=1`).
+is `packages/server/test/context-live.test.ts` (automatic compaction, and a
+reading-heavy review where the model collapses after the concrete note, before
+automatic compaction), and `rewind-live.test.ts` has a real model collapse its reading with `sessions.rewind` from/to (`MP_LIVE_MODEL_TEST=1`).

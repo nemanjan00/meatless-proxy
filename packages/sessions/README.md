@@ -57,7 +57,9 @@ extend them with `records.kinds.extend`.
   `keptFrom`). Kept results whose call was collapsed bring a copy of their
   assistant entry with only those calls (`meta.trimmedCalls`). Refused: a cut
   between a call and its results, an empty stretch, or dropping a call still
-  waiting for its result. `compact` uses the same code. Committing a run whose
+  waiting for its result. `compact` uses the same code. Neither copies context
+  notes (`meta.contextNote` or `meta.transient`) into the kept part: they
+  describe the history as it was. Committing a run whose
   path no longer contains its `base` still moves the head when it's at `base`.
 - **Waiting:** `suspend` (running → suspended; `runs` waits also create
   `waits_on` links run → run, removed when the run leaves `suspended`),

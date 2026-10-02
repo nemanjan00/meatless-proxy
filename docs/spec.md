@@ -2038,24 +2038,46 @@ name (a table of known models, 128k for any other) or from the deployment's
 `MODEL_CONTEXT_TOKENS`, and after every model call it knows how big the prompt
 was. The session page shows it ("context 112k / 200k").
 
-- **The model is told.** When a session's context crosses **50%** and again
-  **75%** of the window, a short note goes into its history before the next
-  model call: the size, and what to do about it (collapse a finished stretch
-  with rewind from/to, offload a big result, compact as the last resort).
-  Each threshold is noted once per crossing: after a rewind, offload or
-  compaction brings the context back under it, it can be noted again later.
-  The note never goes between a tool call and its result.
+- **The model is told, concretely.** When a session's context crosses **50%**
+  and again **75%** of the window, a short note goes into its history before
+  the next model call: the size, and what is big. It names the biggest
+  finished stretches of consecutive tool calls (their first and last call
+  ids, the tools, about how many tokens) with a ready `rewind { from, to,
+  summary }`, and the biggest single result with a ready `offload`; at most
+  three. Only finished work: never the turn whose results the model hasn't
+  seen yet, never a call still waiting for its result.
+- **Near the limit, it is the model's turn.** At **80%**
+  (`CONTEXT_NEAR_AT`, below the compaction threshold) the harness asks the
+  model, as the next message, to free space before it goes on: collapse
+  finished work or compact with its own summary, keeping verbatim what the
+  rest of the work needs (exact line numbers, quotes, numbers, ids) and what
+  is still to do, and update the session document. If it goes on without
+  freeing space and the context reaches the compaction threshold, automatic
+  compaction runs.
+- **Notes don't nag.** Each threshold is noted once per generation of the
+  context: it is armed again only after the context fell well below it (a
+  compaction or a big collapse), not on small dips. At most one note per
+  model call, never between a tool call and its result. Notes describe the
+  context as it was, so a rewind or compaction never copies them into the
+  part it keeps.
 - **Automatic compaction is the safety net.** At **85%** of the window
   (`CONTEXT_COMPACT_AT`), or when the provider says a request is too long,
   the harness compacts by itself before the next model call. One model call,
-  without tools, writes a summary of the work so far (the goal and who asked,
-  decisions, the current state, open items, and every id, path, branch and
-  link still needed); the history becomes the first entry, that summary
+  without tools, writes a summary of the work so far (the goal, the
+  deliverable and who asked, decisions, the current state, what is still to
+  do, and verbatim whatever the rest of the work needs: line numbers, quotes,
+  figures, ids, paths, links); the history becomes the first entry, that summary
   (marked *automatic*), and the most recent entries verbatim (about 15% of the
   window, a tool call always together with its results). It is recorded like
   any compaction, and the detailed history stays in the database. If the
   summary call fails the run carries on; if the request then can't fit, the
-  run pauses with a clear reason instead of failing.
+  run pauses with a clear reason instead of failing. The session document
+  gets a line under "Compactions" saying when it happened, with the summary
+  (or its start); the section keeps the latest few, so it stays bounded.
+- **Durable knowledge.** A session can own work for months, longer than any
+  context. When the model collapses or compacts, it also puts decisions and
+  the current state in the session document, which outlasts the
+  conversation.
 - **Compaction and run modes.** A rewind or compaction (the model's or the
   automatic one) changes only the run's own history, even when it reaches into
   earlier runs. A continuing run commits it, so the session continues from the

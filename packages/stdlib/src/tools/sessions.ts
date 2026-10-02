@@ -856,7 +856,9 @@ export function registerSessionTools(kit: Kit): void {
         'E.g. you read many files: from = the id of your first read call, to = the id of the last one, summary = what you learned from them. ' +
         'Jump back after a dead end: give only from, and everything after it (after its results, for a tool call) is dropped, replaced by your summary; that includes messages after it, so put what still matters in the summary. ' +
         'from and to are ids of your earlier tool calls, in this run or earlier ones: each tool result starts with [call <id>] (entry ids work too). ' +
-        "The summary is all that's left of the stretch: put in every fact, id, path, decision and open item you still need.",
+        "The summary is all that's left of the stretch: put in every fact, id, path, decision and open item you still need, verbatim where the rest of the work needs it (exact line numbers, quotes, figures). " +
+        'The harness names finished stretches worth collapsing, with their ids, when the context grows. ' +
+        'For a long-lived session, also put decisions and the current state in the session document (sessions.save_metadata { document }): it outlasts the conversation.',
       effect: 'idempotent',
       params: {
         properties: {
@@ -1069,7 +1071,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.compact',
       description:
-        'Replace the whole history after the first entry with your summary of everything, for a long session that must go on. Prefer sessions.rewind (collapse a stretch you are done with, from and to, or jump back after a dead end) or sessions.offload (a big result you have used). The harness also compacts automatically near the end of the context window.',
+        'Replace the whole history after the first entry with your summary of everything, for a long session that must go on. Prefer sessions.rewind (collapse a stretch you are done with, from and to, or jump back after a dead end) or sessions.offload (a big result you have used). The summary must hold the goal, decisions, the current state, what is still to do, and verbatim everything the rest of the work needs (exact line numbers, quotes, figures, ids, paths, links). Also put decisions and the current state in the session document (sessions.save_metadata { document }), so a long-lived session keeps them outside the conversation. The harness also compacts automatically near the end of the context window.',
       effect: 'idempotent',
       params: { properties: { summary: { type: 'string' } }, required: ['summary'] },
     },
