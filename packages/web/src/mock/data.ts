@@ -2135,6 +2135,9 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       )
     }
   }
+  // Subjects as the server sends them (`<system>:<ref>`, with what links need: a thread's channel,
+  // the GitLab instance, a local repository's project, a Slack channel's name).
+  const GITLAB = 'https://git.example.com'
   const subs: [number, SubscriptionData][] = [
     [
       1,
@@ -2149,7 +2152,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       2,
       {
         sessionId: SES.pay123,
-        subject: { system: 'chat', ref: mockId('msg', 1), title: 'Thread in #billing' },
+        subject: { system: 'mp', ref: mockId('msg', 1), title: 'Thread in #billing', channelId: CHN.billing },
         primary: true,
         active: true,
       },
@@ -2158,7 +2161,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       3,
       {
         sessionId: SES.pay123,
-        subject: { system: 'session', ref: `${SES.pay123}/children`, title: 'Loop children' },
+        subject: { system: 'mp', ref: `${SES.pay123}/children`, title: 'Loop children' },
         primary: true,
         active: true,
       },
@@ -2167,7 +2170,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       4,
       {
         sessionId: SES.deploy214,
-        subject: { system: 'github', ref: 'acme/payments-api#481', title: 'PR #481' },
+        subject: { system: 'gitlab', ref: 'acme/payments-api!481', baseUrl: GITLAB },
         primary: true,
         active: true,
       },
@@ -2176,7 +2179,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       5,
       {
         sessionId: SES.inc42,
-        subject: { system: 'chat', ref: mockId('msg', 20), title: 'Thread in #inc-42-staging-disk' },
+        subject: { system: 'mp', ref: mockId('msg', 20), title: 'Thread in #inc-42-staging-disk', channelId: CHN.inc42 },
         primary: true,
         active: true,
       },
@@ -2185,7 +2188,7 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       6,
       {
         sessionId: SES.pay123Reply,
-        subject: { system: 'chat', ref: mockId('msg', 1), title: 'Thread in #billing' },
+        subject: { system: 'mp', ref: mockId('msg', 1), title: 'Thread in #billing', channelId: CHN.billing },
         primary: false,
         active: true,
       },
@@ -2203,9 +2206,45 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
       8,
       {
         sessionId: SES.pay131,
-        subject: { system: 'github', ref: 'acme/invoicing#212', title: 'PR #212' },
+        subject: { system: 'gitlab', ref: 'acme/invoicing@pipeline/9001', baseUrl: GITLAB },
         primary: true,
         active: false,
+      },
+    ],
+    [
+      9,
+      {
+        sessionId: SES.inc42,
+        subject: { system: 'slack', ref: 'C0TEST0001/1700000000.000100', channelName: 'general' },
+        primary: false,
+        active: true,
+      },
+    ],
+    [
+      10,
+      {
+        sessionId: SES.pay123,
+        subject: { system: 'gitlab', ref: 'acme/payments-api@mp/refund-fix', baseUrl: GITLAB },
+        primary: false,
+        active: true,
+      },
+    ],
+    [
+      11,
+      {
+        sessionId: SES.deploy214,
+        subject: { system: 'local-git', ref: 'portal/mp/fix-login', projectId: PRO.portal },
+        primary: false,
+        active: true,
+      },
+    ],
+    [
+      12,
+      {
+        sessionId: SES.pay140,
+        subject: { system: 'zendesk', ref: 'SUP-88' },
+        primary: false,
+        active: true,
       },
     ],
   ]
@@ -2598,6 +2637,23 @@ A customer was charged twice for INV-1002 on Sep 27. Find out why, refund the du
     '/shared/infra-bot/staging-runbook.md',
     '# Staging runbook (shared by Infra Bot, read-only)\n\n- Environments live for 2 hours unless extended.\n',
     60 * 24,
+  )
+  // An image (shown inline, with a thumbnail in the list) and an SVG (shown as text: it can carry scripts).
+  const chart =
+    'iVBORw0KGgoAAAANSUhEUgAAAAwAAAAICAIAAABChommAAAAI0lEQVR42mPgFxAkiBjwyMVlXQIi0hXBhainCJPBgEeONEUAxWNCFUcS0jMAAAAASUVORK5CYII='
+  db.files.get(EMP.billing)!.set('/exports/refunds-chart.png', {
+    path: '/exports/refunds-chart.png',
+    content: chart,
+    encoding: 'base64',
+    size: 92,
+    version: 1,
+    updatedAt: at(60 * 25),
+  })
+  file(
+    EMP.billing,
+    '/exports/badge.svg',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#5e6ad2"/></svg>\n',
+    60 * 25,
   )
   file(EMP.infra, '/notes/inc-42.md', '# INC-42\n\n- /var/lib/postgresql 212G\n- check replication slots\n', 20)
   file(

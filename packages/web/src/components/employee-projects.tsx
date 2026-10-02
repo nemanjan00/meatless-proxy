@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
+import { RepoLinks } from '@/components/links.tsx'
 import { NewProjectButton } from '@/components/new-project-dialog.tsx'
 import { SectionTitle } from '@/components/page.tsx'
 import { RoleBadges, RoleSelect } from '@/components/project-people.tsx'
@@ -66,7 +67,7 @@ export function EmployeeProjects({ employeeId, employeeName }: { employeeId: str
       ) : (
         <div className="overflow-hidden rounded-xl border bg-level-1">
           {projects.map((p) => {
-            const repo = p.project.data.repositories?.[0]?.url
+            const repo = p.project.data.repositories?.[0]
             return (
               <div
                 key={p.project.id}
@@ -78,9 +79,7 @@ export function EmployeeProjects({ employeeId, employeeName }: { employeeId: str
                   {p.project.data.name}
                 </Link>
                 <RoleBadges roles={p.roles} />
-                <span className="min-w-0 flex-1 truncate font-mono text-micro text-fg-quaternary" title={repo}>
-                  {repo ?? ''}
-                </span>
+                <span className="min-w-0 flex-1">{repo && <RepoLinks repo={repo} projectId={p.project.id} compact />}</span>
                 {p.owner && !p.roles.includes('owner') && (
                   <span className="hidden shrink-0 text-micro text-fg-tertiary sm:inline">owner {p.owner.name}</span>
                 )}

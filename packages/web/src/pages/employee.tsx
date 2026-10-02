@@ -7,6 +7,7 @@ import { CopyButton } from '@/components/copy.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EmployeeProjects } from '@/components/employee-projects.tsx'
 import { EmployeeIntegrationsSection } from '@/components/integration-setup.tsx'
+import { HandleLink } from '@/components/links.tsx'
 import { McpServers } from '@/components/mcp-servers.tsx'
 import { NetworkSetting } from '@/components/network-setting.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
@@ -95,8 +96,8 @@ function Profile({
           <Property label="Accounts">
             <span className="flex flex-wrap gap-1">
               {handles.map((h) => (
-                <span key={`${h.system}:${h.id}`} className="rounded bg-level-3 px-1.5 py-px font-mono text-micro">
-                  {h.system}:{h.id}
+                <span key={`${h.system}:${h.id}`} className="rounded bg-level-3 px-1.5 py-px text-micro">
+                  {h.system}: <HandleLink handle={h} />
                 </span>
               ))}
             </span>

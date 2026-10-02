@@ -46,6 +46,7 @@ import type {
   SessionStatus,
   SessionTreeNode,
   Subscription,
+  SubjectPermalink,
   TokenTotals,
   TriggerStats,
   UsageBreakdown,
@@ -92,6 +93,7 @@ export const ROUTES = {
   sessionEntryTree: ['GET', '/api/sessions/:id/entry-tree'],
   sessionRuns: ['GET', '/api/sessions/:id/runs'],
   sessionSubscriptions: ['GET', '/api/subscriptions'],
+  subjectPermalink: ['GET', '/api/subjects/permalink'],
   forkSession: ['POST', '/api/sessions/:id/fork'],
   sendMessage: ['POST', '/api/sessions/:id/message'],
   sessionPreview: ['GET', '/api/sessions/:id/preview'],
@@ -142,6 +144,8 @@ export const ROUTES = {
 
   listFiles: ['GET', '/api/files/:employeeId'],
   readFile: ['GET', '/api/files/:employeeId/content'],
+  /** The bytes (`fileUrl` builds its URL). */
+  rawFile: ['GET', '/api/files/:employeeId/raw'],
   writeFile: ['PUT', '/api/files/:employeeId/content'],
 
   listMcpServers: ['GET', '/api/mcp-servers'],
@@ -349,6 +353,12 @@ export interface ApiClient
   sessionRuns(id: string): Promise<Run[]>
   /** `GET /api/subscriptions?sessionId=` → subscriptions, optionally of one session. */
   subscriptions(query?: { sessionId?: string }): Promise<Subscription[]>
+  /**
+   * `GET /api/subjects/permalink?subject=slack:<channel>/<ts>&sessionId=|eventId=` → where the Slack
+   * thread opens: its permalink, or the channel (`app_redirect`) when Slack can't say. The subject must
+   * be one of the session's subscriptions, or the event's subject.
+   */
+  subjectPermalink(query: { subject: string; sessionId?: string; eventId?: string }): Promise<SubjectPermalink>
   /** `POST /api/sessions/:id/fork` body `{ atEntry?, title? }` → the new session. */
   forkSession(id: string, body?: { atEntry?: string; title?: string }): Promise<Session>
   /**
@@ -483,6 +493,12 @@ export interface ApiClient
   listFiles(employeeId: string, dir?: string): Promise<FileEntry[]>
   /** `GET /api/files/:employeeId/content?path=` → the file. */
   readFile(employeeId: string, path: string): Promise<FileContent>
+  /**
+   * The URL of `GET /api/files/:employeeId/raw?path=` (the file's bytes, same permissions as `readFile`) for `<img src>`
+   * or a download link. PNG, JPEG, GIF and WebP (by their bytes) are inline; everything else, SVG included, is an
+   * attachment. `version` keys the cache (pass the file's version); `download` asks for an attachment.
+   */
+  fileUrl(employeeId: string, path: string, opts?: { version?: number; download?: boolean }): string
   /**
    * `PUT /api/files/:employeeId/content?path=` body `{ content, version?, encoding? }` → the file. 409 on a version
    * mismatch (version 0: only if the file doesn't exist yet), 413 over `FILE_WRITE_MAX_BYTES`.
@@ -623,6 +639,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     sessionEntryTree: (id) => call('sessionEntryTree', { id }),
     sessionRuns: (id) => call('sessionRuns', { id }),
     subscriptions: (q = {}) => call('sessionSubscriptions', undefined, { ...q }),
+    subjectPermalink: (q) => call('subjectPermalink', undefined, { ...q }),
     forkSession: (id, body = {}) => call('forkSession', { id }, undefined, body),
     sendMessage: (id, text) => call('sendMessage', { id }, undefined, { text }),
     sessionPreview: (id) => call('sessionPreview', { id }),
@@ -673,6 +690,12 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
     listFiles: (employeeId, dir) => call('listFiles', { employeeId }, { dir }),
     readFile: (employeeId, path) => call('readFile', { employeeId }, { path }),
+    fileUrl: (employeeId, path, o = {}) =>
+      `${base}/api/files/${encodeURIComponent(employeeId)}/raw?${new URLSearchParams({
+        path,
+        ...(o.version !== undefined ? { v: String(o.version) } : {}),
+        ...(o.download ? { download: '1' } : {}),
+      })}`,
     writeFile: (employeeId, path, content, version, opts = {}) =>
       call('writeFile', { employeeId }, { path }, { content, version, ...(opts.encoding ? { encoding: opts.encoding } : {}) }),
 

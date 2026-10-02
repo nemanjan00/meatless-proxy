@@ -300,7 +300,14 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   the employee's paths, marked with the grant's permission, and writes only
   under a `write` grant (and as a member). With nothing shared the top level is
   empty, and deeper paths are 403. What other employees share with this one
-  (`/shared/…`) is for admins. `PUT /api/files/:employeeId/content` takes
+  (`/shared/…`) is for admins. `GET …/content` carries the type sniffed from
+  the bytes (`mime`, and an image's `width`/`height`). `GET …/raw?path=` serves
+  the bytes under the same read rules, for `<img src>` and downloads: PNG, JPEG,
+  GIF and WebP (by their magic bytes) inline with their type, everything else
+  (SVG, HTML, PDF, text) as an attachment and never with a type a browser would
+  render (`downloadMime`), always with `nosniff` and `default-src 'none'; sandbox`.
+  It is cached by version: `ETag` is the version (304 on a match), and a URL
+  with `v=<current version>` is immutable. `PUT /api/files/:employeeId/content` takes
   `{ content, version?, encoding? }`: `encoding: 'base64'` for binary uploads
   (malformed base64 is 422), at most `FILE_WRITE_MAX_BYTES` (10 MB) after
   decoding, else 413 (refused from `Content-Length` before the body is read

@@ -49,6 +49,7 @@ import { type MockDb, mockId } from './data.ts'
 import { createMockSetupApi } from './setup.ts'
 import { createMockMcpApi } from './mcp.ts'
 import { createMockAttachmentsApi } from './attachments.ts'
+import { mockFileUrl, mockSniff } from './files.ts'
 import { createMockProjectsApi } from './projects.ts'
 import { createMockProceduresApi } from './procedures.ts'
 import { createMockKnowledgeApi } from './knowledge.ts'
@@ -688,6 +689,16 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     },
     subscriptions: (q = {}) =>
       delay(all<SubscriptionData>('subscription').filter((s) => !q.sessionId || s.data.sessionId === q.sessionId)),
+    subjectPermalink: (q) => {
+      const m = /^slack:([A-Z0-9]+)\/(\d+\.\d+)$/.exec(q.subject)
+      if (!m) return fail(new ApiRequestError(400, 'validation', 'subject must be a Slack thread, slack:<channel>/<ts>'))
+      // The mock workspace knows the threads of #general (C0TEST0001); others open the channel.
+      return delay(
+        m[1] === 'C0TEST0001'
+          ? { url: `https://example.slack.com/archives/${m[1]}/p${m[2]!.replace('.', '')}`, permalink: true }
+          : { url: `https://slack.com/app_redirect?channel=${m[1]}`, permalink: false },
+      )
+    },
     forkSession: (id, body = {}) => {
       const s = get<SessionData>('session', id)
       if (!s) return fail(notFound('session'))
@@ -1095,7 +1106,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         name: me.name,
         access: me.access ?? 'admin',
         via: 'session' as const,
-        deployment: { defaultNetwork: 'direct' as const, directNetwork: true },
+        deployment: { defaultNetwork: 'direct' as const, directNetwork: true, gitlabBaseUrl: 'https://git.example.com' },
       }),
 
     authConfig: () => delay({ oidc: false }),
@@ -1199,6 +1210,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
             type: 'file',
             size: f.size ?? new TextEncoder().encode(f.content).length,
             updatedAt: f.updatedAt,
+            version: f.version,
             ...(p.startsWith('/shared/') ? { shared: { ownerEmployeeId: mockId('emp', 2), permission: 'read' as const } } : {}),
           })
       }
@@ -1208,8 +1220,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
     },
     readFile: (employeeId, p) => {
       const f = db.files.get(employeeId)?.get(p)
-      return f ? delay(f) : fail(notFound('file'))
+      return f ? delay({ ...f, ...mockSniff(f) }) : fail(notFound('file'))
     },
+    fileUrl: (employeeId, p) => mockFileUrl(db.files.get(employeeId)?.get(p)),
     writeFile: (employeeId, p, content, version, opts = {}) => {
       if (p.startsWith('/shared/')) return fail(new ApiRequestError(403, 'denied', 'shared read-only'))
       if (me.access && me.access !== 'admin') return fail(new ApiRequestError(403, 'denied', 'only admins, or a write share'))
@@ -1229,7 +1242,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         return fail(new ApiRequestError(409, 'conflict', `${p} changed`, prev ? { version: prev.version } : undefined))
       const next = { path: p, content, encoding, size, version: (prev?.version ?? 0) + 1, updatedAt: iso() }
       files.set(p, next)
-      return delay(next)
+      return delay({ ...next, ...mockSniff(next) })
     },
 
     secrets: () => delay(db.secrets),

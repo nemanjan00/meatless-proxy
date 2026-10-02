@@ -135,7 +135,7 @@ describe('sign-in links and sessions', () => {
       name: 'Ana Example',
       access: 'member',
       via: 'session',
-      deployment: { defaultNetwork: 'direct', directNetwork: true },
+      deployment: { defaultNetwork: 'direct', directNetwork: true, gitlabBaseUrl: 'https://gitlab.com' },
     })
 
     // Once only.

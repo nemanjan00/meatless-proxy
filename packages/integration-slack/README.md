@@ -21,6 +21,10 @@ returns a `SlackIntegration` (an `Integration` named `slack`):
   [events](#events-in) and [interactivity](#interactivity-in).
 - `downloadFile(fileId, { maxBytes?, signal? })`: `files.info`, then the file's `url_private_download` with the bot
   token. Returns `{ id, name, mime?, size, bytes, … }`. See [files](#files).
+- `permalink(channel, ts)`: the message's permalink (`chat.getPermalink`), kept for the instance's life since
+  permalinks don't change (failures aren't kept). Throws when Slack can't give one. The UI links Slack threads with it.
+- `channelName(channelId)`: the channel's name without `#`, from the same cache events use (`conversations.info`), or
+  `undefined` for DMs and failures.
 - `resolveUser(userId)`: calls `users.info` and returns `{ handle: { system: 'slack', id }, email?, name?, displayName?,
   bot? }`. The name is the user's `real_name`, `displayName` the profile's display name when it differs, and `bot` is
   set for bot users and Slackbot. An unknown user returns `null`. Any other failure throws. The server uses it to link

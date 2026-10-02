@@ -184,6 +184,15 @@ describe('createApiClient', () => {
     expect(calls[6]!.body).toEqual({ members: [{ kind: 'employee', id: 'emp_1' }] })
   })
 
+  it('builds file byte URLs, keyed on the version', () => {
+    const { fetch } = fakeFetch()
+    const api = createApiClient({ baseUrl: 'http://h/', fetch })
+    expect(api.fileUrl('emp_1', '/pics/a b.png')).toBe('http://h/api/files/emp_1/raw?path=%2Fpics%2Fa+b.png')
+    expect(api.fileUrl('emp_1', '/a.png', { version: 7, download: true })).toBe(
+      'http://h/api/files/emp_1/raw?path=%2Fa.png&v=7&download=1',
+    )
+  })
+
   it('has one client method per route', () => {
     const { fetch } = fakeFetch()
     const api = createApiClient({ baseUrl: '', fetch }) as unknown as Record<string, unknown>

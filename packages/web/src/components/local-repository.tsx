@@ -1,6 +1,7 @@
 import { ApiRequestError, type AttachedRemote, type LocalBranchInfo, type LocalComparison, type LocalProject } from '@mp/api'
 import { ChevronRight, File, Folder, GitBranch, GitMerge, Trash2, Upload, X } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { SectionTitle } from '@/components/page.tsx'
@@ -441,7 +442,15 @@ export function LocalRepositorySection({
   onRemoteAttached?(): void
 }) {
   const local = useLoad((a) => a.localProject(projectId), [projectId])
-  const [open, setOpen] = useState<string | null>(null)
+  // `?branch=` (a link to a branch, e.g. a session's subscription) opens that branch's review.
+  const [params] = useSearchParams()
+  const wanted = params.get('branch')
+  const [open, setOpen] = useState<string | null>(wanted)
+  const section = useRef<HTMLElement>(null)
+  const loaded = !!local.data
+  useEffect(() => {
+    if (wanted && loaded) section.current?.scrollIntoView?.({ block: 'start' })
+  }, [wanted, loaded])
   const [attach, setAttach] = useState(false)
   const data = local.data
   const changed = (next?: LocalProject) => (next ? local.setData(next) : local.reload())
@@ -473,7 +482,12 @@ export function LocalRepositorySection({
     </div>
   )
   return (
-    <section className={cn('flex flex-col', className)} aria-labelledby="local-repo-title" data-testid="local-repository">
+    <section
+      ref={section}
+      className={cn('flex flex-col', className)}
+      aria-labelledby="local-repo-title"
+      data-testid="local-repository"
+    >
       <SectionTitle
         className="mb-1"
         actions={
@@ -520,7 +534,7 @@ export function LocalRepositorySection({
               <div className="flex flex-col">{pending.map(row)}</div>
             )}
             {merged.length > 0 && (
-              <details className="mt-2">
+              <details className="mt-2" open={merged.some((b) => b.name === wanted) || undefined}>
                 <summary className="cursor-pointer text-micro text-fg-tertiary">
                   {merged.length} merged branch{merged.length === 1 ? '' : 'es'}
                 </summary>

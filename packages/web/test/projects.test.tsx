@@ -17,7 +17,8 @@ function renderAt(path: string, access: Access = 'admin') {
   return data
 }
 
-const rows = async () => (await screen.findAllByTestId('employee-project')).map((r) => within(r).getByRole('link').textContent)
+const rows = async () =>
+  (await screen.findAllByTestId('employee-project')).map((r) => within(r).getAllByRole('link')[0]!.textContent)
 
 /** Focuses a record picker's input and types (focused directly: in jsdom, a click on the project page lands on the split view's resize handle). */
 async function typeInto(user: ReturnType<typeof userEvent.setup>, box: HTMLElement, text: string) {

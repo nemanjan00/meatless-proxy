@@ -1,6 +1,6 @@
-import type { FileEntry } from '@mp/api'
-import { ChevronRight, Download, File, FileText, Folder, Share2, Upload } from 'lucide-react'
-import { type DragEvent, useCallback, useMemo, useRef, useState } from 'react'
+import type { FileContent, FileEntry } from '@mp/api'
+import { ChevronRight, Download, File, FileImage, FileText, Folder, Share2, Upload } from 'lucide-react'
+import { type DragEvent, type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
@@ -18,6 +18,44 @@ import { formatDateTime } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 
 type Permission = 'read' | 'write'
+
+/** Types shown inline (by the bytes, as the server sniffs them). SVG is not one: it is a document that can carry scripts. */
+const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+/** Names that may be images: the list shows a thumbnail, which the server serves only if the bytes are one. */
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp)$/i
+/** Bigger images get an icon in the list, not a thumbnail (the original is loaded: there are no server-made thumbnails). */
+const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024
+
+/** A file row's icon: a lazy thumbnail for a small image, else by kind. */
+function FileIcon({ employeeId, file }: { employeeId: string; file: FileEntry }) {
+  const api = useApi()
+  const [broken, setBroken] = useState(false)
+  if (IMAGE_NAME.test(file.name)) {
+    const src = file.size <= THUMBNAIL_MAX_BYTES && !broken ? api.fileUrl(employeeId, file.path, versionOpt(file.version)) : ''
+    return src ? (
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        width={16}
+        height={16}
+        onError={() => setBroken(true)}
+        className="size-4 shrink-0 rounded-sm border object-cover"
+        data-testid="file-thumbnail"
+      />
+    ) : (
+      <FileImage className="size-3.5 shrink-0 text-fg-tertiary" data-testid="file-image-icon" />
+    )
+  }
+  return file.name.endsWith('.md') ? (
+    <FileText className="size-3.5 shrink-0 text-fg-tertiary" />
+  ) : (
+    <File className="size-3.5 shrink-0 text-fg-tertiary" />
+  )
+}
+
+const versionOpt = (version: number | undefined) => (version !== undefined ? { version } : {})
 
 /** The directory uploads go to, with your permission there (people who aren't admins have only what was shared). */
 interface Cwd {
@@ -86,11 +124,7 @@ function Dir({
             ) : (
               <>
                 <span className="w-3" />
-                {f.name.endsWith('.md') ? (
-                  <FileText className="size-3.5 text-fg-tertiary" />
-                ) : (
-                  <File className="size-3.5 text-fg-tertiary" />
-                )}
+                <FileIcon employeeId={employeeId} file={f} />
               </>
             )}
             <span className="min-w-0 truncate text-fg-secondary">{f.name}</span>
@@ -124,6 +158,8 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
   const f = file.data
   const readOnly = path.startsWith('/shared/') || permission === 'read'
   const binary = f.encoding === 'base64'
+  const image = binary && !!f.mime && IMAGE_MIMES.includes(f.mime)
+  const svg = f.mime === 'image/svg+xml'
   const save = async (content: string) => {
     const next = await api.writeFile(employeeId, path, content, f.version)
     file.setData(next)
@@ -140,12 +176,23 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
         {readOnly && <span className="rounded-sm border px-1 text-tiny">shared · read-only</span>}
         {permission === 'write' && <span className="rounded-sm border px-1 text-tiny">shared with you</span>}
       </div>
-      {binary ? (
+      {image ? (
+        <ImageFile employeeId={employeeId} path={path} file={f} />
+      ) : binary ? (
         <BinaryFile path={path} content={f.content} size={f.size} />
       ) : path.endsWith('.md') ? (
         <DocumentEditor value={f.content} onSave={readOnly ? undefined : save} />
       ) : (
         <div className="flex flex-col gap-2">
+          {svg && (
+            <FileBar
+              icon={<FileImage className="size-4 text-fg-tertiary" />}
+              label={`SVG image · ${formatBytes(f.size ?? new TextEncoder().encode(f.content).length)} · shown as text, since an SVG can carry scripts`}
+              name={fileName(path)}
+              bytes={() => new TextEncoder().encode(f.content)}
+              testId="svg-file"
+            />
+          )}
           <Textarea
             value={draft ?? f.content}
             readOnly={readOnly}
@@ -169,25 +216,88 @@ function Editor({ employeeId, path, permission }: { employeeId: string; path: st
   )
 }
 
-/** A file that isn't text: its size and a download, no editor. */
-function BinaryFile({ path, content, size }: { path: string; content: string; size?: number }) {
-  const name = path.slice(path.lastIndexOf('/') + 1)
-  const download = () => {
-    const url = URL.createObjectURL(new Blob([base64ToBytes(content)], { type: 'application/octet-stream' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
-  }
+const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+
+/** Saves bytes as a file. */
+function saveBytes(bytes: Uint8Array<ArrayBuffer>, name: string) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+/** A line about a file with a Download button. */
+function FileBar({
+  icon,
+  label,
+  name,
+  bytes,
+  testId,
+}: {
+  icon: ReactNode
+  label: ReactNode
+  name: string
+  bytes: () => Uint8Array<ArrayBuffer>
+  testId: string
+}) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-level-1 px-4 py-3" data-testid="binary-file">
-      <File className="size-4 text-fg-tertiary" />
-      <span className="flex-1 text-fg-secondary">Binary file · {formatBytes(size ?? Math.floor((content.length * 3) / 4))}</span>
-      <Button variant="secondary" size="sm" onClick={download}>
+    <div className="flex items-center gap-3 rounded-lg border bg-level-1 px-4 py-3" data-testid={testId}>
+      {icon}
+      <span className="min-w-0 flex-1 text-fg-secondary">{label}</span>
+      <Button variant="secondary" size="sm" onClick={() => saveBytes(bytes(), name)}>
         <Download />
         Download
       </Button>
+    </div>
+  )
+}
+
+/** A file that isn't text: its size and a download, no editor. */
+function BinaryFile({ path, content, size }: { path: string; content: string; size?: number }) {
+  return (
+    <FileBar
+      icon={<File className="size-4 text-fg-tertiary" />}
+      label={`Binary file · ${formatBytes(size ?? Math.floor((content.length * 3) / 4))}`}
+      name={fileName(path)}
+      bytes={() => base64ToBytes(content)}
+      testId="binary-file"
+    />
+  )
+}
+
+/** A PNG, JPEG, GIF or WebP (by its bytes): shown scaled to fit, with its dimensions and size, and a download. */
+function ImageFile({ employeeId, path, file }: { employeeId: string; path: string; file: FileContent }) {
+  const api = useApi()
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null)
+  const width = file.width ?? natural?.width
+  const height = file.height ?? natural?.height
+  const size = formatBytes(file.size ?? Math.floor((file.content.length * 3) / 4))
+  return (
+    <div className="flex flex-col gap-3" data-testid="image-file">
+      <FileBar
+        icon={<FileImage className="size-4 text-fg-tertiary" />}
+        label={
+          <>
+            {file.mime?.replace('image/', '').toUpperCase()} image
+            {width && height ? ` · ${width} × ${height}` : ''} · {size}
+          </>
+        }
+        name={fileName(path)}
+        bytes={() => base64ToBytes(file.content)}
+        testId="image-info"
+      />
+      <div className="flex justify-center rounded-xl border bg-level-1 p-4">
+        <img
+          src={api.fileUrl(employeeId, path, versionOpt(file.version))}
+          alt={fileName(path)}
+          decoding="async"
+          onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+          className="max-h-[70vh] max-w-full object-contain"
+          data-testid="image-preview"
+        />
+      </div>
     </div>
   )
 }

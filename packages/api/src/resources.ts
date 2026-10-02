@@ -485,6 +485,22 @@ export interface EventSubject {
   /** The thing's id in that system, e.g. `PAY-123` or a thread id. */
   ref: string
   title?: string
+  /** `GET /api/subscriptions`, for links: a harness thread's channel (`mp:msg_…`). */
+  channelId?: string
+  /** The GitLab instance a `gitlab:` subject is on, e.g. `https://gitlab.com`. */
+  baseUrl?: string
+  /** The project of a `local-git:<slug>/<branch>` subject. */
+  projectId?: string
+  /** A `slack:<channel>/<ts>` subject's channel name, without the `#`. */
+  channelName?: string
+}
+
+/** `GET /api/subjects/permalink`: where a Slack thread opens. */
+export interface SubjectPermalink {
+  /** The thread's permalink, or `https://slack.com/app_redirect?channel=<C>` (the channel) when Slack can't say. */
+  url: string
+  /** Whether `url` is the thread's own permalink. */
+  permalink: boolean
 }
 
 /** Kind `event`: an input from outside or a lifecycle event, stored before anything acts on it. */
@@ -746,6 +762,8 @@ export interface Me {
 export interface DeploymentNetwork {
   defaultNetwork: 'direct' | 'project' | 'none'
   directNetwork: boolean
+  /** The deployment's GitLab (`GITLAB_BASE_URL`, default https://gitlab.com), for links to repositories and people. */
+  gitlabBaseUrl?: string
 }
 
 /** `GET /api/auth/config` (public): what the login page offers. */
@@ -924,6 +942,8 @@ export interface FileEntry {
   type: 'file' | 'dir'
   size: number
   updatedAt: string
+  /** Files: changes with every write (the file's `version`). Use it to key `fileUrl` (cached until it changes). */
+  version?: number
   /** For entries under `/shared`. */
   shared?: { ownerEmployeeId: string; permission: 'read' | 'write' }
 }
@@ -942,6 +962,14 @@ export interface FileContent {
   encoding?: FileEncoding
   /** In bytes. */
   size?: number
+  /**
+   * The type sniffed from the bytes (`image/png`, `image/jpeg`, `image/gif`, `image/webp` by their magic
+   * bytes; text typed by its extension; else `application/octet-stream`), never a claimed one. Absent from older servers.
+   */
+  mime?: string
+  /** Pixels, for the image types above when their header says. */
+  width?: number
+  height?: number
   version: number
   updatedAt: string
 }

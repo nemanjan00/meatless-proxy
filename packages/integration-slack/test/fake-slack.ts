@@ -216,6 +216,15 @@ export async function startFakeSlack(): Promise<FakeSlack> {
       m.edited = { user: BOT_USER, ts: nextTs() }
       return { ok: true, channel: c.id, ts: m.ts, text: m.text, message: { ...m } }
     },
+    'chat.getPermalink': (p) => {
+      const c = findChannel(p.channel)
+      if (!c) return err('channel_not_found')
+      const ts = String(p.message_ts ?? '')
+      const m = c.messages.find((x) => x.ts === ts)
+      if (!m) return err('message_not_found')
+      const thread = m.thread_ts && m.thread_ts !== m.ts ? `?thread_ts=${m.thread_ts}&cid=${c.id}` : ''
+      return { ok: true, channel: c.id, permalink: `https://example.slack.com/archives/${c.id}/p${ts.replace('.', '')}${thread}` }
+    },
     'chat.postEphemeral': (p) => {
       const c = findChannel(p.channel)
       if (!c) return err('channel_not_found')

@@ -2,9 +2,11 @@ import type * as Api from '@mp/api'
 import { FILE_WRITE_MAX_BYTES } from '@mp/api'
 import type { Message as DomainMessage } from '@mp/chat'
 import type { Checklist as DomainChecklist } from '@mp/checklists'
-import { ConflictError, DeniedError, NotFoundError, ValidationError, isMpError, type Json } from '@mp/core'
+import { ConflictError, DeniedError, NotFoundError, ValidationError, errorMessage, isMpError, type Json } from '@mp/core'
 import { invalidNetwork } from '@mp/directory'
+import { downloadMime, sniffFile } from '@mp/files'
 import type { MpEvent } from '@mp/events'
+import type { SlackIntegration } from '@mp/integration-slack'
 import type { SecretScope as DomainScope } from '@mp/secrets'
 import { TERMINAL_RUN_STATES, type RunState } from '@mp/sessions'
 import { normalizeWhere, type Condition, type StoredRecord } from '@mp/store'
@@ -18,7 +20,7 @@ import type { Services } from '../services.ts'
 import { rotateSshKey } from '../ssh.ts'
 import { lineage } from './lineage.ts'
 import { querySessionList, sessionOrigins } from './session-list.ts'
-import { employeeFiles, fileBytes } from './files-access.ts'
+import { bytesOf, contentDisposition, employeeFiles, fileBytes } from './files-access.ts'
 import { canReadWorkRecord, privateWorkFilter, visibleEventsPage, visibleLineage, visibleTree } from './private-views.ts'
 import { BadRequestError, boolParam, intParam, jsonBody, requireString } from './util.ts'
 import {
@@ -34,6 +36,7 @@ import {
   usageFilter,
 } from './views.ts'
 import type { NowTracker } from '../live.ts'
+import { projectByRepository } from '../projects/index.ts'
 import { canSeeMemoryRecord } from '../knowledge/memory-access.ts'
 import { assertLocalReposUnchanged, assertMayGrantRole } from '../local-projects/access.ts'
 
@@ -117,6 +120,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
   const origins = sessionOrigins(s)
   /** The caller, for the private-session rule (src/auth/visibility.ts). */
   const viewer = (c: Context) => viewerOf(principalOf(c))
+  /** The employee's Slack integration (the deployment's without one), when Slack is on and has a bot token. */
+  const slackFor = async (employeeId: string | undefined): Promise<SlackIntegration | null> => {
+    if (!s.integrations?.specs.slack) return null
+    const inst = await s.integrations.instanceFor('slack', employeeId).catch(() => null)
+    return inst?.hasToken ? (inst.integration as SlackIntegration) : null
+  }
 
   /** Extra conditions hiding DM channels (and their messages and chat events) from people who aren't members. */
   const dmFilter = async (c: Context, kind: string): Promise<Condition[]> => {
@@ -480,19 +489,90 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const hiddenWork = await vis.hiddenWork(viewer(c))
     const out = subs.filter((x) => !hiddenWork.sessions.has(x.data.sessionId)).map(mapSubscription)
     // Chat threads have no title of their own: use the start of the thread's first message.
-    const titles = new Map<string, string>()
-    for (const sub of out) {
-      const ref = sub.data.subject.ref
-      if (sub.data.subject.system !== 'mp' || !ref.startsWith('msg_') || sub.data.subject.title || titles.has(ref)) continue
-      const msg = await s.chat.getMessage(ref)
-      if (msg && (await vis.canSeeChannel(me_(c), msg.data.channelId)))
-        titles.set(ref, msg.data.text.replace(/\s+/g, ' ').slice(0, 80))
+    // What the UI needs to link a subject: a thread's channel, a GitLab instance, a local repository's project.
+    const threads = new Map<string, { title: string; channelId: string } | null>()
+    const gitlabBases = new Map<string, string>()
+    const localProjects = new Map<string, string | null>()
+    const gitlabBaseOf = async (sessionId: string) => {
+      const known = gitlabBases.get(sessionId)
+      if (known) return known
+      const session = await s.sessions.get(sessionId)
+      const values = session ? await s.secrets.resolve(['GITLAB_BASE_URL'], { employeeId: session.data.employeeId }) : {}
+      const base = (values.GITLAB_BASE_URL?.trim() || s.config.GITLAB_BASE_URL || 'https://gitlab.com').replace(/\/+$/, '')
+      gitlabBases.set(sessionId, base)
+      return base
+    }
+    const employeeOf = new Map<string, string | undefined>()
+    const slackChannelName = async (sessionId: string, channel: string) => {
+      if (!employeeOf.has(sessionId)) employeeOf.set(sessionId, (await s.sessions.get(sessionId))?.data.employeeId)
+      return (await slackFor(employeeOf.get(sessionId)))?.channelName(channel).catch(() => undefined)
     }
     for (const sub of out) {
-      const title = titles.get(sub.data.subject.ref)
-      if (title && !sub.data.subject.title) sub.data.subject = { ...sub.data.subject, title }
+      const subject = sub.data.subject
+      const ref = subject.ref
+      if (subject.system === 'mp' && ref.startsWith('msg_')) {
+        if (!threads.has(ref)) {
+          const msg = await s.chat.getMessage(ref)
+          const seen = msg && (await vis.canSeeChannel(me_(c), msg.data.channelId))
+          threads.set(
+            ref,
+            seen ? { title: msg.data.text.replace(/\s+/g, ' ').slice(0, 80), channelId: msg.data.channelId } : null,
+          )
+        }
+        const thread = threads.get(ref)
+        if (thread) sub.data.subject = { ...subject, title: subject.title ?? thread.title, channelId: thread.channelId }
+      } else if (subject.system === 'gitlab') {
+        sub.data.subject = { ...subject, baseUrl: await gitlabBaseOf(sub.data.sessionId) }
+      } else if (subject.system === 'slack') {
+        const channel = ref.split('/')[0] ?? ''
+        const name = await slackChannelName(sub.data.sessionId, channel)
+        if (name) sub.data.subject = { ...subject, channelName: name }
+      } else if (subject.system === 'local-git') {
+        const slug = ref.split('/')[0] ?? ''
+        if (!localProjects.has(slug)) localProjects.set(slug, (await projectByRepository(s, [`local:${slug}`]))?.id ?? null)
+        const projectId = localProjects.get(slug)
+        if (projectId) sub.data.subject = { ...subject, projectId }
+      }
     }
     return c.json(out satisfies Api.Subscription[])
+  })
+
+  /**
+   * `GET /api/subjects/permalink?subject=slack:<channel>/<ts>&sessionId=|eventId=`: the Slack thread's
+   * permalink (`chat.getPermalink` with the employee's bot token, cached by the integration), for a
+   * subject of a session you can see (one it's subscribed to) or of an event you can see. Without a
+   * token, or when Slack can't say, it's `app_redirect`, which opens the channel.
+   */
+  app.get('/api/subjects/permalink', async (c) => {
+    const key = c.req.query('subject') ?? ''
+    const m = /^slack:([A-Z0-9]{2,30})\/(\d{6,12}\.\d{1,8})$/.exec(key)
+    if (!m) throw new BadRequestError('subject must be a Slack thread, slack:<channel>/<ts>')
+    const [, channel, ts] = m as unknown as [string, string, string]
+    const sessionId = c.req.query('sessionId')
+    const eventId = c.req.query('eventId')
+    if (!sessionId === !eventId) throw new BadRequestError('give the sessionId or the eventId the subject belongs to')
+    let employeeId: string | undefined
+    if (sessionId) {
+      const session = await vis.requireSession(viewer(c), sessionId)
+      const subs = await s.events.subscriptions.forSession(session.id)
+      if (!subs.some((x) => x.data.subjectKey === key)) throw new NotFoundError('subscription', key)
+      employeeId = session.data.employeeId
+    } else {
+      const e = await requireVisible(c, await s.rawEvents.require(eventId!))
+      const subject = e.data.subject
+      if (!subject || `${subject.system}:${subject.id}` !== key) throw new NotFoundError('event subject', key)
+      employeeId = e.data.employeeId
+    }
+    const slack = await slackFor(employeeId)
+    const url = await slack?.permalink(channel, ts).catch((err) => {
+      s.logger.debug('slack permalink failed', { channel, err: errorMessage(err) })
+      return undefined
+    })
+    return c.json(
+      (url
+        ? { url, permalink: true }
+        : { url: `https://slack.com/app_redirect?channel=${channel}`, permalink: false }) satisfies Api.SubjectPermalink,
+    )
   })
 
   app.post('/api/sessions/:id/fork', async (c) => {
@@ -1169,6 +1249,38 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const employeeId = c.req.param('employeeId')
     await s.directory.employees.require(employeeId)
     return c.json((await employeeFiles(s, principalOf(c), employeeId).read(path)) satisfies Api.FileContent)
+  })
+
+  // The bytes, for <img src> and downloads: the same read permissions as /content. The type comes from the
+  // bytes: PNG, JPEG, GIF and WebP are inline; everything else (SVG, HTML, PDF, text…) is an attachment, never
+  // with a type a browser would run or render. Cached by the file's version.
+  app.get('/api/files/:employeeId/raw', async (c) => {
+    const path = requireString(c.req.query('path'), 'path')
+    const employeeId = c.req.param('employeeId')
+    await s.directory.employees.require(employeeId)
+    const f = await employeeFiles(s, principalOf(c), employeeId).read(path)
+    const bytes = bytesOf(f)
+    const info = sniffFile(bytes, path)
+    const inline = info.kind === 'image' && c.req.query('download') !== '1'
+    const etag = `"${f.version}"`
+    const headers: Record<string, string> = {
+      etag,
+      // Keyed on the version: a URL with the current one never changes; any other is checked every time.
+      'cache-control': c.req.query('v') === String(f.version) ? 'private, max-age=31536000, immutable' : 'private, no-cache',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; sandbox",
+    }
+    if (c.req.header('if-none-match') === etag) return new Response(null, { status: 304, headers })
+    const name = path.slice(path.lastIndexOf('/') + 1) || 'file'
+    return new Response(bytes as Uint8Array<ArrayBuffer>, {
+      status: 200,
+      headers: {
+        ...headers,
+        'content-type': info.kind === 'image' ? info.mime : downloadMime(info.mime),
+        'content-length': String(bytes.length),
+        'content-disposition': contentDisposition(inline ? 'inline' : 'attachment', name),
+      },
+    })
   })
 
   app.put('/api/files/:employeeId/content', async (c) => {

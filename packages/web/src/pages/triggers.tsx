@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { type Connector, ConnectorLayer, useConnectors } from '@/components/connectors.tsx'
 import { ErrorState, LoadingRows } from '@/components/empty.tsx'
+import { SubjectLink } from '@/components/links.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { EmployeeAvatar } from '@/components/people.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
@@ -217,7 +218,7 @@ export function TriggersPage() {
                   <span className="w-16 shrink-0 font-mono text-micro text-fg-tertiary">
                     {s.data.subject.system === 'mp' ? 'thread' : s.data.subject.system}
                   </span>
-                  <span className="min-w-0 truncate text-fg-secondary">{s.data.subject.title ?? s.data.subject.ref}</span>
+                  <SubjectLink subject={s.data.subject} sessionId={s.data.sessionId} />
                   <span className="text-fg-quaternary">→</span>
                   <Link to={`/sessions/${s.data.sessionId}`} className="min-w-0 truncate text-fg-tertiary hover:text-foreground">
                     {titles.get(s.data.sessionId) ?? s.data.sessionId}

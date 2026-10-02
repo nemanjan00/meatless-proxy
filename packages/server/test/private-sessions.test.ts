@@ -77,6 +77,7 @@ beforeAll(async () => {
   })
   await s.sessions.append(workRun.id, { kind: 'assistant', content: { text: `Looking into: ${SECRET}` } })
   await s.checklists.addItem(work.id, { text: 'Check the pay bands' })
+  await s.events.subscriptions.subscribe(work.id, { system: 'slack', id: 'C0TEST0001/1700000000.000100' })
   await s.usage.record({
     runId: workRun.id,
     sessionId: work.id,
@@ -174,6 +175,7 @@ describe('session routes', () => {
     `/api/records/session/${work.id}/links`,
     `/api/records/session/${work.id}/revisions`,
     `/api/subscriptions?sessionId=${work.id}`,
+    `/api/subjects/permalink?subject=${encodeURIComponent('slack:C0TEST0001/1700000000.000100')}&sessionId=${work.id}`,
   ]
 
   it('refuses every session route to people outside the DM, admins included', async () => {

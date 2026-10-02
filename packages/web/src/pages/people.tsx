@@ -29,6 +29,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { ANY, BarSelect, ConfirmDialog, DetailSection, Field, SidePanel, Tag, errorText } from '@/components/knowledge-ui.tsx'
+import { HandleLink } from '@/components/links.tsx'
 import { PickedChip } from '@/components/new-procedure-dialog.tsx'
 import { HandlesEditor, NewPersonDialog, SignInLinkBox, cleanHandles } from '@/components/new-person-dialog.tsx'
 import { Page } from '@/components/page.tsx'
@@ -891,7 +892,7 @@ export function PersonPage() {
                   {handles.length ? (
                     handles.map((h) => (
                       <Tag key={`${h.system}:${h.id}`} className="text-fg-secondary">
-                        {systemLabel(h.system)} <span className="font-mono">{h.id}</span>
+                        {systemLabel(h.system)} <HandleLink handle={h} />
                       </Tag>
                     ))
                   ) : (

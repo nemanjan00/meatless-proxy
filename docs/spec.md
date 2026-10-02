@@ -2236,9 +2236,17 @@ repository.
   dropped on). The web UI asks before replacing a file that's there. Uploads
   follow the same rules as edits: admins anywhere but `/shared`, members only
   under a `write` grant, viewers never. Binary files are shown with their size
-  and a download, not as text. Over the API it's
-  `PUT /api/files/:employeeId/content` with `encoding: 'base64'`; version `0`
-  writes only if the file doesn't exist yet, and a file over 10 MB is 413.
+  and a download, not as text. **Images** (PNG, JPEG, GIF and WebP, by their
+  bytes, not their name) are shown inline, scaled to fit, with their
+  dimensions, size and a download, and the file list shows a small lazy
+  thumbnail for image files up to 2 MB (an icon for bigger ones). SVG is shown
+  as text with a download, never drawn: it can carry scripts. Shared files
+  preview the same way, under the same grants. The bytes come from
+  `GET /api/files/:employeeId/raw` (the read rules of `/content`; only those
+  four image types inline, everything else an attachment that a browser won't
+  render, with `nosniff` and a sandbox CSP; cached by the file's version).
+  Uploading over the API is `PUT /api/files/:employeeId/content` with
+  `encoding: 'base64'`; version `0` writes only if the file doesn't exist yet, and a file over 10 MB is 413.
 - **Upgrading.** Deployments from when files were records are migrated at
   start: each old file record's content is written to the volume, then the
   record is deleted. It is idempotent and safe to interrupt; grants were
@@ -3076,6 +3084,48 @@ It is built with shadcn/ui and styled after Linear. See the
     environments of private (DM) sessions are hidden from everyone who may not
     read those sessions. The session page has the same facts in an Environment
     card, and its Preview tab shows the desktop.
+
+#### Links to what things are about
+
+Wherever the UI shows a subject (`<system>:<id>`: a session's subscriptions,
+the Triggers page's subscriptions, the Events list), a person's handle, or a
+project's repository, it shows a short label linked to the thing itself, styled
+like links in chat. The raw form is in the tooltip; links off the harness open
+in a new tab, without the opener. Unknown subjects stay plain text.
+
+| Subject | Label | Link |
+|---------|-------|------|
+| `mp:msg_…` (a thread root) | `Thread: <first message>` | the chat thread, `/chat/<channel>/<msg>` |
+| `mp:ses_…`, `mp:run_…` | the session's title, or `Session ses_…` | the session's page, or the run's lineage |
+| `slack:<channel>/<ts>` | `Slack thread in #general` | the thread's permalink, else the channel |
+| `gitlab:<path>!<iid>`, `#<iid>` | `MR !4 · acme/app`, `Issue #12 · acme/app` | the merge request or issue |
+| `gitlab:<path>@<ref>`, `@pipeline/<id>` | `branch mp/x · acme/app`, `Pipeline #77 · acme/app` | the branch, or the pipeline |
+| `local-git:<slug>/<branch>` | `branch mp/x · mdtoc` | the branch's review on its project's page (`?branch=`) |
+| `linear:<identifier>` | `PAY-123 · <title>` | none: the harness doesn't know the workspace's URL |
+
+- `GET /api/subscriptions` adds what links need to each subject: a thread's
+  `channelId` and title (for threads the viewer can see), a GitLab subject's
+  `baseUrl` (the session's employee's `GITLAB_BASE_URL`, else the
+  deployment's, else gitlab.com), a local branch's `projectId`, and a Slack
+  channel's `channelName` (the Slack integration's channel-name cache). Events
+  name their Slack channel in their payload.
+- **Slack permalinks** come from `GET /api/subjects/permalink?subject=slack:<channel>/<ts>`
+  with the `sessionId` (the subject must be one of its subscriptions) or the
+  `eventId` (the event's subject) it belongs to, and that session's or event's
+  visibility. The server asks Slack's `chat.getPermalink` with the employee's
+  bot token (never sent to the UI) and keeps the answer for the integration
+  instance's life; without a token, or when Slack can't say, it answers
+  `https://slack.com/app_redirect?channel=<C>`, which opens the channel. The UI
+  asks only when a link is about to be used (hover, focus, press), once per
+  subject; until then the link opens the channel.
+- **Handles:** a Slack user id opens a DM with them
+  (`app_redirect?channel=<U…>`), a GitLab username their profile on the
+  deployment's GitLab (`GET /api/me` `deployment.gitlabBaseUrl`).
+- **Repositories** (a project's page, an employee's projects): the web page,
+  from `httpUrl` when set, else the `url` (`git@host:group/repo.git` becomes
+  `https://host/group/repo`, `.git` dropped). On the deployment's GitLab they
+  also link to the project's merge requests and pipelines. A local repository
+  (`local:<slug>`) points at the project page's Repository section.
 
 #### Notifications
 

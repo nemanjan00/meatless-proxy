@@ -272,6 +272,26 @@ describe('sessions and runs', () => {
     ])
     expect((await t.req('GET', '/api/subscriptions')).body.length).toBeGreaterThanOrEqual(1)
   })
+
+  it('gives subscriptions what the UI needs to link them', async () => {
+    const s = t.a.services
+    const session = await s.sessions.create({ employeeId, title: 'Links', toolset: [], entries: [] })
+    const root = await t.req('POST', `/api/chat/channels/${requestsId}/messages`, { text: 'lunch anyone?' })
+    await s.events.subscriptions.subscribe(session.id, { system: 'mp', id: root.body.id }, { primary: true })
+    await s.events.subscriptions.subscribe(session.id, { system: 'gitlab', id: 'acme/app!4' }, { primary: true })
+    await s.events.subscriptions.subscribe(session.id, { system: 'local-git', id: 'nope/mp/x' }, { primary: true })
+    const r = await t.req('GET', `/api/subscriptions?sessionId=${session.id}`)
+    const subject = (system: string) => r.body.find((x: any) => x.data.subject.system === system).data.subject
+    expect(subject('mp')).toEqual({ system: 'mp', ref: root.body.id, title: 'lunch anyone?', channelId: requestsId })
+    expect(subject('gitlab')).toEqual({ system: 'gitlab', ref: 'acme/app!4', baseUrl: 'https://gitlab.com' })
+    // No project hosts that repository: nothing to link to.
+    expect(subject('local-git')).toEqual({ system: 'local-git', ref: 'nope/mp/x' })
+
+    await s.secrets.set('GITLAB_BASE_URL', 'https://git.example.com/', { type: 'employee', id: employeeId })
+    const again = await t.req('GET', `/api/subscriptions?sessionId=${session.id}`)
+    expect(again.body.find((x: any) => x.data.subject.system === 'gitlab').data.subject.baseUrl).toBe('https://git.example.com')
+    await s.secrets.delete('GITLAB_BASE_URL', { type: 'employee', id: employeeId })
+  })
 })
 
 describe('now, inbox and control', () => {

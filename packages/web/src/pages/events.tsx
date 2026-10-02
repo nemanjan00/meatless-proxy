@@ -4,9 +4,11 @@ import { useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { type DataColumn, DataTable } from '@/components/data-table.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
+import { SubjectLink } from '@/components/links.tsx'
 import { Page } from '@/components/page.tsx'
 import { useLiveReload, useLoad } from '@/lib/api.tsx'
-import { formatDateTime, shortId, timeAgo } from '@/lib/format.ts'
+import { formatDateTime, timeAgo } from '@/lib/format.ts'
+import { eventSubject } from '@/lib/links.ts'
 import { eventTitle, routingOutcome } from '@/lib/routing.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -49,12 +51,14 @@ export function EventsPage() {
         value: (e) => eventTitle(e) ?? e.data.subject?.ref ?? '',
         cell: (e) => {
           const title = eventTitle(e)
+          const subject = eventSubject(e)
+          if (!title && subject) return <SubjectLink subject={subject} eventId={e.id} className="block" />
           return (
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-fg-secondary">{title ?? e.data.subject?.ref ?? '—'}</span>
-              {title && e.data.subject && (
-                <span className="hidden shrink-0 font-mono text-micro text-fg-quaternary lg:inline">
-                  {e.data.subject.system}:{shortId(e.data.subject.ref)}
+              <span className="truncate text-fg-secondary">{title ?? '—'}</span>
+              {subject && (
+                <span className="hidden min-w-0 max-w-[50%] shrink-0 text-micro lg:inline-flex">
+                  <SubjectLink subject={subject} eventId={e.id} />
                 </span>
               )}
             </span>

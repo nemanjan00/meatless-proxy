@@ -1,6 +1,6 @@
 import Md from 'react-markdown'
-import { Link } from 'react-router'
 import remarkGfm from 'remark-gfm'
+import { ChatLink } from '@/components/links.tsx'
 import { linkifyDoc, markTags } from '@/lib/doclinks.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -30,12 +30,7 @@ export function Markdown({
           a: ({ href = '', children }) => {
             if (href.startsWith('tag:'))
               return <span className="rounded-sm bg-accent-tint px-0.5 font-medium text-[#828fff]">{children}</span>
-            if (href.startsWith('/')) return <Link to={href}>{children}</Link>
-            return (
-              <a href={href} target="_blank" rel="noreferrer">
-                {children}
-              </a>
-            )
+            return <ChatLink href={href}>{children}</ChatLink>
           },
         }}
       >

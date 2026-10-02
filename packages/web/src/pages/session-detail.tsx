@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { EntryTreeView } from '@/components/entry-tree.tsx'
+import { ChatLink, SubjectLink } from '@/components/links.tsx'
 import { DesktopViewer } from '@/components/desktop-viewer.tsx'
 import {
   EnvironmentCard,
@@ -47,6 +48,7 @@ import { useApi, useLive, useLoad } from '@/lib/api.tsx'
 import { Can, ReadOnlyNote } from '@/lib/auth.tsx'
 import { hrefFor, linkRole } from '@/lib/doclinks.ts'
 import { useEmployees } from '@/lib/employees.tsx'
+import { threadSubject } from '@/lib/links.ts'
 import {
   duration,
   formatCostOf,
@@ -123,9 +125,9 @@ function RunsView({ runs, sessionId }: { runs: Run[]; sessionId: string }) {
             {r.data.cause.eventId && (
               <>
                 {' · '}
-                <Link to={`/lineage/${r.data.cause.eventId}`} className="font-mono text-micro hover:text-foreground">
+                <ChatLink href={`/lineage/${r.data.cause.eventId}`} title={r.data.cause.eventId} className="font-mono text-micro">
                   {shortId(r.data.cause.eventId)}
-                </Link>
+                </ChatLink>
               </>
             )}
             {r.data.pauseReason && ` · ${r.data.pauseReason}`}
@@ -730,11 +732,7 @@ export function SessionDetailPage() {
                   <span
                     className={cn('size-1.5 rounded-full', sub.data.active ? 'bg-[var(--green)]' : 'bg-[var(--fg-quaternary)]')}
                   />
-                  <span className="min-w-0 truncate text-fg-secondary">
-                    {sub.data.subject.title ??
-                      d.threads.find((t) => t.threadId === sub.data.subject.ref)?.title ??
-                      sub.data.subject.ref}
-                  </span>
+                  <SubjectLink subject={threadSubject(sub.data.subject, d.threads)} sessionId={id} />
                   <span className="ml-auto shrink-0 font-mono text-tiny text-fg-quaternary">{sub.data.subject.system}</span>
                   {sub.data.primary && <span className="shrink-0 text-tiny text-fg-tertiary">primary</span>}
                 </div>

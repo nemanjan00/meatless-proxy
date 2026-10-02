@@ -102,6 +102,13 @@ function fakeApis() {
             },
           })
         }
+        case 'chat.getPermalink':
+          if (body.channel === 'C404') return json({ ok: false, error: 'channel_not_found' })
+          return json({
+            ok: true,
+            channel: body.channel,
+            permalink: `https://example.slack.com/archives/${body.channel}/p${String(body.message_ts).replace('.', '')}`,
+          })
         case 'chat.postEphemeral':
           return json({ ok: true, message_ts: `${ts++}.000200` })
         case 'files.getUploadURLExternal': {
@@ -801,6 +808,60 @@ function integrationSuite(backend: Backend) {
       (e) => (e.data.payload as { ts?: string } | undefined)?.ts === ts,
     )
     expect(events.map((e) => e.data.employeeId).sort()).toEqual([meatless, vee].sort())
+  })
+
+  it('slack permalinks: the thread’s own link with the employee’s bot, cached; the channel when Slack can’t say', async () => {
+    const s = t.a.services
+    api.reset()
+    const session = await s.sessions.create({ employeeId: meatless, title: 'Permalinks', entries: [] })
+    await s.events.subscriptions.subscribe(session.id, { system: 'slack', id: 'C1/1700000009.000100' }, { primary: true })
+    await s.events.subscriptions.subscribe(session.id, { system: 'slack', id: 'C404/1700000009.000200' }, { primary: true })
+    const link = (subject: string, of: string) =>
+      t.req('GET', `/api/subjects/permalink?subject=${encodeURIComponent(subject)}&${of}`)
+
+    const r = await link('slack:C1/1700000009.000100', `sessionId=${session.id}`)
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ url: 'https://example.slack.com/archives/C1/p1700000009000100', permalink: true })
+    expect((await link('slack:C1/1700000009.000100', `sessionId=${session.id}`)).body).toEqual(r.body)
+    const asked = api.calls.filter((c) => c.path === 'chat.getPermalink')
+    expect(asked).toHaveLength(1)
+    expect(asked[0]!.token).toBe('Bearer xoxb-meatless')
+    expect(asked[0]!.body).toMatchObject({ channel: 'C1', message_ts: '1700000009.000100' })
+    expect(JSON.stringify(r.body)).not.toContain('xoxb')
+
+    // Slack refuses: the channel, through app_redirect.
+    expect((await link('slack:C404/1700000009.000200', `sessionId=${session.id}`)).body).toEqual({
+      url: 'https://slack.com/app_redirect?channel=C404',
+      permalink: false,
+    })
+    // An employee without a bot token: the same.
+    const other = await s.sessions.create({ employeeId: kai, title: 'No Slack', entries: [] })
+    await s.events.subscriptions.subscribe(other.id, { system: 'slack', id: 'C1/1700000009.000100' }, { primary: true })
+    expect((await link('slack:C1/1700000009.000100', `sessionId=${other.id}`)).body).toEqual({
+      url: 'https://slack.com/app_redirect?channel=C1',
+      permalink: false,
+    })
+
+    // Only a subject of the session, or of the event.
+    expect((await link('slack:C2/1700000009.000100', `sessionId=${session.id}`)).status).toBe(404)
+    expect((await link('slack:C1/1700000009.000100', 'sessionId=ses_nope')).status).toBe(404)
+    const { event } = await s.rawEvents.ingest({
+      source: 'integration:slack',
+      type: 'message.posted',
+      subject: { system: 'slack', id: 'C1/1700000009.000300' },
+      employeeId: meatless,
+      text: 'lunch anyone?',
+    })
+    expect((await link('slack:C1/1700000009.000300', `eventId=${event.id}`)).body.permalink).toBe(true)
+    expect((await link('slack:C1/1700000009.000100', `eventId=${event.id}`)).status).toBe(404)
+    // Not a Slack thread, or nothing to check it against.
+    expect((await link('gitlab:acme/app!4', `sessionId=${session.id}`)).status).toBe(400)
+    expect((await t.req('GET', '/api/subjects/permalink?subject=slack:C1/1700000009.000100')).status).toBe(400)
+
+    // Subscriptions name their Slack channel.
+    const subs = await t.req('GET', `/api/subscriptions?sessionId=${session.id}`)
+    const c1 = subs.body.find((x: any) => x.data.subject.ref === 'C1/1700000009.000100')
+    expect(c1.data.subject.channelName).toBe('general')
   })
 
   it('a push to a GitLab repository subscribes the session to its branch; a local one does not', async () => {

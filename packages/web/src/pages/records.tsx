@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FileText,
   FolderKanban,
+  GitBranch,
   History,
   Plus,
   Search,
@@ -18,6 +19,7 @@ import { toast } from 'sonner'
 import { DocumentEditor } from '@/components/doc-editor.tsx'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { LinksGraph } from '@/components/links-graph.tsx'
+import { RepoLinks } from '@/components/links.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
 import { SplitView } from '@/components/split-view.tsx'
 import { NewProjectDialog } from '@/components/new-project-dialog.tsx'
@@ -437,6 +439,7 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
                 ))}
               </section>
             )}
+            {kind === 'project' && <ProjectRepositories data={r.data} className="mb-8" />}
             {kind === 'project' && <ProjectPeopleSection projectId={r.id} className="mb-8" />}
             {kind === 'project' && hasLocalRepository(r.data) && (
               <LocalRepositorySection projectId={r.id} className="mb-8" onRemoteAttached={rec.reload} />
@@ -513,5 +516,24 @@ export function RecordDetailPage(props: { kind?: string; title?: string; basePat
         }
       />
     </Page>
+  )
+}
+
+/** A project's repositories, each linked to its web page (and a local one to the Repository section below). */
+function ProjectRepositories({ data, className }: { data: Record<string, unknown>; className?: string }) {
+  const repos = (Array.isArray(data.repositories) ? data.repositories : [])
+    .map((r) => (typeof r === 'string' ? { url: r } : (r as { url?: unknown; httpUrl?: unknown })))
+    .filter((r): r is { url: string; httpUrl?: string } => typeof r?.url === 'string' && r.url !== '')
+  if (!repos.length) return null
+  return (
+    <section className={className} data-testid="project-repositories">
+      <SectionTitle className="mb-1">Repositories</SectionTitle>
+      {repos.map((r) => (
+        <div key={r.url} className="flex h-8 min-w-0 items-center gap-2 border-b last:border-0">
+          <GitBranch className="size-4 shrink-0 text-fg-tertiary" />
+          <RepoLinks repo={r} />
+        </div>
+      ))}
+    </section>
   )
 }

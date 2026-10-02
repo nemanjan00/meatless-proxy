@@ -44,6 +44,8 @@ export interface SlackIntegrationOptions {
 const CHANNEL_CACHE_MAX = 1000
 /** How long a failed channel lookup is remembered, so a broken lookup doesn't slow every event. */
 const CHANNEL_MISS_TTL_MS = 60_000
+/** Most permalinks cached at once. */
+const PERMALINK_CACHE_MAX = 5000
 
 const json = (status: number, body: unknown, events: IntegrationEvent[] = []): WebhookResult => ({
   status,
@@ -68,6 +70,13 @@ export interface SlackIntegration extends Integration {
    * with bytes the harness read from the employee's files: they never go through the model.
    */
   uploadFile(input: SlackUploadInput, opts?: { maxBytes?: number; signal?: AbortSignal }): Promise<SlackUploadResult>
+  /**
+   * A message's permalink (`chat.getPermalink`), for links in the UI. Cached for the instance's
+   * life: permalinks don't change. Throws when Slack can't give one (unknown channel, no access).
+   */
+  permalink(channel: string, ts: string): Promise<string>
+  /** A channel's name without the `#` (`conversations.info`, cached), or undefined for DMs and failures. */
+  channelName(channelId: string): Promise<string | undefined>
 }
 
 /**
@@ -271,6 +280,23 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     ...(apiHost ? { allowHost: (host: string) => host === apiHost } : {}),
   }
+  // Permalinks never change: cached until the instance is replaced (or the cache is full), failures not at all.
+  const permalinks = new Map<string, Promise<string>>()
+  const permalink: SlackIntegration['permalink'] = (channel, ts) => {
+    const key = `${channel}/${ts}`
+    const hit = permalinks.get(key)
+    if (hit) return hit
+    const p = quick.call('chat.getPermalink', { channel, message_ts: ts }, {}).then((r) => {
+      if (typeof r.permalink !== 'string' || !/^https:\/\//.test(r.permalink))
+        throw new Error(`slack chat.getPermalink: no permalink for ${key}`)
+      return r.permalink
+    })
+    permalinks.set(key, p)
+    if (permalinks.size > PERMALINK_CACHE_MAX) permalinks.delete(permalinks.keys().next().value as string)
+    p.catch(() => permalinks.delete(key))
+    return p
+  }
+
   const downloadFile: SlackIntegration['downloadFile'] = (fileId, o) => downloadSlackFile(fileDeps, fileId, o)
   const uploadFile: SlackIntegration['uploadFile'] = (input, o) => uploadSlackFile(fileDeps, input, o)
 
@@ -281,5 +307,7 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     resolveUser,
     downloadFile,
     uploadFile,
+    permalink,
+    channelName,
   }
 }

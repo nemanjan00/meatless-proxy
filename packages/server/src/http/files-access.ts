@@ -6,7 +6,7 @@
  */
 import type * as Api from '@mp/api'
 import { DeniedError, ValidationError } from '@mp/core'
-import { type DirEntry, type FileView, SHARED_DIR, employeePath, isWithin } from '@mp/files'
+import { type DirEntry, type FileView, SHARED_DIR, decodeContent, employeePath, isWithin, sniffFile } from '@mp/files'
 import type { Actor } from '@mp/store'
 import type { Principal } from '../auth/guard.ts'
 import type { Services } from '../services.ts'
@@ -28,14 +28,30 @@ export function fileBytes(content: string, encoding: Api.FileEncoding): number {
   return Math.floor((content.length * 3) / 4) - pad
 }
 
-const content = (f: FileView, path = f.path): Api.FileContent => ({
-  path,
-  content: f.content,
-  encoding: f.encoding,
-  size: f.size,
-  version: f.version,
-  updatedAt: f.updatedAt,
-})
+/** A `Content-Disposition` header: RFC 5987 `filename*`, plus an ASCII fallback. */
+export function contentDisposition(kind: 'inline' | 'attachment', name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
+}
+
+/** A file's bytes, as stored. */
+export const bytesOf = (f: Pick<Api.FileContent, 'content' | 'encoding'>): Uint8Array =>
+  decodeContent(f.content, f.encoding ?? 'utf8')
+
+const content = (f: FileView, path = f.path): Api.FileContent => {
+  // The type from the bytes (images by their magic bytes), never from the name alone.
+  const info = sniffFile(bytesOf(f), path)
+  return {
+    path,
+    content: f.content,
+    encoding: f.encoding,
+    size: f.size,
+    mime: info.mime,
+    ...(info.width && info.height ? { width: info.width, height: info.height } : {}),
+    version: f.version,
+    updatedAt: f.updatedAt,
+  }
+}
 
 const entry = (e: DirEntry, path = e.path, shared?: Api.FileEntry['shared']): Api.FileEntry => ({
   path,
@@ -43,6 +59,7 @@ const entry = (e: DirEntry, path = e.path, shared?: Api.FileEntry['shared']): Ap
   type: e.type,
   size: e.size ?? 0,
   updatedAt: e.updatedAt ?? '',
+  ...(e.type === 'file' && e.version !== undefined ? { version: e.version } : {}),
   ...(shared ? { shared } : {}),
 })
 

@@ -342,10 +342,13 @@
 .prose-doc li + li {
   margin-top: 0.25em;
 }
-.prose-doc a {
+/* Links in chat and documents; .doc-link gives links elsewhere (subjects, handles, repositories) the same look. */
+.prose-doc a,
+.doc-link {
   color: #828fff;
 }
-.prose-doc a:hover {
+.prose-doc a:hover,
+.doc-link:hover {
   text-decoration: underline;
 }
 .prose-doc code {
