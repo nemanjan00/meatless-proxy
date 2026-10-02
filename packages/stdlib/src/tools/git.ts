@@ -98,9 +98,17 @@ export function readView(content: string, offset?: unknown, limit?: unknown): Re
   const lines = content.split('\n')
   const start = Math.max(1, Math.floor(Number(offset) || 1))
   const count = Math.min(Math.max(1, Math.floor(Number(limit) || READ_MAX_LINES)), READ_MAX_LINES)
-  const slice = lines.slice(start - 1, start - 1 + count)
-  let text = slice.map((l, i) => `${start + i}\t${l}`).join('\n')
-  if (text.length > READ_MAX_CHARS) text = clip(text, READ_MAX_CHARS)
+  // Whole lines only, up to READ_MAX_CHARS, so `next` always says where to read on. Cutting mid-text left a big
+  // file (a lockfile) with no way to reach its tail.
+  const slice: string[] = []
+  let size = 0
+  for (const l of lines.slice(start - 1, start - 1 + count)) {
+    const numbered = `${start + slice.length}\t${l}`
+    if (slice.length && size + numbered.length + 1 > READ_MAX_CHARS) break
+    slice.push(numbered.length > READ_MAX_CHARS ? clip(numbered, READ_MAX_CHARS) : numbered)
+    size += numbered.length + 1
+  }
+  const text = slice.join('\n')
   const end = start + slice.length - 1
   return {
     totalLines: lines.length,

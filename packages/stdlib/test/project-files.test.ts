@@ -137,3 +137,29 @@ describe('git.checkout with a ref on an existing checkout', () => {
     expect((await t.out('git.checkout', { projectId: t.project.id })).note).toBeUndefined()
   })
 })
+
+describe('reading a file bigger than one read', () => {
+  it('stops at a whole line and says where to read on, even under the line limit', async () => {
+    const { readView } = await import('../src/tools/git.ts')
+    // 1,500 lines of 40 characters: over the character limit, under the line limit (a lockfile, say).
+    const content = Array.from(
+      { length: 1500 },
+      (_, i) => `"pkg-${String(i).padStart(4, '0')}": "1.0.0-${'x'.repeat(14)}",`,
+    ).join('\n')
+    const first = readView(content)
+    expect(String(first.content).length).toBeLessThanOrEqual(30_000)
+    expect(String(first.content)).not.toContain('[truncated')
+    expect(first.next).toMatch(/^offset \d+ reads on/)
+    // Following `next` reaches the last line, with every line read exactly once.
+    let seen = Number(/^1-(\d+)$/.exec(String(first.lines))![1])
+    let next = first.next
+    while (next) {
+      const offset = Number(/offset (\d+)/.exec(String(next))![1])
+      expect(offset).toBe(seen + 1)
+      const part = readView(content, offset)
+      seen = Number(/-(\d+)$/.exec(String(part.lines))![1])
+      next = part.next
+    }
+    expect(seen).toBe(1500)
+  })
+})
