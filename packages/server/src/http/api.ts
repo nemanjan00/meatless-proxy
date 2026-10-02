@@ -519,7 +519,8 @@ export function apiRoutes(deps: ApiDeps): Hono {
       subject: { system: 'mp', id: session.id },
       actorContactId: contactId,
       payload: { text, sessionId: session.id },
-      text,
+      // Posted on this session's page: the run's final message is the reply there (chat.reply has no thread to answer).
+      text: `On your session page (your final message is your reply here):\n${text}`,
       dedupeKey: `ui:${session.id}:${s.clock.now()}:${Math.random().toString(36).slice(2)}`,
     })
     const outcome = await s.router.deliver(event, {
