@@ -354,6 +354,12 @@ stays the same across calls, runs and forks:
    it is brought up to date only as a run starts, with a note in the history
    (see the spec's whitelist section). The employee prompt is likewise the
    current one, swapped in for the stored first entry.
+   With tools on demand (`TOOLS_ON_DEMAND`, on by default) the definitions
+   sent are the session's core tools plus the ones it loaded
+   ([tools on demand](spec.md#tools-on-demand)). Loading one changes the
+   tool list from the next call on: a one-time cache miss in that session,
+   in exchange for every call of every other session not carrying the
+   definitions of tools it never uses.
 3. **Session history**, from the root to `base`. It's shared with every fork
    and every earlier run.
 4. **Run entries**, from `base` to `tip`.

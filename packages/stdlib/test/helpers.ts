@@ -72,6 +72,8 @@ export interface StackOptions {
   filesDir?: string
   /** projects.create_local (a fake that writes the project and its member link). Default on. */
   localProjects?: boolean
+  /** Tools on demand (tools.find, tools.load). Default on. */
+  toolsOnDemand?: boolean
 }
 
 /** Where a session's checkout is on disk (git.checkout no longer says: it isn't a path for the model). */
@@ -189,6 +191,7 @@ export async function stack(opts: StackOptions = {}) {
       pushPolicy: { allow: ['mp/**'], protected: ['main', 'master', 'release/**'] },
       ...(opts.defaults ? { defaults: opts.defaults } : {}),
       ...(opts.filesDir ? { filesDir: opts.filesDir } : {}),
+      ...(opts.toolsOnDemand === false ? { toolsOnDemand: false } : {}),
     },
     worktreeFs,
   }

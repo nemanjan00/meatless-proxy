@@ -242,7 +242,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.up',
       description:
-        "Start this session's isolated environment (containers on a private network) for working on code. Every repository of the environment is at /repos/<name>, one of them also at /workspace (built from, the working directory). repos brings several projects up in one call: a project id checks it out first if you haven't (your own branch, writable, as git.checkout does); { project, ref } mounts a read-only copy of that branch or commit instead (e.g. an unmerged branch of another project, next to yours); primary: true picks /workspace (default: the first). Without repos: every checkout of this session, /workspace the one named by repo, else the most recent. Read-only git works inside (log, show, diff, grep, status); commit and push with the git.* tools. From an image (any image: it's kept running for you) or a profile (the default); built from the checkout's Dockerfile only with build: true. One environment per session: to add repositories or change its image, call env.up again with restart: true (it restarts; files outside the repositories and /files are lost). Network access goes through a proxy (HTTP_PROXY/HTTPS_PROXY) that allows the hosts your network setting and the project allow, or, when an admin gave you a direct network, straight out; the result says which, or why there is none. Calling it again returns the running one. Use env.exec to build, test or run. To let people watch a dev server live, list its ports in expose (and make it listen on 0.0.0.0), then share env.preview.",
+        "Start this session's environment (containers on a private network) to explore, build, test or run code. Each repository is at /repos/<name>, one also at /workspace (the working directory). repos: projects to bring up together; a project id checks it out first if needed (your own writable branch, like git.checkout); { project, ref } mounts a read-only copy of a branch or commit. Without repos: every checkout of this session. Read-only git works inside (log, show, diff, grep); commit and push only with the git.* tools. /files is your filesystem root: copy what you build there to attach or share it. One environment per session: calling it again returns the running one; restart: true restarts it to add repositories or change its image (files outside the repositories and /files are lost). The result says its network (via proxy to allowed hosts, direct, or none): with network install what the work needs; without it nothing installs, so pick the profile with your tools. expose ports (listening on 0.0.0.0) to let people watch a dev server live (env.preview); desktop: true for GUI programs (env.screenshot).",
       effect: 'idempotent',
       params: {
         properties: {
@@ -256,19 +256,18 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           },
           build: {
             type: 'boolean',
-            description:
-              "Build the checkout's Dockerfile instead of using a profile. Usually that is the app's production image, not a place to work: only when you need exactly it.",
+            description: "Build the checkout's Dockerfile instead (usually the app's production image, not a place to work).",
           },
           dockerfile: { type: 'string', description: 'Dockerfile path in the checkout, to build (implies build).' },
           repos: {
             type: 'array',
             description:
-              'Repositories to bring up together, each at /repos/<name>: { project } (a project id or checkout key; checked out first if needed, on your own branch), with ref to mount a read-only copy of that branch or commit instead. A plain project id string works too. Your other checkouts are mounted as well.',
+              'Repositories to bring up together, each at /repos/<name>: { project } or a plain project id; with ref, a read-only copy of that branch or commit. Your other checkouts are mounted as well.',
             items: {
               type: 'object',
               properties: {
                 project: { type: 'string', description: 'A project id, or the key of one of your checkouts.' },
-                ref: { type: 'string', description: 'A branch or commit to mount read-only instead of your checkout.' },
+                ref: { type: 'string', description: 'A branch or commit, mounted read-only.' },
                 repo: { type: 'number', description: "Index into the project's repositories. Default 0." },
                 primary: { type: 'boolean', description: 'This one goes at /workspace.' },
               },
@@ -278,12 +277,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           repo: {
             type: 'string',
             description:
-              'Which checkout goes at /workspace (and is built), without repos: its key, e.g. gitlab.com/group/repo, or its project id. Default: your most recent checkout.',
+              'Without repos: the checkout at /workspace, by key (e.g. gitlab.com/group/repo) or project id. Default: the most recent.',
           },
           restart: {
             type: 'boolean',
-            description:
-              'Restart a running environment with this call (needed to add repositories: mounts are fixed while it runs).',
+            description: 'Restart a running environment (to add repositories: mounts are fixed while it runs).',
           },
           env: { type: 'object', description: 'Environment variables (no secrets: name secrets instead).' },
           services: {
@@ -298,18 +296,16 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           egress: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              'Narrow the allowed hosts to these (a subset of them), through the proxy. Default: all of them (or your direct network).',
+            description: 'Narrow the allowed hosts to these. Default: all of them.',
           },
           expose: {
             type: 'array',
             items: { type: 'number' },
-            description: 'Ports your app serves, e.g. [5173] for a dev server, shown to people as live previews (env.preview).',
+            description: 'Ports your app serves, e.g. [5173], shown to people as live previews (env.preview).',
           },
           desktop: {
             type: 'boolean',
-            description:
-              'Also start a virtual screen (1440x900) that GUI programs and headed browsers draw on (DISPLAY=:99 is set for env.exec). People watch it live; env.screenshot lets you see it.',
+            description: 'A virtual screen (1440x900, DISPLAY=:99) for GUI programs and headed browsers; people watch it live.',
           },
         },
       },
@@ -632,7 +628,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s.',
+        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s. Install tools the work needs (a browser, a linter) outside the checkout, e.g. in /tmp: only the project\'s own dependencies belong in it.',
       effect: 'non_idempotent',
       params: {
         properties: {

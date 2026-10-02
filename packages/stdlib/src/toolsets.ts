@@ -108,6 +108,8 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'subscriptions.subscribe',
   'subscriptions.unsubscribe',
   'time.now',
+  'tools.find',
+  'tools.load',
   'triggers.create',
   'triggers.disable',
   'triggers.list',
@@ -149,6 +151,8 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'sessions.restore',
   'sessions.save_template',
   'triggers.**',
+  // A router's toolset is small already and offered whole: it loads nothing on demand.
+  'tools.**',
   // Scheduling is work for the session the router starts: it tells the person what it scheduled (a router's
   // own text is never posted) and becomes the report's conversation. The router may still look (schedule.list).
   'schedule.create',

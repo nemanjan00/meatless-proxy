@@ -13,6 +13,7 @@ import { registerProjectTools } from './tools/projects.ts'
 import { registerScheduleTools } from './tools/schedule.ts'
 import { registerSessionTools } from './tools/sessions.ts'
 import { registerTimeTools } from './tools/time.ts'
+import { registerToolTools } from './tools/tools.ts'
 import type { StdlibDeps } from './types.ts'
 import { nodeWorktreeFs } from './worktree-fs.ts'
 
@@ -20,6 +21,7 @@ import { nodeWorktreeFs } from './worktree-fs.ts'
  * Registers every stdlib tool on the registry and returns their names, in
  * registration order. The git tools need `deps.git`, the env tools
  * `deps.containers`, the code tools `deps.sandbox`, projects.create_local `deps.localProjects`; without them those tools aren't registered.
+ * tools.find and tools.load (tools on demand) are registered unless `config.toolsOnDemand` is false.
  */
 export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string[] {
   const kit = createKit(registry, deps)
@@ -32,6 +34,7 @@ export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string
   registerTimeTools(kit)
   registerScheduleTools(kit)
   registerImageTools(kit)
+  if (deps.config.toolsOnDemand !== false) registerToolTools(kit)
   if (deps.localProjects) registerProjectTools(kit, deps.localProjects)
   if (deps.git) registerGitTools(kit, deps.git, deps.worktreeFs ?? nodeWorktreeFs())
   if (deps.containers) registerEnvTools(kit, deps.containers)

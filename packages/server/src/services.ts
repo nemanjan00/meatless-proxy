@@ -500,6 +500,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     logger: logger.child({ component: 'runner' }),
     toolListsFor: offeredToolListsFor,
     currentToolset,
+    // Tools on demand: a session that can load tools (tools.load in its toolset) is offered its core set and what it loaded.
+    onDemand: (session) => (config.TOOLS_ON_DEMAND ? services.stdlib?.onDemandFor(session.data.toolset) : undefined),
     currentPrompt: async (session, stored) => (sessionPrompt ? sessionPrompt(session, stored) : undefined),
     projectOf,
     maxSteps: config.MAX_STEPS,
@@ -656,6 +658,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         ...(config.ENV_DEFAULT_PROFILE ? { envDefaultProfile: config.ENV_DEFAULT_PROFILE } : {}),
         // Environments get the employee's own files at /files, when they are on disk here.
         ...(o.fileStorage ? {} : { filesDir: config.FILES_DIR }),
+        toolsOnDemand: config.TOOLS_ON_DEMAND,
       },
     }
     const names = stdlib.registerStdlib(tools, deps)

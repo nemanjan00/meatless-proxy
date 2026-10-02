@@ -50,6 +50,20 @@ describe('employeePrompt', () => {
     expect(employeePrompt({ ...input, now: 'NOW_TOKEN' }).replace('NOW_TOKEN', input.now)).toBe(p)
   })
 
+  it('attributes messages to their authors, in the always-on rules', async () => {
+    const t = await stack()
+    const contact = await t.directory.contacts.require(t.employee.data.contactId)
+    // In the core rules whether or not tools load on demand: it's about communication.
+    for (const toolsOnDemand of [true, false]) {
+      const p = employeePrompt({ employee: t.employee, contact, now: 'now', toolsOnDemand })
+      const rules = p.slice(p.indexOf('## How you work'), p.indexOf('## Your tools'))
+      expect(rules).toContain("each message's author is in its header")
+      expect(rules).toContain('not to whoever started the thread or the session')
+      expect(rules).toContain("the commit's Requested-by trailer")
+      expect(rules).toContain("Address the person you're answering, and mention others only when needed.")
+    }
+  })
+
   it('leaves out empty sections', async () => {
     const t = await stack()
     const contact = await t.directory.contacts.require(t.employee.data.contactId)

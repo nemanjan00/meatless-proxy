@@ -370,7 +370,7 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
     {
       name: 'git.checkout',
       description:
-        "Get your own checkout of a project repository: a worktree of the local mirror on a new branch of your own (from the default branch or ref). Calling it again returns the existing checkout and doesn't switch it: to read another branch use projects.read_file { ref }, or env.up { repos: [{ project, ref }] } for a read-only copy of it in an environment. Edit with git.write_file, then git.commit and git.push; changes reach production only through a pull request.",
+        "Get your own checkout of a project repository: a worktree of the local mirror on a new branch of your own (from the default branch or ref). Calling it again returns the existing checkout and doesn't switch it: to read another branch use projects.read_file { ref }, or env.up { repos: [{ project, ref }] } for a read-only copy of it in an environment. Edit with git.write_file, then git.commit and git.push; changes reach production only through a pull request. Without access to the repository, read it through the git host's tools (e.g. mcp.gitlab.get_file, mcp.gitlab.list_tree) and ask an admin to add your account to the project.",
       effect: 'idempotent',
       params: {
         properties: {

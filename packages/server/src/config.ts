@@ -258,6 +258,11 @@ export const configSchema = z.object({
   /** Tool results longer than this many characters are stored in full and kept in the history as a preview (0 = never). */
   TOOL_RESULT_MAX_CHARS: z.coerce.number().int().min(0).default(20_000),
   /**
+   * Tools on demand: sessions are offered their everyday tools and load the rest with tools.find and tools.load
+   * (or by calling one), and the employee prompt lists what can be loaded. false offers every tool, every call.
+   */
+  TOOLS_ON_DEMAND: bool(true),
+  /**
    * Whether the model can see images (image.view): `auto` (default: what the provider's model list says,
    * else known vision model names), `true` or `false`.
    */
@@ -459,6 +464,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
       nearAt: c.CONTEXT_NEAR_AT || 'off',
       toolResultMaxChars: c.TOOL_RESULT_MAX_CHARS || 'off',
     },
+    toolsOnDemand: c.TOOLS_ON_DEMAND,
     imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },
     sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),

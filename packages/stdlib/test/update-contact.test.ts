@@ -210,6 +210,8 @@ describe('directory.update_contact', () => {
       now: t.clock.iso(),
     })
     expect(prompt).toMatch(/directory\.update_contact/)
-    expect(prompt).toMatch(/never a guess; never personal or sensitive details/)
+    expect(prompt).toMatch(/never a guess, never personal or sensitive details/)
+    // The details are in the tool's description.
+    expect(t.tools.get('directory.update_contact')!.def.description).toMatch(/health, family, religion, politics, salary/)
   })
 })

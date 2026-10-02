@@ -14,7 +14,7 @@ const STARTED = /Session started: [^\n]*/
  * rebuilt with the current prompt instead (see the server's upgrade).
  */
 export async function currentSessionPrompt(
-  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock' | 'records'>,
+  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock' | 'records'> & { config?: Pick<StdlibDeps['config'], 'toolsOnDemand'> },
   session: Session,
   stored: string,
 ): Promise<string | undefined> {

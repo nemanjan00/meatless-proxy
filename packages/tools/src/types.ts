@@ -109,3 +109,15 @@ export interface ToolRegistry {
 
 /** Error codes `execute` rethrows instead of turning into a tool error. */
 export const RETHROWN_ERROR_CODES: readonly string[] = ['denied', 'limit', 'unavailable']
+
+/**
+ * Session meta key listing the on-demand tools a session has loaded (`tools.load`, or by calling one).
+ * The runner offers them from the next model call on, for the rest of the session.
+ */
+export const LOADED_TOOLS_META = 'loadedTools'
+
+/** The tools a session has loaded, from its meta. */
+export function loadedToolsOf(meta: Record<string, unknown> | undefined): string[] {
+  const v = meta?.[LOADED_TOOLS_META]
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}

@@ -24,6 +24,7 @@ export const RESERVED_META = [
   'procedureId',
   'realTask',
   'scheduledTaskId',
+  'loadedTools',
 ] as const
 
 /** Link roles the stdlib uses. */
@@ -215,7 +216,7 @@ export async function assignedProjectsOf(deps: Pick<StdlibDeps, 'directory'>, em
 
 /** The employee prompt as it would be written now, with the skills of its projects and `projectIds`. */
 export async function promptForEmployee(
-  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock'>,
+  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock'> & { config?: Pick<StdlibDeps['config'], 'toolsOnDemand'> },
   employeeId: string,
   projectIds: string[] = [],
 ): Promise<string> {
@@ -228,7 +229,14 @@ export async function promptForEmployee(
     (p) => p !== null,
   )
   const skills = await deps.skills.available({ projectIds: pids })
-  return employeePrompt({ employee, contact, procedures, skills, now: deps.clock.iso() })
+  return employeePrompt({
+    employee,
+    contact,
+    procedures,
+    skills,
+    now: deps.clock.iso(),
+    toolsOnDemand: deps.config?.toolsOnDemand !== false,
+  })
 }
 
 export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {

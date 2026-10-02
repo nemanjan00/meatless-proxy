@@ -264,6 +264,7 @@ pieces. A run whose context can't be made to fit pauses with the reason.
 | `CONTEXT_COMPACT_AT` | 85 | percent of the window at which a run compacts by itself (`0`: never) |
 | `CONTEXT_NEAR_AT` | 80 | percent of the window at which a run is asked to free space itself first (`0`: never) |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | longer tool results are stored in full and kept as a preview (`0`: never) |
+| `TOOLS_ON_DEMAND` | `true` | sessions are offered their everyday tools and load the rest with `tools.find` / `tools.load` (or by calling one), which roughly halves the fixed overhead of every model call; `false` offers every tool, every call |
 
 ### Limits and budgets
 
@@ -347,6 +348,7 @@ npm run typecheck
 npm run check:deps     # architecture: layers point down, no cycles
 npm run check:secrets  # nothing that looks like a key in the repo
 npm run check          # all of the above
+npx tsx scripts/context-overhead.ts  # tokens of the employee prompt and offered tools (--all: as if nothing were on demand)
 MP_DOCKER_TEST=1 npx vitest run --project node packages/containers-docker   # against a real Docker daemon
 MP_LIVE_MODEL_TEST=1 npx vitest run --project node packages/model-openai     # one real model call
 ```
@@ -374,7 +376,7 @@ packages/
   stdlib/             the model's tools
   server/ web/        the app: API, WebSocket, workers, and the web UI
 docker/sandbox/       the code.run sandbox image
-scripts/              architecture and secret checks
+scripts/              architecture and secret checks; context-overhead.ts measures the prompt and tools
 ```
 
 Dependencies only point down the layers, and every component can be replaced

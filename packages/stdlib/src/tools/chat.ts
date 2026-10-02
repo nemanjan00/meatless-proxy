@@ -26,7 +26,7 @@ export const SANDBOX_PATHS_NOTE =
 
 const attachmentsProp = {
   type: 'array',
-  description: `Files from your filesystem to attach, any type (at most 10, 10 MB each), e.g. a script you wrote or a chart code.run saved: [{ "path": "/chart.png" }]. Images (PNG, JPEG, GIF, WebP) are shown inline, other files as downloads. Files shared with you work too (/shared/<owner>/…). ${SANDBOX_PATHS_NOTE}`,
+  description: `Files from your filesystem, any type (at most 10, 10 MB each), e.g. a chart code.run saved: [{ "path": "/chart.png" }]; files shared with you too (/shared/<owner>/…). ${SANDBOX_PATHS_NOTE}`,
   items: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
 }
 

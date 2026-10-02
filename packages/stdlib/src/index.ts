@@ -5,6 +5,17 @@ export { employeePrompt, type EmployeePromptInput } from './prompt.ts'
 export { currentSessionPrompt } from './session-prompt.ts'
 export { DEFAULT_TOOLSET, REVIEWER_TOOLSET, REVIEWER_ONLY_TOOLS, ROUTER_EXCLUDED_TOOLS } from './toolsets.ts'
 export {
+  CORE_TOOLS,
+  LOADER_TOOLS,
+  ON_DEMAND_GROUPS,
+  groupOf,
+  isOnDemandTool,
+  offeredTools,
+  onDemandFor,
+  onDemandPromptSection,
+  type ToolGroup,
+} from './on-demand.ts'
+export {
   registerPolicies,
   registerRouterPolicies,
   registerUsagePolicies,

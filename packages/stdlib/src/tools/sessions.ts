@@ -14,7 +14,7 @@ import {
   type TreeNode,
 } from '@mp/sessions'
 import type { Entry, Ref } from '@mp/store'
-import { mcpToolName, type ToolContext } from '@mp/tools'
+import { LOADED_TOOLS_META, loadedToolsOf, mcpToolName, type ToolContext } from '@mp/tools'
 import { RESERVED_META, Roles, checkRef, clip, fail, line, ok, pathValue, sessionBrief, str, type Kit } from '../kit.ts'
 import type { TaskSystemConfig } from '../types.ts'
 
@@ -155,6 +155,13 @@ export function registerSessionTools(kit: Kit): void {
   const { sessions, records } = deps
 
   /** Forks (and new sessions) keep working on the same projects and for the same people. */
+  /** A fork knows what its parent knew, including the tools it loaded (tools on demand). */
+  const inheritLoadedTools = async (from: Session, to: Session) => {
+    const loaded = loadedToolsOf((await sessions.get(from.id))?.data.meta ?? from.data.meta)
+    if (!loaded.length) return
+    await kit.patchMeta(to.id, (m) => ({ ...m, [LOADED_TOOLS_META]: [...new Set([...loadedToolsOf(m), ...loaded])].sort() }))
+  }
+
   const copyLinks = async (from: Session, to: Session, ctx: ToolContext) => {
     for (const l of await records.links({ from: sessionRef(from.id) })) {
       if (l.to.kind !== 'contact' && l.to.kind !== 'project') continue
@@ -326,6 +333,7 @@ export function registerSessionTools(kit: Kit): void {
           actor: kit.actor(ctx),
         })
         await copyLinks(parent, fork, ctx)
+        await inheritLoadedTools(parent, fork)
         await linkRequester(fork, ctx)
         const forkMode = workMode(parent, mode)
         const run = await kit.startRun(fork.id, ctx, { instruction, type: 'fork', ...(forkMode ? { mode: forkMode } : {}) })
@@ -416,6 +424,7 @@ export function registerSessionTools(kit: Kit): void {
       for (const [i, child] of children.entries()) {
         if (toolset) await records.update<SessionData>('session', child.id, { toolset }, { actor: kit.actor(ctx) })
         await copyLinks(parent, child, ctx)
+        await inheritLoadedTools(parent, child)
         await linkRequester(child, ctx)
         const task = tasks[i]
         if (task) {

@@ -40,6 +40,15 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
   the router's `runInput` hook.
 - `DEFAULT_TOOLSET` (every stdlib tool except reviewer-only ones),
   `REVIEWER_TOOLSET`, `REVIEWER_ONLY_TOOLS`.
+- Tools on demand (`on-demand.ts`, docs/spec.md#tools-on-demand): `CORE_TOOLS`
+  (offered from the start, including the most used integration tools),
+  `ON_DEMAND_GROUPS` (the rest, by what they're for, with the line the prompt
+  shows), `isOnDemandTool(name)`, `onDemandFor(toolset)` (undefined without
+  `tools.load` in the toolset: everything offered; the server passes it to the
+  runner's `onDemand`), `offeredTools(toolset, loaded)` and
+  `onDemandPromptSection()`. `employeePrompt({ toolsOnDemand })` adds the
+  section; `promptForEmployee` sets it from `config.toolsOnDemand` (default
+  true; false also leaves `tools.*` unregistered).
 - `registerPolicies(hooks, deps, config?)` on the runner hooks: checklist gate,
   docs maintenance, session document (off by default), commit on stop, and the
   `git.push` tool gate. Returns an unregister function.
@@ -72,6 +81,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 | `projects.*` | create_local: a project on a repository the harness hosts (docs/spec.md#local-projects), the employee a member (`deps.localProjects.create`, once per call). branches, read_file, list_files: a local repository at any ref without a checkout (`deps.localProjects.branches` / `readFile` / `tree`); on the default branch, an empty result names the branches waiting for review; git host projects point to `mcp.gitlab.*`. No tool merges |
 | `env.*` | up (with `repos` for several repositories in one environment, `{ project, ref }` a read-only copy of a branch; `restart`; `expose` ports for live previews, `desktop: true` for a virtual screen), exec, logs, preview, screenshot (the desktop as a PNG in the employee's files), down |
 | `schedule.*` | create, list, update, cancel, run_now: scheduled tasks (docs/spec.md#scheduled-tasks). `create { instruction, at? \| in? \| every? \| cron?, timezone?, report?, session? }` reads times in the company time zone, creates the task's own session (employee prompt, full toolset, `requested_by`) and reports "here" by default (the conversation of the run, or the thread its session owns). `sessions.follow_up { in \| at, note }` leaves a note for the calling session. Routers get `schedule.list` only |
+| `tools.*` | find (`{ query }`: tools of the session's toolset, allowed and visible, ranked by name, group and description, a line each with `loaded`; a name or pattern matches exactly; no match lists the groups), load (`{ names }`, names or patterns: on-demand tools added to `meta.loadedTools`, which `sessions.save_metadata` can't touch; `alreadyLoaded`, `unknown`). Forks and loop children inherit the loaded tools. Not registered with `config.toolsOnDemand: false`; never in router toolsets |
 | `time.now` | the current time `{ iso, local, timezone, weekday, unix }`, in the company timezone or an IANA one asked for (an unknown one is an error naming an example) |
 | `code.*` | run (`{ language: 'python' \| 'node', code, timeoutMs?, fresh? }`, stateful per session, files at `/work/files`), reset |
 
@@ -271,6 +281,9 @@ container and checks that commit fails there.
 `test/schedule.test.ts` covers `schedule.*` and `sessions.follow_up`: one-offs, recurring in words and cron, the
 company time zone, the task's session and requester, a retried call, bad input, "here" and other report targets,
 list/update/pause/run now/cancel on the employee's own tasks only, and the router's toolset.
+`test/tools-on-demand.test.ts` covers the core set and groups (every default tool classified, every on-demand tool
+named in the prompt), `offeredTools`, `tools.find` and `tools.load` (ranking, patterns, the toolset as the boundary,
+the meta and its protection, forks and loops inheriting), and the switch (prompt section, no loaders when off).
 `test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
 project, `you`, role order, the limit), skipping a repeat, new sessions and forks
 getting the current list with the system prompt byte-identical after an

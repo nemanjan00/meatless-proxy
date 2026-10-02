@@ -25,7 +25,16 @@ import type {
   WaitCondition,
 } from '@mp/sessions'
 import type { Entry } from '@mp/store'
-import type { ControlSignal, ToolContext, ToolDefinition, ToolLists, ToolRegistry, ToolResult } from '@mp/tools'
+import {
+  LOADED_TOOLS_META,
+  loadedToolsOf,
+  type ControlSignal,
+  type ToolContext,
+  type ToolDefinition,
+  type ToolLists,
+  type ToolRegistry,
+  type ToolResult,
+} from '@mp/tools'
 import { answeredCall, lastAssistantText, renderMessages } from './context.ts'
 import {
   COMPACTION_PROMPT,
@@ -145,6 +154,14 @@ export interface RunnerOptions {
    * its history may say a tool is missing.
    */
   currentToolset?: (session: Session) => Promise<string[] | undefined>
+  /**
+   * Tools on demand (`TOOLS_ON_DEMAND`): for a session, which tools of its toolset are offered only once
+   * loaded; undefined (or no option) offers every tool of the toolset. A session is offered the others,
+   * the tools listed in its meta (`LOADED_TOOLS_META`), and the tools its history has called (a fork's
+   * inherited calls). A call to an on-demand tool that isn't loaded, but is in the toolset and allowed,
+   * loads it and runs: the call is valid, and the tool stays loaded.
+   */
+  onDemand?: (session: Session) => ((name: string) => boolean) | undefined
   /**
    * The current text of a session's first entry (the employee prompt it was created with), read when a
    * run starts; undefined keeps it. The model sees the current text in place of the stored one.
@@ -332,13 +349,55 @@ export function createRunner(opts: RunnerOptions): Runner {
   /** A vision tool (image.view) when the model can't see images. */
   const blind = (def: ToolDefinition) => !vision && !!def.tags?.includes(VISION_TAG)
 
-  const toolSpecsFor = async (session: Session): Promise<{ specs: ToolSpec[]; names: string[] }> => {
+  /** Tool names called in a history: a fork inherits its parent's calls, so it keeps being offered those tools. */
+  const calledIn = (history: Entry[]) => {
+    const out = new Set<string>()
+    for (const e of history) {
+      if (e.kind !== 'assistant') continue
+      for (const c of (e.content as unknown as AssistantContent).toolCalls ?? [])
+        out.add(tools.resolveProviderName(c.name) ?? c.name)
+    }
+    return out
+  }
+
+  /**
+   * The tools offered at a model call: the session's toolset, registered, allowed and visible to the model,
+   * minus on-demand tools it hasn't loaded. The session is read again for what it loaded (tools.load).
+   */
+  const toolSpecsFor = async (session: Session, history: Entry[] = []): Promise<{ specs: ToolSpec[]; names: string[] }> => {
     const lists = await opts.toolListsFor(session.data.employeeId)
-    const names = session.data.toolset.filter((n) => {
+    let names = session.data.toolset.filter((n) => {
       const t = tools.get(n)
       return t && !blind(t.def) && tools.isAllowed(n, lists)
     })
+    const onDemand = opts.onDemand?.(session)
+    if (onDemand) {
+      const current = (await sessions.get(session.id)) ?? session
+      const loaded = new Set([...loadedToolsOf(current.data.meta), ...calledIn(history)])
+      names = names.filter((n) => !onDemand(n) || loaded.has(n))
+    }
     return { specs: names.length ? tools.specs(names) : [], names }
+  }
+
+  /**
+   * Loads an on-demand tool the model called before loading it (it is in the toolset and allowed, so the
+   * call is valid): it stays offered for the rest of the session. A failure to record it is logged; the call runs anyway.
+   */
+  const loadOnCall = async (session: Session, name: string, logger: Logger) => {
+    const onDemand = opts.onDemand?.(session)
+    if (!onDemand?.(name)) return
+    try {
+      const current = await sessions.require(session.id)
+      const loaded = loadedToolsOf(current.data.meta)
+      if (loaded.includes(name)) return
+      await sessions.update(session.id, {
+        meta: { ...(current.data.meta ?? {}), [LOADED_TOOLS_META]: [...loaded, name].sort() },
+      })
+      emit('tools.loaded', { sessionId: session.id, names: [name], by: 'call' })
+      logger.info('on-demand tool loaded by calling it', { tool: name })
+    } catch (err) {
+      logger.warn('could not record a tool as loaded', { tool: name, err: errorMessage(err) })
+    }
   }
 
   /**
@@ -616,6 +675,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         control: [],
       }
     }
+    await loadOnCall(session, name, logger)
     // Crash recovery: a non-idempotent call whose outcome we don't know is never retried blindly.
     if (resumed && def.effect === 'non_idempotent') {
       return {
@@ -846,7 +906,7 @@ export function createRunner(opts: RunnerOptions): Runner {
           return { status: 'paused', runId, reason: 'wall clock' }
         }
 
-        const { specs } = await toolSpecsFor(session)
+        const { specs } = await toolSpecsFor(session, history)
         const modelName = session.data.model ?? model.defaultModel
         const window = windowOf(modelName)
         const render = (h: Entry[]) => {

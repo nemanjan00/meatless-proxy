@@ -72,6 +72,7 @@ first by a small built-in loader; variables already set win.
 | `CONTEXT_COMPACT_AT` | `85` | percent of the context window at which a run compacts its context by itself before the next model call; `0` turns it off |
 | `CONTEXT_NEAR_AT` | `80` | percent of the context window at which the model is asked, in its next turn, to free space itself (collapse finished work, or compact with its own summary); only below `CONTEXT_COMPACT_AT`; `0` turns it off |
 | `TOOL_RESULT_MAX_CHARS` | `20000` | tool results longer than this are stored in full and kept in the history as a preview with a pointer; `0` turns it off |
+| `TOOLS_ON_DEMAND` | `true` | tools on demand (docs/spec.md#tools-on-demand): work sessions are offered their core tools and load the rest with `tools.find` / `tools.load` (or by calling one); the employee prompt lists what can be loaded. `false`: every tool is offered, every call, and `tools.*` isn't registered |
 | `ALERTS_ENABLED` | `true` | Post alerts in `#alerts` (see [Alerts](#alerts)) |
 | `ALERT_PAUSED_MINUTES` | `30` | Alert about a run paused longer than this |
 | `ALERT_UNAVAILABLE_COUNT` | `3` | Alert when a dependency had this many `unavailable` errors… |

@@ -499,6 +499,45 @@ standard library tools and every tool of every connected MCP server.
   An employee's own MCP servers' tools are never on for anyone else
   ([connecting MCP servers](#connecting-mcp-servers)).
 
+#### Tools on demand
+
+Every model call carries the definitions of the tools it offers, and most
+sessions use a small part of them. So a session is offered its **core
+tools** from the start and loads the rest when it needs them
+(`TOOLS_ON_DEMAND`, on by default; `false` offers every tool, every call).
+
+- **The core set** is what most work uses: chat replies and reading, git and
+  project reads, `env.up` and `env.exec`, the session tools that script work
+  and manage context, checklists, memory, files, `time.now`, skills, and the
+  most used tools of each integration (Slack `reply`, `post_message`,
+  `read_thread`, `react`; GitLab `get_file`, `list_tree`,
+  `create_merge_request`; Linear `get_issue`, `comment`). Everything else of
+  the standard library and the first-party integrations is **on demand**,
+  grouped by what it's for (scheduling, triggers, subscriptions, chat
+  channels, Slack forms and files, GitLab reviews and pipelines…). Tools of
+  other MCP servers are offered from the start, as before.
+- **The employee prompt** lists the on-demand groups in one short line each,
+  with their tool names, so the model knows what exists.
+- **`tools.find { query }`** returns matching tools, a line each, and whether
+  each is loaded. **`tools.load { names }`** (names or patterns such as
+  `mcp.slack.*`) adds them from the next model call, for the rest of the
+  session. Loaded tools are recorded in the session's meta (`loadedTools`,
+  managed by the harness); forks and loop children inherit them, and a tool
+  a session's history has called stays offered.
+- **Calling a tool that isn't loaded** but is in the session's toolset and
+  allowed runs it and loads it: the call is valid. A tool outside the
+  toolset, or not allowed, is refused as before.
+- **The toolset stays the permission boundary**: only its tools, allowed
+  for the employee, can be found, loaded or called. A session without
+  `tools.load` in its toolset (a router context, a reviewer, a narrowed
+  template) is offered its whole toolset; router contexts never get the
+  loaders.
+- Situational guidance lives in the descriptions of the tools it concerns
+  (Slack forms, environment profiles and networks, local projects, merging
+  the base branch), so it costs context only where the tool is offered. The
+  prompt keeps the rules in full: the hard limits, how to communicate,
+  "on it" first, and untrusted input.
+
 Open questions:
 
 - Can templates and procedures narrow an employee's tool set further for their

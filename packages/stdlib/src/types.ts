@@ -181,6 +181,12 @@ export interface StdlibConfig {
    * server passes its defaults to `@mp/usage` instead. `maxConcurrentSessions` is enforced by the runner.
    */
   defaults?: { maxFanOut?: number; maxDepth?: number; maxConcurrentSessions?: number }
+  /**
+   * Tools on demand (`TOOLS_ON_DEMAND`): sessions are offered their everyday tools and load the rest with
+   * tools.find and tools.load, and the employee prompt lists what can be loaded. Default true; false
+   * registers neither tool, and sessions are offered every tool of their toolset.
+   */
+  toolsOnDemand?: boolean
 }
 
 export interface PolicyConfig {

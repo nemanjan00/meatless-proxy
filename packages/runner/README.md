@@ -18,6 +18,12 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
      between steps can be recovered.
 - **Tools:**
   - allow and deny lists, and the session's fixed toolset
+  - tools on demand (`onDemand(session)`, `TOOLS_ON_DEMAND`): a session that
+    can load tools is offered the others plus the ones in its meta
+    (`LOADED_TOOLS_META`, from `@mp/tools`) and the ones its history called
+    (a fork's inherited calls). A call to an on-demand tool that isn't
+    loaded, but is in the toolset and allowed, records it as loaded
+    (`tools.loaded` on the bus) and runs
   - `beforeToolCall` (can deny)
   - secret variables injected at call time and redacted from outputs
   - `afterToolCall` (transform)
@@ -122,7 +128,11 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
 `test/runner.test.ts` covers full scenarios with the scripted model and the
 in-memory stack: tools, ephemeral and committed runs, summary commits,
 children and waits, budgets, policies, secrets, crash recovery, retries,
-inbox, max steps and bus events. `test/limits.test.ts` covers the wall clock
+inbox, max steps and bus events. `test/on-demand.test.ts` covers tools on
+demand: core versus on-demand offering, a load seen from the next call and in
+later runs, a call to an allowed tool that isn't loaded (runs, and loads it),
+refused calls outside the toolset or the lists, a fork's inherited calls, and
+sessions without the loader. `test/limits.test.ts` covers the wall clock
 (manual clock: paused between steps, not mid-tool; fresh allowance on resume;
 time across a suspend), step allowances from `limitsFor`, and the concurrency
 cap. `test/context.test.ts` covers context management: notes once each (no

@@ -89,7 +89,7 @@ describe('the prompt', () => {
     const t = await stack()
     const contact = await t.directory.contacts.require(t.employee.data.contactId)
     const p = employeePrompt({ employee: t.employee, contact, now: 'now' })
-    expect(p).toContain('code.run runs Python or Node')
+    expect(p).toContain('compute with code.run (your Python/Node sandbox')
     expect(p).toContain('/work/files')
   })
 })
