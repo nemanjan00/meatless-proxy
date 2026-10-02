@@ -153,6 +153,11 @@ export interface RunResult {
   /** Final assistant text, if any. */
   output?: string
   error?: string
+  /**
+   * Structured data the run ended with (`sessions.finish { result }`), stored as given. A parent waiting on
+   * the run gets it as is, next to `output`, so it doesn't have to parse text.
+   */
+  result?: Json
 }
 
 export interface RunData extends Record<string, unknown> {
@@ -167,8 +172,14 @@ export interface RunData extends Record<string, unknown> {
   tip: string | null
   /** What started it. */
   cause: { type: 'event' | 'fork' | 'loop' | 'manual' | 'wake'; eventId?: string; parentRunId?: string; note?: string }
-  /** The contact the work is for, if known. */
+  /** The contact the work is for, if known: who asked for what started the run. */
   requesterId?: string
+  /**
+   * Later requests that reached the run while it worked (deliveries it took from the inbox that ask it to
+   * act), oldest first, with who asked. The latest one's requester is who the run works for from then on
+   * (tool calls, commit trailers); `requesterId` stays who started it.
+   */
+  requests?: RunRequest[]
   /** Higher runs first. */
   priority: number
   wait?: WaitCondition
@@ -220,6 +231,17 @@ export interface RunContextSize {
   noted?: number
 }
 
+/** A request delivered into a running run (`RunData.requests`). */
+export interface RunRequest {
+  eventId: string
+  requesterId?: string
+  at: string
+}
+
+/** Who a run works for now: the requester of its latest request, else whoever started it. */
+export const currentRequester = (run: Pick<Run, 'data'>): string | undefined =>
+  run.data.requests?.findLast((r) => r.requesterId)?.requesterId ?? run.data.requesterId
+
 export type Run = StoredRecord<RunData>
 
 export interface CreateRunInput {
@@ -245,6 +267,8 @@ export interface InboxItemData extends Record<string, unknown> {
   text: string
   source: string
   type: string
+  /** Who sent it (the event's actor), when known. */
+  requesterId?: string
   consumed: boolean
   consumedByRun?: string
 }
@@ -405,6 +429,10 @@ export interface Sessions {
     employeeId?: string
     rootSessionId?: string
     limit?: number
+    /** Skip this many (for paging). */
+    offset?: number
+    /** Newest first instead of oldest first. */
+    newestFirst?: boolean
   }): Promise<Run[]>
   /** The non-terminal continuing run of a session, if any (there is at most one). */
   activeContinuingRun(sessionId: string): Promise<Run | null>

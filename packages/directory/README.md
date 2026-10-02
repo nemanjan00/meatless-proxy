@@ -15,7 +15,7 @@ as extendable records on top of `@mp/records`.
   `identity`; the slug is the employee's record key), `get`, `require`, `list`, `update` (renaming renames the contact and handle),
   `byContact`, `byHandle('@name')`, `contact(employeeId)`.
 - `projects`: `create`, `get`, `require`, `update`, `list`, `search`, `byName` (name or alias), `addMember(projectId, contactId, role)`,
-  `removeMember`, `setOwner`, `owner`, `members` (`{contact, roles, links}[]`), `forContact` (`{project, roles, links}[]`).
+  `removeMember`, `setOwner`, `owner`, `leads` (people only), `members` (`{contact, roles, links}[]`), `forContact` (`{project, roles, links}[]`).
 - `procedures`: `create`, `get`, `require`, `update`, `list`, `find(text, { projectIds })` (keyword scoring over name, applies, body;
   archived procedures are left out). `approvals` are `{ contactId | role, step? }`; `archived: true` retires one.
 - `learning` (`learning.ts`, docs/spec.md "What employees learn about people"): `learn({ contactId, employeeId, source,
@@ -33,8 +33,11 @@ employee pushes with its key), `httpUrl` the same repository over https. An empl
 link from its AI contact (the harness's "Your projects" entry and GitLab hook provisioning read it); its older
 `scope.projects` is only a fallback that the server migrates to links.
 
-Ownership and membership are links `contact -> project` with a role (`ProjectRoles`: owner, backup, member, reviewer,
+Ownership and membership are links `contact -> project` with a role (`ProjectRoles`: lead, owner, backup, member, reviewer,
 stakeholder, or any string), stored once and read from both sides. Any contact can own a project, including an employee's.
+The `lead` is the person in charge, who employees ask for decisions: `PERSON_ONLY_ROLES`, so `addMember` refuses an AI or
+agent contact (`ValidationError`; `projectRoleProblem(contact, role)` says why, for other write paths), and
+`projects.leads(projectId)` lists the leads that are people, earliest first.
 A project's optional `egress: { allow: string[] }` is its containers' egress allowlist (see `EnvSpec.egress`). An
 employee's optional `network` (`EmployeeNetwork`: `'none'`, `'project'` (the default) or `{ allow: string[] }`) says what
 its environments and sandbox may reach on top of that; `create` and `update` refuse other shapes (`invalidNetwork`).

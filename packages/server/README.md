@@ -140,7 +140,8 @@ Exactly the routes of `@mp/api` (`ROUTES`), plus:
   requested), `origin` (`chat`, `procedure`, `trigger`, `handoff`, `session`, `manual`, `router`) and
   `excludeRoles` (session `meta.role`s, comma-separated; default `router-retired`, `none` for nothing), and sorts
   by `sort` (`activity`: `updatedAt` desc, the default; `newest`; `oldest`; `title`), ties broken by id so pages
-  don't overlap. Rows carry `lastActivityAt`, `startedFrom`, `requester` and `project`. Where a session came from is
+  don't overlap. Rows carry `lastActivityAt`, `startedFrom`, `requester`, `project` and `outcome` (the stdlib's
+  `sessionOutcome`, `services.sessionOutcome`; also on `GET /api/sessions/:id`; left out for a redacted private session). Where a session came from is
   its role (router contexts), its meta (procedures), else its first run's cause: a fork or loop by a router's run
   is a hand-off and by any other session's is `session`, an event from `chat` is `chat`, from `ui` is manual, from
   anything else (integrations, timers, webhooks) is `trigger`. It's cached per session once it has a run, and an
@@ -808,8 +809,9 @@ from its AI contact, with a role, the same link GitLab hook provisioning and the
 `{ contactId }` or `{ employeeId }`), refuses a taken name or a repository another project has (compared with
 `repoKey`, so https and ssh match), then creates the project and its links (and removes it again if a link fails).
 `addProjectPerson` (`owner` replaces the owner), `removeProjectPerson` (one role or all; an employee losing its last
-role also loses the project from its older `scope.projects`), `projectPeople`, `employeeProjects`,
-`projectByRepository`. `projectRoutes(s)` serves them; writes need a member (`GUARD_RULES`), like links.
+role also loses the project from its older `scope.projects`), `projectPeople` (with `leads`), `employeeProjects` (each
+with its `leads`), `allProjectLeads` (`GET /api/projects/leads`, for the project list's "no lead"),
+`projectByRepository`. A `lead` must be a person: an AI is a 422 here and on `POST /api/records/contact/:id/links`. `projectRoutes(s)` serves them; writes need a member (`GUARD_RULES`), like links.
 `createEmployee` links its `projects` as `member`. A `local:` URL is refused there: local repositories are made with
 their project (below), and `assertMayGrantRole` refuses handing out a merge role on a local project to anyone who
 can't merge there already.
@@ -826,7 +828,9 @@ The employee git stores get `LOCAL_REPOS_DIR` too, so checkouts and pushes reach
   `member`, and the first commit is its.
 - `localProject`, `mergeLocalBranch` (fast-forward or merge commit by the person; conflicts are a 409 with
   `details.files`), `deleteLocalBranch`: both write a `local-git` event (`branch.merged` / `branch.deleted`) on the
-  branch's subject, which `git.push` subscribed the pushing session to.
+  branch's subject, which `git.push` subscribed the pushing session to. Once the event was delivered (bus
+  `event.routed`), the integration policies' subscription hygiene (`closingReason`) ends the subscriptions to that
+  branch, like a merged MR's; it runs whether or not an integration is configured.
 - `attachRemote` (admins): refuses credentials in the URL and a repository another project has, picks the SSH key
   (`employeeId`, else the owner, else the first employee member with a key), pushes every branch and tag, then
   replaces the repository with the remote (`previousUrl: local:<slug>`). Access problems are a 403, a remote with

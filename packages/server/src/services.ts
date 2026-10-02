@@ -36,6 +36,7 @@ import { storeSecretStore } from '@mp/secrets-store'
 import { createSandbox, type Sandbox } from '@mp/sandbox'
 import { directNetworkName, networkFor, type ProcedureContexts, type ScheduleService } from '@mp/stdlib'
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
+import type * as Api from '@mp/api'
 import { createSkills, type SkillsService } from '@mp/skills'
 import { memoryStore, type Store } from '@mp/store'
 import { postgresStore, runMigrations } from '@mp/store-postgres'
@@ -141,6 +142,11 @@ export interface Services {
   stdlib: StdlibModule | null
   /** Procedure contexts: build, check, rebuild and start (from the stdlib; null without it). */
   procedureContexts: ProcedureContexts | null
+  /**
+   * What a session did and waits for (its last outcome, what it produced, its document's first line,
+   * `waitingFor`), as the session tools show it (from the stdlib; null without it).
+   */
+  sessionOutcome: ((session: Session) => Promise<Api.SessionOutcome>) | null
   /** Scheduled tasks and follow-ups, as records (docs/spec.md#scheduled-tasks). */
   scheduledTasks: ScheduledTasks
   /** Creating, running and cancelling them, with their sessions (from the stdlib; null without it). */
@@ -584,6 +590,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     runner,
     stdlib: null,
     procedureContexts: null,
+    sessionOutcome: null,
     scheduledTasks,
     schedules: null,
     mcpTools: [],
@@ -668,6 +675,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     services.stdlib = stdlib
     sessionPrompt = (session, stored) => stdlib.currentSessionPrompt(deps, session, stored)
     services.procedureContexts = stdlib.createProcedureContexts(tools, deps)
+    services.sessionOutcome = (session) => stdlib.sessionOutcome(deps, session)
     services.schedules = stdlib.scheduleService(deps)
     logger.debug('stdlib registered', { tools: names.length })
   } else {

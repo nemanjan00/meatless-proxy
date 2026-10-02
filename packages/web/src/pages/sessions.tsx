@@ -39,6 +39,9 @@ export function SessionRow({ row, indent = 0 }: { row: SessionListItem; indent?:
   const loop = s.meta?.loop as { index: number; of: number } | undefined
   const { handle } = useEmployees()
   const activity = row.lastActivityAt ?? row.session.updatedAt
+  // What it waits for, else what it did last: a bare status doesn't say.
+  const waiting = row.outcome?.waitingFor?.[0]
+  const outcome = waiting ? `waiting for ${waiting}` : row.outcome?.lastOutcome
   return (
     <Link
       to={`/sessions/${row.session.id}`}
@@ -48,6 +51,11 @@ export function SessionRow({ row, indent = 0 }: { row: SessionListItem; indent?:
     >
       <StatusIcon status={status} />
       <span className="min-w-0 truncate text-fg-secondary group-hover:text-foreground">{s.title}</span>
+      {outcome && (
+        <span className="hidden min-w-0 shrink truncate text-micro text-fg-quaternary lg:inline" data-testid="session-outcome">
+          {outcome}
+        </span>
+      )}
       <span className="hidden shrink-0 font-mono text-micro text-fg-quaternary md:inline">
         @{handle(row.employee)}#{s.slug}
       </span>

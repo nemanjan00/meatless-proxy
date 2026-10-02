@@ -67,8 +67,12 @@ extend them with `records.kinds.extend`.
   `waitResults` (each awaited run's state, result, session document and
   `done`). `run.data.wait` is kept after waking so the resumed run can read the
   results; clear it with `updateRun` if needed.
-- **Inbox:** `addToInbox` (idempotent per session and event), `inbox`,
+- **Inbox:** `addToInbox` (idempotent per session and event; `requesterId` is the sender, when known), `inbox`,
   `takeInbox` (atomic; concurrent takers never get the same item).
+- **Who asked:** `run.data.requesterId` (who started it) and `run.data.requests` (later requests taken from
+  the inbox, with their senders); `currentRequester(run)` is who it works for now. `runs({ newestFirst, offset })`
+  pages runs newest first. `RunResult.result` is the structured result of `sessions.finish { result }`, returned
+  as is by `waitResults`.
 - **Templates:** `createTemplate`, `getTemplate`, `templates`,
   `updateTemplate`, `fromTemplate` (fills `{{param}}` in name, instructions and
   document; missing required params are a `ValidationError`). Copying the

@@ -14,15 +14,16 @@ import {
 import { contextWindowOf, type ChatMessage, type ImageRef, type ModelClient, type ModelResponse, type ToolSpec } from '@mp/model'
 import type { Queue } from '@mp/queue'
 import { createRedactor, type SecretStore } from '@mp/secrets'
-import type {
-  AssistantContent,
-  Run,
-  RunContextSize,
-  RunResult,
-  Session,
-  Sessions,
-  ToolResultContent,
-  WaitCondition,
+import {
+  currentRequester,
+  type AssistantContent,
+  type Run,
+  type RunContextSize,
+  type RunResult,
+  type Session,
+  type Sessions,
+  type ToolResultContent,
+  type WaitCondition,
 } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import {
@@ -333,7 +334,10 @@ export function createRunner(opts: RunnerOptions): Runner {
       sessionId: session.id,
       mode: 'continuing',
       cause: { type: 'event', eventId: left[0]!.data.eventId, note: 'inbox' },
-      ...(run.data.requesterId ? { requesterId: run.data.requesterId } : {}),
+      // Whoever sent the delivery it picks up, else whoever the last run worked for.
+      ...((left[0]!.data.requesterId ?? currentRequester(run))
+        ? { requesterId: left[0]!.data.requesterId ?? currentRequester(run) }
+        : {}),
       priority: run.data.priority,
     })
     await enqueue(next.id, { priority: run.data.priority })
@@ -497,7 +501,11 @@ export function createRunner(opts: RunnerOptions): Runner {
           await historyOp(run, 'sessions.compact', () => sessions.compact(run.id, c.summary, { meta: notedMeta(run) }))
           break
         case 'end':
-          out.end = { status: c.status, ...(c.output !== undefined ? { output: c.output } : {}) }
+          out.end = {
+            status: c.status,
+            ...(c.output !== undefined ? { output: c.output } : {}),
+            ...(c.result !== undefined ? { result: c.result } : {}),
+          }
           break
       }
     }
@@ -719,7 +727,7 @@ export function createRunner(opts: RunnerOptions): Runner {
       runId: run.id,
       callId: call.id,
       idempotencyKey: `${run.id}:${step}:${call.id}`,
-      ...(run.data.requesterId ? { requesterId: run.data.requesterId } : {}),
+      ...(currentRequester(run) ? { requesterId: currentRequester(run) } : {}),
       secrets: secretValues,
       signal: ac.signal,
       logger: logger.child({ tool: name }),
@@ -816,6 +824,7 @@ export function createRunner(opts: RunnerOptions): Runner {
             state: r.state,
             output: r.result?.output,
             error: r.result?.error,
+            ...(r.result?.result !== undefined ? { result: r.result.result } : {}),
           })),
           null,
           2,
@@ -882,6 +891,15 @@ export function createRunner(opts: RunnerOptions): Runner {
               meta: { inboxId: item.id },
             })
           }
+          // A later request (someone else in the thread, say) is who the run works for from now on.
+          const asked = items.filter((i) => i.data.expectedToAct && i.data.requesterId)
+          if (asked.length)
+            run = await sessions.updateRun(runId, {
+              requests: [
+                ...(run.data.requests ?? []),
+                ...asked.map((i) => ({ eventId: i.data.eventId, requesterId: i.data.requesterId!, at: clock.iso() })),
+              ],
+            })
           if (items.length) history = await sessions.runHistory(runId)
         }
 

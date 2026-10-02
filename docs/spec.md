@@ -1332,7 +1332,10 @@ removed or redefined.
 
 An employee works on a project through a [link](#links-between-contacts-and-projects)
 from its AI contact to the project, with a role (`owner` or `member`, or any
-other role). People are assigned the same way. That one link is what the
+other role). The project's **lead** (role `lead`) is the person in charge, who
+employees ask for decisions and clarifications: it must be a person, never an
+AI (an AI contact is refused, through the project API and the records API
+alike), and an AI employee may still own the project. People are assigned the same way. That one link is what the
 directory, [GitLab webhook provisioning](#integrations) and the employee's
 "Your projects" entry all read, so assigning a project also registers its
 webhooks.
@@ -1340,8 +1343,10 @@ webhooks.
 - **In the web UI.** The employee page has a **Projects** section: its
   projects with its roles, each project's owner and repository, a typeahead to
   add a project with a role, remove, and **New project**. A project's page
-  lists the employees and people on it (owners first) and adds them the same
-  way.
+  lists the employees and people on it (lead and owners first) and adds them
+  the same way, with a role: member, reviewer, backup, owner or lead (lead is
+  offered for people only). It says who leads, or **No lead**; the project list
+  shows each project's lead or "no lead" (`GET /api/projects/leads`).
 - **New project** (`POST /api/projects`): name, description, repository URLs
   (https or ssh), optional docs links (stored as `links` with system `docs`),
   and an employee as owner, created and linked in one step. A name or a
@@ -1362,8 +1367,17 @@ webhooks.
 The system prompt doesn't list projects. Instead, every run gets a short
 **"Your projects"** system entry after the session's history, and before the
 event: for each project its name and id, the employee's role, the repository
-URLs, the owner and a one-line description (at most 20, then a count). With
-none, it says so and tells the employee to ask an admin to assign projects.
+URLs, the owner, who to **ask** for decisions and clarifications, and a
+one-line description (at most 20, then a count). With none, it says so and
+tells the employee to ask an admin to assign projects.
+
+- **Who to ask** is the lead, with their handles (`ask: Ana (lead; slack:U0TEST0001)`);
+  without one, a human owner, then the human backups, each marked "no lead
+  set"; with none of them, "no lead set: ask the requester or an admin". An AI
+  is never named. The prompt tells the employee to ask that person, tagged
+  with their handle, in the thread where the work lives or a DM, instead of
+  guessing; the router's hand-offs name the project and its lead, and
+  `directory.get_project` returns `leads` and `ask` too.
 
 - It's added by the router's `runInput` hook for every delivery, and for new
   sessions, forks and reviews the employee starts (`kit.startRun`). Loop
@@ -1395,7 +1409,7 @@ id copied into both sides:
 |-----------|-------------|------------------------------------------------------|
 | `contact` | contact id  |                                                      |
 | `project` | project id  |                                                      |
-| `role`    | string      | e.g. `owner`, `member`, `reviewer`, `stakeholder`    |
+| `role`    | string      | e.g. `lead`, `owner`, `backup`, `member`, `reviewer`, `stakeholder` |
 
 - **Stored once, read from both sides.** The project's `owner` and `members`,
   and the list of a contact's projects, are both views of the same links. The
@@ -1567,7 +1581,8 @@ and work that has no GitLab project yet.
   conflicting files and change nothing: they're resolved on the branch.
   **Delete branch** removes a branch (never `main`). Both send the subscribed
   session an event (`branch.merged` / `branch.deleted`, source `local-git`),
-  so the employee learns what happened, like a GitLab MR event.
+  so the employee learns what happened, like a GitLab MR event. Once it was
+  delivered, the subscriptions to that branch end, as a merged MR's do.
 - **Who merges.** Admins, and members who are the project's `owner`, `backup`
   or `reviewer` (`MERGE_ROLES`). Everyone signed in can read the branches,
   diffs and files. Because project roles are knowledge members can edit, on a
@@ -1590,7 +1605,7 @@ and work that has no GitLab project yet.
 |-------|-----|
 | `POST /api/projects/local` | admins |
 | `GET /api/projects/:id/local`, `…/compare?branch=`, `…/tree?path=`, `…/file?path=` | everyone signed in |
-| `POST /api/projects/:id/local/merge`, `…/branches/delete` | admins, the project's owners, backups and reviewers |
+| `POST /api/projects/:id/local/merge`, `…/branches/delete` | admins, the project's leads, owners, backups and reviewers |
 | `POST /api/projects/:id/local/remote` | admins |
 
 #### Agent instructions in repositories
@@ -1980,7 +1995,9 @@ The model has tools for working with sessions:
 | loop           | split a session into *n* children, one per item               |
 | look up        | find sessions by id, title, status, any metadata field, link, or text in their document |
 | search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before. Every word must appear, in any order, anywhere in an entry: text, tool call arguments (a file written with `git.write_file`) and tool results. The searching session's own entries are left out by default (it has them, and newest first they crowded out the older sessions: live, a search for files written in earlier sessions returned only the current run's own entries) and counted instead; `includeThisSession` lists them. Snippets show tool call arguments decoded, not as escaped JSON |
-| tree           | get a session's parent, children, or whole tree               |
+| get            | a session: metadata, document, checklist, links, its [outcome](#outcomes-and-who-asked), and its recent runs (the last 10, newest first; `runs` and `runsOffset` page): when, who asked (name and handles), the request in one line, the outcome |
+| list / tree    | list sessions, or get a session's parent, children, or whole tree, each with its [outcome](#outcomes-and-who-asked) |
+| contents       | a table of contents of the history: every collapse, jump back, compaction, run committed as a summary and offload, with the entries it replaced, their size, the summary's first line and how to get the detail back (`item` lists the entries of one stretch, each with a ready `restore` call that reads it) |
 | save metadata  | set or update metadata fields and the session's document      |
 | link / unlink  | add or remove links to contacts, projects and other sessions  |
 | save template  | turn a session into a template                                |
@@ -1989,7 +2006,8 @@ The model has tools for working with sessions:
 | commit         | keep the current run: add it to the session's history          |
 | rewind         | collapse a stretch of history (`from` and `to`, tool call ids or entry ids, in this run or earlier ones) into a summary, keeping everything after it word for word; or, with only `from`, jump back to an earlier point and continue from a summary of what happened since |
 | offload        | replace a message in history with a pointer, optionally to a docs chapter written first |
-| restore        | put an offloaded message back into the active history, or read a piece of it without changing anything |
+| restore        | put an offloaded message back into the active history; or, with `offset` and `length`, read a piece of any entry of the session (or its fork tree) by id without changing anything: an offloaded original, a big result in parts, one entry of a collapsed or compacted stretch. A collapsed or compacted stretch can't be put back whole, and nothing else of the history can be reopened: for that the tool points to `contents` and `search` (live, a model thought restore could reopen any part of its history) |
+| finish         | end the run with an output and, optionally, a structured `result` (a JSON object) stored on the run, which `wait` returns to a parent as is |
 | compact        | replace the whole history after the first entry with a summary of everything |
 
 #### Runs: ephemeral or committed
@@ -2009,6 +2027,44 @@ current history, and the result is one of two things:
 Every session can do both. Sessions created by a loop are usually ephemeral
 runs of one context, and a context commits a run when there is something worth
 carrying forward.
+
+#### Outcomes and who asked
+
+A session that owns a thread for months does work for many people, and a bare
+status ("done", "waiting") says nothing to whoever comes back to it later. The
+record says more, and the session tools and the web UI show it:
+
+- **Every run stores who asked.** `requesterId` is the person whose message or
+  instruction started it. A request that reaches a run while it works (a
+  delivery it takes from its inbox that asks it to act, e.g. someone else in the
+  thread asking for a follow-up) is added to the run's `requests` with its
+  sender, and from then on the run works for that person: its tool calls carry
+  them as the requester, so commits get their `Requested-by:` trailer. A run
+  that picks up a delivery left in the inbox is for whoever sent it. Live, a
+  long-lived session asked "who asked for that merge request?" named the person
+  who started the session, not the one who asked for the merge request later.
+- **`sessions.get` lists recent runs** (the last 10, newest first, paged with
+  `runs` and `runsOffset`): when, who asked (name and handles), the request in
+  one line (the text of the event that caused it, else the instruction), the
+  outcome (the result output, shortened), a structured result if any, later
+  requests with who sent them, and what a run that hasn't finished waits for.
+- **Each session has an outcome**, in `sessions.get`, `sessions.list`,
+  `sessions.tree`, the sessions list and the session page: the last finished
+  run's outcome; what it produced (merge requests from its GitLab
+  subscriptions and run outputs, branches it pushed and files it shared,
+  recorded in its meta as it works); its document's first line; and
+  `waitingFor`, derived when it applies: a suspended run's wait ("a reply or
+  event delivered to this session", "runs …"), a paused run's reason, "review
+  of mp/x in local project y (1 commit ahead)" from a local branch
+  subscription and the branch's state (a branch that is gone or no longer
+  ahead isn't waited for), "MR !4 review" from a GitLab merge request
+  subscription (they end when the merge request is merged or closed, so an
+  active one is open). Live, a session was "waiting" with no visible reason: it
+  was waiting for a person to merge its branch.
+- **Questions about past work are answered from the record**: the commit
+  trailers, the run, the thread, or the session that did it, never from memory
+  or a summary ([employee.md](employee.md)).
+- **Private sessions** shown redacted to an admin have no outcome either.
 
 #### Context management: rewind, not compaction
 
@@ -2066,6 +2122,12 @@ summary, and (when collapsing) what came after.
   needs the detail again. Editing a message invalidates the cached prefix from
   that point on, so it's best done on older, larger messages, or together with
   a rewind.
+- **A table of contents.** After several collapses and compactions, a session
+  finds where they happened with `sessions.contents`: each one with the entry
+  range it replaced, its size, the summary's first line, and how to get the
+  detail back. An offload is put back with `restore`; the entries of a
+  collapsed or compacted stretch are listed one by one, each read back with
+  `restore { entryId, offset: 0 }`.
 - **Real compaction only when required**, meaning when even the rewound
   context would be too large. It is then done explicitly and recorded, and the
   full history is still kept in the database.
@@ -2140,7 +2202,10 @@ After a fork or a loop, **the parent decides whether to wait**:
   can check on them later with `tree` or `look up`, or call `wait` whenever it
   needs their results.
 
-Each child's result is its final output together with its session document.
+Each child's result is its final output together with its session document,
+and its structured `result` as is when it ended with `finish { output,
+result }`: a parent that asks its children for data (counts, ids, a verdict)
+gets JSON it doesn't have to parse out of text.
 
 Open questions:
 
@@ -2792,7 +2857,10 @@ forward it.
   instead of the general triggers, so the work isn't routed twice.
 - **Lifetime.** A subscription ends when the session unsubscribes, when the
   session ends, or when the thing itself is closed (the ticket resolved, the PR
-  merged). Subscriptions are handed on when a session forks or passes the work
+  merged, a local branch merged or deleted). A closing event is delivered
+  first, then every subscription to its subject ends (on `event.routed`): a
+  GitLab MR merged or closed, a Linear issue completed, canceled or removed,
+  a local project's `branch.merged` / `branch.deleted`. Subscriptions are handed on when a session forks or passes the work
   to another session.
 - **Any session can subscribe.** It's part of the session library, like fork
   and loop.

@@ -39,13 +39,17 @@ export { ROUTER_MARK, routerAwareScript } from './testing/router-aware.ts'
 export { DIRECT_NOTE, directNetworkName, networkFor, PROXY_NOTE, type NetworkDecision } from './network.ts'
 export * from './procedure-context.ts'
 export {
+  askText,
   currentProjects,
   lastProjectsText,
   MAX_LISTED_PROJECTS,
+  NO_LEAD_TEXT,
+  projectAsk,
   PROJECTS_ENTRY_META,
   PROJECTS_HEADER,
   projectsEntry,
   projectsText,
+  type AskLine,
   type ProjectLine,
   type ProjectsEntry,
 } from './projects-entry.ts'
@@ -60,3 +64,15 @@ export {
   type ScheduleService,
   type WhenInput,
 } from './schedules.ts'
+export {
+  PRODUCED_META,
+  documentLine,
+  outcomeCache,
+  producedOf,
+  runView,
+  sessionOutcome,
+  withProduced,
+  type OutcomeCache,
+  type ProducedItem,
+  type SessionOutcome,
+} from './session-outcomes.ts'

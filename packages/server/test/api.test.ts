@@ -174,11 +174,14 @@ describe('sessions and runs', () => {
     const row = list.body.items.find((x: any) => x.session.id === reqId)
     expect(row).toMatchObject({ employee: { id: employeeId, name: 'Meatless' }, runState: 'completed' })
     expect(row.tokens.calls).toBeGreaterThan(0)
+    // What the session did last, not just its status.
+    expect(row.outcome.lastOutcome).toMatch(/^echo: /)
 
     const detail = await t.req('GET', `/api/sessions/${reqId}`)
     expect(detail.body).toMatchObject({ session: { id: reqId }, employee: { name: 'Meatless' }, activeRun: null })
     expect(detail.body.checklist?.data.items ?? []).toEqual([])
     expect(detail.body.tokens.total).toBeGreaterThan(0)
+    expect(detail.body.outcome).toEqual(row.outcome)
 
     const history = await t.req('GET', `/api/sessions/${reqId}/history`)
     expect(history.body[0]).toMatchObject({ kind: 'system', parent: null })

@@ -391,6 +391,24 @@ export interface SessionListItem {
   requester?: { id: string; name: string }
   /** The project the session is linked to (a `works_on` link first, then any other link but `mentions`). */
   project?: { id: string; name: string }
+  /** What it did and waits for. */
+  outcome?: SessionOutcome
+}
+
+/**
+ * What a session did and is waiting for, derived from its runs, subscriptions and meta (the same the
+ * employee's sessions.get, sessions.tree and sessions.list show).
+ */
+export interface SessionOutcome {
+  /** The last finished run's outcome, shortened. */
+  lastOutcome?: string
+  lastOutcomeAt?: string
+  /** Merge requests, branches pushed and files shared, e.g. `branch mp/fix-login in local:portal`. */
+  produced?: string[]
+  /** The session document's first line. */
+  document?: string
+  /** E.g. `review of mp/fix-login in local project portal (1 commit ahead)`, `MR !4 review (acme/portal)`. */
+  waitingFor?: string[]
 }
 
 /**
@@ -416,6 +434,8 @@ export interface SessionDetail {
   tokens: TokenTotals
   /** Chat threads linked to this session. */
   threads: { channelId: string; threadId: string; title: string }[]
+  /** What it did and waits for. */
+  outcome?: SessionOutcome
 }
 
 /** How a session came to be, relative to its parent. */

@@ -6,6 +6,7 @@ import type {
   SessionData,
   SessionListItem,
   SessionListQuery,
+  SessionOutcome,
   SessionStartedFrom,
 } from '@mp/api'
 import { CHN, CON, EMP, type MockDb, PRO, mockId } from './data.ts'
@@ -52,11 +53,41 @@ export function mockStartedFrom(db: MockDb, s: ApiRecord<SessionData>): SessionS
   return 'manual'
 }
 
-/** The list row fields the server adds: last activity, origin, requester and project. */
+/**
+ * What a session did and waits for, like the stdlib's sessionOutcome: the last finished run's output, the
+ * document's first line, and its local branches waiting for review (from its subscriptions).
+ */
+export function mockOutcome(db: MockDb, s: ApiRecord<SessionData>): SessionOutcome | undefined {
+  const last = runsOf(db, s.id)
+    .filter((r) => r.data.result?.output)
+    .at(-1)
+  const doc = (s.data.document ?? '')
+    .split('\n')
+    .map((l) => l.replace(/^\s*#+\s*/, '').trim())
+    .find(Boolean)
+  const waitingFor = records<{ sessionId: string; subject: { system: string; ref?: string; id?: string }; active?: boolean }>(
+    db,
+    'subscription',
+  )
+    .filter((x) => x.data.sessionId === s.id && x.data.subject.system === 'local-git' && x.data.active !== false)
+    .map((x) => {
+      const ref = x.data.subject.ref ?? x.data.subject.id ?? ''
+      const slash = ref.indexOf('/')
+      return `review of ${ref.slice(slash + 1)} in local project ${ref.slice(0, slash)}`
+    })
+  const out: SessionOutcome = {
+    ...(last?.data.result?.output ? { lastOutcome: last.data.result.output.replace(/\s+/g, ' ').slice(0, 200) } : {}),
+    ...(doc ? { document: doc.slice(0, 160) } : {}),
+    ...(waitingFor.length ? { waitingFor } : {}),
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** The list row fields the server adds: last activity, origin, requester, project and outcome. */
 export function mockListExtras(
   db: MockDb,
   s: ApiRecord<SessionData>,
-): Pick<SessionListItem, 'lastActivityAt' | 'startedFrom' | 'requester' | 'project'> {
+): Pick<SessionListItem, 'lastActivityAt' | 'startedFrom' | 'requester' | 'project' | 'outcome'> {
   const runs = runsOf(db, s.id)
   const last = [...runs].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).at(-1)
   const out = db.links.filter((l) => l.from.kind === 'session' && l.from.id === s.id)
@@ -72,6 +103,7 @@ export function mockListExtras(
     startedFrom: mockStartedFrom(db, s),
     ...(requester ? { requester: { id: requester.id, name: requester.data.name } } : {}),
     ...(project ? { project: { id: project.id, name: project.data.name } } : {}),
+    ...(mockOutcome(db, s) ? { outcome: mockOutcome(db, s)! } : {}),
   }
 }
 

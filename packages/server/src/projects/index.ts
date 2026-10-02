@@ -1,6 +1,6 @@
 import type * as Api from '@mp/api'
 import { ConflictError, NotFoundError, ValidationError } from '@mp/core'
-import type { Contact, Project, ProjectData, Repository } from '@mp/directory'
+import { type Contact, type Project, type ProjectData, ProjectRoles, type Repository } from '@mp/directory'
 import { LOCAL_MIRROR_HOST, isLocalRepoUrl, isValidRepoSlug } from '@mp/git'
 import type { Actor } from '@mp/store'
 import { type Context, Hono } from 'hono'
@@ -23,7 +23,7 @@ export const MAX_ROLE_LENGTH = 40
 /** The `links` system of a project's documentation links. */
 export const DOCS_LINK_SYSTEM = 'docs'
 
-const ROLE_ORDER = ['owner', 'backup', 'member', 'reviewer', 'stakeholder']
+const ROLE_ORDER = ['lead', 'owner', 'backup', 'member', 'reviewer', 'stakeholder']
 const roleRank = (roles: string[]) => Math.min(...roles.map((r) => (ROLE_ORDER.includes(r) ? ROLE_ORDER.indexOf(r) : 99)))
 
 /**
@@ -112,7 +112,25 @@ export async function projectPeople(s: Services, projectId: string): Promise<Api
     })
   }
   people.sort((a, b) => roleRank(a.roles) - roleRank(b.roles) || a.name.localeCompare(b.name))
-  return { projectId, people }
+  return { projectId, people, leads: await projectLeadsOf(s, projectId) }
+}
+
+/** A project's leads (people only), earliest first. */
+export async function projectLeadsOf(s: Services, projectId: string): Promise<Api.ProjectLead[]> {
+  return (await s.directory.projects.leads(projectId)).map((c) => ({ contactId: c.id, name: c.data.name }))
+}
+
+/** Every project's leads, by project id (`GET /api/projects/leads`): one query over the `lead` links. */
+export async function allProjectLeads(s: Services): Promise<Api.ProjectLeads> {
+  const leads: Record<string, Api.ProjectLead[]> = {}
+  const links = await s.records.links({ from: { kind: 'contact' }, to: { kind: 'project' }, role: ProjectRoles.lead })
+  for (const l of links) {
+    if (l.from.kind !== 'contact' || l.to.kind !== 'project') continue
+    const c = await s.directory.contacts.get(l.from.id)
+    if (!c || (c.data.kind ?? 'person') !== 'person') continue
+    ;(leads[l.to.id] ??= []).push({ contactId: c.id, name: c.data.name })
+  }
+  return { leads }
 }
 
 /** Gives a contact a role on a project. `owner` makes it the only owner. */
@@ -165,6 +183,7 @@ export async function employeeProjects(s: Services, employeeId: string): Promise
       project: m.project as unknown as Api.ApiRecord<Api.ProjectData>,
       roles: [...m.roles].sort((a, b) => roleRank([a]) - roleRank([b]) || a.localeCompare(b)),
       owner: owner ? { contactId: owner.id, name: owner.data.name } : null,
+      leads: await projectLeadsOf(s, m.project.id),
     })
   }
   projects.sort((a, b) => a.project.data.name.localeCompare(b.project.data.name))
@@ -281,6 +300,8 @@ export function projectRoutes(s: Services): Hono {
   const actor = (c: Context): Actor => actorOf(principalOf(c).contactId)
 
   app.post('/api/projects', async (c) => c.json(await createProject(s, await jsonBody(c), actor(c)), 201))
+
+  app.get('/api/projects/leads', async (c) => c.json(await allProjectLeads(s)))
 
   app.get('/api/projects/:id/people', async (c) => c.json(await projectPeople(s, c.req.param('id'))))
 

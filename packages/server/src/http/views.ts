@@ -211,9 +211,10 @@ export class Views {
       runs.find((r) => r.data.requesterId)?.data.requesterId
     const projectLinks = links.filter((l) => l.to.kind === 'project' && l.role !== 'mentions')
     const projectId = (projectLinks.find((l) => l.role === 'works_on') ?? projectLinks[0])?.to.id
-    const [requester, project] = await Promise.all([
+    const [requester, project, outcome] = await Promise.all([
       requesterId ? this.contact(requesterId) : null,
       projectId ? this.s.records.get<{ name?: string }>('project', projectId) : null,
+      this.outcome(session),
     ])
     return {
       session: session as Api.Session,
@@ -226,6 +227,19 @@ export class Views {
       startedFrom: origin,
       ...(requester ? { requester: { id: requester.id, name: requester.data.name } } : {}),
       ...(project ? { project: { id: project.id, name: project.data.name ?? project.id } } : {}),
+      ...(outcome ? { outcome } : {}),
+    }
+  }
+
+  /** What a session did and waits for (the stdlib's sessionOutcome), or null without the stdlib or on a failure. */
+  async outcome(session: Session): Promise<Api.SessionOutcome | null> {
+    // A private session shown redacted (an admin outside the DM): nothing it holds, so no outcome either.
+    if (!this.s.sessionOutcome || session.data.meta?.redacted === true) return null
+    try {
+      const o = await this.s.sessionOutcome(session)
+      return Object.keys(o).length ? o : null
+    } catch {
+      return null
     }
   }
 

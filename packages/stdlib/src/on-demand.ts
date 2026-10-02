@@ -125,9 +125,9 @@ export const ON_DEMAND_GROUPS: readonly ToolGroup[] = [
   },
   {
     name: 'sessions',
-    about: 'fan-out, finding and linking sessions, templates',
+    about: 'fan-out, finding and linking sessions, outcomes, a table of contents of your history, templates',
     tools: ['sessions.*'],
-    list: 'sessions.loop/list/search/look_up/tree/link/unlink/save_template',
+    list: 'sessions.loop/list/search/look_up/tree/contents/link/unlink/save_template',
   },
   {
     name: 'checklists',

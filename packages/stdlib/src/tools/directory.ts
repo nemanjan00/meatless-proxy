@@ -3,6 +3,7 @@ import type { Contact, Procedure, Project } from '@mp/directory'
 import type { Session } from '@mp/sessions'
 import { Roles, clip, fail, line, ok, str, type Kit } from '../kit.ts'
 import { createProcedureContexts, isArchived } from '../procedure-context.ts'
+import { askText, projectAsk } from '../projects-entry.ts'
 
 const contactView = (c: Contact): Json => ({
   id: c.id,
@@ -199,7 +200,8 @@ export function registerDirectoryTools(kit: Kit): void {
   kit.tool(
     {
       name: 'directory.get_project',
-      description: 'A project: description, status, owner, members with their roles, repositories, links and its docs.',
+      description:
+        'A project: description, status, owner, lead, who to ask about it, members with their roles, repositories, links and its docs.',
       effect: 'read',
       params: { properties: { id: { type: 'string' } }, required: ['id'] },
     },
@@ -212,6 +214,8 @@ export function registerDirectoryTools(kit: Kit): void {
         ...(projectView(p) as object),
         ...(p.data.description ? { description: clip(p.data.description, 1500) } : {}),
         owner: owner ? { id: owner.id, name: owner.data.name } : null,
+        leads: (await directory.projects.leads(p.id)).map((c) => ({ id: c.id, name: c.data.name })),
+        ask: askText(await projectAsk(directory, p.id)),
         members: members.map((m) => ({ id: m.contact.id, name: m.contact.data.name, roles: m.roles })),
         repositories: (p.data.repositories ?? []).map((r, i) => ({ index: i, ...r })) as Json,
         links: (p.data.links ?? []) as Json,

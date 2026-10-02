@@ -3,7 +3,7 @@ import { FILE_WRITE_MAX_BYTES } from '@mp/api'
 import type { Message as DomainMessage } from '@mp/chat'
 import type { Checklist as DomainChecklist } from '@mp/checklists'
 import { ConflictError, DeniedError, NotFoundError, ValidationError, errorMessage, isMpError, type Json } from '@mp/core'
-import { invalidNetwork } from '@mp/directory'
+import { invalidNetwork, projectRoleProblem } from '@mp/directory'
 import { downloadMime, sniffFile } from '@mp/files'
 import type { MpEvent } from '@mp/events'
 import type { SlackIntegration } from '@mp/integration-slack'
@@ -277,7 +277,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const role = requireString(body.role, 'role')
     visibleKind(toKind)
     // A role that merges into a local project is given only by someone who can merge there (src/local-projects/access.ts).
-    if (kind === 'contact' && toKind === 'project') await assertMayGrantRole(s, principalOf(c), toId, role.trim().toLowerCase())
+    if (kind === 'contact' && toKind === 'project') {
+      await assertMayGrantRole(s, principalOf(c), toId, role.trim().toLowerCase())
+      // A project's lead is a person, never an AI (packages/directory: PERSON_ONLY_ROLES).
+      const problem = projectRoleProblem(await s.directory.contacts.require(id), role.trim().toLowerCase())
+      if (problem) throw new ValidationError(problem)
+    }
     const link = await s.records.link(
       { kind, id },
       { kind: toKind, id: toId },
@@ -388,6 +393,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       )
         shownLinks.push(l)
     const shownRun = activeRun && (await vis.canReadRun(viewer(c), activeRun)) ? activeRun : null
+    const outcome = await v.outcome(session)
     return c.json({
       session: session as Api.Session,
       employee,
@@ -396,6 +402,7 @@ export function apiRoutes(deps: ApiDeps): Hono {
       links: shownLinks,
       tokens,
       threads: threads.filter((t) => !hidden.has(t.channelId)),
+      ...(outcome ? { outcome } : {}),
     } satisfies Api.SessionDetail)
   })
 

@@ -224,6 +224,8 @@ describe('session routes', () => {
     const row = find(await list(admin))
     expect(row.session.data.title).toBe(PRIVATE_TITLE)
     expect(JSON.stringify(row)).not.toContain(SECRET)
+    // Nothing it did either: no outcome on a redacted row.
+    expect(row.outcome).toBeUndefined()
     expect(find(await list(bob))).toBeUndefined()
     expect((await list(bob)).some((i) => i.session.id === publicSession.id)).toBe(true)
     // Search (the ⌘K menu uses the list's text filter).

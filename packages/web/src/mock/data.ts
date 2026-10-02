@@ -667,6 +667,7 @@ Webhooks are retried with exponential backoff for 24 hours. See [[session:${SES.
   link(['contact', CON.eli], ['project', PRO.invoicing], 'owner')
   link(['contact', CON.billingBot], ['project', PRO.invoicing], 'member')
   link(['contact', CON.bob], ['project', PRO.platform], 'owner')
+  link(['contact', CON.dana], ['project', PRO.platform], 'lead')
   link(['contact', CON.infraBot], ['project', PRO.platform], 'member')
   link(['contact', CON.chen], ['project', PRO.portal], 'owner')
   link(['procedure', PRC.refund], ['project', PRO.payments], 'applies_to')

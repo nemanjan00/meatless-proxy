@@ -8,6 +8,8 @@ import {
   ProjectRoles,
   contactRef,
   directorySchemas,
+  PERSON_ONLY_ROLES,
+  projectRoleProblem,
   invalidNetwork,
   projectRef,
   type ContactData,
@@ -109,6 +111,8 @@ export interface Projects {
   setOwner(projectId: string, contactId: string, opts?: WriteOpts): Promise<Link>
   /** The accountable owner (the earliest owner link), or null. */
   owner(projectId: string): Promise<Contact | null>
+  /** The project's leads (`lead` links, people only), earliest first. Empty when none is set. */
+  leads(projectId: string): Promise<Contact[]>
   members(projectId: string, opts?: { role?: string }): Promise<Member[]>
   /** The projects a contact is linked to, with their roles, e.g. "what does Ana own?". */
   forContact(contactId: string, opts?: { role?: string }): Promise<Membership[]>
@@ -349,6 +353,8 @@ export function createDirectory({ records, clock = systemClock }: DirectoryDeps)
     },
     async addMember(projectId, contactId, role = ProjectRoles.member, data, opts) {
       if (!role.trim()) throw new ValidationError('role is required')
+      const problem = PERSON_ONLY_ROLES.includes(role) ? projectRoleProblem(await contacts.require(contactId), role) : null
+      if (problem) throw new ValidationError(problem)
       return records.link(contactRef(contactId), projectRef(projectId), role, data ?? {}, actorOpt(opts))
     },
     async removeMember(projectId, contactId, role, opts) {
@@ -366,6 +372,11 @@ export function createDirectory({ records, clock = systemClock }: DirectoryDeps)
     async owner(projectId) {
       const [first] = await projects.members(projectId, { role: ProjectRoles.owner })
       return first?.contact ?? null
+    },
+    async leads(projectId) {
+      return (await projects.members(projectId, { role: ProjectRoles.lead }))
+        .map((m) => m.contact)
+        .filter((c) => (c.data.kind ?? 'person') === 'person')
     },
     async members(projectId, opts) {
       const linked = await records.linked<ContactData>(projectRef(projectId), {

@@ -1,4 +1,4 @@
-import type { ProjectPeople, ProjectPerson } from '@mp/api'
+import type { ProjectLead, ProjectPeople, ProjectPerson } from '@mp/api'
 import { X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -13,24 +13,34 @@ import { useApi, useLoad } from '@/lib/api.tsx'
 import { useAuth } from '@/lib/auth.tsx'
 import { cn } from '@/lib/utils.ts'
 
-/** The roles offered when assigning someone to a project. */
+/** The roles offered when assigning someone to a project. `lead` is for people only. */
 export const PROJECT_ROLES = [
   { value: 'member', label: 'Member' },
   { value: 'reviewer', label: 'Reviewer' },
+  { value: 'backup', label: 'Backup' },
   { value: 'owner', label: 'Owner' },
+  { value: 'lead', label: 'Lead' },
 ] as const
 
-/** Owner, reviewer or member. Owner replaces the project's current owner; reviewers merge into local projects. */
+/** The roles an AI employee can hold: every one but `lead`, which must be a person. */
+export const EMPLOYEE_PROJECT_ROLES = PROJECT_ROLES.filter((r) => r.value !== 'lead')
+
+/**
+ * Lead, owner, backup, reviewer or member. Owner replaces the project's current owner; reviewers merge into
+ * local projects; the lead (a person) is who employees ask for decisions.
+ */
 export function RoleSelect({
   value,
   onChange,
   id,
   className,
+  roles = PROJECT_ROLES,
 }: {
   value: string
   onChange(role: string): void
   id?: string
   className?: string
+  roles?: readonly { value: string; label: string }[]
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
@@ -38,7 +48,7 @@ export function RoleSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {PROJECT_ROLES.map((r) => (
+        {roles.map((r) => (
           <SelectItem key={r.value} value={r.value}>
             {r.label}
           </SelectItem>
@@ -48,7 +58,7 @@ export function RoleSelect({
   )
 }
 
-/** Roles as small badges; `owner` stands out a little. */
+/** Roles as small badges; `lead` and `owner` stand out a little. */
 export function RoleBadges({ roles }: { roles: string[] }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -57,7 +67,7 @@ export function RoleBadges({ roles }: { roles: string[] }) {
           key={r}
           className={cn(
             'rounded-sm border px-1 text-tiny',
-            r === 'owner' ? 'border-transparent bg-accent-tint text-[#828fff]' : 'text-fg-tertiary',
+            r === 'owner' || r === 'lead' ? 'border-transparent bg-accent-tint text-[#828fff]' : 'text-fg-tertiary',
           )}
         >
           {r}
@@ -95,6 +105,30 @@ function PersonRow({ p, canEdit, onRemove }: { p: ProjectPerson; canEdit: boolea
   )
 }
 
+/** Who leads the project (people only), or "No lead" when no one does: employees ask the lead for decisions. */
+export function ProjectLeadLine({ leads }: { leads: ProjectLead[] }) {
+  if (!leads.length)
+    return (
+      <p className="py-1 text-mini text-fg-tertiary" data-testid="project-lead">
+        No lead: employees don't know who decides. Add a person as lead.
+      </p>
+    )
+  return (
+    <p className="py-1 text-mini text-fg-tertiary" data-testid="project-lead">
+      Lead:{' '}
+      {leads.map((l, i) => (
+        <span key={l.contactId}>
+          {i > 0 && ', '}
+          <Link to={`/contacts/${l.contactId}`} className="text-fg-secondary hover:text-foreground">
+            {l.name}
+          </Link>
+        </span>
+      ))}
+      <span className="text-fg-quaternary">. Employees ask them for decisions.</span>
+    </p>
+  )
+}
+
 /**
  * The employees and people on a project, with their roles (owner first). Members and admins add
  * someone with a typeahead and a role, or remove them; assigning an employee is how it learns it
@@ -119,6 +153,7 @@ export function ProjectPeopleSection({ projectId, className }: { projectId: stri
     }
   }
   const list = people.data?.people ?? []
+  const leads = people.data?.leads ?? []
   return (
     <section className={cn('flex flex-col', className)} aria-labelledby="project-people-title" data-testid="project-people">
       <SectionTitle className="mb-1">
@@ -128,19 +163,24 @@ export function ProjectPeopleSection({ projectId, className }: { projectId: stri
         <ErrorState error={people.error} retry={people.reload} />
       ) : !people.data ? (
         <LoadingRows rows={2} />
-      ) : list.length === 0 ? (
-        <p className="py-2 text-fg-tertiary">No one is on this project yet. Assign an employee so it knows it works on it.</p>
       ) : (
-        <div className="flex flex-col">
-          {list.map((p) => (
-            <PersonRow
-              key={p.contactId}
-              p={p}
-              canEdit={canEdit && !busy}
-              onRemove={() => run(() => api.removeProjectPerson(projectId, p.contactId), `${p.name} removed`)}
-            />
-          ))}
-        </div>
+        <>
+          <ProjectLeadLine leads={leads} />
+          {list.length === 0 ? (
+            <p className="py-2 text-fg-tertiary">No one is on this project yet. Assign an employee so it knows it works on it.</p>
+          ) : (
+            <div className="flex flex-col">
+              {list.map((p) => (
+                <PersonRow
+                  key={p.contactId}
+                  p={p}
+                  canEdit={canEdit && !busy}
+                  onRemove={() => run(() => api.removeProjectPerson(projectId, p.contactId), `${p.name} removed`)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
       {canEdit && (
         <div className="mt-2 flex items-center gap-2" data-testid="project-people-add">

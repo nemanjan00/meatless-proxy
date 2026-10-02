@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_TOOLSET, REVIEWER_ONLY_TOOLS, REVIEWER_TOOLSET, employeePrompt } from '../src/index.ts'
+import { ROUTER_INSTRUCTIONS } from '../src/router-prompt.ts'
 import { stack } from './helpers.ts'
+
+describe('router instructions', () => {
+  it("hand-offs carry the project's lead", () => {
+    expect(ROUTER_INSTRUCTIONS).toContain('the project and who to ask about it (its lead')
+  })
+})
 
 describe('employeePrompt', () => {
   it('covers identity, personality, the rules, the stdlib and skills, and is stable', async () => {
@@ -62,6 +69,15 @@ describe('employeePrompt', () => {
       expect(rules).toContain("the commit's Requested-by trailer")
       expect(rules).toContain("Address the person you're answering, and mention others only when needed.")
     }
+  })
+
+  it("sends project decisions to the project's lead, in the always-on rules", async () => {
+    const t = await stack()
+    const contact = await t.directory.contacts.require(t.employee.data.contactId)
+    const p = employeePrompt({ employee: t.employee, contact, now: 'now' })
+    const asking = p.slice(p.indexOf('\nAsking\n'), p.indexOf('\nHonesty\n'))
+    expect(asking).toContain('ask its lead (the "ask:" in Your projects)')
+    expect(asking).toContain("Don't guess.")
   })
 
   it('leaves out empty sections', async () => {

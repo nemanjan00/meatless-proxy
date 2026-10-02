@@ -663,7 +663,12 @@ export function createSessions(opts: SessionsOptions): Sessions {
       if (q.employeeId) where.push({ field: 'employeeId', op: 'eq', value: q.employeeId })
       if (q.rootSessionId) where.push({ field: 'rootSessionId', op: 'eq', value: q.rootSessionId })
       if (q.state) where.push({ field: 'state', op: 'in', value: Array.isArray(q.state) ? q.state : [q.state] })
-      const r = await records.query<RunData>(RUN_KIND, { where, orderBy: { field: 'createdAt' }, limit: q.limit ?? ALL })
+      const r = await records.query<RunData>(RUN_KIND, {
+        where,
+        orderBy: { field: 'createdAt', ...(q.newestFirst ? { dir: 'desc' as const } : {}) },
+        limit: q.limit ?? ALL,
+        ...(q.offset ? { offset: q.offset } : {}),
+      })
       return r.items
     },
 

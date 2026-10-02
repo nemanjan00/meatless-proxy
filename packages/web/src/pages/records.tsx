@@ -177,6 +177,8 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
       api.listRecords(kind, { text: text || undefined, orderBy: schema?.titleField ?? 'updatedAt', dir: 'asc', limit: 200 }),
     [kind, text, schema?.titleField],
   )
+  // Projects show their lead, or "no lead": employees ask the lead for decisions.
+  const leads = useLoad((api) => (kind === 'project' ? api.projectLeads() : Promise.resolve(null)), [kind])
   useLiveReload([`records:${kind}`], list.reload)
   const texts = (list.data?.items ?? []).map((r) => String(r.data.content ?? r.data.description ?? ''))
   const names = useNames(texts)
@@ -246,6 +248,11 @@ export function RecordListPage({ kind, title, basePath }: { kind: string; title:
                 <span className="min-w-0 flex-1 truncate text-fg-tertiary">
                   {recordSubtitle(kind, r.data, (_k, rid) => names.get(rid))}
                 </span>
+                {kind === 'project' && leads.data && (
+                  <span className="hidden shrink-0 text-micro text-fg-tertiary sm:inline" data-testid="project-row-lead">
+                    {leads.data.leads[r.id]?.length ? `lead ${leads.data.leads[r.id]!.map((l) => l.name).join(', ')}` : 'no lead'}
+                  </span>
+                )}
                 {badge && <span className="shrink-0 rounded-sm border px-1 text-tiny text-fg-tertiary">{badge}</span>}
                 <span className="w-8 shrink-0 text-right text-micro text-fg-quaternary">{timeAgo(r.updatedAt)}</span>
               </Link>

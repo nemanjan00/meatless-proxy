@@ -18,6 +18,7 @@ import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type RefWorktreeMeta
 import type { StdlibDeps, WorktreeFs } from '../types.ts'
 import { INSTRUCTIONS_NOTE, nestedInstructions, rootInstructions, type AgentInstructions } from '../agent-instructions.ts'
 import { safeRelPath } from '../worktree-fs.ts'
+import { withProduced } from '../session-outcomes.ts'
 
 const repoProp = {
   type: 'string',
@@ -651,6 +652,11 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
         }
         throw err
       }
+      // Recorded as what the session produced (sessions.get, sessions.tree, the session list).
+      const shortName = branch.replace(/^refs\/heads\//, '')
+      await kit.patchMeta(ctx.sessionId, (m) =>
+        withProduced(m, { kind: 'branch', what: `${shortName} in ${slug ? `local:${slug}` : w.url}`, at: deps.clock.iso() }),
+      )
       if (!slug) return ok({ key: w.key, pushed: branch, url: w.url })
       // A local project: no merge request to open. A person merges it in the web UI; this session hears about it.
       const name = branch.replace(/^refs\/heads\//, '')

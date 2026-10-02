@@ -51,6 +51,14 @@ schema change on billing"). Each entry has one **owner** (accountable) and
 optionally a **backup**. Knowing who owns what is how the employee routes
 questions and escalations. It is the most important part of its knowledge.
 
+Each project can have a **lead**: the person in charge, always a person,
+never an AI (an AI employee may own a project, but it can't lead one). When
+work on a project needs a decision or a clarification, the employee asks the
+lead, tagged correctly, in the thread where the work lives or a DM, and
+doesn't guess. Its "Your projects" note names who to ask: the lead, else a
+human owner, else a human backup, else "no lead set: ask the requester or an
+admin".
+
 ### Procedures
 
 How things are done here: onboarding, deploys, releases, incident response,
@@ -88,6 +96,11 @@ it asks the procedure's owner and does not improvise.
   thread or the work; asked who decided something, it checks the record (the
   message, the run that did it, the commit's `Requested-by` trailer). It
   addresses the person it is answering and mentions others only when needed.
+- **Answer questions about its own work from the record.** Who asked, what
+  changed, when and why: it looks at the commit trailers, the run
+  (`sessions.get` lists each run's requester and request), the thread, or the
+  session that did the work, never at its memory or a summary. If the record
+  doesn't say, it says so.
 
 ### Asking
 

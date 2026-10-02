@@ -30,14 +30,19 @@ table), [docs/employee.md](../../docs/employee.md) (the rules in the prompt),
   archived procedure. The server keeps one as `services.procedureContexts`.
 - "Your projects" (`projects-entry.ts`): `currentProjects(directory, employeeId)`
   (the projects its AI contact is linked to: name, id, roles owner first,
-  repository URLs, owner or `you`, a one-line description), `projectsText(lines)`
+  repository URLs, owner or `you`, who to ask, a one-line description), `projectsText(lines)`
   (deterministic; at most `MAX_LISTED_PROJECTS`, then a count; with none, to ask
   an admin), and `projectsEntry(deps, employeeId, sessionId?)`: the `system`
   entry for a new run (meta `projectsEntry`: the project ids), or null when the
   session's history already ends with the same list. `kit.startRun` adds it
   before the instruction of every new session, fork and review (not loop
   children, whose item stays last); the server adds it to router runs through
-  the router's `runInput` hook.
+  the router's `runInput` hook. Who to ask (`projectAsk(directory, projectId)`,
+  rendered by `askText`): the leads with their handles, else a human owner,
+  else the human backups, else `NO_LEAD_TEXT` ("no lead set: ask the requester
+  or an admin"); never an AI. `directory.get_project` returns `leads` and `ask`
+  too, the prompt's Asking rules send project decisions to the lead, and the
+  router's hand-offs name the project and its lead (`ROUTER_INSTRUCTIONS_VERSION` 6).
 - `DEFAULT_TOOLSET` (every stdlib tool except reviewer-only ones),
   `REVIEWER_TOOLSET`, `REVIEWER_ONLY_TOOLS`.
 - Tools on demand (`on-demand.ts`, docs/spec.md#tools-on-demand): `CORE_TOOLS`
@@ -71,7 +76,7 @@ access inside worktrees, default the local disk), `config.defaults.maxConcurrent
 
 | Namespace | Tools |
 |-----------|-------|
-| `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search (every word, in text, tool call arguments and results; the own session left out unless `includeThisSession`), tree, get, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
+| `sessions.*` | create, fork, loop, wait, follow_up, look_up, list, search (every word, in text, tool call arguments and results; the own session left out unless `includeThisSession`), tree, get, contents, save_metadata, link, unlink, save_template, commit, discard, rewind, offload, restore, compact, message, finish |
 | `chat.*` | post, reply, read, search, create_channel, add_member, remove_member, archive, invite |
 | `subscriptions.*` / `triggers.*` | subscribe, unsubscribe, list / list, create, update, disable |
 | `directory.*` / `procedures.run` | find_contact, get_contact (with `learned` and `pendingSuggestions`), update_contact (role, team, manager and bio notes an employee learned, with a source: fills empty fields, suggests changes to set ones, refuses every other field and AI contacts; idempotent; not in router contexts), find_project, get_project, projects_of (without `contactId`: which projects you work on), find_procedure, get_procedure / run |
@@ -193,9 +198,28 @@ Notes on behaviour:
   pointer names the original entry. `sessions.restore { entryId }` takes the
   original entry id, the pointer id or the call id: with `offset`/`length` it
   returns that piece of the original text (at most 20,000 characters, any
-  entry of this session) and changes nothing; without them it puts the whole
-  original back. The runner's oversized-result pointers tell the model to use
-  it that way.
+  entry of this session or its fork tree, e.g. one inside a collapsed stretch)
+  and changes nothing; without them it puts an offloaded original back (only
+  those: anything else points to `sessions.contents` and `sessions.search`).
+  The runner's oversized-result pointers tell the model to use it that way.
+  `sessions.contents` lists every collapse, jump back, compaction, run summary
+  and offload on the current path (entry range from the summary's meta, size,
+  first line, a ready call); `item` lists one stretch's entries with
+  `sessions.restore { entryId, offset: 0 }` calls (`src/tools/session-contents.ts`).
+- **Outcomes and who asked** (`src/session-outcomes.ts`, docs/spec.md#outcomes-and-who-asked):
+  `sessions.get` lists recent runs newest first (`runs`, default 10, at most 50;
+  `runsOffset`; `moreRuns` says how to page) with `requestedBy` (name and
+  handles), `request` (the causing event's text, else the run's first user
+  entry), `outcome`, `result`, `laterRequests` and `waitingFor`.
+  `sessions.get`, `list` and `tree` add the session's outcome: `lastOutcome`,
+  `produced` (GitLab MR subscriptions, MR URLs in run outputs, and
+  `meta.produced`, which `git.push` and `fs.share` write; reserved), `document`
+  (its first line) and `waitingFor` (suspended or paused runs, local branch
+  subscriptions still ahead of the default branch via `localProjects.branches`,
+  GitLab MR subscriptions). The server uses `sessionOutcome` for the web UI.
+- **Structured results**: `sessions.finish { output, result? }` puts `result`
+  (a JSON object, at most 20,000 characters) on the end signal; the runner
+  stores it on the run (`RunResult.result`) and `sessions.wait` returns it as is.
 - **Reviews** run in a new session (not a fork) with `REVIEWER_TOOLSET`; the
   reviewer is recorded in both sessions' meta (`reviews`, `reviewFor`), and
   only that session may call `checklist.record_review`.
@@ -284,6 +308,11 @@ list/update/pause/run now/cancel on the employee's own tasks only, and the route
 `test/tools-on-demand.test.ts` covers the core set and groups (every default tool classified, every on-demand tool
 named in the prompt), `offeredTools`, `tools.find` and `tools.load` (ranking, patterns, the toolset as the boundary,
 the meta and its protection, forks and loops inheriting), and the switch (prompt section, no loaders when off).
+`test/session-outcomes.test.ts` covers `sessions.get` runs (requesters with handles, the request from the event or
+the instruction, paging, later requests), outcomes in `list` and `tree` (the document line, produced items, waits
+for a suspended run, a local branch ahead, an MR; none for a merged branch; a paused run's reason), `fs.share`
+recording what it shared, `sessions.finish { result }` and `sessions.wait` returning it, and `sessions.contents`
+(a collapse with its entries read back, an offload, a compaction, restore refusing to reopen a collapsed entry).
 `test/projects-entry.test.ts` covers the "Your projects" text (none, one line per
 project, `you`, role order, the limit), skipping a repeat, new sessions and forks
 getting the current list with the system prompt byte-identical after an

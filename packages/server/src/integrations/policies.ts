@@ -1,5 +1,6 @@
 import { errorMessage, type EventBus, type Hooks, type Json, type Logger } from '@mp/core'
 import type { Events, MpEvent, Subject } from '@mp/events'
+import { LOCAL_GIT_SYSTEM } from '@mp/git'
 import { afterRun, afterToolCall } from '@mp/runner'
 import type { AssistantContent, Run, Session, Sessions, ToolResultContent } from '@mp/sessions'
 import type { Entry } from '@mp/store'
@@ -36,7 +37,8 @@ const HANDOFF_TOOLS = ['sessions.fork', 'sessions.loop', 'sessions.create', 'ses
 /**
  * Whether an event closes its subject, so subscriptions to it end: a GitLab
  * merge request merged or closed, a Linear issue removed or moved to a
- * completed or canceled state. Returns the reason, or null.
+ * completed or canceled state, a local project's branch merged or deleted
+ * (`local-git`). Returns the reason, or null.
  */
 export function closingReason(event: Pick<MpEvent['data'], 'source' | 'type' | 'payload' | 'subject'>): string | null {
   if (!event.subject) return null
@@ -44,6 +46,10 @@ export function closingReason(event: Pick<MpEvent['data'], 'source' | 'type' | '
   if (event.source === 'integration:gitlab') {
     if (event.type === 'merge_request.merged') return 'merge request merged'
     if (event.type === 'merge_request.closed') return 'merge request closed'
+  }
+  if (event.source === LOCAL_GIT_SYSTEM) {
+    if (event.type === 'branch.merged') return 'branch merged'
+    if (event.type === 'branch.deleted') return 'branch deleted'
   }
   if (event.source === 'integration:linear') {
     if (event.type === 'issue.removed') return 'issue removed'
@@ -145,9 +151,9 @@ export interface IntegrationPolicyDeps {
 /**
  * The integration policies:
  *
- * - subscription hygiene (bus `event.routed`): a merged or closed MR, or a
- *   finished or removed Linear issue, ends the subscriptions to its subject
- *   after the event itself was delivered.
+ * - subscription hygiene (bus `event.routed`): a merged or closed MR, a
+ *   finished or removed Linear issue, or a merged or deleted local branch,
+ *   ends the subscriptions to its subject after the event itself was delivered.
  * - replies go back out (`afterRun`): a run caused by a Slack event it was
  *   expected to act on, which ends with a final answer without posting in
  *   Slack, has that answer posted in the event's thread with the employee's
@@ -162,21 +168,21 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
   const { events, logger } = deps
   const offs: (() => void)[] = []
 
-  if (deps.specs.gitlab || deps.specs.linear)
-    offs.push(
-      deps.bus.subscribe<{ eventId: string }>('event.routed', async (m) => {
-        const event = await events.get(m.payload.eventId)
-        if (!event?.data.subject) return
-        const reason = closingReason(event.data)
-        if (!reason) return
-        try {
-          const n = await events.subscriptions.endForSubject(event.data.subject, reason)
-          if (n) logger.info('subscriptions ended', { subject: event.data.subjectKey, reason, count: n })
-        } catch (err) {
-          logger.warn('could not end subscriptions', { subject: event.data.subjectKey, err: errorMessage(err) })
-        }
-      }),
-    )
+  // Always on: local branches (`local-git`) close their subjects without any integration configured.
+  offs.push(
+    deps.bus.subscribe<{ eventId: string }>('event.routed', async (m) => {
+      const event = await events.get(m.payload.eventId)
+      if (!event?.data.subject) return
+      const reason = closingReason(event.data)
+      if (!reason) return
+      try {
+        const n = await events.subscriptions.endForSubject(event.data.subject, reason)
+        if (n) logger.info('subscriptions ended', { subject: event.data.subjectKey, reason, count: n })
+      } catch (err) {
+        logger.warn('could not end subscriptions', { subject: event.data.subjectKey, err: errorMessage(err) })
+      }
+    }),
+  )
 
   const slack = deps.specs.slack
   if (slack)

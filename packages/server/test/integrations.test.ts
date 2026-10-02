@@ -1123,6 +1123,9 @@ describe('integration helpers', () => {
     expect(closingReason(ev('integration:linear', 'issue.state_changed', { stateType: 'canceled' }))).toBe('issue canceled')
     expect(closingReason(ev('integration:linear', 'issue.state_changed', { stateType: 'started' }))).toBeNull()
     expect(closingReason({ source: 'integration:gitlab', type: 'merge_request.merged', payload: {} })).toBeNull()
+    expect(closingReason(ev('local-git', 'branch.merged'))).toBe('branch merged')
+    expect(closingReason(ev('local-git', 'branch.deleted'))).toBe('branch deleted')
+    expect(closingReason(ev('local-git', 'branch.pushed'))).toBeNull()
   })
 
   it('mergeRequestSubject: from web_url, also under a sub-path', () => {

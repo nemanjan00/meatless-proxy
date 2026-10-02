@@ -25,6 +25,7 @@ export const RESERVED_META = [
   'realTask',
   'scheduledTaskId',
   'loadedTools',
+  'produced',
 ] as const
 
 /** Link roles the stdlib uses. */

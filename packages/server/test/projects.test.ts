@@ -164,6 +164,38 @@ describe('project people', () => {
     expect((await s.directory.employees.require(employeeId)).data.scope?.projects).toEqual([])
   })
 
+  it('has a lead, who must be a person, listed first and in the project list', async () => {
+    const none = await t.req('GET', `/api/projects/${projectId}/people`)
+    expect(none.body.leads).toEqual([])
+    expect((await t.req('GET', '/api/projects/leads', undefined, viewer)).body.leads[projectId]).toBeUndefined()
+
+    // An AI can't lead, through the people API or a raw records link.
+    const ai = await t.req('POST', `/api/projects/${projectId}/people`, { employeeId, role: 'lead' })
+    expect(ai.status).toBe(422)
+    expect(ai.body.error.message).toMatch(/must be a person/)
+    const raw = await t.req('POST', `/api/records/contact/${aiContactId}/links`, {
+      to: { kind: 'project', id: projectId },
+      role: 'lead',
+    })
+    expect(raw.status).toBe(422)
+
+    const bo = (await t.a.services.directory.contacts.create({ name: 'Bo Example', kind: 'person' })).id
+    await t.req('POST', `/api/projects/${projectId}/people`, { employeeId })
+    const r = await t.req('POST', `/api/projects/${projectId}/people`, { contactId: bo, role: 'lead' }, member)
+    expect(r.status).toBe(200)
+    expect(r.body.leads).toEqual([{ contactId: bo, name: 'Bo Example' }])
+    expect(r.body.people.map((p: any) => [p.name, p.roles])).toEqual([
+      ['Bo Example', ['lead']],
+      ['Ana Example', ['owner']],
+      ['Meatless', ['member']],
+    ])
+    const all = await t.req('GET', '/api/projects/leads', undefined, viewer)
+    expect(all.status).toBe(200)
+    expect(all.body.leads[projectId]).toEqual([{ contactId: bo, name: 'Bo Example' }])
+    const mine = await t.req('GET', `/api/employees/${employeeId}/projects`)
+    expect(mine.body.projects.find((p: any) => p.project.id === projectId).leads).toEqual([{ contactId: bo, name: 'Bo Example' }])
+  })
+
   it('checks access, input and existence', async () => {
     expect((await t.req('POST', `/api/projects/${projectId}/people`, { employeeId }, viewer)).status).toBe(403)
     expect((await t.req('DELETE', `/api/projects/${projectId}/people/${ana}`, undefined, viewer)).status).toBe(403)

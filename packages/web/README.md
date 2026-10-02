@@ -71,11 +71,14 @@ the demo employee.
 
 The employee page's **Projects** section (`src/components/employee-projects.tsx`) lists the projects the employee
 works on (`GET /api/employees/:id/projects`) with its roles, each owner and repository; members and admins add one
-with the `RecordPicker` and a role (`RoleSelect`: member, reviewer or owner), remove one, or press **New project**.
+with the `RecordPicker` and a role (`RoleSelect` with `EMPLOYEE_PROJECT_ROLES`: member, reviewer, backup or owner; never
+lead, which is for people), remove one, or press **New project**.
 `src/components/new-project-dialog.tsx` is that dialog (name, description, repository URLs, docs links, an employee
 owner, preset to the page's employee) over `POST /api/projects`; the Projects list's **New project** opens it too,
 instead of the generic record form. A project's page shows `ProjectPeopleSection`
-(`src/components/project-people.tsx`): the employees and people on it, owners first, with the same add and remove.
+(`src/components/project-people.tsx`): who leads it (`ProjectLeadLine`: the lead, or **No lead**), then the employees
+and people on it, lead and owners first, with the same add and remove and a role that can also be lead (a person only;
+the server refuses an AI). The Projects list shows each project's lead, or "no lead" (`GET /api/projects/leads`).
 Admins can pick **Local repository** in the dialog (`POST /api/projects/local`): the harness hosts the repository. A
 local project's page then has `LocalRepositorySection` (`src/components/local-repository.tsx`,
 docs/spec.md#local-projects): **To review** lists the branches ahead of `main`, each opening its commits, changed files
@@ -246,8 +249,10 @@ Clear filters on the second, with the count. Everything is in the URL (`filter`,
 `employee`, `project`, `requester`, `origin`, `retired=1`). The page's `?employee=` wins over the sidebar's
 employee switcher (`all` means every employee) and leaves the switcher alone; without it the list follows the
 switcher. The server filters, sorts and pages (100 rows a page, "Load more"); the status tabs filter what's
-loaded. Rows (36 px) show the last activity with the exact time on hover, the requester's avatar and the
-project tag. Grouping and sorting are pure functions in `src/lib/session-list.ts` (`groupSessions`,
+loaded. Rows (36 px) show the last activity with the exact time on hover, the requester's avatar, the
+project tag and, on wide screens, an outcome line after the title (`outcome` from the server: what it waits
+for, else its last run's outcome), so a bare status isn't all there is. The session page's side panel has an
+**Outcome** section: what it waits for, the last run's outcome and what it produced. Grouping and sorting are pure functions in `src/lib/session-list.ts` (`groupSessions`,
 `compareSessions`). The mock mirrors the server in `src/mock/session-list.ts`, which also seeds sessions from
 every origin across the employees and projects, and a retired router.
 

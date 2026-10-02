@@ -369,14 +369,28 @@ export interface ProcedureData extends Record<string, unknown> {
   archived?: boolean
 }
 
-/** Common roles on contact -> project links. Any other string is allowed too. */
+/**
+ * Common roles on contact -> project links. Any other string is allowed too. `lead` is the person in
+ * charge, who answers decisions and clarifications about the project: always a person, never an AI.
+ */
 export const ProjectRoles = {
+  lead: 'lead',
   owner: 'owner',
   backup: 'backup',
   member: 'member',
   reviewer: 'reviewer',
   stakeholder: 'stakeholder',
 } as const
+
+/** Roles only a person (a contact of kind `person`) may hold on a project. */
+export const PERSON_ONLY_ROLES: readonly string[] = [ProjectRoles.lead]
+
+/** Why a contact can't hold a role on a project, or null when it can (`lead` is for people only). */
+export function projectRoleProblem(contact: { data: { kind?: string; name?: string } }, role: string): string | null {
+  if (!PERSON_ONLY_ROLES.includes(role)) return null
+  if ((contact.data.kind ?? 'person') === 'person') return null
+  return `${contact.data.name ?? 'that contact'} is an AI, and a project's ${role} must be a person: make a person the ${role}`
+}
 
 /** Role of the link from an employee to its own contact. */
 export const IDENTITY = 'identity'

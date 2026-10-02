@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  askText,
   currentProjects,
   lastProjectsText,
   MAX_LISTED_PROJECTS,
+  NO_LEAD_TEXT,
   PROJECTS_ENTRY_META,
   PROJECTS_HEADER,
   projectsEntry,
@@ -30,7 +32,7 @@ describe('Your projects entry', () => {
     await t.directory.projects.addMember(t.project.id, t.employee.data.contactId, 'member')
     const text = projectsText(await currentProjects(t.directory, t.employee.id))
     expect(text).toBe(
-      `${PROJECTS_HEADER}\n- Billing (${t.project.id}); your role: member; owner: Ana Lima; repos: git@github.com:acme/billing.git, ${REPO}. Invoices and payments.`,
+      `${PROJECTS_HEADER}\n- Billing (${t.project.id}); your role: member; owner: Ana Lima; ask: Ana Lima (owner, no lead set; mp:ana); repos: git@github.com:acme/billing.git, ${REPO}. Invoices and payments.`,
     )
   })
 
@@ -45,6 +47,37 @@ describe('Your projects entry', () => {
     expect(lines[0]).toMatchObject({ roles: ['owner'], owner: 'you' })
     expect(lines[1]!.roles).toEqual(['member', 'reviewer'])
     expect(lines[1]!.owner).toBeUndefined()
+  })
+
+  it('names who to ask: the lead with handles, else a human owner, else human backups, else no lead', async () => {
+    const t = await stack()
+    await t.directory.projects.addMember(t.project.id, t.employee.data.contactId, 'member')
+    const ask = async () => (await currentProjects(t.directory, t.employee.id))[0]!
+    // A human owner stands in while no lead is set.
+    expect((await ask()).ask).toEqual([{ name: 'Ana Lima', role: 'owner', handles: ['mp:ana'] }])
+
+    // The AI employee owns it: no human owner, so a human backup, and never the AI itself.
+    await t.directory.projects.setOwner(t.project.id, t.employee.data.contactId)
+    expect(projectsText([await ask()])).toContain(`ask: ${NO_LEAD_TEXT}`)
+    const bo = await t.directory.contacts.create({ name: 'Bo Berg', handles: [{ system: 'slack', id: 'U0TEST0002' }] })
+    await t.directory.projects.addMember(t.project.id, bo.id, 'backup')
+    expect(askText((await ask()).ask)).toBe('Bo Berg (backup, no lead set; slack:U0TEST0002)')
+
+    // The lead wins over everyone.
+    const cy = await t.directory.contacts.create({
+      name: 'Cy Ode',
+      handles: [
+        { system: 'slack', id: 'U0TEST0003' },
+        { system: 'mp', id: 'cy' },
+      ],
+    })
+    await t.directory.projects.addMember(t.project.id, cy.id, 'lead')
+    const text = projectsText([await ask()])
+    expect(text).toContain('ask: Cy Ode (lead; slack:U0TEST0003, mp:cy)')
+    expect(text).not.toContain('Bo Berg')
+    await expect(t.directory.projects.addMember(t.project.id, t.employee.data.contactId, 'lead')).rejects.toThrow(
+      /must be a person/,
+    )
   })
 
   it('counts the projects beyond the limit', async () => {

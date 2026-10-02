@@ -224,6 +224,28 @@ describe('projects and links', () => {
     expect((await dir.projects.forContact(emp.data.contactId, { role: 'owner' }))[0]?.project.id).toBe(p.id)
   })
 
+  it('has leads, who must be people', async () => {
+    const ana = await dir.contacts.create({ name: 'Ana' })
+    const bo = await dir.contacts.create({ name: 'Bo' })
+    const emp = await dir.employees.create({ name: 'Robo' })
+    const agent = await dir.contacts.create({ name: 'Helper', kind: 'agent' })
+    const p = await dir.projects.create({ name: 'Docs site' })
+    expect(await dir.projects.leads(p.id)).toEqual([])
+    await expect(dir.projects.addMember(p.id, emp.data.contactId, 'lead')).rejects.toThrow(/must be a person/)
+    await expect(dir.projects.addMember(p.id, agent.id, 'lead')).rejects.toThrow(ValidationError)
+    await expect(dir.projects.addMember(p.id, 'con_missing', 'lead')).rejects.toThrow(NotFoundError)
+    await dir.projects.addMember(p.id, ana.id, 'lead')
+    await dir.projects.addMember(p.id, bo.id, 'lead')
+    // An AI may still own the project; the lead stays a person.
+    await dir.projects.setOwner(p.id, emp.data.contactId)
+    expect((await dir.projects.leads(p.id)).map((c) => c.data.name)).toEqual(['Ana', 'Bo'])
+    // A lead link written around addMember (e.g. straight through records) to an AI is ignored.
+    await records.link({ kind: 'contact', id: agent.id }, { kind: 'project', id: p.id }, 'lead')
+    expect((await dir.projects.leads(p.id)).map((c) => c.id)).toEqual([ana.id, bo.id])
+    await dir.projects.removeMember(p.id, ana.id, 'lead')
+    expect((await dir.projects.leads(p.id)).map((c) => c.id)).toEqual([bo.id])
+  })
+
   it('enforces referential integrity', async () => {
     const p = await dir.projects.create({ name: 'X' })
     await expect(dir.projects.addMember(p.id, 'con_missing', 'owner')).rejects.toThrow(NotFoundError)

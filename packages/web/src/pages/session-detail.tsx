@@ -1,4 +1,4 @@
-import type { ApiEntry, Checklist, LiveEvent, Run, RunState, SessionDetail } from '@mp/api'
+import type { ApiEntry, Checklist, LiveEvent, Run, RunState, SessionDetail, SessionOutcome } from '@mp/api'
 import { TERMINAL_RUN_STATES } from '@mp/api'
 import {
   ChevronRight,
@@ -73,6 +73,41 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
       <span className="text-fg-tertiary">{label}</span>
       <span className="min-w-0 truncate text-fg-secondary">{children}</span>
     </div>
+  )
+}
+
+/** What the session did and waits for: the same the employee's sessions.get shows. */
+function OutcomeView({ outcome }: { outcome: SessionOutcome }) {
+  const waiting = outcome.waitingFor ?? []
+  const produced = outcome.produced ?? []
+  if (!waiting.length && !outcome.lastOutcome && !produced.length) return null
+  return (
+    <>
+      <SectionTitle className="mt-5 mb-2">Outcome</SectionTitle>
+      <div className="flex flex-col gap-2 text-micro" data-testid="session-outcome">
+        {waiting.map((w) => (
+          <p key={w} className="text-fg-secondary" data-testid="waiting-for">
+            <span className="text-fg-tertiary">Waiting for </span>
+            {w}
+          </p>
+        ))}
+        {outcome.lastOutcome && (
+          <p className="line-clamp-3 text-fg-secondary" title={outcome.lastOutcome}>
+            <span className="text-fg-tertiary">Last run: </span>
+            {outcome.lastOutcome}
+          </p>
+        )}
+        {produced.length > 0 && (
+          <ul className="flex flex-col gap-0.5">
+            {produced.map((p) => (
+              <li key={p} className="truncate font-mono text-fg-tertiary" title={p}>
+                {p}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -679,6 +714,8 @@ export function SessionDetailPage() {
               <Prop label="Created">{formatDateTime(d.session.createdAt)}</Prop>
               <Prop label="Updated">{timeAgo(d.session.updatedAt)} ago</Prop>
             </div>
+
+            {d.outcome && <OutcomeView outcome={d.outcome} />}
 
             {env && (
               <>

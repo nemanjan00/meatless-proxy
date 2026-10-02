@@ -6,8 +6,17 @@ import type { ApiRecord, ProjectData } from './resources.ts'
 // role (`owner`, `member`, …); an employee is assigned through its AI contact. Reads are for
 // everyone signed in; writes for members and admins, like the records API.
 
-/** A role on a project. `owner` and `member` are the usual ones; any other string works too. */
-export type ProjectRole = 'owner' | 'member' | (string & {})
+/**
+ * A role on a project. `owner` and `member` are the usual ones; `lead` is the person in charge, who answers
+ * decisions and clarifications, and must be a person (an AI is refused with a 422). Any other string works too.
+ */
+export type ProjectRole = 'lead' | 'owner' | 'backup' | 'member' | 'reviewer' | (string & {})
+
+/** A project's lead, as the people panel and the project list show it. */
+export interface ProjectLead {
+  contactId: string
+  name: string
+}
 
 /** Someone on a project: `{ contactId }`, or `{ employeeId }` for an AI employee (its contact is used). */
 export type ProjectPersonRef = { contactId: string; employeeId?: undefined } | { employeeId: string; contactId?: undefined }
@@ -39,10 +48,17 @@ export interface ProjectPerson {
   roles: string[]
 }
 
-/** `GET /api/projects/:id/people` → the project's owner(s) first, then everyone else. */
+/** `GET /api/projects/:id/people` → the project's lead(s) and owner first, then everyone else. */
 export interface ProjectPeople {
   projectId: string
   people: ProjectPerson[]
+  /** The project's leads (people only). Empty: no lead set. */
+  leads: ProjectLead[]
+}
+
+/** `GET /api/projects/leads` → every project's leads, by project id; a project without one isn't listed. */
+export interface ProjectLeads {
+  leads: Record<string, ProjectLead[]>
 }
 
 /** A project someone works on, with their roles and the project's owner. */
@@ -50,6 +66,8 @@ export interface ProjectAssignment {
   project: ApiRecord<ProjectData>
   roles: string[]
   owner: { contactId: string; name: string } | null
+  /** The project's leads (people only). Empty: no lead set. */
+  leads: ProjectLead[]
 }
 
 /** `GET /api/employees/:id/projects` → the projects the employee works on. */
@@ -167,6 +185,7 @@ export interface AttachedRemote {
 /** The routes of this section (merged into `ROUTES`). */
 export const PROJECT_ROUTES = {
   createProject: ['POST', '/api/projects'],
+  projectLeads: ['GET', '/api/projects/leads'],
   projectPeople: ['GET', '/api/projects/:id/people'],
   addProjectPerson: ['POST', '/api/projects/:id/people'],
   removeProjectPerson: ['DELETE', '/api/projects/:id/people/:contactId'],
@@ -189,11 +208,13 @@ export interface ProjectsApi {
    * harness register GitLab webhooks on its repositories.
    */
   createProject(body: CreateProjectBody): Promise<CreatedProject>
+  /** `GET /api/projects/leads` → every project's leads (for the project list's "no lead"). */
+  projectLeads(): Promise<ProjectLeads>
   /** `GET /api/projects/:id/people` → the employees and people on a project, with their roles. */
   projectPeople(id: string): Promise<ProjectPeople>
   /**
    * `POST /api/projects/:id/people` body `{ contactId | employeeId, role }` → adds a role
-   * (default `member`; `owner` replaces the current owner). Idempotent.
+   * (default `member`; `owner` replaces the current owner; `lead` must be a person). Idempotent.
    */
   addProjectPerson(id: string, body: ProjectPersonRef & { role?: ProjectRole }): Promise<ProjectPeople>
   /** `DELETE /api/projects/:id/people/:contactId?role=` → removes one role, or all of them. */
@@ -238,6 +259,7 @@ type Call = <T>(
 export function projectsMethods(call: Call): ProjectsApi {
   return {
     createProject: (body) => call('createProject', undefined, undefined, body),
+    projectLeads: () => call('projectLeads'),
     projectPeople: (id) => call('projectPeople', { id }),
     addProjectPerson: (id, body) => call('addProjectPerson', { id }, undefined, body),
     removeProjectPerson: (id, contactId, role) => call('removeProjectPerson', { id, contactId }, { role }),

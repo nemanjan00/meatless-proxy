@@ -6,6 +6,7 @@ import {
   type LocalBranchInfo,
   type LocalProject,
   type ProjectData,
+  type ProjectLead,
   type ProjectPeople,
   type ProjectPerson,
   type ProjectPersonRef,
@@ -23,7 +24,7 @@ export interface MockProjectsHelpers {
   all<T>(kind: string): ApiRecord<T>[]
 }
 
-const ROLE_ORDER = ['owner', 'backup', 'member', 'reviewer', 'stakeholder']
+const ROLE_ORDER = ['lead', 'owner', 'backup', 'member', 'reviewer', 'stakeholder']
 const rank = (r: string) => (ROLE_ORDER.includes(r) ? ROLE_ORDER.indexOf(r) : 99)
 const rankOf = (roles: string[]) => Math.min(...roles.map(rank))
 
@@ -154,8 +155,22 @@ export function createMockProjectsApi({ db, iso, delay, write, get, all }: MockP
     }
     const list = [...by.values()].map((p) => ({ ...p, roles: [...p.roles].sort((a, b) => rank(a) - rank(b)) }))
     list.sort((a, b) => rankOf(a.roles) - rankOf(b.roles) || a.name.localeCompare(b.name))
-    return { projectId, people: list }
+    return { projectId, people: list, leads: leadsOf(projectId) }
   }
+
+  /** A project's leads (people only), like the server's `projectLeadsOf`. */
+  const leadsOf = (projectId: string): ProjectLead[] =>
+    db.links
+      .filter((l) => l.to.id === projectId && l.from.kind === 'contact' && l.role === 'lead')
+      .map((l) => get<ContactData>('contact', l.from.id))
+      .filter((c): c is ApiRecord<ContactData> => !!c && (c.data.kind ?? (c.data.ai ? 'ai' : 'person')) === 'person')
+      .map((c) => ({ contactId: c.id, name: c.data.name }))
+
+  /** Refuses an AI as a lead (the server's 422). */
+  const leadProblem = (c: ApiRecord<ContactData>, role: string) =>
+    role === 'lead' && (c.data.kind ?? (c.data.ai ? 'ai' : 'person')) !== 'person'
+      ? `${c.data.name} is an AI, and a project's lead must be a person: make a person the lead`
+      : null
 
   const localView = (projectId: string, repo: MockLocalRepo): LocalProject => ({
     projectId,
@@ -185,6 +200,8 @@ export function createMockProjectsApi({ db, iso, delay, write, get, all }: MockP
       if (body.owner && !owner) return fail(404, 'not_found', 'owner not found')
       const members = (body.members ?? []).map((m) => ({ contact: contactOf(m), role: roleOf(m.role, 'member') }))
       if (members.some((m) => !m.contact)) return fail(404, 'not_found', 'member not found')
+      const bad = members.map((m) => leadProblem(m.contact!, m.role)).find(Boolean)
+      if (bad) return fail(422, 'validation', bad)
       const id = mockId('pro', `n${++db.seq}`)
       const rec = write<ProjectData>('project', id, {
         name,
@@ -197,6 +214,14 @@ export function createMockProjectsApi({ db, iso, delay, write, get, all }: MockP
       for (const m of members) link(m.contact!.id, id, m.role)
       return delay({ project: get<ProjectData>('project', id) ?? rec, people: people(id).people })
     },
+    projectLeads() {
+      const leads: Record<string, ProjectLead[]> = {}
+      for (const p of all<ProjectData>('project')) {
+        const l = leadsOf(p.id)
+        if (l.length) leads[p.id] = l
+      }
+      return delay({ leads })
+    },
     projectPeople(id) {
       if (!get('project', id)) return fail(404, 'not_found', 'project not found')
       return delay(people(id))
@@ -206,6 +231,8 @@ export function createMockProjectsApi({ db, iso, delay, write, get, all }: MockP
       const c = contactOf(body)
       if (!c) return fail(400, 'bad_request', 'give { contactId } or { employeeId }')
       const role = roleOf(body.role, 'member')
+      const problem = leadProblem(c, role)
+      if (problem) return fail(422, 'validation', problem)
       if (role === 'owner') setOwner(id, c.id)
       else link(c.id, id, role)
       return delay(people(id))
@@ -233,6 +260,7 @@ export function createMockProjectsApi({ db, iso, delay, write, get, all }: MockP
             project,
             roles: [...new Set(roles)].sort((a, b) => rank(a) - rank(b)),
             owner: owner ? { contactId: owner.id, name: owner.data.name } : null,
+            leads: leadsOf(pid),
           }
         })
         .filter((x) => x !== null)

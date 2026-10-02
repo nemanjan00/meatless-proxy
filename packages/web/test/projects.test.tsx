@@ -1,10 +1,10 @@
 import type { Access } from '@mp/api'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { App } from '../src/app.tsx'
-import { createMockDataLayer, EMP, PRO } from '../src/mock/index.ts'
+import { CON, createMockDataLayer, EMP, PRO } from '../src/mock/index.ts'
 
 function renderAt(path: string, access: Access = 'admin') {
   const data = createMockDataLayer({ now: Date.now() })
@@ -149,6 +149,58 @@ describe('project page: people', () => {
       ).toHaveLength(1),
     )
     expect(within(section).getByRole('option', { name: /Support Bot/ })).toHaveTextContent('employee')
+  })
+})
+
+describe('project lead', () => {
+  it('says "No lead" until a person leads, refuses an AI as lead, and shows the lead in the list', async () => {
+    const user = userEvent.setup()
+    const data = renderAt(`/projects/${PRO.payments}`)
+    const section = await screen.findByTestId('project-people')
+    expect(await within(section).findByTestId('project-lead')).toHaveTextContent(/^No lead/)
+    await expect(data.api.addProjectPerson(PRO.payments, { employeeId: EMP.billing, role: 'lead' })).rejects.toThrow(
+      /must be a person/,
+    )
+
+    // The role picker offers Lead next to the others.
+    await user.click(within(section).getByRole('combobox', { name: 'Role' }))
+    expect(await screen.findByRole('option', { name: 'Lead' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Backup' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    cleanup()
+
+    // With a person as lead, the panel names them and the role shows on their row.
+    const again = createMockDataLayer({ now: Date.now() })
+    await again.api.addProjectPerson(PRO.payments, { contactId: CON.dana, role: 'lead' })
+    render(
+      <MemoryRouter initialEntries={[`/projects/${PRO.payments}`]}>
+        <App data={again} />
+      </MemoryRouter>,
+    )
+    const panel = await screen.findByTestId('project-people')
+    await waitFor(() => expect(within(panel).getByTestId('project-lead')).toHaveTextContent(/^Lead: Dana Park/))
+    const dana = within(panel)
+      .getAllByTestId('project-person')
+      .find((p) => p.textContent?.includes('Dana'))!
+    expect(within(dana).getByText('lead')).toBeInTheDocument()
+    expect((await again.api.projectLeads()).leads[PRO.payments]).toEqual([{ contactId: CON.dana, name: 'Dana Park' }])
+  })
+
+  it('the project list shows each lead, or "no lead"', async () => {
+    renderAt('/projects')
+    const rows = await screen.findAllByTestId('record-row')
+    const row = (name: string) => rows.find((r) => r.textContent?.includes(name))!
+    await waitFor(() => expect(within(row('Infra Platform')).getByTestId('project-row-lead')).toHaveTextContent(/^lead Dana/))
+    expect(within(row('Payments API')).getByTestId('project-row-lead')).toHaveTextContent('no lead')
+  })
+
+  it("an employee's project roles don't offer lead", async () => {
+    const user = userEvent.setup()
+    renderAt(`/employees/${EMP.billing}`)
+    const add = await screen.findByTestId('employee-projects-add')
+    await user.click(within(add).getByRole('combobox', { name: 'Role' }))
+    expect(await screen.findByRole('option', { name: 'Owner' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Lead' })).toBeNull()
   })
 })
 

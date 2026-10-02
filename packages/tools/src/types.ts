@@ -51,7 +51,8 @@ export type ControlSignal =
   | { type: 'offload'; entryId: string; pointer: { text: string; doc?: { id: string; chapter?: string } } }
   | { type: 'restore'; pointerEntryId: string }
   | { type: 'compact'; summary: string }
-  | { type: 'end'; status: 'completed' | 'failed'; output?: string }
+  /** End the run; `result` is structured data stored on the run next to its output (`sessions.finish { result }`). */
+  | { type: 'end'; status: 'completed' | 'failed'; output?: string; result?: Json }
 
 export interface ToolResult {
   output: Json

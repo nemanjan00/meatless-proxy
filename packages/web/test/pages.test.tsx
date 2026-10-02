@@ -55,6 +55,21 @@ describe('pages against the mock API', () => {
     expect(within(tree).getAllByTestId('tree-node').length).toBe(9)
   })
 
+  it('Session detail and the list say what a session waits for, not just its status', async () => {
+    renderAt(`/sessions/${SES.deploy214}`)
+    const outcome = await screen.findByTestId('session-outcome')
+    expect(within(outcome).getByTestId('waiting-for')).toHaveTextContent(
+      'Waiting for review of mp/fix-login in local project portal',
+    )
+  })
+
+  it('Session rows show an outcome line', async () => {
+    renderAt('/sessions')
+    await screen.findAllByTestId('session-row')
+    const lines = screen.getAllByTestId('session-outcome').map((x) => x.textContent)
+    expect(lines).toContain('waiting for review of mp/fix-login in local project portal')
+  })
+
   it('Session tree collapses a subtree', async () => {
     renderAt(`/sessions/${SES.pay123}?tab=tree`)
     const tree = await screen.findByTestId('session-tree')

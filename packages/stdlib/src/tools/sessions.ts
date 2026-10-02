@@ -17,9 +17,16 @@ import type { Entry, Ref } from '@mp/store'
 import { LOADED_TOOLS_META, loadedToolsOf, mcpToolName, type ToolContext } from '@mp/tools'
 import { RESERVED_META, Roles, checkRef, clip, fail, line, ok, pathValue, sessionBrief, str, type Kit } from '../kit.ts'
 import type { TaskSystemConfig } from '../types.ts'
+import { outcomeCache, runView, sessionOutcome } from '../session-outcomes.ts'
+import { registerSessionContents } from './session-contents.ts'
 
 /** The most characters sessions.restore returns in one piece. */
 const PIECE_MAX = 20_000
+/** The most characters of a structured result (sessions.finish { result }). */
+const RESULT_MAX = 20_000
+/** Runs sessions.get lists by default, and at most. */
+const RUNS_DEFAULT = 10
+const RUNS_MAX = 50
 
 /** The tool call an entry answers: a tool result, or a pointer standing for one. */
 const answeredCall = (e: Entry): string | undefined =>
@@ -152,6 +159,7 @@ function taskIdFrom(output: Json, idPath?: string): string | null {
 
 export function registerSessionTools(kit: Kit): void {
   const { deps } = kit
+  registerSessionContents(kit)
   const { sessions, records } = deps
 
   /** Forks (and new sessions) keep working on the same projects and for the same people. */
@@ -347,7 +355,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.loop',
       description:
-        'Fan out: fork this session once per item (one child per repository, ticket, contact…) and start each child with the instruction plus its item. Returns the children with their run ids; sessions.wait on them to collect results. Fork depth, fan-out and concurrency limits apply: a loop over the limit is not started at all. With realTasks: true each item also becomes a task in the task system (a "real fork" people can see), which needs the employee\'s taskSystem to be configured.',
+        'Fan out: fork this session once per item (one child per repository, ticket, contact…) and start each child with the instruction plus its item. Returns the children with their run ids; sessions.wait on them to collect results. For results you can use without parsing text, tell the children to end with sessions.finish { output, result } and the JSON shape you want: sessions.wait returns each child\'s result as is. Fork depth, fan-out and concurrency limits apply: a loop over the limit is not started at all. With realTasks: true each item also becomes a task in the task system (a "real fork" people can see), which needs the employee\'s taskSystem to be configured.',
       effect: 'non_idempotent',
       params: {
         properties: {
@@ -447,7 +455,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.wait',
       description:
-        'Wait until the given runs finish (mode all, or any), optionally with a timeout: this run is suspended and resumes with their outputs (if they are already done, you get the results right away). Or, with delivery: true instead of runIds, wait for the next reply or event delivered to this session (e.g. the answer to a question asked with mcp.slack.ask); anything that already arrived answers at once. Nothing is lost while you wait; replies and events are delivered afterwards.',
+        "Wait until the given runs finish (mode all, or any), optionally with a timeout: this run is suspended and resumes with their outputs, and each one's structured result (sessions.finish { result }) as is (if they are already done, you get the results right away). Or, with delivery: true instead of runIds, wait for the next reply or event delivered to this session (e.g. the answer to a question asked with mcp.slack.ask); anything that already arrived answers at once. Nothing is lost while you wait; replies and events are delivered afterwards.",
       effect: 'read',
       params: {
         properties: {
@@ -503,6 +511,7 @@ export function registerSessionTools(kit: Kit): void {
             state: r.data.state,
             ...(r.data.result?.output ? { output: clip(r.data.result.output, 4000) } : {}),
             ...(r.data.result?.error ? { error: clip(r.data.result.error, 1000) } : {}),
+            ...(r.data.result?.result !== undefined ? { result: r.data.result.result } : {}),
             ...(doc ? { document: clip(doc, 2000) } : {}),
           })
         }
@@ -571,7 +580,8 @@ export function registerSessionTools(kit: Kit): void {
   kit.tool(
     {
       name: 'sessions.list',
-      description: 'List your sessions, newest first, optionally by status or by tree (rootId).',
+      description:
+        "List your sessions, newest first, optionally by status or by tree (rootId). Each comes with its outcome: the last run's outcome, what it produced (merge requests, branches, shared files), its document's first line, and what it's waiting for (a review of its branch or merge request, a suspended run's wait).",
       effect: 'read',
       params: {
         properties: {
@@ -590,7 +600,11 @@ export function registerSessionTools(kit: Kit): void {
         limit: Math.min(Math.max(1, a.limit ?? 20), 100),
         offset: Math.max(0, a.offset ?? 0),
       })
-      return ok({ sessions: res.items.map(briefWithTime), total: res.total })
+      const cache = outcomeCache()
+      const list: Json[] = []
+      for (const x of res.items)
+        list.push({ ...sessionBrief(x), updatedAt: x.updatedAt, ...(await sessionOutcome(deps, x, cache)) } as Json)
+      return ok({ sessions: list, total: res.total })
     },
   )
 
@@ -640,7 +654,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.tree',
       description:
-        "A session's fork tree from its root: every session with its status, and which is which. Default: this session.",
+        "A session's fork tree from its root: every session with its status and outcome (the last run's outcome, what it produced, its document's first line, what it's waiting for), and which is which. Default: this session.",
       effect: 'read',
       params: { properties: { sessionId: { type: 'string' } } },
     },
@@ -649,17 +663,23 @@ export function registerSessionTools(kit: Kit): void {
       const tree = await sessions.tree(s.id)
       let count = 0
       const MAX = 200
-      const render = (n: TreeNode): Json => {
+      const cache = outcomeCache()
+      const render = async (n: TreeNode): Promise<Json> => {
         count++
-        const children = count < MAX ? n.children.map(render) : []
+        const children: Json[] = []
+        for (const c of n.children) {
+          if (count >= MAX) break
+          children.push(await render(c))
+        }
         return {
           ...sessionBrief(n.session),
+          ...(await sessionOutcome(deps, n.session, cache)),
           ...(n.session.id === s.id ? { self: true } : {}),
           ...(children.length ? { children } : {}),
           ...(n.children.length > children.length ? { moreChildren: n.children.length - children.length } : {}),
         }
       }
-      return ok({ tree: render(tree), ...(count >= MAX ? { note: `showing the first ${MAX} sessions` } : {}) })
+      return ok({ tree: await render(tree), ...(count >= MAX ? { note: `showing the first ${MAX} sessions` } : {}) })
     },
   )
 
@@ -667,15 +687,26 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.get',
       description:
-        'A session: metadata, its document, checklist status, links and latest runs (with their outputs). Default: this session.',
+        "A session: metadata, its document, checklist status, links, its outcome (what it produced, what it's waiting for) and its recent runs, newest first: when, who asked (name and handles), the request in one line, the outcome, and later requests that reached a run while it worked. It's the record of who asked for what: use it to answer questions about your past work. Default: this session, the last 10 runs.",
       effect: 'read',
-      params: { properties: { sessionId: { type: 'string' } } },
+      params: {
+        properties: {
+          sessionId: { type: 'string' },
+          runs: { type: 'number', description: `How many runs to list (default ${RUNS_DEFAULT}, at most ${RUNS_MAX}).` },
+          runsOffset: { type: 'number', description: 'Skip this many of the newest runs (paging back).' },
+        },
+      },
     },
     async (a, ctx) => {
       const s = await kit.ownSession(a.sessionId, ctx)
       const status = await deps.checklists.status(s.id)
       const links = await records.links({ touching: sessionRef(s.id) })
-      const runs = (await sessions.runs({ sessionId: s.id, limit: 1000 })).slice(-5)
+      const limit = Math.min(Math.max(1, Math.floor(Number(a.runs ?? RUNS_DEFAULT)) || RUNS_DEFAULT), RUNS_MAX)
+      const runsOffset = Math.max(0, Math.floor(Number(a.runsOffset ?? 0)) || 0)
+      const page = await sessions.runs({ sessionId: s.id, newestFirst: true, offset: runsOffset, limit: limit + 1 })
+      const cache = outcomeCache()
+      const runs: Json[] = []
+      for (const r of page.slice(0, limit)) runs.push(await runView(deps, r, cache))
       const meta = { ...(s.data.meta ?? {}) }
       return ok({
         ...sessionBrief(s),
@@ -697,14 +728,11 @@ export function registerSessionTools(kit: Kit): void {
           .filter((l) => l.role !== 'mentions')
           .slice(0, 50)
           .map((l) => (l.from.id === s.id ? { role: l.role, to: l.to } : { role: l.role, from: l.from })),
-        runs: runs.map((r) => ({
-          runId: r.id,
-          state: r.data.state,
-          mode: r.data.mode,
-          ...(r.data.result?.output ? { output: clip(r.data.result.output, 1000) } : {}),
-          ...(r.data.result?.error ? { error: clip(r.data.result.error, 500) } : {}),
-          ...(r.data.pauseReason ? { pauseReason: r.data.pauseReason } : {}),
-        })),
+        ...(await sessionOutcome(deps, s, cache)),
+        runs,
+        ...(page.length > limit
+          ? { moreRuns: `older runs: sessions.get { runs: ${limit}, runsOffset: ${runsOffset + limit} }` }
+          : {}),
       })
     },
   )
@@ -1030,7 +1058,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.restore',
       description:
-        'Read back something offloaded (by you, or by the harness when a tool result was too big). With offset and length: returns that piece of the original text and changes nothing, to read a big result in parts. Without them: puts the whole original back into the history in place of its pointer (it costs context).',
+        "Two things, and only these. Without offset and length: puts an offloaded entry (offloaded by you with sessions.offload, or by the harness when a tool result was too big) back into the history in place of its pointer (it costs context). With offset and length: reads a piece of the text of one entry of this session (or its fork tree) by its id and changes nothing: an offloaded original, a big result in parts, or one entry of a collapsed or compacted stretch (sessions.contents { item } lists them with their ids). A collapsed or compacted stretch can't be put back whole, and nothing else of your history can be reopened: to find where something happened, use sessions.contents (every collapse, compaction and offload) or sessions.search { text, includeThisSession: true }.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -1056,7 +1084,11 @@ export function registerSessionTools(kit: Kit): void {
       if (piece) {
         const originalId = pointer ? (pointer.content as unknown as PointerContent).original : id
         const original = await records.store.entries.get(originalId)
-        if (!original || original.meta.sessionId !== ctx.sessionId) return fail(`${id} is not an entry of this session`)
+        // An entry of this session, or of another session of its fork tree (a parent whose history it inherited).
+        const owner = original && typeof original.meta.sessionId === 'string' ? await sessions.get(original.meta.sessionId) : null
+        const me = owner ? await sessions.get(ctx.sessionId) : null
+        if (!original || !owner || owner.data.employeeId !== ctx.employeeId || owner.data.rootId !== me?.data.rootId)
+          return fail(`${id} is not an entry of this session or its fork tree`)
         const text = entryText(original)
         const offset = Math.max(0, Math.floor(Number(a.offset ?? 0)) || 0)
         const length = Math.min(PIECE_MAX, Math.max(1, Math.floor(Number(a.length ?? PIECE_MAX)) || PIECE_MAX))
@@ -1070,7 +1102,10 @@ export function registerSessionTools(kit: Kit): void {
           text: text.slice(offset, end),
         })
       }
-      if (!pointer) return fail(`${id} is not offloaded in the current history`)
+      if (!pointer)
+        return fail(
+          `${id} is not offloaded in the current history: only offloaded entries can be put back. Read an entry with offset: 0; sessions.contents lists what was collapsed, compacted or offloaded`,
+        )
       const original = (pointer.content as unknown as PointerContent).original
       return { output: { restoring: original }, control: [{ type: 'restore', pointerEntryId: pointer.id }] }
     },
@@ -1165,11 +1200,15 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.finish',
       description:
-        'End this run now with an output (your final answer or report). Policies may refuse (e.g. open checklist items); you then get the reason and can fix it.',
+        'End this run now with an output (your final answer or report), and optionally a structured result (a JSON object) stored on the run: a parent waiting on this run (sessions.wait, sessions.loop) gets it as is. Policies may refuse (e.g. open checklist items); you then get the reason and can fix it.',
       effect: 'idempotent',
       params: {
         properties: {
           output: { type: 'string' },
+          result: {
+            type: 'object',
+            description: 'Structured result, a JSON object (e.g. the fields the parent asked for), stored on the run as is.',
+          },
           status: { type: 'string', enum: ['completed', 'failed'], description: 'Default completed.' },
         },
         required: ['output'],
@@ -1178,7 +1217,15 @@ export function registerSessionTools(kit: Kit): void {
     async (a) => {
       const status = a.status ?? 'completed'
       if (status !== 'completed' && status !== 'failed') return fail('status must be completed or failed')
-      return { output: { finishing: status }, control: [{ type: 'end', status, output: String(a.output) }] }
+      const result = a.result as Json | undefined
+      if (result !== undefined && JSON.stringify(result).length > RESULT_MAX)
+        return fail(
+          `result is too big (over ${RESULT_MAX.toLocaleString('en-US')} characters): keep the data in a file and return its path`,
+        )
+      return {
+        output: { finishing: status, ...(result !== undefined ? { result: true } : {}) },
+        control: [{ type: 'end', status, output: String(a.output), ...(result !== undefined ? { result } : {}) }],
+      }
     },
   )
 }

@@ -13,7 +13,7 @@ import type { Services } from '../services.ts'
  */
 
 /** Project roles that may merge and delete branches of a local project (admins may too). */
-export const MERGE_ROLES: readonly string[] = [ProjectRoles.owner, ProjectRoles.backup, ProjectRoles.reviewer]
+export const MERGE_ROLES: readonly string[] = [ProjectRoles.lead, ProjectRoles.owner, ProjectRoles.backup, ProjectRoles.reviewer]
 
 /** The local repository urls of a list of repositories, sorted. */
 export const localUrlsOf = (repos: Repository[] | undefined): string[] =>

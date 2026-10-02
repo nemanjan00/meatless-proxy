@@ -7,7 +7,12 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   Untrusted events are marked. Tool calls without a result get a synthetic
   answer.
 - **Step loop:**
-  1. Take inbox items (continuing runs only).
+  1. Take inbox items (continuing runs only). An item that asks the run to act
+     and names its sender (`requesterId`) is added to `run.data.requests`; tool
+     calls from then on carry `currentRequester(run)` (the latest such sender,
+     else `requesterId`) as `ctx.requesterId`, so commit trailers name whoever
+     asked for the follow-up. A run started for an item left in the inbox is
+     for that item's sender.
   2. Context management (below): compact automatically near the limit, or
      note how full the context is.
   3. Check `beforeModelCall` (budgets can pause here).
@@ -27,7 +32,7 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   - `beforeToolCall` (can deny)
   - secret variables injected at call time and redacted from outputs
   - `afterToolCall` (transform)
-  - control signals: suspend, commit, discard, rewind (with `keepAfter`, a
+  - control signals: suspend, commit, discard, end (with an optional structured `result`), rewind (with `keepAfter`, a
     collapse), offload, restore, compact, end. A history change that no
     longer applies leaves the history alone and appends a `system` note
     (`meta.historyOpFailed`) instead of failing the run
@@ -128,7 +133,9 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
 `test/runner.test.ts` covers full scenarios with the scripted model and the
 in-memory stack: tools, ephemeral and committed runs, summary commits,
 children and waits, budgets, policies, secrets, crash recovery, retries,
-inbox, max steps and bus events. `test/on-demand.test.ts` covers tools on
+inbox, max steps and bus events. `test/requests.test.ts` covers later requests (recorded, the requester
+switched for the next tool calls, an FYI ignored, a late delivery's run) and a structured `end` result stored on the
+run and handed to a waiting parent as is. `test/on-demand.test.ts` covers tools on
 demand: core versus on-demand offering, a load seen from the next call and in
 later runs, a call to an allowed tool that isn't loaded (runs, and loads it),
 refused calls outside the toolset or the lists, a fork's inherited calls, and

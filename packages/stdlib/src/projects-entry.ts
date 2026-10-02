@@ -1,5 +1,5 @@
 import type { Json } from '@mp/core'
-import type { Directory, Project } from '@mp/directory'
+import type { Contact, Directory, Project } from '@mp/directory'
 import type { Sessions } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 
@@ -29,10 +29,60 @@ export interface ProjectLine {
   repositories: string[]
   /** The owner's name, `you` when it is the employee itself. */
   owner?: string
+  /**
+   * Who to ask for decisions and clarifications: the leads, else a human owner, else the human backups.
+   * Empty when none of them is set.
+   */
+  ask: AskLine[]
   description?: string
 }
 
-const ROLE_ORDER = ['owner', 'backup', 'member', 'reviewer', 'stakeholder']
+/** A person to ask about a project, with the role they hold and their handles (`system:id`). */
+export interface AskLine {
+  name: string
+  role: 'lead' | 'owner' | 'backup'
+  handles: string[]
+}
+
+/** What the note says when a project has nobody to ask. */
+export const NO_LEAD_TEXT = 'no lead set: ask the requester or an admin'
+/** At most this many people to ask are named per project, with this many handles each. */
+const MAX_ASK = 3
+const MAX_HANDLES = 3
+
+const isPerson = (c: Contact) => (c.data.kind ?? 'person') === 'person'
+
+const askLine = (c: Contact, role: AskLine['role']): AskLine => ({
+  name: c.data.name,
+  role,
+  handles: (c.data.handles ?? []).slice(0, MAX_HANDLES).map((h) => `${h.system}:${h.id}`),
+})
+
+/**
+ * Who to ask about a project: its leads (people by definition), else its owner when that is a person,
+ * else its backups that are people. Empty when there is none.
+ */
+export async function projectAsk(directory: Directory, projectId: string): Promise<AskLine[]> {
+  const leads = await directory.projects.leads(projectId)
+  if (leads.length) return leads.slice(0, MAX_ASK).map((c) => askLine(c, 'lead'))
+  const owner = await directory.projects.owner(projectId)
+  if (owner && isPerson(owner)) return [askLine(owner, 'owner')]
+  const backups = (await directory.projects.members(projectId, { role: 'backup' })).map((m) => m.contact).filter(isPerson)
+  return backups.slice(0, MAX_ASK).map((c) => askLine(c, 'backup'))
+}
+
+/** The "ask:" part of a project line: `Ana Lima (lead; mp:ana)`, or `NO_LEAD_TEXT`. */
+export function askText(ask: AskLine[]): string {
+  if (!ask.length) return NO_LEAD_TEXT
+  return ask
+    .map((a) => {
+      const role = a.role === 'lead' ? 'lead' : `${a.role}, no lead set`
+      return `${a.name} (${[role, ...(a.handles.length ? [a.handles.join(', ')] : [])].join('; ')})`
+    })
+    .join(', ')
+}
+
+const ROLE_ORDER = ['lead', 'owner', 'backup', 'member', 'reviewer', 'stakeholder']
 const byRole = (a: string, b: string) => {
   const ia = ROLE_ORDER.indexOf(a)
   const ib = ROLE_ORDER.indexOf(b)
@@ -62,6 +112,7 @@ export async function currentProjects(directory: Directory, employeeId: string):
       roles: [...roles].sort(byRole),
       repositories,
       ...(owner ? { owner: owner.id === contactId ? 'you' : owner.data.name } : {}),
+      ask: await projectAsk(directory, project.id),
       ...(project.data.description ? { description: oneLine(project.data.description, DESCRIPTION_CHARS) } : {}),
     })
   }
@@ -78,6 +129,7 @@ export function projectsText(lines: ProjectLine[]): string {
   const shown = lines.slice(0, MAX_LISTED_PROJECTS).map((p) => {
     const bits = [`your role: ${p.roles.join(', ')}`]
     if (p.owner) bits.push(`owner: ${p.owner}`)
+    bits.push(`ask: ${askText(p.ask)}`)
     if (p.repositories.length) bits.push(`repos: ${p.repositories.join(', ')}`)
     return `- ${p.name} (${p.id}); ${bits.join('; ')}${p.description ? `. ${p.description}` : ''}`
   })

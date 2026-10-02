@@ -31,7 +31,7 @@ export { MERGE_ROLES, assertLocalReposUnchanged, assertMayGrantRole, canMerge, m
  * - Employees check out and push their own branches through the git tools, like any remote; the
  *   push policy refuses protected branches the same way.
  * - People review and merge those branches here. Merging and deleting branches: admins and the
- *   project's owners, backups and reviewers (`MERGE_ROLES`). AI employees never sign in, so no route
+ *   project's leads, owners, backups and reviewers (`MERGE_ROLES`). AI employees never sign in, so no route
  *   is open to them, and no tool merges.
  * - An admin can attach a remote later: every branch is pushed there and the project's repository
  *   becomes that remote. The local repository is kept, as the repository's `previousUrl`.

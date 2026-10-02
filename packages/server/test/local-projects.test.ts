@@ -163,6 +163,21 @@ describe('review and merge', () => {
     expect(again.status).toBe(422)
   })
 
+  it("a project's lead (the human in charge) can merge too", async () => {
+    const leadId = (await t.a.services.directory.contacts.create({ name: 'Lea Lead', kind: 'person', email: 'lea@example.com' }))
+      .id
+    const lead = await t.as(leadId, { access: 'member' })
+    const r = await t.req('POST', '/api/projects/local', { name: `Local ${++n}`, members: [{ contactId: leadId, role: 'lead' }] })
+    expect(r.status).toBe(201)
+    const id = r.body.project.id as string
+    const url: string = r.body.project.data.repositories[0].url
+    const { sha } = await push(url, 'mp/meatless/notes', 'notes.md', '# notes\n')
+    expect((await t.req('GET', `/api/projects/${id}/local`, undefined, lead)).body.canMerge).toBe(true)
+    const m = await t.req('POST', `/api/projects/${id}/local/merge`, { branch: 'mp/meatless/notes' }, lead)
+    expect(m.status).toBe(200)
+    expect(m.body).toMatchObject({ sha, mode: 'fast-forward' })
+  })
+
   it('makes a merge commit when main moved on, by the person who merged', async () => {
     const p = await newProject()
     await push(p.url, 'mp/meatless/a', 'a.txt', 'a\n')
@@ -203,6 +218,39 @@ describe('review and merge', () => {
       actorContactId: reviewerId,
       payload: { branch: 'mp/meatless/evt', sha, mode: 'fast-forward' },
     })
+  })
+
+  it('ends the subscriptions to a branch once branch.merged or branch.deleted was delivered', async () => {
+    const s = t.a.services
+    const p = await newProject()
+    const session = await s.sessions.create({ employeeId, title: 'Local work' })
+    const subjects = ['mp/meatless/end-merge', 'mp/meatless/end-delete'].map((b) => ({
+      system: 'local-git',
+      id: `${p.slug}/${b}`,
+    }))
+    for (const [i, b] of ['mp/meatless/end-merge', 'mp/meatless/end-delete'].entries()) {
+      await push(p.url, b, `end${i}.txt`, `${i}\n`)
+      await s.events.subscriptions.subscribe(session.id, subjects[i]!, { primary: true })
+    }
+    // Another branch's subscription stays.
+    const other = { system: 'local-git', id: `${p.slug}/mp/meatless/still-open` }
+    await s.events.subscriptions.subscribe(session.id, other, { primary: true })
+
+    await t.req('POST', `/api/projects/${p.id}/local/merge`, { branch: 'mp/meatless/end-merge' }, reviewer)
+    await t.req('POST', `/api/projects/${p.id}/local/branches/delete`, { branch: 'mp/meatless/end-delete' }, reviewer)
+    await t.settle()
+    for (const [i, type] of (['branch.merged', 'branch.deleted'] as const).entries()) {
+      const e = (await s.events.query({ source: 'local-git', type })).find((x) => x.data.subject?.id === subjects[i]!.id)!
+      // Delivered first: a run of the session, or its inbox, has the event.
+      const runs = await s.sessions.runs({ sessionId: session.id })
+      const inbox = await s.sessions.inbox(session.id)
+      expect(
+        runs.some((r) => r.data.cause.eventId === e.id) || inbox.some((x) => x.data.eventId === e.id),
+        `${type} delivered`,
+      ).toBe(true)
+      expect(await s.events.subscriptions.forSubject(subjects[i]!), `${type} ended`).toEqual([])
+    }
+    expect((await s.events.subscriptions.forSubject(other)).map((x) => x.data.sessionId)).toEqual([session.id])
   })
 
   it('deletes branches (not main), with the same permission', async () => {

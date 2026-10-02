@@ -146,6 +146,12 @@ and tags combine as described below:
    subscription). A router's final text is its decision, never posted as a
    reply: the session it starts answers.
 
+After an event is routed (bus `event.routed`), an event that closes its
+subject ends every subscription to it: a GitLab MR merged or closed, a Linear
+issue completed, canceled or removed, a local project's branch merged or
+deleted (`local-git` `branch.merged` / `branch.deleted`). The closing event
+itself is delivered first, so the session still learns what happened.
+
 Only the router sessions in steps 3 and 5 involve a model. That's where
 [untrusted input](spec.md#untrusted-input) is judged critically, and where
 work nobody has claimed gets assigned.
@@ -199,7 +205,11 @@ anything.
 | compact   | the same as rewind to the root, with a summary of everything. It's done only when required and recorded like any other operation. It may keep the latest entries: they are re-created verbatim on top of the summary. |
 
 The web UI can show all of this as a tree. Every summary and pointer links to
-the branch or entry it stands for.
+the branch or entry it stands for. The model gets the same map as a table of
+contents (`sessions.contents`): each summary and pointer on its current path
+with the entries it replaced (from the summary's `rewoundTo`, `replacesTip`,
+`collapsedFrom`/`collapsedTo` and `keptFrom`), their size and how to read them
+back.
 
 ## Runs
 
@@ -214,6 +224,9 @@ A **run** is the unit of scheduling: one piece of work in one session.
 | `tip`     | the run's latest entry                                             |
 | `state`   | see below                                                          |
 | `cause`   | the event or delivery that started it                              |
+| `requesterId` | the person whose request started it                            |
+| `requests` | later requests taken from the inbox while it ran (event, sender, when); the latest sender is who it works for from then on |
+| `result`  | how it ended: status, output, error, and the structured `result` of `finish { output, result }` |
 | `worker`  | which worker holds it, while running                               |
 | `wait`    | what it's waiting for, while suspended                             |
 
@@ -277,7 +290,7 @@ Anything that takes a while **suspends** the run instead of holding a worker:
 - The wake condition is stored on the run (e.g. `all of [r1, r2, r3]`, with an
   optional timeout). When the condition is met, the run goes back to `queued`.
   When it resumes, it gets the results as a `tool_result` entry for its
-  `wait` call.
+  `wait` call: each child's output, error and structured `result` (as is).
 - Long tools such as container jobs are asynchronous: the tool returns a
   handle straight away, and the model can `wait` on it or keep working.
 - **Timeouts and cancelling children** (an open question in the spec): `wait`
@@ -317,7 +330,11 @@ them. The proposal:
   goes into the session's inbox. At the next step boundary, the worker appends
   all pending inbox items as `event` entries, so the model sees them mid-task,
   like a person noticing a new message. If no run is going, the delivery
-  starts one.
+  starts one. Each inbox item carries its sender; an item that asks the run to
+  act is added to the run's `requests`, and the tool calls after it carry that
+  sender as the requester (so a commit made for a follow-up names whoever asked
+  for it, not whoever started the run). A run started for an item left in the
+  inbox is for that item's sender.
 - **Ephemeral runs in parallel.** Ephemeral runs don't move `head`, so several
   can run at once from the same `head`, up to a per-session limit, e.g. an
   intake context handling ten new tasks at once. Beyond the limit, they queue.

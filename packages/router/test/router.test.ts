@@ -209,11 +209,19 @@ describe('router', () => {
     const [d1] = (await t.router.route(e1.id)).deliveries
     expect(d1!.outcome).toMatchObject({ type: 'inbox', runId: active.id })
     await t.sessions.suspend(active.id, { type: 'delivery' })
-    const e2 = await t.ingest({ source: 'chat', type: 'message.replied', subject, text: 'second reply' })
+    const e2 = await t.ingest({
+      source: 'chat',
+      type: 'message.replied',
+      subject,
+      text: 'second reply',
+      actorContactId: 'con_bo',
+    })
     const [d2] = (await t.router.route(e2.id)).deliveries
     expect(d2!.outcome).toMatchObject({ type: 'woke', runId: active.id })
     expect((await t.sessions.requireRun(active.id)).data.state).toBe('queued')
     expect((await t.sessions.inbox(work.id)).map((i) => i.data.text)).toHaveLength(2)
+    // The inbox item says who sent it, so the run knows who it works for when it takes it.
+    expect((await t.sessions.inbox(work.id)).map((i) => i.data.requesterId)).toEqual([undefined, 'con_bo'])
   })
 
   it('uses chat tags: session tags, employee tags, and never echoes an author', async () => {

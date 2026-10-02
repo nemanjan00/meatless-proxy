@@ -6,7 +6,7 @@ import { ErrorState, LoadingRows } from '@/components/empty.tsx'
 import { RepoLinks } from '@/components/links.tsx'
 import { NewProjectButton } from '@/components/new-project-dialog.tsx'
 import { SectionTitle } from '@/components/page.tsx'
-import { RoleBadges, RoleSelect } from '@/components/project-people.tsx'
+import { EMPLOYEE_PROJECT_ROLES, RoleBadges, RoleSelect } from '@/components/project-people.tsx'
 import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
@@ -116,7 +116,7 @@ export function EmployeeProjects({ employeeId, employeeName }: { employeeId: str
               change(() => api.addProjectPerson(o.id, { employeeId, role }), `${employeeName} added to ${o.label} as ${role}`)
             }
           />
-          <RoleSelect value={role} onChange={setRole} />
+          <RoleSelect value={role} onChange={setRole} roles={EMPLOYEE_PROJECT_ROLES} />
         </div>
       )}
     </section>

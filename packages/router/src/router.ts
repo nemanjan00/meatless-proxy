@@ -432,6 +432,7 @@ export function createRouter(opts: RouterOptions): Router {
           text: renderEvent(shown),
           source: event.data.source,
           type: event.data.type,
+          ...(event.data.actorContactId ? { requesterId: event.data.actorContactId } : {}),
         })
         if (decision && 'pause' in decision && (active.data.state === 'suspended' || active.data.state === 'queued')) {
           // e.g. the AI-to-AI streak limit: stop the conversation until a person looks at it.

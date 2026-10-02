@@ -6,6 +6,7 @@ import type { Ref, StoredRecord } from '@mp/store'
 import type { ToolContext } from '@mp/tools'
 import { checkRef, clip, fail, line, ok, str, type Kit } from '../kit.ts'
 import { SANDBOX_PATHS_NOTE } from './chat.ts'
+import { withProduced } from '../session-outcomes.ts'
 
 const OWNER_KINDS = ['project', 'session', 'procedure', 'contact', 'memory', 'employee']
 const REF_KINDS = ['contact', 'project', 'session', 'memory', 'procedure', 'doc']
@@ -525,6 +526,13 @@ export function registerKnowledgeTools(kit: Kit): void {
       }
       const s = await files.share(ctx.employeeId, a.path, contactId, a.permission ?? 'read', { actor: kit.actor(ctx) })
       const contact = await deps.directory.contacts.get(contactId)
+      await kit.patchMeta(ctx.sessionId, (m) =>
+        withProduced(m, {
+          kind: 'file',
+          what: `${s.data.path} shared with ${contact?.data.name ?? contactId}`,
+          at: deps.clock.iso(),
+        }),
+      )
       return ok({
         shared: s.data.path,
         with: contactId,

@@ -59,7 +59,7 @@ import { createMockEnvironmentsApi } from './environments.ts'
 import { createMockSchedulesApi } from './schedules.ts'
 import { createMockNotificationsApi } from './notifications.ts'
 import { createMockChatActivity } from './chat-activity.ts'
-import { mockListExtras, mockQuerySessions } from './session-list.ts'
+import { mockListExtras, mockOutcome, mockQuerySessions } from './session-list.ts'
 
 /** Emits a live event (the mock live source implements this). */
 export type Emit = <T extends LiveTopic>(topic: T, payload: LiveTopics[T]) => void
@@ -632,6 +632,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
         links,
         tokens: totalsFor((u) => u.sessionId === id),
         threads,
+        ...(mockOutcome(db, s) ? { outcome: mockOutcome(db, s)! } : {}),
       }
       return delay(detail)
     },
