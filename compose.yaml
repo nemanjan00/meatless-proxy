@@ -27,6 +27,9 @@ services:
       # Live previews are served on their own origin: this port, or PREVIEW_DOMAIN (see packages/server/README.md).
       PREVIEW_PORT: "3001"
       NODE_ENV: production
+    # Lets OPENAI_BASE_URL point at a model proxy on the host (http://host.docker.internal:<port>/v1).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     ports:
       - "${APP_PORT:-3000}:3000"
       - "${PREVIEW_HOST_PORT:-3001}:3001"
