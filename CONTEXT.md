@@ -78,7 +78,7 @@ falls back to the drastic one only when the gentler ones weren't used:
 
 ```mermaid
 flowchart LR
-    A["1 · Offload<br/>one big item → a pointer<br/><i>automatic for huge results,<br/>or the model's choice</i>"] --> B["2 · Collapse<br/>a finished stretch → the model's summary,<br/>everything after it kept<br/><i>the model's choice, suggested at 50 / 75 / 80%</i>"] --> C["3 · Compaction<br/>everything but the latest part → a summary<br/><i>the harness's safety net at 85%</i>"]
+    A["1 · Offload<br/>one big item → a pointer<br/><i>automatic for huge results,<br/>or the model's choice</i>"] --> B["2 · Collapse<br/>a finished stretch → the model's summary,<br/>everything after it kept<br/><i>the model's choice, suggested at 70 / 80%</i>"] --> C["3 · Compaction<br/>everything but the latest part → a summary<br/><i>the harness's safety net at 85%</i>"]
 ```
 
 | | Offload | Collapse | Compaction |
@@ -272,14 +272,23 @@ for before (its ticket and deploy id).
 |-----|----------|
 | `classic` | classic compaction: at 85% everything is summarised; no notes, no context tools |
 | `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
-| `managed` | everything: notes at 50/75%, the free-space turn at 80%, collapse/offload/restore tools, compaction at 85% |
+| `managed-early` | everything, with notes at 50% and 75% (the default before the benchmark) |
+| `managed` | everything, as deployed: a note at 70%, the free-space turn at 80%, the context tools (`sessions.rewind`, `offload`, `restore`, `compact`, `contents`, `search`), compaction at 85% |
+
+A **fresh session** baseline asks the same follow-up of a new session that
+starts from zero, as the cost of not asking the session that already read the
+archive.
+
+Arm names changed as the benchmark went on: in the first two rounds,
+`managed` had notes at 50% and 75% (now `managed-early`), and `managed-late`
+had one note at 70%, which is now the default and the `managed` arm.
 
 ### First results (2026-10-13)
 
 Claude Sonnet 5.5, a 64k window, three runs per arm. Figures are medians,
 with the range when the runs differ. **Billed-equivalent** weighs tokens by
 price, in uncached input tokens: cached reads ×0.1, output ×5. Cache writes
-(×1.25) aren't reported by the provider, so the uncached part is a lower
+(×1.25) aren't reported by the provider, so billed-equivalent is a lower
 bound.
 
 | arm | report correct | prompt tokens | cached | billed-equivalent | collapses | restores | time | follow-up right | follow-up billed |
@@ -317,7 +326,7 @@ What we saw in the managed arm:
   on it, and read entries back only for a detail it lacks.
 - **Restores show their cost** ("adds about 5.5k tokens to your context").
 - **Fewer notes:** the `managed-late` arm has a single note at 70%
-  (`CONTEXT_NOTES=70`).
+  (`CONTEXT_NOTES=70`; now the default).
 - **A one-time source** (`--source feed`): each page can be read once, so a
   follow-up can only be answered from the session's own history, and a
   **fresh session** baseline asks the same follow-up from zero.
@@ -330,27 +339,42 @@ pages can be read again; on the **feed**, each page can be read once, so the
 follow-up (the ticket and deploy id of a minor incident on page 3) can only
 be answered from what the session kept.
 
-| source | arm | report correct | calls | billed-equivalent | collapses | restores | time | follow-up right | follow-up billed |
-|--------|-----|----------------|-------|-------------------|-----------|----------|------|-----------------|------------------|
-| archive | classic | 12/12 (3/3 runs) | 23 | 310k | 0 | 0 | 70 s | 3/3 | 30k |
-| archive | managed-late | 12/12 (3/3) | 21 | **265k** | 2 | 0 | 57 s | 2/3 | 104k (60k–215k) |
-| archive | managed | 12/12 (3/3) | 29 | 410k (355k–431k) | 5 | 0 | 102 s | 3/3 | 126k (48k–221k) |
-| feed | classic | 12/12 (3/3) | 23 | 306k | 0 | 0 | 88 s | **0/3** | 4k |
-| feed | safety-net | 12/12 (3/3) | 23 | 316k | 0 | 0 | 72 s | **0/3** | 5k |
-| feed | managed-late | 12/12 (3/3) | 21 | **267k** | 2 | 0 | 56 s | 2/3 | 42k (0k–87k) |
-| feed | managed | 12/12 (3/3) | 27 | 401k (267k–456k) | 6 | 10 | 108 s | **3/3** | 64k (40k–183k) |
+Follow-up figures count only runs that finished; a run the harness failed is
+counted on its own, not as a wrong answer.
+
+| source | arm | report correct | calls | billed-equivalent | collapses | restores | time | follow-up right | follow-up billed | harness failures | fresh session |
+|--------|-----|----------------|-------|-------------------|-----------|----------|------|-----------------|------------------|------------------|---------------|
+| archive | classic | 12/12 (3/3 runs) | 23 | 310k | 0 | 0 | 70 s | 3/3 | 30k | 0 | 3/3, 27k |
+| archive | safety-net | 12/12 (3/3) | 23 | 311k | 0 | 0 | 69 s | 3/3 | 34k | 0 | 3/3, 27k |
+| archive | managed-late | 12/12 (3/3) | 21 | **265k** | 2 | 0 | 57 s | 2/2 | 159k (104k–215k) | 1 | 3/3, 29k |
+| archive | managed (50/75) | 12/12 (3/3) | 29 | 410k (355k–431k) | 5 | 0 | 102 s | 3/3 | 126k (48k–221k) | 0 | 3/3, 28k |
+| feed | classic | 12/12 (3/3) | 23 | 306k | 0 | 0 | 88 s | **0/3, all abstained** | 4k | 0 | – |
+| feed | safety-net | 12/12 (3/3) | 23 | 316k | 0 | 0 | 72 s | **0/3, all abstained** | 5k | 0 | – |
+| feed | managed-late | 12/12 (3/3) | 21 | **267k** | 2 | 0 | 56 s | 2/2 | 65k (42k–87k) | 1 | – |
+| feed | managed (50/75) | 12/12 (3/3) | 27 | 401k (267k–456k) | 6 | 10 | 108 s | **3/3** | 64k (40k–183k) | 0 | – |
 
 - **One late note beats two early ones.** With a single note at 70%, the
   model collapses twice, in big pieces, never restores, and never reaches
   compaction: **15% cheaper than classic compaction** on billed cost, and
-  faster. The 50/75% arm still churns.
+  faster. The 50/75% arm still churns: on the feed it read back 10 and 12
+  collapsed entries during the report in two of three runs (0 in the third),
+  as in the first round, so it's a habit of that arm, not one bad run.
+  `CONTEXT_NOTES` now defaults to 70.
 - **Detail that can't be read again is where classic compaction fails.** On
   the feed, classic and safety-net answered the follow-up wrong in all six
   runs: the summary had no reason to keep a minor incident's ticket, and
-  nothing else held it. The managed arms answered from their own history.
+  nothing else held it. They failed honestly: every one of the six answers
+  said the details weren't in its notes and that it wouldn't guess, none
+  invented a ticket. The managed arms answered from their own history.
 - **Answering from history still costs more than re-reading** when
-  re-reading is possible: the model looks through `sessions.contents` and
-  restores entries instead of going straight to the one it needs.
+  re-reading is possible. The question names an incident, not a page, and an
+  index of arguments (`read_page {page: 3}`) doesn't say where the incident
+  is, so the model browsed `sessions.contents` and restored page after page.
+  The benchmark also left out `sessions.search`, which the deployed toolset
+  has. Fixed since: the context tools include `sessions.search`, which
+  searches the session's own history, collapsed parts included, and each hit
+  comes with a ready `restore { entryId, offset, length }` that reads the
+  text around the match.
 - **One failure, the same in both rounds:** a managed-late follow-up run
   failed right after a `sessions.rewind` that reached back into the earlier
   run. It's a harness error, not a model one, and it's being fixed.
@@ -384,7 +408,7 @@ flowchart TD
     G -- yes --> P[Pause the run<br/>with a clear reason]
     G -- no --> F
     D -- no --> F{Crossed a threshold<br/>not yet noted?}
-    F -- "50% / 75%" --> N[Context note: size + the biggest<br/>finished stretches and results,<br/>with ready rewind / offload calls]
+    F -- "70%" --> N[Context note: size + the biggest<br/>finished stretches and results,<br/>with ready rewind / offload calls]
     F -- "80%" --> NN[Instruction as the next user turn:<br/>free space before going on]
     F -- no --> M
     N --> M[Model call]
@@ -399,7 +423,7 @@ flowchart TD
 | Percent | Setting | What happens |
 |---------|---------|--------------|
 | any | `TOOL_RESULT_MAX_CHARS` (20,000) | oversized results are offloaded as they arrive |
-| 50%, 75% | runner `contextNotes` | an advisory `system` note with up to three suggestions |
+| 70% | `CONTEXT_NOTES` | an advisory `system` note with up to three suggestions |
 | 80% | `CONTEXT_NEAR_AT` | a `user` turn: free space now (collapse, or compact with your own summary) |
 | 85% | `CONTEXT_COMPACT_AT` | automatic compaction before the next model call |
 | over the window | — | compaction is tried once more; if it fails, the run pauses |
@@ -499,7 +523,7 @@ history. An ephemeral run (router, triggers) leaves the session as it was.
 | `MODEL_CONTEXT_TOKENS` | from the model table, else 128k | the window |
 | `CONTEXT_COMPACT_AT` | 85 | percent for automatic compaction; 0 turns it off |
 | `CONTEXT_NEAR_AT` | 80 | percent for the "free space now" turn; 0 turns it off |
-| `CONTEXT_NOTES` | 50,75 | percents for the advisory notes; `off` turns them off |
+| `CONTEXT_NOTES` | 70 | percents for the advisory notes, comma-separated; `off` turns them off |
 | `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim; 0 summarises everything |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | automatic offload of big results; 0 turns it off |
 

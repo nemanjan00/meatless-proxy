@@ -7,6 +7,7 @@ import {
   followUpsText,
   scoreAnswer,
   scoreFollowUps,
+  classifyFollowUps,
   type Archive,
   type Score,
 } from './archive.ts'
@@ -26,7 +27,14 @@ export interface Arm {
   contextTools: boolean
 }
 
-export const CONTEXT_TOOLS = ['sessions.rewind', 'sessions.offload', 'sessions.restore', 'sessions.compact', 'sessions.contents']
+export const CONTEXT_TOOLS = [
+  'sessions.rewind',
+  'sessions.offload',
+  'sessions.restore',
+  'sessions.compact',
+  'sessions.contents',
+  'sessions.search',
+]
 
 export const ARMS: Arm[] = [
   {
@@ -42,14 +50,14 @@ export const ARMS: Arm[] = [
     contextTools: false,
   },
   {
-    name: 'managed-late',
-    description: 'everything, with one note at 70% instead of 50/75%: fewer, bigger collapses',
-    env: { CONTEXT_NOTES: '70' },
+    name: 'managed-early',
+    description: 'everything, with notes at 50% and 75% (the default before the benchmark): more, smaller collapses',
+    env: { CONTEXT_NOTES: '50,75' },
     contextTools: true,
   },
   {
     name: 'managed',
-    description: 'everything: notes at 50/75%, free-space turn at 80%, collapse/offload tools, compaction at 85%',
+    description: 'everything, as deployed: a note at 70%, the free-space turn at 80%, the context tools, compaction at 85%',
     env: {},
     contextTools: true,
   },
@@ -103,6 +111,10 @@ export interface FollowUp {
   /** Incidents answered with both details right, of how many asked. */
   right: number
   of: number
+  /** Wrong answers that gave a ticket or deploy id that isn't the incident's own. */
+  invented: number
+  /** Wrong answers that said the details weren't available. */
+  abstained: number
   answer: string
   stats: PhaseStats
   error?: string
@@ -302,7 +314,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     const graded = (p: Awaited<ReturnType<typeof phase>>) => ({
       state: p.state,
       correct: scoreFollowUps(xs, p.answer) === xs.length,
-      right: scoreFollowUps(xs, p.answer),
+      ...classifyFollowUps(xs, p.answer),
       of: xs.length,
       ...(p.error ? { error: p.error } : {}),
       answer: p.answer,

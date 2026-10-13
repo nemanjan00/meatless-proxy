@@ -179,8 +179,18 @@ describe('context windows', () => {
 })
 
 describe('context notes', () => {
-  it('tells the model at 50% and 75%, once each, never between a call and its result', async () => {
+  it('by default tells the model once, at 70%', async () => {
     const h = harness(growScript(6), { contextWindow: () => 1000, compactAt: 0, contextNearAt: 0 })
+    withGrow(h)
+    const s = await h.session(['grow'])
+    const run = await h.start(s.id)
+    expect((await h.runner.execute(run.id)).status).toBe('completed')
+    const notes = (await h.sessions.history(s.id)).filter((e) => typeof e.meta.contextNote === 'number')
+    expect(notes.map((n) => n.meta.contextNote)).toEqual([70])
+  })
+
+  it('tells the model at 50% and 75%, once each, never between a call and its result', async () => {
+    const h = harness(growScript(6), { contextWindow: () => 1000, compactAt: 0, contextNearAt: 0, contextNotes: [50, 75] })
     withGrow(h)
     const s = await h.session(['grow'])
     const run = await h.start(s.id)

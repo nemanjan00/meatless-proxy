@@ -263,7 +263,7 @@ pieces. A run whose context can't be made to fit pauses with the reason.
 | `MODEL_CONTEXT_TOKENS` | from the model's name, else 128k | the context window of `MODEL`, in tokens |
 | `CONTEXT_COMPACT_AT` | 85 | percent of the window at which a run compacts by itself (`0`: never) |
 | `CONTEXT_NEAR_AT` | 80 | percent of the window at which a run is asked to free space itself first (`0`: never) |
-| `CONTEXT_NOTES` | `50,75` | percents of the window at which the model is told its context size and what it could free (`off`: never) |
+| `CONTEXT_NOTES` | `70` | percents of the window at which the model is told its context size and what it could free (`off`: never) |
 | `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim (`0`: summarise everything) |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | longer tool results are stored in full and kept as a preview (`0`: never) |
 | `TOOLS_ON_DEMAND` | `true` | sessions are offered their everyday tools and load the rest with `tools.find` / `tools.load` (or by calling one), which roughly halves the fixed overhead of every model call; `false` offers every tool, every call |

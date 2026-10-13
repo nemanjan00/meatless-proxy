@@ -2139,8 +2139,9 @@ name (a table of known models, 128k for any other) or from the deployment's
 `MODEL_CONTEXT_TOKENS`, and after every model call it knows how big the prompt
 was. The session page shows it ("context 112k / 200k").
 
-- **The model is told, concretely.** When a session's context crosses **50%**
-  and again **75%** of the window (`CONTEXT_NOTES`), a short note goes into its history before
+- **The model is told, concretely.** When a session's context crosses **70%**
+  of the window (`CONTEXT_NOTES`; a list of percents, e.g. `50,75`, gives
+  several notes), a short note goes into its history before
   the next model call: the size, and what is big. It names the biggest
   finished stretches of consecutive tool calls (their first and last call
   ids, the tools, about how many tokens) with a ready `rewind { from, to,
@@ -2217,7 +2218,7 @@ Open questions:
 - Is a run ephemeral by default and committed only on `commit`, or can a
   trigger or template set the default?
 - How does a session choose its rewind point? By itself: the harness tells it
-  its context size at 50% and 75% and compacts automatically near the limit
+  its context size at 70% and compacts automatically near the limit
   ([knowing the context size](#knowing-the-context-size)). Rewinding at run
   and task boundaries on its own is still open.
 

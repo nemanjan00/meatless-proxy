@@ -672,7 +672,7 @@ export function SessionDetailPage() {
                     </TooltipTrigger>
                     <TooltipContent className="max-w-72 text-micro">
                       Prompt tokens at the latest model call ({contextRun.data.context.model}), against its context window. The
-                      model is told at 50% and 75%; near the limit the harness compacts automatically.
+                      model is told at 70%; near the limit the harness compacts automatically.
                     </TooltipContent>
                   </Tooltip>
                 </Prop>

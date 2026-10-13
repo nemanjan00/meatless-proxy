@@ -77,6 +77,24 @@ const entryChars = (e: Entry): number => JSON.stringify(e.content).length
 /** `9.2k`, `850`: an estimated token count for a person or a model to read. */
 const kTok = (n: number): string => (n < 1000 ? String(Math.round(n)) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`)
 
+/** Characters a search hit's ready read starts before the match, and reads. */
+const READ_BEFORE = 300
+const READ_LENGTH = 1500
+
+/** A ready sessions.restore call that reads the part of an entry around the first word of a search that it contains. */
+function readAround(e: Entry, query: string): { read?: { entryId: string; offset: number; length: number } } {
+  const text = entryText(e).toLowerCase()
+  const at = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => text.indexOf(w))
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b)[0]
+  if (at === undefined) return {}
+  return { read: { entryId: e.id, offset: Math.max(0, at - READ_BEFORE), length: READ_LENGTH } }
+}
+
 /** Lines an index of a collapsed stretch lists at most. */
 const INDEX_MAX = 40
 
@@ -101,7 +119,7 @@ function stretchIndex(stretch: Entry[], skip: Set<string>, perChar: number): str
     }
   if (!lines.length) return ''
   const more = lines.length > INDEX_MAX ? [`- … and ${lines.length - INDEX_MAX} more (sessions.contents lists them all)`] : []
-  return `\n\n[index of what this summary replaced: read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
+  return `\n\n[index of what this summary replaced: find a detail in it with sessions.search { text, includeThisSession: true }, or read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
 }
 
 /** The text a model saw for an entry (a tool result's output as it is rendered). */
@@ -648,7 +666,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.search',
       description:
-        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order. Newest first; this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get.",
+        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order. Newest first; this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session's own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.",
       effect: 'read',
       params: {
         properties: {
@@ -676,6 +694,8 @@ export function registerSessionTools(kit: Kit): void {
           sessionId: h.sessionId,
           ...(h.session ? { sessionTitle: h.session.data.title } : {}),
           snippet: h.snippet,
+          // In this session's own history (collapsed or compacted parts included): where to read around the match.
+          ...(h.sessionId === ctx.sessionId ? readAround(h.entry, text) : {}),
         })),
         totalEntries: hits.total,
         ...(inThis

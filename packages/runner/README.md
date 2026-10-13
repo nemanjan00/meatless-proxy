@@ -45,7 +45,7 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   - Before each model call the runner estimates the request's tokens from its
     characters, calibrated by the ratio the previous call of the run measured
     (prompt tokens per character; 3.5 characters a token before the first).
-  - **Notes:** at `contextNotes` (50% and 75%) a short `system` entry
+  - **Notes:** at `contextNotes` (70%; `CONTEXT_NOTES`) a short `system` entry
     (`meta.contextNote`, `meta.transient`) tells the model its size and names
     what to free, with ready calls (`contextSuggestions`): the biggest
     finished stretches of consecutive tool-call turns (`sessions.rewind

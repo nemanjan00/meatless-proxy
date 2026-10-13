@@ -286,3 +286,19 @@ export function scoreFollowUps(xs: Incident[], answer: string): number {
   const lines = answer.split('\n')
   return xs.filter((x) => lines.some((l) => l.includes(x.id) && scoreFollowUp(x, l))).length
 }
+
+/**
+ * How follow-up answers went, per incident: right (both details), invented (a ticket or deploy id that isn't its
+ * own: a hallucination), or abstained (said it doesn't have them). For an employee, inventing is far worse.
+ */
+export function classifyFollowUps(xs: Incident[], answer: string): { right: number; invented: number; abstained: number } {
+  const lines = xs.length === 1 ? [answer] : answer.split('\n')
+  let right = 0
+  let invented = 0
+  for (const x of xs) {
+    const mine = xs.length === 1 ? answer : lines.filter((l) => l.includes(x.id)).join('\n')
+    if (scoreFollowUp(x, mine)) right++
+    else if ((mine.match(/TKT-\d+/g) ?? []).some((t) => t !== x.ticket) || /deploy[:\s]+[a-z0-9]{4}\b/i.test(mine)) invented++
+  }
+  return { right, invented, abstained: xs.length - right - invented }
+}

@@ -7,6 +7,7 @@ import {
   scoreAnswer,
   scoreFollowUp,
   scoreFollowUps,
+  classifyFollowUps,
 } from '../src/bench/archive.ts'
 import { ARMS, type PhaseStats, taskText } from '../src/bench/context.ts'
 import { billed, median } from '../src/bench/summary.ts'
@@ -79,9 +80,9 @@ describe('the follow-up question', () => {
 
 describe('arms', () => {
   it('compares classic compaction with ours, and only the managed arm gets the context tools', () => {
-    expect(ARMS.map((x) => x.name)).toEqual(['classic', 'safety-net', 'managed-late', 'managed'])
+    expect(ARMS.map((x) => x.name)).toEqual(['classic', 'safety-net', 'managed-early', 'managed'])
     expect(ARMS.find((x) => x.name === 'classic')!.env).toMatchObject({ CONTEXT_COMPACT_KEEP: '0', CONTEXT_NOTES: 'off' })
-    expect(ARMS.filter((x) => x.contextTools).map((x) => x.name)).toEqual(['managed-late', 'managed'])
+    expect(ARMS.filter((x) => x.contextTools).map((x) => x.name)).toEqual(['managed-early', 'managed'])
     expect(taskText(20)).toContain('20 pages')
   })
 })
@@ -133,5 +134,15 @@ describe('scaling', () => {
     const answer = xs.map((x, i) => `${x.id}: ${x.ticket}, deploy ${i === 0 ? 'zzzz' : x.deploy}`).join('\n')
     expect(scoreFollowUps(xs, answer)).toBe(4)
     expect(followUpsText(xs)).toContain(xs[4]!.id)
+  })
+})
+
+describe('wrong follow-ups', () => {
+  it('tells abstaining from inventing', () => {
+    const a = buildArchive()
+    const [x] = followUpIncidents(a, 1)
+    expect(classifyFollowUps([x!], `${x!.ticket}, deploy ${x!.deploy}`)).toEqual({ right: 1, invented: 0, abstained: 0 })
+    expect(classifyFollowUps([x!], "I don't have its details and won't guess.")).toEqual({ right: 0, invented: 0, abstained: 1 })
+    expect(classifyFollowUps([x!], 'TKT-0001, deploy zzzz')).toEqual({ right: 0, invented: 1, abstained: 0 })
   })
 })

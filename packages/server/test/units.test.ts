@@ -32,7 +32,7 @@ describe('config', () => {
   it('knows context windows by model name, and MODEL_CONTEXT_TOKENS overrides it for MODEL', () => {
     const d = loadConfig({})
     expect(d).toMatchObject({ CONTEXT_COMPACT_AT: 85, CONTEXT_NEAR_AT: 80, TOOL_RESULT_MAX_CHARS: 20000 })
-    expect(d.CONTEXT_NOTES).toEqual([50, 75])
+    expect(d.CONTEXT_NOTES).toEqual([70])
     expect(d.CONTEXT_COMPACT_KEEP).toBe(0.15)
     expect(loadConfig({ CONTEXT_NOTES: 'off', CONTEXT_COMPACT_KEEP: '0' })).toMatchObject({
       CONTEXT_NOTES: [],
@@ -63,7 +63,7 @@ describe('config', () => {
       window: 100_000,
       compactAt: 'off',
       nearAt: 80,
-      notes: [50, 75],
+      notes: [70],
       compactKeep: 0.15,
       toolResultMaxChars: 5000,
     })

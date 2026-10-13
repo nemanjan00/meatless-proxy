@@ -260,7 +260,7 @@ export const configSchema = z.object({
    * comma-separated (`off` or `0` = no notes).
    */
   CONTEXT_NOTES: optStr.transform((v, ctx) => {
-    const t = (v ?? '50,75').trim().toLowerCase()
+    const t = (v ?? '70').trim().toLowerCase()
     if (t === 'off' || t === '0') return []
     const ns = t.split(',').map((x) => Number(x.trim()))
     if (ns.some((n) => !Number.isFinite(n) || n <= 0 || n >= 100)) {

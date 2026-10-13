@@ -289,6 +289,11 @@ describe('finding sessions', () => {
     const s = await t.out('sessions.search', { text: 'quarterly ledger', includeThisSession: true })
     expect(s.entries[0]).toMatchObject({ sessionId: t.session.id, kind: 'tool_result' })
     expect(s.entries[0].snippet).toContain('quarterly ledger')
+    // A hit in this session's own history comes with a ready read around the match, which lands on it.
+    expect(s.entries[0].read).toMatchObject({ entryId: s.entries[0].entryId, length: 1500 })
+    const piece = await t.out('sessions.restore', s.entries[0].read)
+    expect(piece.text).toContain('the quarterly ledger says 42')
+    expect(piece.cost).toMatch(/adds about \d+ tokens/)
     // By default this session's own entries are left out, and counted.
     const others = await t.out('sessions.search', { text: 'quarterly ledger' })
     expect(others.entries).toHaveLength(0)

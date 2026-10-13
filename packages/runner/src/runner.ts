@@ -172,7 +172,8 @@ export interface RunnerOptions {
   contextWindow?: (model: string) => number
   /**
    * Context sizes (percent of the window) at which the model gets a note about it, naming the biggest finished
-   * parts it could free. Each fires once, and again only after the context fell well below it. Default [50, 75].
+   * parts it could free. Each fires once, and again only after the context fell well below it. Default [70]: one note, so the model
+   * collapses rarely and in big pieces (earlier notes made it collapse every few steps; see CONTEXT.md).
    */
   contextNotes?: number[]
   /**
@@ -246,7 +247,7 @@ export function createRunner(opts: RunnerOptions): Runner {
   }
   const emit = (topic: string, payload: unknown) => opts.bus?.publish(topic, payload)
   const windowOf = (m: string) => opts.contextWindow?.(m) ?? contextWindowOf(m)
-  const noteAt = [...(opts.contextNotes ?? [50, 75])].filter((t) => t > 0).sort((a, b) => a - b)
+  const noteAt = [...(opts.contextNotes ?? [70])].filter((t) => t > 0).sort((a, b) => a - b)
   const compactAt = opts.compactAt ?? 85
   const nearAt = opts.contextNearAt ?? 80
   /** Every threshold the model is told about: the notes, and the near-limit instruction when it comes before compaction. */

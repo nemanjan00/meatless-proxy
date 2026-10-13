@@ -20,9 +20,25 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
 }
 
-/** `14/15`: details answered right of those asked, over the runs (older reports: runs right of runs). */
-const rightOf = (xs: { correct: boolean; right?: number; of?: number }[]) =>
-  xs.length ? `${xs.reduce((a, x) => a + (x.right ?? (x.correct ? 1 : 0)), 0)}/${xs.reduce((a, x) => a + (x.of ?? 1), 0)}` : '–'
+type Answered = { state: string; correct: boolean; right?: number; of?: number; invented?: number; abstained?: number }
+
+/**
+ * `14/15 (1 abstained)`: incidents answered right of those asked, over the runs that finished; wrong ones split
+ * into abstained and invented when the report says (older reports: runs right of runs). Harness failures are
+ * left out here and counted on their own.
+ */
+const rightOf = (xs: Answered[]) => {
+  const ok = xs.filter((x) => x.state === 'completed')
+  if (!ok.length) return xs.length ? 'harness failed' : '–'
+  const right = ok.reduce((a, x) => a + (x.right ?? (x.correct ? 1 : 0)), 0)
+  const of = ok.reduce((a, x) => a + (x.of ?? 1), 0)
+  const inv = ok.reduce((a, x) => a + (x.invented ?? 0), 0)
+  const abs = ok.reduce((a, x) => a + (x.abstained ?? 0), 0)
+  const why = [abs ? `${abs} abstained` : '', inv ? `${inv} invented` : ''].filter(Boolean).join(', ')
+  return `${right}/${of}${why ? ` (${why})` : ''}`
+}
+/** Runs the harness failed (not a wrong answer: the run itself failed). */
+const failedOf = (xs: Answered[]) => String(xs.filter((x) => x.state !== 'completed').length)
 
 const k = (n: number) => `${Math.round(n / 1000)}k`
 /** `108k (100k–492k)`: the median, and the range when the runs differ. */
@@ -49,6 +65,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     'time',
     'follow-up right',
     'follow-up billed',
+    'follow-up harness failures',
     'fresh session right',
     'fresh session billed',
   ]
@@ -73,9 +90,10 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       String(med((r) => r.report.compactions)),
       `${Math.round(med((r) => r.report.durationMs) / 1000)} s`,
       rightOf(fs),
-      spread(fs.map((x) => billed(x.stats))),
+      spread(fs.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
+      failedOf(fs),
       rightOf(fr),
-      spread(fr.map((x) => billed(x.stats))),
+      spread(fr.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
     ]
   })
   return [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')

@@ -120,8 +120,8 @@ generated from a seed, so every arm reads the same text.
 |-----|------------------|
 | `classic` | classic compaction: at 85% the whole history is summarised (`CONTEXT_COMPACT_KEEP=0`), no notes, no context tools |
 | `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
-| `managed-late` | everything, with one note at 70% instead of 50/75%: fewer, bigger collapses |
-| `managed` | everything: notes at 50/75%, the free-space turn at 80%, `sessions.rewind`/`offload`/`restore`/`compact`/`contents`, compaction at 85% |
+| `managed-early` | everything, with notes at 50% and 75% (the default before the benchmark): more, smaller collapses |
+| `managed` | everything, as deployed: a note at 70%, the free-space turn at 80%, `sessions.rewind`/`offload`/`restore`/`compact`/`contents`/`search`, compaction at 85% |
 
 ```sh
 npm run bench:context                                   # every arm, 3 runs each, a 64k window
@@ -142,8 +142,9 @@ about, on pages spread across the archive; default 1, on page 3),
 `--no-follow-up`, `--summarize <report.json>` (re-print a saved report), `--repeat` (default 3), `--concurrency` (default 3),
 `--window` (the window the harness enforces, default 64000; the model's real
 one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),
-`--timeout <s>` (default 1800). It prints a table per arm (exact answers, F1,
-extras, the audit reference, model calls, prompt tokens and the cached share,
-peak prompt, compactions, collapses, offloads, pages re-read, time) and writes
+`--timeout <s>` (default 1800). It prints a table per arm: medians with ranges, billed-equivalent tokens
+(cached ×0.1, output ×5), follow-ups right of those asked (wrong ones split
+into abstained and invented) over the runs that finished, and harness
+failures on their own. It also writes
 every run, with a trace of its model calls, tool calls and context events, to
 `results/context-<timestamp>.json`.
