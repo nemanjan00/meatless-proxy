@@ -84,6 +84,10 @@ export type ContextSuggestion =
   /** A finished earlier request and all its work, from the request to its last entry. */
   | { kind: 'task'; from: string; to: string; request: string; tokens: number }
 
+/** A note from the harness about the context (its size, what to free, a new request's boundary). */
+const isContextNote = (e: Entry) =>
+  e.meta.transient === true || typeof e.meta.contextNote === 'number' || e.meta.contextBoundary === true
+
 /** Whether an entry is a request made in `runId` (its input, or one delivered while it worked), not a copy of an older one. */
 const isNewRequest = (e: Entry, runId: string) =>
   (e.kind === 'user' || e.kind === 'event') && e.meta.runId === runId && typeof e.meta.copiedFrom !== 'string'
@@ -118,7 +122,8 @@ export function earlierTasks(
       from: history[s]!.id,
       to: history[last]!.id,
       request: first.length > 70 ? `${first.slice(0, 70)}…` : first,
-      tokens: span.reduce((n, e) => n + entryTokens(e, perChar), 0),
+      // The harness's own notes about the context aren't the task's work.
+      tokens: span.filter((e) => !isContextNote(e)).reduce((n, e) => n + entryTokens(e, perChar), 0),
     })
   })
   return tasks.filter((t) => t.tokens >= (o.minTokens ?? 0)).sort((a, b) => b.tokens - a.tokens)

@@ -64,6 +64,12 @@ everything after it stays exactly as it was: the person's request, later
 messages, replies already sent, the current turn. Most of the context keeps
 its full detail.
 
+The one exception is a **request boundary**. When a new request arrives, a
+finished earlier request (the message that asked for it, the work, the reply)
+can be collapsed whole, so the next task starts with only what it needs. The
+request being worked on is never collapsed: a collapse that would replace it
+is refused.
+
 ### Keep the cached prefix
 
 Everything before the first changed entry is byte-identical, so the provider's
@@ -83,7 +89,7 @@ flowchart LR
 
 | | Offload | Collapse | Compaction |
 |---|---|---|---|
-| **Replaces** | one entry | a finished stretch of tool calls | all but the first entry and the latest part (`CONTEXT_COMPACT_KEEP`, 15% of the window) |
+| **Replaces** | one entry | a finished stretch of tool calls, or at a new request a whole finished request | all but the first entry and the latest part (`CONTEXT_COMPACT_KEEP`, 15% of the window) |
 | **With** | a pointer and a preview | the model's own summary | a summary written by a separate call |
 | **Who decides** | the harness (huge results) or the model | the model, prompted by notes | the harness (or the model, explicitly) |
 | **Detail kept** | everything except that entry | everything outside the stretch | the first entry and the recent tail |
@@ -148,8 +154,18 @@ flowchart LR
     before ~~~ after
 ```
 
-A variant, **jump back**, drops everything after a point. It's for
-abandoning a dead end: the summary keeps what was tried and why it failed.
+Two variants:
+
+- **Jump back** drops everything after a point. It's for abandoning a dead
+  end: the summary keeps what was tried and why it failed.
+- **Collapse a finished request.** At a new request, an earlier request and
+  everything done for it (its own collapses, the reply) become one summary of
+  what the new work still needs. It's a collapse of collapses: its index lists
+  the earlier summaries inside it, each with its own index, so every part
+  stays findable. Work made of tasks stays bounded: each task starts from the
+  prompt, short summaries of the tasks before, and its own request. It's
+  suggested once per finished request, when they take 30% of the window
+  (`CONTEXT_BOUNDARY_AT`).
 
 ### 3 · Compaction: the safety net
 
@@ -283,7 +299,9 @@ for before (its ticket and deploy id).
 | `managed-early` | everything, with notes at 50% and 75% (the default before the benchmark) |
 | `managed` | everything, as deployed: a note at 70%, the free-space turn at 80%, the context tools (`sessions.rewind`, `offload`, `restore`, `compact`, `contents`, `search`¹), compaction at 85% |
 
-¹ Rounds one and two ran without `sessions.search`.
+¹ Rounds one and two ran without `sessions.search`. The note at a request
+boundary came after the third round (`bfed127`); it fires only when there is
+more than one request, so the single-request rounds wouldn't have used it.
 
 A **fresh session** baseline asks the same follow-up of a new session that
 starts from zero, as the cost of not asking the session that already read the
@@ -515,6 +533,16 @@ flowchart TD
   the small dips an offload causes. Notes are `transient`: they describe the
   context as it was, so a collapse or compaction never copies them into the
   part it keeps. A note never goes between a tool call and its result.
+- **At a new request** (`earlierTasks`), the history before the run's own
+  request is split into finished requests: each from its message to the entry
+  before the next one (the harness's notes don't count towards its size). If
+  they take `CONTEXT_BOUNDARY_AT` (30%) of the window, the run's first call
+  gets a note naming the biggest, with ready `sessions.rewind { from, to,
+  summary }` calls. It fires once per finished request: the note records the
+  requests it named, and a later request gets one only if some finished
+  request hasn't been named yet, so a model that kept its finished work isn't
+  told again. The first entry (the prompt) is never part of a request, so it
+  stays first, and the cached prefix is the prompt plus the earliest summary.
 - **Picking suggestions** (`contextSuggestions`). Walk the history up to the
   latest tool-call turn (that's still current work). Group consecutive
   tool-call turns into stretches; notes between them don't break a stretch,

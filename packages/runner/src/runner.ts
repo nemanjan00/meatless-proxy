@@ -1006,15 +1006,27 @@ export function createRunner(opts: RunnerOptions): Runner {
           !pendingCalls(history).length &&
           !history.some((e) => e.meta.contextBoundary === true && e.meta.runId === runId)
         ) {
-          const tasks = earlierTasks(history, runId, tokensPerChar(run.data.context), {
+          const all = earlierTasks(history, runId, tokensPerChar(run.data.context), {
             minTokens: Math.max(200, Math.round(window * 0.02)),
-          }).slice(0, 3)
-          const total = tasks.reduce((n, t) => n + t.tokens, 0)
-          if (tasks.length && total >= (window * boundaryAt) / 100) {
+          })
+          // Once per finished request: a note fires only when one of them hasn't been named in an earlier note,
+          // so a model that kept its finished work on purpose isn't told again at every request.
+          const named = new Set(
+            history.flatMap((e) => (Array.isArray(e.meta.boundaryTasks) ? (e.meta.boundaryTasks as string[]) : [])),
+          )
+          const tasks = all.slice(0, 3)
+          const total = all.reduce((n, t) => n + t.tokens, 0)
+          const fresh = all.some((t) => t.kind === 'task' && !named.has(t.from))
+          if (tasks.length && fresh && total >= (window * boundaryAt) / 100) {
             await sessions.append(runId, {
               kind: 'system',
               content: { text: taskBoundaryText(tokens, window, tasks) },
-              meta: { contextBoundary: true, contextTokens: tokens, contextWindow: window, transient: true },
+              meta: {
+                contextBoundary: true,
+                boundaryTasks: all.flatMap((t) => (t.kind === 'task' ? [t.from] : [])),
+                contextTokens: tokens,
+                contextWindow: window,
+              },
             })
             history = await sessions.runHistory(runId)
             messages = render(history)

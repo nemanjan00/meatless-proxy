@@ -669,6 +669,16 @@ describe('a new request on top of finished ones', () => {
     expect(JSON.stringify(second.messages)).toContain('earlier requests that are done')
   })
 
+  it("doesn't repeat itself: a later request gets the note only if a finished request wasn't named before", async () => {
+    const { h, s } = await twoTasks(2000)
+    // Task 2 was small, so above task 3 there's only task 1, already named: the model kept it, and isn't told again.
+    const r3 = await h.start(s.id, 'task 3: one more')
+    expect((await h.runner.execute(r3.id)).status).toBe('completed')
+    const notes = (await h.sessions.history(s.id)).filter((e) => e.meta.contextBoundary === true)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.meta.boundaryTasks).toHaveLength(1)
+  })
+
   it('stays quiet when the finished requests are small', async () => {
     const { h, s, boundary } = await twoTasks(50)
     expect((await h.sessions.history(s.id)).some((e) => e.meta.contextBoundary === true)).toBe(false)
