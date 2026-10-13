@@ -80,15 +80,15 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     'follow-up right',
     'follow-up billed',
     'follow-up harness failures',
-    'fresh session right',
-    'fresh session billed',
+    'fuzzy follow-up right',
+    'fuzzy follow-up billed',
   ]
   const rows = arms.map((arm) => {
     const rs = runs.filter((r) => r.arm === arm)
     const n = rs.length
     const med = (f: (r: BenchRun) => number) => median(rs.map(f))
     const fs = rs.flatMap((r) => (r.followUp ? [r.followUp] : []))
-    const fr = rs.flatMap((r) => (r.fresh ? [r.fresh] : []))
+    const fz = rs.flatMap((r) => (r.fuzzy ? [r.fuzzy] : []))
     const prompt = rs.reduce((a, r) => a + r.report.promptTokens, 0)
     const cached = rs.reduce((a, r) => a + r.report.cachedTokens, 0)
     return [
@@ -108,9 +108,15 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       rightOf(fs),
       spread(fs.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
       failedOf(fs),
-      rightOf(fr),
-      spread(fr.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
+      rightOf(fz),
+      spread(fz.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
     ]
   })
-  return [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')
+  const table = [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')
+  // The fresh session doesn't depend on the arm: one baseline over every run, its range a noise floor.
+  const fr = runs.flatMap((r) => (r.fresh ? [r.fresh] : []))
+  const done = fr.filter((x) => x.state === 'completed')
+  return fr.length
+    ? `${table}\n\nFresh session (the same follow-up, from zero; any arm): ${rightOf(fr)} right, ${spread(done.map((x) => billed(x.stats)))} billed-equivalent over ${done.length} runs.`
+    : table
 }

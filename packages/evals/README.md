@@ -139,6 +139,9 @@ Options: `--arms`, `--source archive|feed` (default `archive`), `--severe N`
 (incidents the report must list, default 12; 40, 80 or 150 make the facts to
 keep outgrow one summary), `--follow-ups N` (incidents the follow-up asks
 about, on pages spread across the archive; default 1, on page 3),
+`--fuzzy-follow-ups N` (then N incidents described in other words, without
+their ids, e.g. "the checkout incident where people saw out-of-date results,
+because two cache entries ended up with the same key"; default 0),
 `--no-follow-up`, `--summarize <report.json>` (re-print a saved report), `--repeat` (default 3), `--concurrency` (default 3),
 `--window` (the window the harness enforces, default 64000; the model's real
 one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),

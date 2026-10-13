@@ -28,6 +28,7 @@ const { values } = parseArgs({
     summarize: { type: 'string' },
     severe: { type: 'string' },
     'follow-ups': { type: 'string' },
+    'fuzzy-follow-ups': { type: 'string' },
   },
 })
 if (values.summarize) {
@@ -50,6 +51,7 @@ const opts = {
   source: (values.source === 'feed' ? 'feed' : 'archive') as 'archive' | 'feed',
   severe: int(values.severe, 12),
   followUps: int(values['follow-ups'], 1),
+  fuzzyFollowUps: int(values['fuzzy-follow-ups'], 0),
 }
 const names = (values.arms ?? ARMS.map((a) => a.name).join(',')).split(',').map((x) => x.trim())
 const arms = ARMS.filter((a) => names.includes(a.name))

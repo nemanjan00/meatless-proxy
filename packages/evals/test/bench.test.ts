@@ -8,6 +8,9 @@ import {
   scoreFollowUp,
   scoreFollowUps,
   classifyFollowUps,
+  classifyFuzzy,
+  fuzzyIncidents,
+  fuzzyText,
 } from '../src/bench/archive.ts'
 import { ARMS, type PhaseStats, taskText } from '../src/bench/context.ts'
 import { billed, median } from '../src/bench/summary.ts'
@@ -157,5 +160,34 @@ describe('report errors', () => {
     const s = scoreAnswer(a, [a.auditRef, wrong, ...rest].join('\n'))
     expect(s).toMatchObject({ correct: a.expected.length - 2, wrongDetail: 1, missing: 1, extra: 0 })
     expect(second).toBeTruthy()
+  })
+})
+
+describe('fuzzy follow-ups', () => {
+  it('describes incidents without their ids, each description fitting exactly one incident', () => {
+    const a = buildArchive()
+    const named = followUpIncidents(a, 5)
+    const xs = fuzzyIncidents(a, 3, named)
+    expect(xs).toHaveLength(3)
+    const text = fuzzyText(xs)
+    for (const x of xs) {
+      expect(text).not.toContain(x.id)
+      expect(named).not.toContain(x)
+      const same = a.incidents.filter((y) => y.service === x.service && y.symptom === x.symptom && y.cause === x.cause)
+      expect(same).toEqual([x])
+    }
+    // In other words than the archive's: the record's own phrases don't appear in the question.
+    expect(text).not.toMatch(/connection pool exhaustion|stale results served|unbounded retry loop/)
+  })
+
+  it('scores numbered answers, telling invented details from abstaining', () => {
+    const a = buildArchive()
+    const xs = fuzzyIncidents(a, 3)
+    const answer = [
+      `1: ${xs[0]!.ticket}, deploy ${xs[0]!.deploy}`,
+      '2: TKT-0001, deploy zzzz',
+      "3: I can't tell which one that is.",
+    ].join('\n')
+    expect(classifyFuzzy(xs, answer)).toEqual({ right: 1, invented: 1, abstained: 1 })
   })
 })

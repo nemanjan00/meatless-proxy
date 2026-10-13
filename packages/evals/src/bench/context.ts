@@ -8,6 +8,9 @@ import {
   scoreAnswer,
   scoreFollowUps,
   classifyFollowUps,
+  classifyFuzzy,
+  fuzzyIncidents,
+  fuzzyText,
   type Archive,
   type Score,
 } from './archive.ts'
@@ -80,6 +83,8 @@ export interface BenchOptions {
   source?: 'archive' | 'feed'
   /** Incidents the follow-up asks about, on pages spread across the archive (default 1: one on page 3). */
   followUps?: number
+  /** Incidents a second follow-up describes in other words, without their ids (default 0: none). */
+  fuzzyFollowUps?: number
 }
 
 /** What one phase of a run cost and did. */
@@ -133,6 +138,8 @@ export interface BenchRun {
   followUp?: FollowUp
   /** The same question asked of a new session that starts from zero (archive source only): the cost of not asking. */
   fresh?: FollowUp
+  /** Follow-ups that describe incidents instead of naming them, asked after the others in the same session. */
+  fuzzy?: FollowUp
   trace: string[]
   error?: string
 }
@@ -316,6 +323,22 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
         `The incident archive is read with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. ${followUpsText(xs)}`,
       )
     }
+    let fuzzy: FollowUp | undefined
+    const fz = asking && (o.fuzzyFollowUps ?? 0) > 0 ? fuzzyIncidents(archive, o.fuzzyFollowUps!, xs) : []
+    if (fz.length) {
+      trace.push('— fuzzy follow-up —')
+      const p = await phase(session.id, fuzzyText(fz))
+      const c = classifyFuzzy(fz, p.answer)
+      fuzzy = {
+        state: p.state,
+        correct: c.right === fz.length,
+        ...c,
+        of: fz.length,
+        ...(p.error ? { error: p.error } : {}),
+        answer: p.answer,
+        stats: p.stats,
+      }
+    }
     const graded = (p: Awaited<ReturnType<typeof phase>>) => ({
       state: p.state,
       correct: scoreFollowUps(xs, p.answer) === xs.length,
@@ -334,6 +357,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       report: report.stats,
       ...(follow ? { followUp: graded(follow) } : {}),
       ...(fresh ? { fresh: graded(fresh) } : {}),
+      ...(fuzzy ? { fuzzy } : {}),
       trace,
       ...(report.error ? { error: report.error } : {}),
     }

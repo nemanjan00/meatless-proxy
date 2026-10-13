@@ -16,6 +16,9 @@ export interface Incident {
   /** Set when the page is written: details nobody asks about until the follow-up question. */
   deploy?: string
   ticket?: string
+  /** Indexes into SYMPTOMS and CAUSES: what a fuzzy follow-up describes it by. */
+  symptom?: number
+  cause?: number
 }
 
 export interface Correction {
@@ -66,6 +69,27 @@ const SYMPTOMS = [
   'duplicate notifications',
   'timeouts on the export endpoint',
   'memory growth until restart',
+]
+/** How a person would describe each symptom and cause, in other words than the archive's. */
+const SYMPTOM_WORDS = [
+  'pages got slow for the slowest requests',
+  'it returned a burst of server errors',
+  'background jobs piled up and stopped moving',
+  'people saw out-of-date results',
+  'some users could not sign in',
+  'people got the same notification twice',
+  'exports kept timing out',
+  'it kept using more memory until it was restarted',
+]
+const CAUSE_WORDS = [
+  'it ran out of database connections',
+  'something retried forever',
+  'a migration dropped an index it needed',
+  'two cache entries ended up with the same key',
+  'two writers raced each other',
+  'a client certificate had expired',
+  'the schema no longer matched after a deploy',
+  'a rate limit was set too low',
 ]
 const CAUSES = [
   'connection pool exhaustion',
@@ -165,10 +189,13 @@ export function buildArchive(o: ArchiveOptions = {}): Archive {
         `  ${hh}:${String(r.int(60)).padStart(2, '0')}:${String(r.int(60)).padStart(2, '0')} ${x.service} worker-${r.int(40)} ` +
         `${r.pick(['WARN', 'ERROR', 'INFO'])} req=${r.token(10)} dur=${50 + r.int(9000)}ms status=${r.pick(['200', '502', '504', '429', '500'])}`,
     ).join('\n')
+    // Drawn in the same order as before they were kept, so an archive for a seed is unchanged.
+    x.symptom = r.int(SYMPTOMS.length)
+    x.cause = r.int(CAUSES.length)
     return [
       `${x.id} · 2026-03-${String(day).padStart(2, '0')} ${hh}:${mm} UTC · SEV${x.severity} · service: ${x.service}`,
-      `Summary: ${r.pick(SYMPTOMS)} after deploy ${x.deploy}.`,
-      `Root cause: ${r.pick(CAUSES)} in ${x.file}:${x.line}.`,
+      `Summary: ${SYMPTOMS[x.symptom]} after deploy ${x.deploy}.`,
+      `Root cause: ${CAUSES[x.cause]} in ${x.file}:${x.line}.`,
       `On call: ${x.onCall}. Follow-up: ${x.ticket}.`,
       'Log excerpt:',
       noise,
@@ -310,5 +337,59 @@ export function classifyFollowUps(xs: Incident[], answer: string): { right: numb
     if (scoreFollowUp(x, mine)) right++
     else if ((mine.match(/TKT-\d+/g) ?? []).some((t) => t !== x.ticket) || /deploy[:\s]+[a-z0-9]{4}\b/i.test(mine)) invented++
   }
+  return { right, invented, abstained: xs.length - right - invented }
+}
+
+/**
+ * Incidents for fuzzy follow-ups: described by their service, symptom and cause in other words, never by id, so
+ * finding them takes working out what to look for. Each description fits exactly one incident in the archive;
+ * minor, uncorrected ones on pages spread across it, none of `skip`.
+ */
+export function fuzzyIncidents(archive: Archive, count: number, skip: Incident[] = []): Incident[] {
+  const key = (x: Incident) => `${x.service}|${x.symptom}|${x.cause}`
+  const seen = new Map<string, number>()
+  for (const x of archive.incidents) seen.set(key(x), (seen.get(key(x)) ?? 0) + 1)
+  const corrected = new Set(archive.corrections.map((c) => c.id))
+  const last = archive.pages.length - 1
+  const out: Incident[] = []
+  for (let i = 0; i < count; i++) {
+    const page = Math.round(2 + (i * (last - 3)) / Math.max(1, count - 1))
+    const x = archive.incidents.find(
+      (y) =>
+        y.page === page &&
+        y.severity !== 1 &&
+        !corrected.has(y.id) &&
+        seen.get(key(y)) === 1 &&
+        !skip.includes(y) &&
+        !out.includes(y),
+    )
+    if (x) out.push(x)
+  }
+  return out
+}
+
+/** How a person would describe an incident without its id. */
+export function describeIncident(x: Incident): string {
+  return `the ${x.service} incident where ${SYMPTOM_WORDS[x.symptom!]}, because ${CAUSE_WORDS[x.cause!]}`
+}
+
+export function fuzzyText(xs: Incident[]): string {
+  return [
+    "A few more questions about the archive. I don't have the incident ids, only what happened:",
+    ...xs.map((x, i) => `${i + 1}. ${describeIncident(x)}`),
+    'For each, what were the follow-up ticket and the deploy id? Reply with one line each, exactly: 1: TKT-1234, deploy abcd',
+  ].join('\n')
+}
+
+/** Fuzzy follow-ups answered right, invented or abstained: each numbered line must have that incident's details. */
+export function classifyFuzzy(xs: Incident[], answer: string): { right: number; invented: number; abstained: number } {
+  const lines = answer.split('\n')
+  let right = 0
+  let invented = 0
+  xs.forEach((x, i) => {
+    const line = lines.find((l) => new RegExp(`^\\W*${i + 1}\\s*[:.)]`).test(l)) ?? ''
+    if (scoreFollowUp(x, line)) right++
+    else if (/TKT-\d+/.test(line) || /deploy[:\s]+[a-z0-9]{4}\b/i.test(line)) invented++
+  })
   return { right, invented, abstained: xs.length - right - invented }
 }
