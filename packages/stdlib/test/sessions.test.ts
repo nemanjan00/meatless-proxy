@@ -280,6 +280,30 @@ describe('searching in other words', () => {
     ])
   })
 
+  it('ranks by the best passage: a page with every word scattered loses to one that has them in one record', async () => {
+    const t = await stack()
+    const rec = (id: string, service: string, symptom: string, cause: string) =>
+      `${id} · service: ${service}\nSummary: ${symptom}.\nRoot cause: ${cause}.\n${'  filler worker INFO req=abc dur=10ms\n'.repeat(12)}`
+    // Every word of the question is on this page, but in different records.
+    const scattered = [
+      rec('INC-11111', 'media-cdn', 'stale results served', 'a race between two writers'),
+      rec('INC-22222', 'checkout', 'stuck jobs in the queue', 'an expired certificate'),
+      rec('INC-33333', 'search', 'login failures', 'a cache key collision'),
+    ].join('\n')
+    const together = [
+      rec('INC-44444', 'auth', 'duplicate notifications', 'a missing index'),
+      rec('INC-55555', 'media-cdn', 'stuck jobs in the queue', 'a cache key collision'),
+    ].join('\n')
+    await t.recordCall(t.run.id, 'archive.read_page', scattered)
+    await t.recordCall(t.run.id, 'archive.read_page', together)
+    const s = await t.out('sessions.search', {
+      text: 'the media-cdn incident where jobs got stuck in the queue because of a cache key collision',
+      includeThisSession: true,
+    })
+    const piece = await t.out('sessions.restore', s.entries[0].read)
+    expect(piece.text).toContain('INC-55555')
+  })
+
   it('finds an entry by most of its words when none has them all, and reads where they come together', async () => {
     const t = await stack()
     const record = (id: string, service: string, symptom: string, cause: string, ticket: string) =>
@@ -295,7 +319,7 @@ describe('searching in other words', () => {
     const question = 'the media-cdn incident where jobs piled up in the queue, because two cache entries had the same key'
     const s = await t.out('sessions.search', { text: question, includeThisSession: true })
     expect(s.closest).toMatch(/No entry has every word/)
-    expect(s.entries[0].matched).toMatch(/^\d+ of \d+ words$/)
+    expect(s.entries[0].matched).toMatch(/^\d+ of \d+ words in one passage$/)
     // The read lands on the record where the words come together, not on the first media-cdn one.
     const piece = await t.out('sessions.restore', s.entries[0].read)
     expect(piece.text).toContain('INC-33333')

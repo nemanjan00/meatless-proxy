@@ -122,31 +122,34 @@ export function searchTerms(text: string): string[] {
 const CLUSTER_SPAN = 600
 
 /**
- * A ready sessions.restore call that reads the part of an entry where the search's terms come together: the
- * window of CLUSTER_SPAN characters with the most different terms, so a long entry that mentions one term all
- * over (a service name on every line) is read where the others are too.
+ * Where in a text the terms come together: the window of CLUSTER_SPAN characters with the most different terms,
+ * its start and how many terms it has. A long entry that mentions one term all over (a service name on every
+ * line) scores by its best passage, not by having every word somewhere.
  */
-function readAround(e: Entry, query: string): { read?: { entryId: string; offset: number; length: number } } {
-  const text = entryText(e).toLowerCase()
-  const terms = query.trim().includes(' ') ? searchTerms(query) : [query.trim().toLowerCase()]
+export function bestPassage(text: string, terms: string[]): { at: number; count: number } {
+  const lower = text.toLowerCase()
   const hits: { at: number; term: number }[] = []
   terms.forEach((t, term) => {
     if (!t) return
-    for (let i = text.indexOf(t); i >= 0; i = text.indexOf(t, i + 1)) hits.push({ at: i, term })
+    for (let i = lower.indexOf(t); i >= 0; i = lower.indexOf(t, i + 1)) hits.push({ at: i, term })
   })
-  if (!hits.length) return {}
+  if (!hits.length) return { at: 0, count: 0 }
   hits.sort((x, y) => x.at - y.at)
-  let best = hits[0]!.at
-  let bestCount = 0
+  let best = { at: hits[0]!.at, count: 0 }
   for (let i = 0; i < hits.length; i++) {
     const seen = new Set<number>()
     for (let j = i; j < hits.length && hits[j]!.at - hits[i]!.at <= CLUSTER_SPAN; j++) seen.add(hits[j]!.term)
-    if (seen.size > bestCount) {
-      bestCount = seen.size
-      best = hits[i]!.at
-    }
+    if (seen.size > best.count) best = { at: hits[i]!.at, count: seen.size }
   }
-  return { read: { entryId: e.id, offset: Math.max(0, best - READ_BEFORE), length: READ_LENGTH } }
+  return best
+}
+
+/** A ready sessions.restore call that reads an entry's best passage for a search. */
+function readAround(e: Entry, query: string): { read?: { entryId: string; offset: number; length: number } } {
+  const terms = query.trim().includes(' ') ? searchTerms(query) : [query.trim().toLowerCase()]
+  const p = bestPassage(entryText(e), terms)
+  if (!p.count) return {}
+  return { read: { entryId: e.id, offset: Math.max(0, p.at - READ_BEFORE), length: READ_LENGTH } }
 }
 
 /** Lines an index of a collapsed stretch lists at most. */
@@ -774,16 +777,17 @@ export function registerSessionTools(kit: Kit): void {
       let closest: Map<string, number> | undefined
       const terms = searchTerms(text)
       if (!hits.total && terms.length >= 2) {
-        const tally = new Map<string, { hit: (typeof hits.items)[number]; n: number }>()
+        // Candidates: entries with any of the words, each once (copies made by collapses share their content).
+        const byContent = new Map<string, (typeof hits.items)[number]>()
         for (const term of terms) {
           const r = await sessions.search({ ...query, text: term, allWords: false, ...scope, limit: CLOSEST_SCAN })
-          for (const h of r.items) {
-            const t = tally.get(h.entry.id)
-            if (t) t.n++
-            else tally.set(h.entry.id, { hit: h, n: 1 })
-          }
+          for (const h of r.items) if (!byContent.has(h.entry.hash)) byContent.set(h.entry.hash, h)
         }
-        const ranked = [...tally.values()].filter((t) => t.n >= 2).sort((x, y) => y.n - x.n)
+        // Ranked by their best passage: the most different words close together, where the thing described is.
+        const ranked = [...byContent.values()]
+          .map((hit) => ({ hit, n: bestPassage(entryText(hit.entry), terms).count }))
+          .filter((t) => t.n >= 2)
+          .sort((x, y) => y.n - x.n)
         closest = new Map(ranked.map((t) => [t.hit.entry.id, t.n]))
         hits = { items: ranked.slice(0, limit).map((t) => t.hit), total: ranked.length }
       }
@@ -796,7 +800,7 @@ export function registerSessionTools(kit: Kit): void {
           sessionId: h.sessionId,
           ...(h.session ? { sessionTitle: h.session.data.title } : {}),
           snippet: h.snippet,
-          ...(closest ? { matched: `${closest.get(h.entry.id)} of ${terms.length} words` } : {}),
+          ...(closest ? { matched: `${closest.get(h.entry.id)} of ${terms.length} words in one passage` } : {}),
           // In this session's own history (collapsed or compacted parts included): where to read around the match.
           ...(h.sessionId === ctx.sessionId ? readAround(h.entry, text) : {}),
         })),
