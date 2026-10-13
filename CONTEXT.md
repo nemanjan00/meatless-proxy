@@ -1,39 +1,183 @@
 # Context management
 
-How a session keeps its context window from filling up without losing
-anything. The behaviour is specified in
-[docs/spec.md](docs/spec.md#context-management-rewind-not-compaction) and the
-entry tree in [docs/execution.md](docs/execution.md#history-as-an-entry-tree);
-this page explains the three algorithms and how they fit together. The code is
-in `packages/runner/src/context-window.ts` (pure decisions),
+An AI employee can own a piece of work for weeks: read a codebase, answer
+follow-ups, come back after a pipeline fails. Its model only sees a fixed
+window of tokens. This page explains how a session stays inside that window
+without forgetting what matters. Concepts come first; the mechanics follow in
+[How it works](#how-it-works).
+
+The behaviour is specified in
+[docs/spec.md](docs/spec.md#context-management-rewind-not-compaction), and the
+entry tree in [docs/execution.md](docs/execution.md#history-as-an-entry-tree).
+
+## The problem with classic compaction
+
+The usual answer is **compaction**: when the context is nearly full, ask the
+model to summarise the whole conversation, then replace the conversation with
+the summary. It works, but it has four costs:
+
+1. **It happens at the worst moment.** The model is in the middle of
+   something, the context is at its fullest, and it has to summarise
+   everything at once.
+2. **Detail is lost for good.** Whatever isn't copied into the summary (an
+   exact line number, an id, a quote someone asked for) is gone, and the work
+   that depended on it quietly gets worse.
+3. **Everything is treated the same.** A finished file read and the person's
+   original request get the same lossy treatment.
+4. **The cache is thrown away.** Providers cache the unchanged start of a
+   prompt. Rewriting the whole conversation means the next call pays full
+   price for everything.
+
+## The concepts
+
+### Nothing is ever deleted
+
+A session's history is an **append-only tree** of entries. Freeing context
+never deletes or edits anything. It builds a new, shorter path through the
+tree, and the old path stays where it was. "Removed" means "no longer on the
+path the model sees". So every operation can be read back or undone, by the
+model (`sessions.restore`, `sessions.contents`) or by a person in the web UI.
+
+This changes the trade-off. When dropping something can't lose it, you can
+drop things early and often.
+
+### Free small things early, not everything late
+
+Instead of one big rewrite at the end, context is freed in **small, targeted
+steps while the work goes on**: this one big result, that finished stretch of
+file reads. Each step removes something that is clearly done and leaves the
+rest word for word.
+
+### The model chooses what to forget, and gets help
+
+The model knows which parts of its history still matter, and the harness
+knows how big they are. So the harness **measures and suggests**, and the
+model **decides and summarises**. At set fill levels the harness tells the
+model how full its context is and names the biggest finished parts, with a
+ready call to free each one. The model writes the summary while the material
+is fresh and while it knows what the rest of the task needs.
+
+### Summarise a part, keep the rest verbatim
+
+A summary stands in only for the part it replaces. Everything before it and
+everything after it stays exactly as it was: the person's request, later
+messages, replies already sent, the current turn. Most of the context keeps
+its full detail.
+
+### Keep the cached prefix
+
+Everything before the first changed entry is byte-identical, so the provider's
+prompt cache stays valid for it. Freeing something near the end of the
+history costs little; rewriting from the start costs the most. That's another
+reason to prefer small, local moves.
+
+### Escalate only when needed
+
+There are three moves, from the most local to the most drastic. The harness
+falls back to the drastic one only when the gentler ones weren't used:
+
+```mermaid
+flowchart LR
+    A["1 · Offload<br/>one big item → a pointer<br/><i>automatic for huge results,<br/>or the model's choice</i>"] --> B["2 · Collapse<br/>a finished stretch → the model's summary,<br/>everything after it kept<br/><i>the model's choice, suggested at 50 / 75 / 80%</i>"] --> C["3 · Compaction<br/>everything but the latest part → a summary<br/><i>the harness's safety net at 85%</i>"]
+```
+
+| | Offload | Collapse | Compaction |
+|---|---|---|---|
+| **Replaces** | one entry | a finished stretch of tool calls | all but the first entry and the latest ~15% |
+| **With** | a pointer and a preview | the model's own summary | a summary written by a separate call |
+| **Who decides** | the harness (huge results) or the model | the model, prompted by notes | the harness (or the model, explicitly) |
+| **Detail kept** | everything except that entry | everything outside the stretch | the first entry and the recent tail |
+| **Cache kept** | up to that entry | up to the stretch | only the first entry |
+| **Undo** | `restore` puts it back | each entry readable with `restore` | each entry readable with `restore` |
+
+## The three algorithms
+
+### 1 · Offload: swap one big thing for a pointer
+
+**Idea.** One item dominates the context: a 180 KB log, a lockfile, a long
+document. Put a **pointer** in its place. The pointer says what it was,
+shows a preview, and says how to read the rest. The original stays in the
+tree and can be read in pieces or put back.
+
+```mermaid
+flowchart LR
+    subgraph before [Before]
+        direction LR
+        a1[assistant<br/>calls c1] --> r1["tool_result c1<br/>(180k chars)"] --> a2[assistant] --> u1[user]
+    end
+    subgraph after [After]
+        direction LR
+        b1[assistant<br/>calls c1] --> p1["pointer → c1<br/>head 3,000 + tail 1,500 chars<br/>+ how to read the rest"] --> b2["assistant (copy)"] --> b3["user (copy)"]
+        p1 -. original kept .-> r2["tool_result c1<br/>(full, in the tree)"]
+    end
+    before ~~~ after
+```
+
+It happens automatically for results too big to keep at all, and the model
+can do it for anything it has read and no longer needs word for word.
+
+### 2 · Collapse: replace finished work with what was learned
+
+**Idea.** Work comes in stretches: twelve file reads to understand a module,
+a round of trial and error on a failing test. Once a stretch is done, its raw
+material is no longer needed, only what was learned from it. The model
+replaces the stretch with **its own summary**, and everything after the
+stretch stays word for word. This is the main move; the other two are the
+fallbacks.
+
+```mermaid
+flowchart LR
+    subgraph before [Before]
+        direction LR
+        s0[system] --> u0[user: request] --> c1["assistant<br/>calls c1…c4"] --> r1["results c1…c4"] --> c2["assistant<br/>calls c5…c12"] --> r2["results c5…c12"] --> u2[user: follow-up] --> c3["assistant<br/>calls rewind"]
+    end
+    subgraph after [After]
+        direction LR
+        t0[system] --> t1[user: request] --> sm["summary<br/>(the model's own words:<br/>findings, line numbers, ids)"] --> t2["user: follow-up (copy)"] --> t3["assistant: rewind (copy)"]
+        t1 -. "branch c1…c12 kept in the tree" .-> x1["assistant calls c1…c4 …"]
+    end
+    before ~~~ after
+```
+
+A variant, **jump back**, drops everything after a point. It's for
+abandoning a dead end: the summary keeps what was tried and why it failed.
+
+### 3 · Compaction: the safety net
+
+**Idea.** If the model kept working without freeing anything and the context
+reaches 85%, the harness steps in. A separate model call summarises the
+older part of the work. The history becomes the first entry (the prompt),
+that summary, and the most recent entries word for word, so the model doesn't
+lose track of what it was doing a moment ago.
+
+```mermaid
+flowchart LR
+    subgraph before [Before: 85% of the window]
+        direction LR
+        s0[system] --> e1[entry 2] --> e2[…] --> e3[entry n−k] --> e4["entries n−k+1 … n<br/>(≈15% of the window)"]
+    end
+    subgraph after [After]
+        direction LR
+        f0[system] --> sm["summary (automatic)<br/>≤ 8,000 tokens"] --> kk["entries n−k+1 … n (copies)"]
+        f0 -. "entries 2 … n−k kept in the tree" .-> o1[entry 2 …]
+    end
+    before ~~~ after
+```
+
+Unlike classic compaction, it keeps the recent tail, it's recorded in the
+session document, and the detailed history is still in the tree.
+
+## How it works
+
+The code is in `packages/runner/src/context-window.ts` (pure decisions),
 `packages/runner/src/runner.ts` (when they run) and
 `packages/sessions/src/sessions.ts` (`offload`, `restore`, `rewind`,
 `compact`).
 
-## The idea
+### The loop
 
-Classic compaction waits until the context is full, then summarises the whole
-conversation and throws the original away. It's one blunt move at the worst
-moment: the summary is written under pressure, everything that wasn't copied
-into it is gone, and the cached prompt prefix is invalidated in full.
-
-Here, context is freed in small, targeted steps while the work goes on, by the
-party that knows best what is still needed:
-
-| # | Algorithm | What it frees | Who triggers it | Cache impact |
-|---|-----------|---------------|-----------------|--------------|
-| 1 | **Offload** | one big message or tool result, replaced by a pointer with a preview | the harness (results over 20,000 chars), or the model (`sessions.offload`) | prefix valid up to that message |
-| 2 | **Collapse** (rewind) | a finished stretch of tool calls, replaced by the model's own summary; everything after it stays verbatim | the model (`sessions.rewind { from, to, summary }`), prompted by context notes | prefix valid up to the stretch |
-| 3 | **Compaction** | everything but the first entry and the latest ~15% of the window | the harness at 85% (safety net), or the model (`sessions.compact`) | prefix valid only for the first entry |
-
-All three are **non-destructive**. History is an append-only tree of entries;
-an operation creates new entries and moves the run's `tip`. The originals stay
-in the database and can be read back (`sessions.restore`,
-`sessions.contents`), by the model or in the web UI.
-
-## When each one runs
-
-Before every model call the runner measures the request and decides what to do:
+Before every model call the runner measures the request and decides what to
+do:
 
 ```mermaid
 flowchart TD
@@ -60,8 +204,6 @@ flowchart TD
     T -- other tools --> A
 ```
 
-The thresholds as the context grows:
-
 | Percent | Setting | What happens |
 |---------|---------|--------------|
 | any | `TOOL_RESULT_MAX_CHARS` (20,000) | oversized results are offloaded as they arrive |
@@ -70,113 +212,53 @@ The thresholds as the context grows:
 | 85% | `CONTEXT_COMPACT_AT` | automatic compaction before the next model call |
 | over the window | — | compaction is tried once more; if it fails, the run pauses |
 
-The window comes from the model name (a table of known models, 128k
-otherwise) or `MODEL_CONTEXT_TOKENS`. Token counts are estimated from the
-request's characters, using the chars-per-token ratio measured at the run's
-last model call (3.5 before the first).
+- **Measuring.** The window comes from the model name (a table of known
+  models, 128k otherwise) or `MODEL_CONTEXT_TOKENS`. Tokens are estimated
+  from the request's characters, using the chars-per-token ratio measured at
+  the run's last model call (3.5 before the first).
+- **Notes don't nag.** Each threshold is noted once. It re-arms only after the
+  context falls 15 points below it (a compaction or a big collapse), not on
+  the small dips an offload causes. Notes are `transient`: they describe the
+  context as it was, so a collapse or compaction never copies them into the
+  part it keeps. A note never goes between a tool call and its result.
+- **Picking suggestions** (`contextSuggestions`). Walk the history up to the
+  latest tool-call turn (that's still current work). Group consecutive
+  tool-call turns into stretches; notes between them don't break a stretch,
+  a message does. Drop stretches with a call still waiting for its result.
+  Rank stretches and single results by estimated tokens, drop anything under
+  2% of the window, and keep at most three: mostly stretches, plus the
+  biggest single result.
 
-**Notes don't nag.** Each threshold is noted once. It re-arms only after the
-context falls 15 points below it (a compaction or a big collapse), not on the
-small dips an offload causes. Notes are marked `transient`: they describe the
-context as it was, so a collapse or compaction never copies them into the part
-it keeps. A note never goes between a tool call and its result.
+### Offload
 
-## 1 · Offload
-
-One entry is replaced by a **pointer**. The pointer keeps the tool call id, so
-the history is still a valid tool exchange for the provider.
-
-```mermaid
-flowchart LR
-    subgraph before [Before]
-        direction LR
-        a1[assistant<br/>calls c1] --> r1["tool_result c1<br/>(180k chars)"] --> a2[assistant] --> u1[user]
-    end
-    subgraph after [After]
-        direction LR
-        b1[assistant<br/>calls c1] --> p1["pointer → c1<br/>head 3,000 + tail 1,500 chars<br/>+ how to read the rest"] --> b2["assistant (copy)"] --> b3["user (copy)"]
-        p1 -. original kept .-> r2["tool_result c1<br/>(full, in the tree)"]
-    end
-    before ~~~ after
-```
-
-- **Automatic:** a result longer than `TOOL_RESULT_MAX_CHARS` is stored in full
-  and kept in the history as its first 3,000 and last 1,500 characters, with
-  the instruction to call `sessions.restore { entryId, offset, length }` to
-  read pieces, or without them to put the whole result back. Results with
+- **Automatic:** a result longer than `TOOL_RESULT_MAX_CHARS` is stored in
+  full and kept in the history as its first 3,000 and last 1,500 characters,
+  with the instruction to call `sessions.restore { entryId, offset, length }`
+  to read pieces, or without them to put the whole result back. Results with
   images are left alone.
-- **By the model:** `sessions.offload { entryId, text }` for anything it
-  read and no longer needs verbatim, optionally pointing to a docs chapter it
-  wrote first.
-- **Cost:** the entries after the pointer are re-created on top of it. Their
-  content is stored by hash, so that's cheap, but the cached prefix is invalid
-  from the pointer on. Best on older, larger entries.
-- **Reversible:** `sessions.restore { entryId }` puts the original back.
+- **By the model:** `sessions.offload { entryId, text }`, optionally pointing
+  to a docs chapter it wrote first.
+- **In the tree:** a `pointer` entry is created next to the original, with
+  the same tool call id, so the history is still a valid tool exchange. The
+  entries after it are re-created on top with the same content hashes, which
+  is cheap, but the cached prefix is invalid from the pointer on. That's why
+  it's best on older, larger entries.
 
-## 2 · Collapse (rewind)
-
-The main move. When a part of the work is done (say, twelve file reads to
-understand a module), the model replaces that stretch with a summary of what
-it learned. Everything after the stretch (people's later messages, replies it
-already sent, its current turn) stays word for word.
-
-```mermaid
-flowchart LR
-    subgraph before [Before]
-        direction LR
-        s0[system] --> u0[user: request] --> c1["assistant<br/>calls c1…c4"] --> r1["results c1…c4"] --> c2["assistant<br/>calls c5…c12"] --> r2["results c5…c12"] --> u2[user: follow-up] --> c3["assistant<br/>calls rewind"]
-    end
-    subgraph after [After]
-        direction LR
-        t0[system] --> t1[user: request] --> sm["summary<br/>(the model's own words:<br/>findings, line numbers, ids)"] --> t2["user: follow-up (copy)"] --> t3["assistant: rewind (copy)"]
-        t1 -. "branch c1…c12 kept in the tree" .-> x1["assistant calls c1…c4 …"]
-    end
-    before ~~~ after
-```
+### Collapse
 
 - **Named by tool call ids.** Every tool result the model sees starts with
   `[call <id>]`, so it can say `sessions.rewind { from: "c1", to: "c12",
-  summary }`. The context notes hand it ready-made calls for the biggest
-  finished stretches.
+  summary }`. The notes hand it ready-made calls.
 - **Tool calls stay whole.** A stretch never splits a call from its results,
-  and a call still waiting for its result can't be collapsed.
-- **Jump back:** with only `from`, everything after that point is replaced by
-  the summary. That's for abandoning a dead end.
-- **Any point:** the stretch may lie in earlier runs of a continuing session.
-- **Why it's better than a summary at the end:** the model writes the summary
-  while the material is fresh and while it knows what the rest of the task
-  needs, and it summarises one finished part, not everything at once.
-- **Cache:** everything before the stretch is unchanged, so its cached prefix
-  stays valid.
+  and a call still waiting for its result can't be collapsed. Kept results
+  whose call was collapsed bring a copy of their assistant entry with only
+  those calls.
+- **Any point.** The stretch may lie in earlier runs of a continuing session.
+- **Jump back:** `sessions.rewind { from, summary }` without `to`.
+- **In the tree:** a `summary` entry hangs off the entry before the stretch,
+  and the entries after the stretch are re-created on top of it.
 
-How the suggestions are picked (`contextSuggestions`): walk the history up to
-the latest tool-call turn (still current work), group consecutive tool-call
-turns into stretches (notes between them don't break a stretch; a message
-does), drop stretches with a call still waiting, and rank stretches and single
-results by estimated tokens. Things under 2% of the window aren't suggested.
-At most three: mostly stretches, plus the biggest single result.
-
-## 3 · Compaction
-
-The safety net, for when the model didn't free enough. One extra model call,
-without tools, writes a summary of the work so far: the goal and who asked,
-decisions, current state, what's left, and verbatim whatever the rest needs
-(line numbers, quotes, figures, ids, paths, links). The history becomes the
-first entry, that summary, and the latest entries verbatim.
-
-```mermaid
-flowchart LR
-    subgraph before [Before: 85% of the window]
-        direction LR
-        s0[system] --> e1[entry 2] --> e2[…] --> e3[entry n−k] --> e4["entries n−k+1 … n<br/>(≈15% of the window)"]
-    end
-    subgraph after [After]
-        direction LR
-        f0[system] --> sm["summary (automatic)<br/>≤ 8,000 tokens"] --> kk["entries n−k+1 … n (copies)"]
-        f0 -. "entries 2 … n−k kept in the tree" .-> o1[entry 2 …]
-    end
-    before ~~~ after
-```
+### Compaction
 
 ```mermaid
 sequenceDiagram
@@ -197,8 +279,11 @@ sequenceDiagram
     end
 ```
 
+- **The summary prompt** asks for the goal and who asked, decisions, the
+  current state, what's left, and verbatim whatever the rest needs (line
+  numbers, quotes, figures, ids, paths, links), in about 2,000 words.
 - **The kept tail:** 15% of the window (`compactKeep`), or of the request when
-  it's smaller. It never starts with a tool result: a result whose call is
+  that's smaller. It never starts with a tool result: a result whose call is
   summarised is summarised with it.
 - **Recorded:** the summary entry is marked `automatic`, the session document
   keeps the latest five compactions under "Compactions", and
@@ -206,16 +291,16 @@ sequenceDiagram
   replaced.
 - **Provider quirks:** if a provider refuses the summary call without the tool
   definitions, it's retried once with them.
-- **The model can do it too:** `sessions.compact { summary }` with its own
-  summary, which the 80% instruction offers as an alternative to collapsing.
+- **By the model:** `sessions.compact { summary }`, which the 80% instruction
+  offers as an alternative to collapsing.
 
-## Run modes
+### Run modes
 
 All three change the **run's** history, even when they reach into earlier
 runs. A continuing run commits it, so the session carries on from the shorter
 history. An ephemeral run (router, triggers) leaves the session as it was.
 
-## Settings
+### Settings
 
 | Variable | Default | |
 |----------|---------|---|
