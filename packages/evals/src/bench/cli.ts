@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,10 +62,19 @@ if (!modelEnv) {
   process.stderr.write('the benchmark needs a real model: set OPENAI_BASE_URL, OPENAI_API_KEY and MODEL\n')
   process.exit(2)
 }
+/** The code the runs used: the commit, and whether the working tree had changes on top of it. */
+const git = (...args: string[]) => {
+  try {
+    return execFileSync('git', args, { encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
+}
+const code = { commit: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain', '--', 'packages').length > 0 }
 const archive = buildArchive({ seed: opts.seed, pages: opts.pages, severe: opts.severe })
 const chars = archive.pages.reduce((n, p) => n + p.length, 0)
 process.stderr.write(
-  `bench:context ${describeModelEnv(modelEnv)}, window ${opts.window}, ${opts.pages} pages (${chars.toLocaleString('en-US')} chars), ` +
+  `bench:context at ${code.commit.slice(0, 7)}${code.dirty ? ' (with uncommitted changes)' : ''}, ${describeModelEnv(modelEnv)}, window ${opts.window}, ${opts.pages} pages (${chars.toLocaleString('en-US')} chars), ` +
     `${opts.source}, arms ${arms.map((a) => a.name).join(', ')}, repeat ${repeat}\n`,
 )
 
@@ -104,5 +114,8 @@ process.stdout.write(
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'results')
 mkdirSync(dir, { recursive: true })
 const file = join(dir, `context-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-writeFileSync(file, JSON.stringify({ model: describeModelEnv(modelEnv), ...opts, expected: archive.expected, runs }, null, 2))
+writeFileSync(
+  file,
+  JSON.stringify({ model: describeModelEnv(modelEnv), code, ...opts, expected: archive.expected, runs }, null, 2),
+)
 process.stderr.write(`report: ${file}\n`)

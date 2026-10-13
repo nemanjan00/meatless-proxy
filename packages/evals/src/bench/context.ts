@@ -100,6 +100,8 @@ export interface PhaseStats {
   notes: number
   /** archive.read_page calls that returned a page. */
   reads: number
+  /** Model calls the client retried (overload, 5xx, a broken stream): a retried stream may still be billed. */
+  retries: number
   durationMs: number
 }
 
@@ -160,6 +162,7 @@ const emptyStats = (): PhaseStats => ({
   restores: 0,
   notes: 0,
   reads: 0,
+  retries: 0,
   durationMs: 0,
 })
 
@@ -208,9 +211,11 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
   let logsSeen = 0
   /** Warnings and errors the app logged since the last call, into the trace. */
   const traceLogs = () => {
-    for (const l of logs.slice(logsSeen))
+    for (const l of logs.slice(logsSeen)) {
+      if (l.msg === 'model call failed, retrying') stats.retries++
       if (l.level === 'warn' || l.level === 'error')
         trace.push(`[${l.level}] ${l.msg}${l.fields.err !== undefined ? `: ${String(l.fields.err)}` : ''}`)
+    }
     logsSeen = logs.length
   }
   const s = ctx.services

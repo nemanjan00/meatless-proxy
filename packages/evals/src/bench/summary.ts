@@ -37,6 +37,18 @@ const rightOf = (xs: Answered[]) => {
   const why = [abs ? `${abs} abstained` : '', inv ? `${inv} invented` : ''].filter(Boolean).join(', ')
   return `${right}/${of}${why ? ` (${why})` : ''}`
 }
+/**
+ * What the reports got wrong, summed over the runs: a named incident with a wrong location or engineer (a wrong
+ * value: the worse failure), one not named at all (missing), and one listed that isn't SEV1 (extra).
+ */
+const reportErrors = (rs: BenchRun[]) => {
+  const wrong = rs.reduce((a, r) => a + r.score.wrongDetail, 0)
+  const missing = rs.reduce((a, r) => a + (r.score.missing ?? r.score.expected - r.score.correct - r.score.wrongDetail), 0)
+  const extra = rs.reduce((a, r) => a + r.score.extra, 0)
+  const parts = [wrong ? `${wrong} wrong value` : '', missing ? `${missing} missing` : '', extra ? `${extra} extra` : '']
+  return parts.filter(Boolean).join(', ') || 'none'
+}
+
 /** Runs the harness failed (not a wrong answer: the run itself failed). */
 const failedOf = (xs: Answered[]) => String(xs.filter((x) => x.state !== 'completed').length)
 
@@ -54,6 +66,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
   const head = [
     'arm',
     'report correct',
+    'report errors',
     'audit ref',
     'calls',
     'prompt tokens',
@@ -62,6 +75,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     'collapses',
     'restores',
     'compactions',
+    'retries',
     'time',
     'follow-up right',
     'follow-up billed',
@@ -80,6 +94,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     return [
       arm,
       `${med((r) => r.score.correct)}/${expected} (${rs.filter((r) => r.score.correct === expected).length}/${n} runs)`,
+      reportErrors(rs),
       `${rs.filter((r) => r.score.auditRef).length}/${n}`,
       String(med((r) => r.report.calls)),
       spread(rs.map((r) => r.report.promptTokens)),
@@ -88,6 +103,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       String(med((r) => r.report.collapses)),
       String(med((r) => r.report.restores)),
       String(med((r) => r.report.compactions)),
+      String(rs.reduce((a, r) => a + (r.report.retries ?? 0) + (r.followUp?.stats.retries ?? 0), 0)),
       `${Math.round(med((r) => r.report.durationMs) / 1000)} s`,
       rightOf(fs),
       spread(fs.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),

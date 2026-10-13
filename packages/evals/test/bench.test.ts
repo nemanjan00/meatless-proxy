@@ -101,6 +101,7 @@ describe('summary', () => {
     restores: 0,
     notes: 0,
     reads: 0,
+    retries: 0,
     durationMs: 0,
     ...o,
   })
@@ -144,5 +145,17 @@ describe('wrong follow-ups', () => {
     expect(classifyFollowUps([x!], `${x!.ticket}, deploy ${x!.deploy}`)).toEqual({ right: 1, invented: 0, abstained: 0 })
     expect(classifyFollowUps([x!], "I don't have its details and won't guess.")).toEqual({ right: 0, invented: 0, abstained: 1 })
     expect(classifyFollowUps([x!], 'TKT-0001, deploy zzzz')).toEqual({ right: 0, invented: 1, abstained: 0 })
+  })
+})
+
+describe('report errors', () => {
+  it('tells a wrong value from a missing incident', () => {
+    const a = buildArchive()
+    const [first, second, ...rest] = a.expected
+    const wrong = first!.replace(/:(\d+) \|/, (_, n) => `:${Number(n) + 1} |`)
+    // The first with a wrong line number, the second left out.
+    const s = scoreAnswer(a, [a.auditRef, wrong, ...rest].join('\n'))
+    expect(s).toMatchObject({ correct: a.expected.length - 2, wrongDetail: 1, missing: 1, extra: 0 })
+    expect(second).toBeTruthy()
   })
 })

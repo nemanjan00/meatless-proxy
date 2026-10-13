@@ -208,6 +208,8 @@ export interface Score {
   extra: number
   /** Expected incidents named, but with a wrong file, line or person. */
   wrongDetail: number
+  /** Expected incidents the answer doesn't name at all (dropped, not blurred). */
+  missing: number
   auditRef: boolean
   /** correct / expected, minus a penalty for extras, and 0 without the audit reference counted separately. */
   f1: number
@@ -231,7 +233,15 @@ export function scoreAnswer(archive: Archive, answer: string): Score {
   const precision = rows.length ? (rows.length - extra) / rows.length : 0
   const recall = correct / archive.expected.length
   const f1 = precision + recall ? (2 * precision * recall) / (precision + recall) : 0
-  return { correct, expected: archive.expected.length, extra, wrongDetail, auditRef: text.includes(archive.auditRef), f1 }
+  return {
+    correct,
+    expected: archive.expected.length,
+    extra,
+    wrongDetail,
+    missing: archive.expected.length - correct - wrongDetail,
+    auditRef: text.includes(archive.auditRef),
+    f1,
+  }
 }
 
 /**
