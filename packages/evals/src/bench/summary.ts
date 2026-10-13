@@ -20,6 +20,10 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
 }
 
+/** `14/15`: details answered right of those asked, over the runs (older reports: runs right of runs). */
+const rightOf = (xs: { correct: boolean; right?: number; of?: number }[]) =>
+  xs.length ? `${xs.reduce((a, x) => a + (x.right ?? (x.correct ? 1 : 0)), 0)}/${xs.reduce((a, x) => a + (x.of ?? 1), 0)}` : '–'
+
 const k = (n: number) => `${Math.round(n / 1000)}k`
 /** `108k (100k–492k)`: the median, and the range when the runs differ. */
 const spread = (xs: number[]) => {
@@ -68,9 +72,9 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       String(med((r) => r.report.restores)),
       String(med((r) => r.report.compactions)),
       `${Math.round(med((r) => r.report.durationMs) / 1000)} s`,
-      fs.length ? `${fs.filter((x) => x.correct).length}/${fs.length}` : '–',
+      rightOf(fs),
       spread(fs.map((x) => billed(x.stats))),
-      fr.length ? `${fr.filter((x) => x.correct).length}/${fr.length}` : '–',
+      rightOf(fr),
       spread(fr.map((x) => billed(x.stats))),
     ]
   })

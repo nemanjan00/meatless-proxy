@@ -1,7 +1,15 @@
 import type { Json } from '@mp/core'
 import { startEvalApp } from '../app.ts'
 import type { ModelEnv } from '../env.ts'
-import { buildArchive, followUpIncident, followUpText, scoreAnswer, scoreFollowUp, type Archive, type Score } from './archive.ts'
+import {
+  buildArchive,
+  followUpIncidents,
+  followUpsText,
+  scoreAnswer,
+  scoreFollowUps,
+  type Archive,
+  type Score,
+} from './archive.ts'
 
 /**
  * The context benchmark: one long task (audit a paged incident archive much bigger than the context window,
@@ -62,6 +70,8 @@ export interface BenchOptions {
    * are gone, so a later question can only be answered from the session's own history.
    */
   source?: 'archive' | 'feed'
+  /** Incidents the follow-up asks about, on pages spread across the archive (default 1: one on page 3). */
+  followUps?: number
 }
 
 /** What one phase of a run cost and did. */
@@ -85,6 +95,18 @@ export interface PhaseStats {
   durationMs: number
 }
 
+/** A follow-up question (or several in one message) and how it was answered. */
+export interface FollowUp {
+  state: string
+  /** Every asked detail right. */
+  correct: boolean
+  /** Incidents answered with both details right, of how many asked. */
+  right: number
+  of: number
+  answer: string
+  stats: PhaseStats
+}
+
 export interface BenchRun {
   arm: string
   repeat: number
@@ -93,9 +115,9 @@ export interface BenchRun {
   answer: string
   report: PhaseStats
   /** The follow-up question about a detail from an early page, asked in the same session after the report. */
-  followUp?: { state: string; correct: boolean; answer: string; stats: PhaseStats }
+  followUp?: FollowUp
   /** The same question asked of a new session that starts from zero (archive source only): the cost of not asking. */
-  fresh?: { state: string; correct: boolean; answer: string; stats: PhaseStats }
+  fresh?: FollowUp
   trace: string[]
   error?: string
 }
@@ -255,21 +277,23 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     const session = await newSession('Incident archive audit')
     const report = await phase(session.id, taskText(archive.pages.length, o.source))
     trace.push('— follow-up —')
-    const x = followUpIncident(archive)
+    const xs = followUpIncidents(archive, o.followUps ?? 1)
     const asking = o.followUp !== false && report.state === 'completed'
-    const follow = asking ? await phase(session.id, followUpText(x)) : undefined
+    const follow = asking ? await phase(session.id, followUpsText(xs)) : undefined
     let fresh: Awaited<ReturnType<typeof phase>> | undefined
     if (asking && o.source !== 'feed') {
       trace.push('— fresh session —')
       const other = await newSession('A question about the incident archive')
       fresh = await phase(
         other.id,
-        `The incident archive is read with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. ${followUpText(x)}`,
+        `The incident archive is read with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. ${followUpsText(xs)}`,
       )
     }
     const graded = (p: Awaited<ReturnType<typeof phase>>) => ({
       state: p.state,
-      correct: scoreFollowUp(x, p.answer),
+      correct: scoreFollowUps(xs, p.answer) === xs.length,
+      right: scoreFollowUps(xs, p.answer),
+      of: xs.length,
       answer: p.answer,
       stats: p.stats,
     })

@@ -135,7 +135,11 @@ already read the archive. With `--source feed` each page can be read only
 once, like events that arrive and are gone: the follow-up can then only be
 answered from the session's own history (and there's no fresh session).
 
-Options: `--arms`, `--source archive|feed` (default `archive`), `--no-follow-up`, `--repeat` (default 3), `--concurrency` (default 3),
+Options: `--arms`, `--source archive|feed` (default `archive`), `--severe N`
+(incidents the report must list, default 12; 40, 80 or 150 make the facts to
+keep outgrow one summary), `--follow-ups N` (incidents the follow-up asks
+about, on pages spread across the archive; default 1, on page 3),
+`--no-follow-up`, `--summarize <report.json>` (re-print a saved report), `--repeat` (default 3), `--concurrency` (default 3),
 `--window` (the window the harness enforces, default 64000; the model's real
 one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),
 `--timeout <s>` (default 1800). It prints a table per arm (exact answers, F1,

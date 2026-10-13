@@ -254,3 +254,35 @@ export function followUpText(x: Incident): string {
 export function scoreFollowUp(x: Incident, answer: string): boolean {
   return answer.includes(x.ticket!) && new RegExp(`\\b${x.deploy}\\b`).test(answer)
 }
+
+/**
+ * The incidents several follow-up questions ask about: minor ones (never severe, never corrected) on pages spread
+ * across the archive, so the answers sit in different stretches of what was read. One gives the page-3 question.
+ */
+export function followUpIncidents(archive: Archive, count = 1): Incident[] {
+  if (count <= 1) return [followUpIncident(archive)]
+  const last = archive.pages.length - 1
+  const corrected = new Set(archive.corrections.map((c) => c.id))
+  const out: Incident[] = []
+  for (let i = 0; i < count; i++) {
+    const page = Math.round(1 + (i * (last - 1)) / (count - 1))
+    const x = archive.incidents.find((y) => y.page === page && y.severity !== 1 && !corrected.has(y.id) && !out.includes(y))
+    if (x) out.push(x)
+  }
+  return out
+}
+
+export function followUpsText(xs: Incident[]): string {
+  if (xs.length === 1) return followUpText(xs[0]!)
+  return [
+    `A few more questions about the archive: for each of these incidents, what were the follow-up ticket and the deploy id? ${xs.map((x) => x.id).join(', ')}`,
+    'Reply with one line each, exactly: INC-12345: TKT-1234, deploy abcd',
+  ].join('\n')
+}
+
+/** How many follow-ups an answer got right: the incident's line (or the whole answer, for one) has both details. */
+export function scoreFollowUps(xs: Incident[], answer: string): number {
+  if (xs.length === 1) return scoreFollowUp(xs[0]!, answer) ? 1 : 0
+  const lines = answer.split('\n')
+  return xs.filter((x) => lines.some((l) => l.includes(x.id) && scoreFollowUp(x, l))).length
+}

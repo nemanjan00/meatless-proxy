@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildArchive, followUpIncident, scoreAnswer, scoreFollowUp } from '../src/bench/archive.ts'
+import {
+  buildArchive,
+  followUpIncident,
+  followUpIncidents,
+  followUpsText,
+  scoreAnswer,
+  scoreFollowUp,
+  scoreFollowUps,
+} from '../src/bench/archive.ts'
 import { ARMS, type PhaseStats, taskText } from '../src/bench/context.ts'
 import { billed, median } from '../src/bench/summary.ts'
 
@@ -106,5 +114,24 @@ describe('summary', () => {
     expect(median([100, 108, 492])).toBe(108)
     expect(median([1, 2, 3, 4])).toBe(2.5)
     expect(median([])).toBe(0)
+  })
+})
+
+describe('scaling', () => {
+  it('scales the facts to keep: 150 severe incidents still fit, each expected once', () => {
+    const a = buildArchive({ severe: 150 })
+    expect(a.expected.length).toBe(150)
+    expect(new Set(a.expected).size).toBe(150)
+  })
+
+  it('spreads several follow-ups across the archive and scores each one', () => {
+    const a = buildArchive()
+    const xs = followUpIncidents(a, 5)
+    expect(xs).toHaveLength(5)
+    expect(new Set(xs.map((x) => x.page)).size).toBe(5)
+    expect(xs.every((x) => !a.expected.some((l) => l.startsWith(`${x.id} |`)))).toBe(true)
+    const answer = xs.map((x, i) => `${x.id}: ${x.ticket}, deploy ${i === 0 ? 'zzzz' : x.deploy}`).join('\n')
+    expect(scoreFollowUps(xs, answer)).toBe(4)
+    expect(followUpsText(xs)).toContain(xs[4]!.id)
   })
 })

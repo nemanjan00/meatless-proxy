@@ -25,6 +25,8 @@ const { values } = parseArgs({
     'no-follow-up': { type: 'boolean' },
     source: { type: 'string' },
     summarize: { type: 'string' },
+    severe: { type: 'string' },
+    'follow-ups': { type: 'string' },
   },
 })
 if (values.summarize) {
@@ -45,6 +47,8 @@ const opts = {
   timeoutMs: int(values.timeout, 1800) * 1000,
   followUp: !values['no-follow-up'],
   source: (values.source === 'feed' ? 'feed' : 'archive') as 'archive' | 'feed',
+  severe: int(values.severe, 12),
+  followUps: int(values['follow-ups'], 1),
 }
 const names = (values.arms ?? ARMS.map((a) => a.name).join(',')).split(',').map((x) => x.trim())
 const arms = ARMS.filter((a) => names.includes(a.name))
@@ -57,7 +61,7 @@ if (!modelEnv) {
   process.stderr.write('the benchmark needs a real model: set OPENAI_BASE_URL, OPENAI_API_KEY and MODEL\n')
   process.exit(2)
 }
-const archive = buildArchive({ seed: opts.seed, pages: opts.pages })
+const archive = buildArchive({ seed: opts.seed, pages: opts.pages, severe: opts.severe })
 const chars = archive.pages.reduce((n, p) => n + p.length, 0)
 process.stderr.write(
   `bench:context ${describeModelEnv(modelEnv)}, window ${opts.window}, ${opts.pages} pages (${chars.toLocaleString('en-US')} chars), ` +
