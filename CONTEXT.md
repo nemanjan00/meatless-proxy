@@ -167,6 +167,86 @@ flowchart LR
 Unlike classic compaction, it keeps the recent tail, it's recorded in the
 session document, and the detailed history is still in the tree.
 
+## Dense sessions that talk to each other
+
+The three algorithms do more than keep one session alive. They change what a
+long-lived session **is**, and with it how work is shared across sessions.
+
+### Knowledge density
+
+Think of a context as tokens spent per thing known. A fresh session that
+reads twelve files to answer one question holds 40k tokens of raw material
+for a few facts. After a collapse it holds the facts: the summary of what was
+learned, with the line numbers and ids that matter. Repeat that over weeks of
+work and the session's context becomes **dense**. Nearly every token is a
+conclusion, a decision or a pointer, not raw material. Collapse is what makes
+this possible. A classic compaction would also make the context short, but by
+lossy averaging, all at once, under pressure. Collapse distils one finished
+part at a time, written by the model that just did the work.
+
+```mermaid
+flowchart LR
+    R["raw work<br/>file reads, searches, attempts<br/><i>low density</i>"] -- "collapse:<br/>keep what was learned" --> D["dense context<br/>conclusions, decisions, ids,<br/>pointers to the detail<br/><i>high density</i>"]
+    D -- "next piece of work" --> R
+    D -- "commit, weeks of it" --> E["a long-lived expert<br/>on its project, procedure or thread"]
+```
+
+So a session owning a project, a procedure or a long thread turns into a
+specialist that **already knows**: what the code does, who decided what, what
+was tried and failed, where the detail is if it's needed again.
+
+### Ask the session that knows
+
+When work needs knowledge another session holds, the cheap path is not to
+rebuild it but to **ask**:
+
+- **Messages between sessions.** `sessions.message { to: "@employee#slug",
+  text }` puts a message straight into another session as something to act
+  on, and it answers the same way. The question and the answer are short.
+  They carry conclusions, not the raw material behind them.
+- **Routing to the owner.** The router forwards new requests to the session
+  that owns that work (from its decision log), so a follow-up lands where the
+  knowledge already is, not in a new session that starts from zero.
+- **Forks start warm.** A fork of a dense context (a procedure context, a
+  project session) starts out knowing everything it knows. Nothing has to be
+  re-read, and every fork shares the same prefix, so the provider's prompt
+  cache serves it.
+- **Ephemeral runs keep experts small.** A long-lived context handles a
+  passing event in a run that's thrown away afterwards, and commits only what
+  is worth keeping. It stays dense for months instead of growing with every
+  question it answered.
+
+```mermaid
+flowchart LR
+    subgraph team [Sessions of one employee]
+        P["#payments<br/>dense: billing code,<br/>decisions, owners"]
+        A["#access-requests<br/>procedure context:<br/>steps, approvers"]
+        T["#thread-4711<br/>a person's request"]
+    end
+    T -- "sessions.message:<br/>where are refunds retried?" --> P
+    P -- "retry.ts:214, 3 tries,<br/>Ana owns it" --> T
+    T -- "fork for the access step" --> A
+```
+
+### Why it's cheaper
+
+Answering "where are refunds retried?" from scratch means a session reads
+the code again: tens of thousands of tokens of file reads, every time
+someone asks. Asking the session that already collapsed that reading costs
+its prompt (mostly a cached prefix) plus a short question and answer. The
+knowledge is paid for once, kept dense, and reused by everyone who asks.
+
+| | Fresh session per question | Ask a dense session |
+|---|---|---|
+| Raw material read | every time | once, then collapsed |
+| Tokens per answer | the whole reading again | a cached prefix + a short Q&A |
+| What the asker's context gains | raw material it must collapse itself | a conclusion, a few lines |
+| Knowledge over time | starts from zero each time | accumulates, and stays dense |
+
+Each session keeps its own slice dense, and what crosses between them is
+distilled. That's how a few dense contexts can cover a whole company without
+any of them running out of room.
+
 ## How it works
 
 The code is in `packages/runner/src/context-window.ts` (pure decisions),
