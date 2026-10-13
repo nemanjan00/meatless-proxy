@@ -31,6 +31,7 @@ const { values } = parseArgs({
     'follow-ups': { type: 'string' },
     'fuzzy-follow-ups': { type: 'string' },
     chain: { type: 'string' },
+    instructions: { type: 'boolean' },
   },
 })
 if (values.summarize) {
@@ -66,6 +67,7 @@ const opts = {
   followUps: int(values['follow-ups'], 1),
   fuzzyFollowUps: int(values['fuzzy-follow-ups'], 0),
   chain: int(values.chain, 0),
+  instructions: !!values.instructions,
 }
 const names = (values.arms ?? ARMS.map((a) => a.name).join(',')).split(',').map((x) => x.trim())
 const arms = ARMS.filter((a) => names.includes(a.name))

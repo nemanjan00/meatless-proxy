@@ -142,6 +142,12 @@ about, on pages spread across the archive; default 1, on page 3),
 `--fuzzy-follow-ups N` (then N incidents described in other words, without
 their ids, e.g. "the checkout incident where people saw out-of-date results,
 because two cache entries ended up with the same key"; default 0),
+`--instructions` (a person sends a constraint after page 4, "leave out
+every <service> incident", and after page 12 a correction to it that doesn't
+repeat the service, "keep those after all, marked (review)"; scored on
+whether the report follows both), `--chain N` (N tasks of five pages in one
+session, each asked about an incident from the task before; billed cost and
+context at the end per task),
 `--no-follow-up`, `--summarize <report.json>` (re-print a saved report), `--repeat` (default 3), `--concurrency` (default 3),
 `--window` (the window the harness enforces, default 64000; the model's real
 one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),

@@ -11,6 +11,8 @@ import {
   chainTaskText,
   chainTasks,
   classifyFuzzy,
+  instructionsFor,
+  scoreInstructions,
   scoreChainTask,
   fuzzyIncidents,
   fuzzyText,
@@ -236,5 +238,35 @@ describe('a chain of tasks', () => {
     const answer = [...t.expected, `CROSS: ${t.cross!.onCall}, ${t.cross!.ticket}`].join('\n')
     expect(scoreChainTask(t, answer)).toEqual({ correct: t.expected.length, expected: t.expected.length, cross: true })
     expect(scoreChainTask(t, t.expected.slice(1).join('\n'))).toMatchObject({ correct: t.expected.length - 1, cross: false })
+  })
+})
+
+describe('instructions during the work', () => {
+  it('picks a service with SEV1 incidents before the constraint and after the correction', () => {
+    const a = buildArchive({ severe: 40 })
+    const ins = instructionsFor(a)!
+    const sev1 = new Set(a.expected.map((l) => l.split(' | ')[0]))
+    const mine = a.incidents.filter((x) => sev1.has(x.id) && x.service === ins.service)
+    expect(mine.some((x) => x.page <= ins.constraintAfter)).toBe(true)
+    expect(mine.some((x) => x.page > ins.correctionAfter)).toBe(true)
+    expect(ins.constraint).toContain(ins.service)
+    // The correction doesn't repeat what it is about: following it takes remembering the constraint.
+    expect(ins.correction).not.toContain(ins.service)
+  })
+
+  it('scores the report: their incidents kept and marked, nothing else marked', () => {
+    const a = buildArchive({ severe: 40 })
+    const ins = instructionsFor(a)!
+    const service = new Map(a.incidents.map((x) => [x.id, x.service]))
+    const theirs = (l: string) => service.get(l.split(' | ')[0]!) === ins.service
+    expect(scoreInstructions(a, ins, a.expected.map((l) => (theirs(l) ? `${l} (review)` : l)).join('\n')).followed).toBe(true)
+    // Forgot the correction: still left out.
+    const left = scoreInstructions(a, ins, a.expected.filter((l) => !theirs(l)).join('\n'))
+    expect(left).toMatchObject({ followed: false, marked: 0 })
+    expect(left.dropped).toBeGreaterThan(0)
+    // Forgot the constraint: kept, unmarked.
+    expect(scoreInstructions(a, ins, a.expected.join('\n'))).toMatchObject({ followed: false, marked: 0 })
+    // Marked the wrong ones.
+    expect(scoreInstructions(a, ins, a.expected.map((l) => `${l} (review)`).join('\n')).wronglyMarked).toBeGreaterThan(0)
   })
 })

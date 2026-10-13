@@ -60,6 +60,21 @@ const reportErrors = (rs: BenchRun[]) => {
   return parts.filter(Boolean).join(', ') || 'none'
 }
 
+/** `2/3 runs (1 dropped the constraint's incidents)`: whether reports followed the constraint as corrected. */
+const instructionsCell = (rs: BenchRun[]) => {
+  const xs = rs.flatMap((r) => (r.instructions ? [r.instructions] : []))
+  if (!xs.length) return '–'
+  const why = [
+    ['dropped', xs.reduce((n, x) => n + x.dropped, 0)],
+    ['unmarked', xs.reduce((n, x) => n + x.unmarked, 0)],
+    ['wrongly marked', xs.reduce((n, x) => n + x.wronglyMarked, 0)],
+  ]
+    .filter(([, n]) => n)
+    .map(([w, n]) => `${n} ${w}`)
+    .join(', ')
+  return `${xs.filter((x) => x.followed).length}/${xs.length} runs${why ? ` (${why})` : ''}`
+}
+
 /** Runs the harness failed (not a wrong answer: the run itself failed). */
 const failedOf = (xs: Answered[]) => String(xs.filter((x) => x.state !== 'completed').length)
 
@@ -92,8 +107,10 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     'follow-up right',
     'follow-up billed',
     'follow-up harness failures',
+    'follow-ups re-read the source',
     'fuzzy follow-up right',
     'fuzzy follow-up billed',
+    'instructions followed',
   ]
   const rows = arms.map((arm) => {
     const rs = runs.filter((r) => r.arm === arm)
@@ -121,8 +138,12 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       rightOf(fs),
       spread(fs.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
       failedOf(fs),
+      // A follow-up answered by reading the source again lost the detail and recovered it: on a one-time source
+      // it would have been wrong.
+      fs.length ? `${fs.filter((x) => x.state === 'completed' && x.stats.reads > 0).length}/${fs.length} runs` : '–',
       rightOf(fz),
       spread(fz.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
+      instructionsCell(rs),
     ]
   })
   const table = [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')

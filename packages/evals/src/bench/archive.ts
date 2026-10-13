@@ -479,3 +479,65 @@ export function scoreChainTask(t: ChainTask, answer: string): { correct: number;
     ...(t.cross ? { cross: crossLine.includes(t.cross.onCall) && crossLine.includes(t.cross.ticket!) } : {}),
   }
 }
+
+/**
+ * Instructions a person sends while the report is being written: a constraint after one page, and later a
+ * correction to it that doesn't repeat what it was about, so following it takes remembering the constraint.
+ * The service chosen has SEV1 incidents both before the constraint and after the correction.
+ */
+export interface Instructions {
+  service: string
+  /** 0-based pages after whose reading each message arrives. */
+  constraintAfter: number
+  correctionAfter: number
+  constraint: string
+  correction: string
+}
+
+export function instructionsFor(archive: Archive, constraintAfter = 3, correctionAfter = 11): Instructions | undefined {
+  const finalSev1 = new Set(archive.expected.map((l) => l.split(' | ')[0]))
+  const severe = archive.incidents.filter((x) => finalSev1.has(x.id))
+  const byService = new Map<string, Incident[]>()
+  for (const x of severe) byService.set(x.service, [...(byService.get(x.service) ?? []), x])
+  const ranked = [...byService.entries()].sort((a, b) => a[1].length - b[1].length || a[0].localeCompare(b[0]))
+  // The smallest such service, so most of the report is unaffected and the instruction is a detail.
+  const pick =
+    ranked.find(([, xs]) => xs.some((x) => x.page <= constraintAfter) && xs.some((x) => x.page > correctionAfter)) ??
+    ranked.at(-1)
+  if (!pick) return undefined
+  const service = pick[0]
+  return {
+    service,
+    constraintAfter,
+    correctionAfter,
+    constraint: `One more thing for this audit: leave out every ${service} incident. Those go to a separate review.`,
+    correction:
+      'Correction to what I said earlier about the separate review: keep those incidents in the report after all, ' +
+      'but mark each of them with (review) at the end of its line. Nothing else changes.',
+  }
+}
+
+/** Whether the report follows both: the service's SEV1 incidents present and marked, nothing else marked. */
+export function scoreInstructions(
+  archive: Archive,
+  ins: Instructions,
+  answer: string,
+): { marked: number; of: number; unmarked: number; dropped: number; wronglyMarked: number; followed: boolean } {
+  const lines = answer.split('\n')
+  const service = new Map(archive.incidents.map((x) => [x.id, x.service]))
+  const mine = archive.expected.map((l) => l.split(' | ')[0]!).filter((id) => service.get(id) === ins.service)
+  let marked = 0
+  let unmarked = 0
+  let dropped = 0
+  for (const id of mine) {
+    const row = lines.find((x) => x.includes(id) && /\|/.test(x))
+    if (!row) dropped++
+    else if (/\(review\)/i.test(row)) marked++
+    else unmarked++
+  }
+  const wronglyMarked = lines.filter((x) => {
+    const id = x.match(/INC-\d{5}/)?.[0]
+    return /\(review\)/i.test(x) && (!id || service.get(id) !== ins.service)
+  }).length
+  return { marked, of: mine.length, unmarked, dropped, wronglyMarked, followed: marked === mine.length && !wronglyMarked }
+}

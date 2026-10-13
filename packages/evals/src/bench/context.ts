@@ -8,6 +8,8 @@ import {
   scoreAnswer,
   scoreFollowUps,
   classifyFollowUps,
+  instructionsFor,
+  scoreInstructions,
   chainTasks,
   chainTaskText,
   scoreChainTask,
@@ -89,6 +91,11 @@ export interface BenchOptions {
   /** Incidents a second follow-up describes in other words, without their ids (default 0: none). */
   fuzzyFollowUps?: number
   /**
+   * A person sends instructions while the report is written: a constraint after page 4, and after page 12 a
+   * correction to it that doesn't repeat what it was about (default false).
+   */
+  instructions?: boolean
+  /**
    * Instead of one report: a chain of this many tasks in one session, each auditing its own run of pages and, from
    * the second on, asked about an incident from the task before (default 0: off).
    */
@@ -152,6 +159,8 @@ export interface BenchRun {
   fresh?: FollowUp
   /** Follow-ups that describe incidents instead of naming them, asked after the others in the same session. */
   fuzzy?: FollowUp
+  /** With `instructions`: whether the report followed the constraint as corrected. */
+  instructions?: ReturnType<typeof scoreInstructions> & { service: string }
   /** A chain of tasks (with `chain`): each one's answer and what it cost. */
   chain?: { task: number; state: string; correct: number; expected: number; cross?: boolean; stats: PhaseStats }[]
   trace: string[]
@@ -201,6 +210,10 @@ const addStats = (a: PhaseStats, b: PhaseStats): PhaseStats => {
 export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive: Archive): Promise<BenchRun> {
   /** Pages read so far, in a feed. */
   const consumed = new Set<number>()
+  const ins = o.instructions ? instructionsFor(archive) : undefined
+  // Filled in once the app is up: the page tool posts messages through it.
+  let s!: Awaited<ReturnType<typeof startEvalApp>>['ctx']['services']
+  const trace: string[] = []
   const app = await startEvalApp({
     modelEnv: o.modelEnv,
     maxSteps: o.maxSteps,
@@ -220,7 +233,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
           effect: 'read',
           source: 'stdlib',
         },
-        async (args) => {
+        async (args, ctx) => {
           const a = args as { page?: number; cursor?: string }
           const i = Number(a.page) - 1
           if (!Number.isInteger(i) || i < 0 || i >= archive.pages.length)
@@ -233,6 +246,20 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
               isError: true,
             }
           consumed.add(i)
+          // A person's message while the work goes on: delivered like any message to the session, seen at the next step.
+          const say = ins && (i === ins.constraintAfter ? ins.constraint : i === ins.correctionAfter ? ins.correction : undefined)
+          if (say) {
+            await s.sessions.addToInbox({
+              sessionId: ctx.sessionId,
+              eventId: `evt_bench_${i}`,
+              expectedToAct: true,
+              trusted: true,
+              source: 'chat',
+              type: 'message.posted',
+              text: `Ana Lopez (who asked for this audit): ${say}`,
+            })
+            trace.push(`[message after page ${i + 1}] ${say.slice(0, 60)}…`)
+          }
           return { output: archive.pages[i]! }
         },
       )
@@ -249,11 +276,10 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     }
     logsSeen = logs.length
   }
-  const s = ctx.services
+  s = ctx.services
   // Counted from live events: a later collapse folds earlier tool calls (rewinds included) out of the history.
   let stats = emptyStats()
   /** What happened, in order: each model call's prompt size and tool calls, and the context events between them. */
-  const trace: string[] = []
   const k = (n: number | undefined) => `${Math.round((n ?? 0) / 100) / 10}k`
   const subs = [
     s.bus.subscribe<{ tokensBefore?: number; tokensAfter?: number }>('context.compacted', (m) => {
@@ -263,6 +289,9 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     s.bus.subscribe<{ error?: string }>('context.compact_failed', (m) => {
       stats.compactionsFailed++
       trace.push(`auto-compaction failed: ${m.payload.error}`)
+    }),
+    s.bus.subscribe<{ tasks?: number; taskTokens?: number }>('context.boundary', (m) => {
+      trace.push(`boundary note: ${m.payload.tasks} finished requests, ${k(m.payload.taskTokens)}`)
     }),
     s.bus.subscribe('context.result_offloaded', () => {
       stats.offloads++
@@ -357,6 +386,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       }
     }
     const report = await phase(session.id, taskText(archive.pages.length, o.source))
+    const followed = ins ? { service: ins.service, ...scoreInstructions(archive, ins, report.answer) } : undefined
     trace.push('— follow-up —')
     const xs = followUpIncidents(archive, o.followUps ?? 1)
     const asking = o.followUp !== false && report.state === 'completed'
@@ -405,6 +435,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       ...(follow ? { followUp: graded(follow) } : {}),
       ...(fresh ? { fresh: graded(fresh) } : {}),
       ...(fuzzy ? { fuzzy } : {}),
+      ...(followed ? { instructions: followed } : {}),
       trace,
       ...(report.error ? { error: report.error } : {}),
     }
