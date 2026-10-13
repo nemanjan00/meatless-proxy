@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "eval": "tsx src/cli.ts"
+    "eval": "tsx src/cli.ts",
+    "bench:context": "tsx src/bench/cli.ts"
   },
   "dependencies": {
     "@mp/chat": "0.0.0",

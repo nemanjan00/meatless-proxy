@@ -22,6 +22,10 @@ export interface EvalAppOptions {
   timeoutMs?: number
   /** Model calls per run before it pauses (default 12: evals are meant to be cheap). */
   maxSteps?: number
+  /** More settings for the app (e.g. `CONTEXT_COMPACT_AT`), over the defaults above. */
+  env?: Record<string, string>
+  /** Runs after the services are wired: register extra tools or hooks. */
+  setup?: (services: App['services']) => void | Promise<void>
 }
 
 export interface EvalApp {
@@ -49,6 +53,7 @@ export async function startEvalApp(opts: EvalAppOptions = {}): Promise<EvalApp> 
     SECRETS_KEY: CANARY_SECRETS_KEY,
     RUN_BACKOFF_MS: '500',
     MAX_STEPS: String(opts.maxSteps ?? 12),
+    ...opts.env,
   }
   if (!opts.model && opts.modelEnv) {
     env.OPENAI_BASE_URL = opts.modelEnv.OPENAI_BASE_URL
@@ -63,6 +68,7 @@ export async function startEvalApp(opts: EvalAppOptions = {}): Promise<EvalApp> 
       git: fakeGitCache(),
       logger: memoryLogger(logs),
       ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.setup ? { setup: opts.setup } : {}),
     })
     await app.start({ http: false, workers: true })
   } catch (e) {

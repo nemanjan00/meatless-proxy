@@ -116,6 +116,15 @@ flowchart LR
 It happens automatically for results too big to keep at all, and the model
 can do it for anything it has read and no longer needs word for word.
 
+**Offload to a doc.** The model can first write what matters into a docs
+chapter, so the pointer reads "see doc *X*, chapter *Y*". That turns private
+context into shared knowledge: other sessions read the chapter, and any of
+them can correct it. The pointer isn't refreshed when the chapter changes, and
+it doesn't need to be. What's offloaded isn't in the context, so nothing stale
+is relied on, and following the pointer reads the chapter as it is now.
+(`sessions.restore` brings back the original entry as it was, which is the
+point of restore.)
+
 ### 2 · Collapse: replace finished work with what was learned
 
 **Idea.** Work comes in stretches: twelve file reads to understand a module,
@@ -246,6 +255,53 @@ knowledge is paid for once, kept dense, and reused by everyone who asks.
 Each session keeps its own slice dense, and what crosses between them is
 distilled. That's how a few dense contexts can cover a whole company without
 any of them running out of room.
+
+## Benchmark
+
+`npm run bench:context` ([packages/evals](packages/evals/README.md#the-context-benchmark))
+runs one long task under different strategies, with the same model, archive
+and window. The task: read a paged incident archive (20 pages, about 206k
+characters, roughly three times the window) one page at a time, then report
+the audit reference from page 1 and the 12 incidents whose final severity is
+SEV1 (corrections on later pages change four of them), each with its exact
+root-cause location and on-call engineer. Afterwards, the same session gets a
+**follow-up** about details of a minor incident on page 3 that nobody asked
+for before (its ticket and deploy id).
+
+| arm | strategy |
+|-----|----------|
+| `classic` | classic compaction: at 85% everything is summarised; no notes, no context tools |
+| `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
+| `managed` | everything: notes at 50/75%, the free-space turn at 80%, collapse/offload/restore tools, compaction at 85% |
+
+### First results (2026-10-13)
+
+Claude Sonnet 5.5, a 64k window, three runs per arm:
+
+| arm | report correct | report prompt tokens | cached | time | collapses | restores | follow-up right | follow-up tokens |
+|-----|---------------|----------------------|--------|------|-----------|----------|-----------------|------------------|
+| classic | 12/12 (3/3 runs) | 657k | 65% | 65 s | 0 | 0 | 3/3 | 108k (re-read 3 pages) |
+| safety-net | 12/12 (3/3) | 684k | 67% | 68 s | 0 | 0 | 3/3 | 152k (re-read 3 pages) |
+| managed | 12/12 (3/3) | 795k | 62% | 104 s | 5.7 | 7.0 | 3/3 | 232k (100k, 108k, 492k) |
+
+**Classic compaction wins this task.** Everything the report needs is twelve
+short lines, so any summary keeps it, and the archive can be read again, so
+the follow-up costs three page reads. What we saw in the managed arm:
+
+- **It collapses too early and too often.** The 50% note fires about every
+  five pages. The model collapses each time, and each collapse means the next
+  call re-sends a context the cache hasn't seen.
+- **It distrusts its own summaries.** In two of three runs, after a few
+  collapses, the model listed what it had collapsed and restored entries one
+  by one, then hit an automatic compaction anyway.
+- **The follow-up was answered from its own history** in two runs (three or
+  five restores, about the cost of classic's re-read). In the third it read
+  16 pages again.
+
+Not tested yet, and where the design should pay off: detail that can't be
+read again (people's messages, events, results that change), long-lived
+sessions that hit the cache over weeks, and sessions asking a dense session
+instead of re-reading.
 
 ## How it works
 
@@ -387,7 +443,8 @@ history. An ephemeral run (router, triggers) leaves the session as it was.
 | `MODEL_CONTEXT_TOKENS` | from the model table, else 128k | the window |
 | `CONTEXT_COMPACT_AT` | 85 | percent for automatic compaction; 0 turns it off |
 | `CONTEXT_NEAR_AT` | 80 | percent for the "free space now" turn; 0 turns it off |
+| `CONTEXT_NOTES` | 50,75 | percents for the advisory notes; `off` turns them off |
+| `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim; 0 summarises everything |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | automatic offload of big results; 0 turns it off |
 
-The 50% and 75% notes, the 15% kept tail and the 8,000-token summary limit
-are runner options (`contextNotes`, `compactKeep`, `compactSummaryMaxTokens`).
+The 8,000-token summary limit is a runner option (`compactSummaryMaxTokens`).

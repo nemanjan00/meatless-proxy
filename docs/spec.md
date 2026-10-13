@@ -2140,7 +2140,7 @@ name (a table of known models, 128k for any other) or from the deployment's
 was. The session page shows it ("context 112k / 200k").
 
 - **The model is told, concretely.** When a session's context crosses **50%**
-  and again **75%** of the window, a short note goes into its history before
+  and again **75%** of the window (`CONTEXT_NOTES`), a short note goes into its history before
   the next model call: the size, and what is big. It names the biggest
   finished stretches of consecutive tool calls (their first and last call
   ids, the tools, about how many tokens) with a ready `rewind { from, to,
@@ -2169,7 +2169,7 @@ was. The session page shows it ("context 112k / 200k").
   do, and verbatim whatever the rest of the work needs: line numbers, quotes,
   figures, ids, paths, links); the history becomes the first entry, that summary
   (marked *automatic*), and the most recent entries verbatim (about 15% of the
-  window, a tool call always together with its results). It is recorded like
+  window, `CONTEXT_COMPACT_KEEP`, a tool call always together with its results). It is recorded like
   any compaction, and the detailed history stays in the database. If the
   summary call fails the run carries on; if the request then can't fit, the
   run pauses with a clear reason instead of failing. The session document

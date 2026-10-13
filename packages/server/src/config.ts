@@ -255,6 +255,22 @@ export const configSchema = z.object({
    * or compact with its own summary) before automatic compaction (0 = never; only below CONTEXT_COMPACT_AT).
    */
   CONTEXT_NEAR_AT: z.coerce.number().min(0).max(99).default(80),
+  /**
+   * Percents of the context window at which the model gets a note naming the biggest finished parts it could free,
+   * comma-separated (`off` or `0` = no notes).
+   */
+  CONTEXT_NOTES: optStr.transform((v, ctx) => {
+    const t = (v ?? '50,75').trim().toLowerCase()
+    if (t === 'off' || t === '0') return []
+    const ns = t.split(',').map((x) => Number(x.trim()))
+    if (ns.some((n) => !Number.isFinite(n) || n <= 0 || n >= 100)) {
+      ctx.addIssue({ code: 'custom', message: 'must be percents between 0 and 100, comma-separated, or off' })
+      return z.NEVER
+    }
+    return ns
+  }),
+  /** Share of the context window an automatic compaction keeps verbatim (the latest entries); 0 summarises everything. */
+  CONTEXT_COMPACT_KEEP: numOr(0.15).refine((v) => v < 1, 'must be below 1'),
   /** Tool results longer than this many characters are stored in full and kept in the history as a preview (0 = never). */
   TOOL_RESULT_MAX_CHARS: z.coerce.number().int().min(0).default(20_000),
   /**
@@ -462,6 +478,8 @@ export function describeConfig(c: Config): Record<string, unknown> {
       window: c.MODEL_CONTEXT_TOKENS ?? (c.MODEL ? contextWindowOf(c.MODEL) : null),
       compactAt: c.CONTEXT_COMPACT_AT || 'off',
       nearAt: c.CONTEXT_NEAR_AT || 'off',
+      notes: c.CONTEXT_NOTES.length ? c.CONTEXT_NOTES : 'off',
+      compactKeep: c.CONTEXT_COMPACT_KEEP,
       toolResultMaxChars: c.TOOL_RESULT_MAX_CHARS || 'off',
     },
     toolsOnDemand: c.TOOLS_ON_DEMAND,

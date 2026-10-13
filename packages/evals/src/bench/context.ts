@@ -1,0 +1,276 @@
+import type { Json } from '@mp/core'
+import { startEvalApp } from '../app.ts'
+import type { ModelEnv } from '../env.ts'
+import { buildArchive, followUpIncident, followUpText, scoreAnswer, scoreFollowUp, type Archive, type Score } from './archive.ts'
+
+/**
+ * The context benchmark: one long task (audit a paged incident archive much bigger than the context window,
+ * and report exact details from all of it) run under different context strategies, with the same model,
+ * archive and window. See CONTEXT.md.
+ */
+
+export interface Arm {
+  name: string
+  description: string
+  /** App settings for this arm. */
+  env: Record<string, string>
+  /** Whether the session gets the context tools (rewind, offload, restore, compact, contents). */
+  contextTools: boolean
+}
+
+export const CONTEXT_TOOLS = ['sessions.rewind', 'sessions.offload', 'sessions.restore', 'sessions.compact', 'sessions.contents']
+
+export const ARMS: Arm[] = [
+  {
+    name: 'classic',
+    description: 'classic compaction: at 85% the whole history is summarised, nothing else',
+    env: { CONTEXT_NOTES: 'off', CONTEXT_NEAR_AT: '0', CONTEXT_COMPACT_KEEP: '0', TOOL_RESULT_MAX_CHARS: '0' },
+    contextTools: false,
+  },
+  {
+    name: 'safety-net',
+    description: 'our automatic compaction alone: at 85%, keeping the latest 15% verbatim',
+    env: { CONTEXT_NOTES: 'off', CONTEXT_NEAR_AT: '0', TOOL_RESULT_MAX_CHARS: '0' },
+    contextTools: false,
+  },
+  {
+    name: 'managed',
+    description: 'everything: notes at 50/75%, free-space turn at 80%, collapse/offload tools, compaction at 85%',
+    env: {},
+    contextTools: true,
+  },
+]
+
+export interface BenchOptions {
+  modelEnv: ModelEnv
+  /** The context window the harness enforces (the model's real one is bigger). */
+  window: number
+  pages: number
+  seed: number
+  maxSteps: number
+  timeoutMs: number
+  /** Ask a follow-up question about a detail nobody asked for, after the report (default true). */
+  followUp?: boolean
+}
+
+/** What one phase of a run cost and did. */
+export interface PhaseStats {
+  /** Model calls, including the summary calls of automatic compactions. */
+  calls: number
+  promptTokens: number
+  cachedTokens: number
+  completionTokens: number
+  /** The biggest prompt sent, in tokens. */
+  peakPrompt: number
+  /** Automatic compactions plus sessions.compact calls. */
+  compactions: number
+  compactionsFailed: number
+  collapses: number
+  offloads: number
+  restores: number
+  notes: number
+  /** archive.read_page calls that returned a page. */
+  reads: number
+  durationMs: number
+}
+
+export interface BenchRun {
+  arm: string
+  repeat: number
+  state: string
+  score: Score
+  answer: string
+  report: PhaseStats
+  /** The follow-up question about a detail from an early page, asked in the same session after the report. */
+  followUp?: { state: string; correct: boolean; answer: string; stats: PhaseStats }
+  trace: string[]
+  error?: string
+}
+
+export function taskText(pages: number): string {
+  return [
+    `Audit the incident archive. Read it with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. There are ${pages} pages, read them all.`,
+    'Then reply with the audit report and nothing else:',
+    '- first line: the audit reference given on page 1;',
+    '- then one line per incident whose final severity is SEV1 (a CORRECTION on a later page supersedes the original record), exactly in the form',
+    '  INC-12345 | path/to/file.ts:123 | First Last',
+    '  with the root-cause location and the on-call engineer from its record.',
+  ].join('\n')
+}
+
+const emptyStats = (): PhaseStats => ({
+  calls: 0,
+  promptTokens: 0,
+  cachedTokens: 0,
+  completionTokens: 0,
+  peakPrompt: 0,
+  compactions: 0,
+  compactionsFailed: 0,
+  collapses: 0,
+  offloads: 0,
+  restores: 0,
+  notes: 0,
+  reads: 0,
+  durationMs: 0,
+})
+
+/** Runs one arm once: a fresh app, a session with the archive tool, the task, the follow-up, and the measurements. */
+export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive: Archive): Promise<BenchRun> {
+  const app = await startEvalApp({
+    modelEnv: o.modelEnv,
+    maxSteps: o.maxSteps,
+    timeoutMs: o.timeoutMs,
+    env: { MODEL_CONTEXT_TOKENS: String(o.window), ...arm.env },
+    setup: (s) => {
+      s.tools.register(
+        {
+          name: 'archive.read_page',
+          description:
+            'Read one page of the incident archive. Pages are read in order: each page ends with the cursor of the next.',
+          parameters: {
+            type: 'object',
+            properties: { page: { type: 'number' }, cursor: { type: 'string' } },
+            required: ['page', 'cursor'],
+          },
+          effect: 'read',
+          source: 'stdlib',
+        },
+        async (args) => {
+          const a = args as { page?: number; cursor?: string }
+          const i = Number(a.page) - 1
+          if (!Number.isInteger(i) || i < 0 || i >= archive.pages.length)
+            return { output: { error: `no page ${a.page}: the archive has ${archive.pages.length}` }, isError: true }
+          if (a.cursor !== archive.cursors[i])
+            return {
+              output: { error: `wrong cursor for page ${a.page}: it is at the end of page ${i} (the start cursor is "start")` },
+              isError: true,
+            }
+          return { output: archive.pages[i]! }
+        },
+      )
+    },
+  })
+  const { ctx } = app
+  const s = ctx.services
+  // Counted from live events: a later collapse folds earlier tool calls (rewinds included) out of the history.
+  let stats = emptyStats()
+  /** What happened, in order: each model call's prompt size and tool calls, and the context events between them. */
+  const trace: string[] = []
+  const k = (n: number | undefined) => `${Math.round((n ?? 0) / 100) / 10}k`
+  const subs = [
+    s.bus.subscribe<{ tokensBefore?: number; tokensAfter?: number }>('context.compacted', (m) => {
+      stats.compactions++
+      trace.push(`auto-compaction ${k(m.payload.tokensBefore)} → ${k(m.payload.tokensAfter)}`)
+    }),
+    s.bus.subscribe<{ error?: string }>('context.compact_failed', (m) => {
+      stats.compactionsFailed++
+      trace.push(`auto-compaction failed: ${m.payload.error}`)
+    }),
+    s.bus.subscribe('context.result_offloaded', () => {
+      stats.offloads++
+      trace.push('auto-offload')
+    }),
+    s.bus.subscribe<{ percent?: number; near?: boolean; suggestions?: number }>('context.noted', (m) => {
+      stats.notes++
+      trace.push(`note ${m.payload.percent}%${m.payload.near ? ' (free space now)' : ''}, ${m.payload.suggestions} suggestions`)
+    }),
+    s.bus.subscribe<{
+      usage?: { promptTokens?: number; cachedTokens?: number; completionTokens?: number }
+      purpose?: string
+      employeeId?: string
+    }>('usage.recorded', (m) => {
+      // The usage service publishes the same topic again once it has recorded the call: count the runner's only.
+      if (m.payload.employeeId !== undefined) return
+      const u = m.payload.usage ?? {}
+      stats.calls++
+      stats.promptTokens += u.promptTokens ?? 0
+      stats.cachedTokens += u.cachedTokens ?? 0
+      stats.completionTokens += u.completionTokens ?? 0
+      stats.peakPrompt = Math.max(stats.peakPrompt, u.promptTokens ?? 0)
+      trace.push(`${m.payload.purpose === 'compaction' ? 'summary call' : 'model call'} ${k(u.promptTokens)}`)
+    }),
+    s.bus.subscribe<{ name?: string; isError?: boolean }>('tool.result', (m) => {
+      trace.push(`  ${m.payload.name}${m.payload.isError ? ' (error)' : ''}`)
+      if (m.payload.isError) return
+      if (m.payload.name === 'archive.read_page') stats.reads++
+      if (m.payload.name === 'sessions.rewind') stats.collapses++
+      if (m.payload.name === 'sessions.offload') stats.offloads++
+      if (m.payload.name === 'sessions.restore') stats.restores++
+      if (m.payload.name === 'sessions.compact') stats.compactions++
+    }),
+  ]
+  /** Runs one instruction in the session until everything settles; its stats and the run's outcome. */
+  const phase = async (sessionId: string, text: string) => {
+    stats = emptyStats()
+    const started = Date.now()
+    const run = await s.sessions.createRun({
+      sessionId,
+      cause: { type: 'manual' },
+      input: [{ kind: 'user', content: { text } as Json }],
+    })
+    await s.runner.enqueue(run.id)
+    await ctx.settle(o.timeoutMs)
+    const done = await s.sessions.requireRun(run.id)
+    stats.durationMs = Date.now() - started
+    return {
+      state: done.data.state,
+      answer: typeof done.data.result?.output === 'string' ? done.data.result.output : '',
+      stats,
+      error: done.data.state !== 'completed' ? (done.data.pauseReason ?? done.data.result?.error ?? done.data.state) : undefined,
+    }
+  }
+  try {
+    const employee = await s.directory.employees.byHandle('meatless')
+    if (!employee) throw new Error('the default employee is missing')
+    const contact = await s.directory.employees.contact(employee.id)
+    let prompt = s.stdlib ? s.stdlib.employeePrompt({ employee, contact, now: s.clock.iso() }) : 'You are an employee.'
+    // Without the context tools, the prompt's guidance about them would only confuse the model.
+    if (!arm.contextTools) prompt = prompt.replace(/^- Context: .*$/m, '')
+    const session = await s.sessions.create({
+      employeeId: employee.id,
+      title: 'Incident archive audit',
+      toolset: ['archive.read_page', ...(arm.contextTools ? CONTEXT_TOOLS : [])],
+      entries: [{ kind: 'system', content: { text: prompt } }],
+    })
+    const report = await phase(session.id, taskText(archive.pages.length))
+    trace.push('— follow-up —')
+    const x = followUpIncident(archive)
+    const follow = o.followUp !== false && report.state === 'completed' ? await phase(session.id, followUpText(x)) : undefined
+    return {
+      arm: arm.name,
+      repeat,
+      state: report.state,
+      score: scoreAnswer(archive, report.answer),
+      answer: report.answer,
+      report: report.stats,
+      ...(follow
+        ? {
+            followUp: {
+              state: follow.state,
+              correct: scoreFollowUp(x, follow.answer),
+              answer: follow.answer,
+              stats: follow.stats,
+            },
+          }
+        : {}),
+      trace,
+      ...(report.error ? { error: report.error } : {}),
+    }
+  } catch (err) {
+    return {
+      arm: arm.name,
+      repeat,
+      state: 'error',
+      score: scoreAnswer(archive, ''),
+      answer: '',
+      report: stats,
+      trace,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    for (const u of subs) u()
+    await app.close()
+  }
+}
+
+export { buildArchive }

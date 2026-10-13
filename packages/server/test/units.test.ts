@@ -32,6 +32,15 @@ describe('config', () => {
   it('knows context windows by model name, and MODEL_CONTEXT_TOKENS overrides it for MODEL', () => {
     const d = loadConfig({})
     expect(d).toMatchObject({ CONTEXT_COMPACT_AT: 85, CONTEXT_NEAR_AT: 80, TOOL_RESULT_MAX_CHARS: 20000 })
+    expect(d.CONTEXT_NOTES).toEqual([50, 75])
+    expect(d.CONTEXT_COMPACT_KEEP).toBe(0.15)
+    expect(loadConfig({ CONTEXT_NOTES: 'off', CONTEXT_COMPACT_KEEP: '0' })).toMatchObject({
+      CONTEXT_NOTES: [],
+      CONTEXT_COMPACT_KEEP: 0,
+    })
+    expect(loadConfig({ CONTEXT_NOTES: '40, 70' }).CONTEXT_NOTES).toEqual([40, 70])
+    expect(() => loadConfig({ CONTEXT_NOTES: '50,abc' })).toThrow()
+    expect(() => loadConfig({ CONTEXT_COMPACT_KEEP: '1' })).toThrow()
     expect(d.MODEL_CONTEXT_TOKENS).toBeUndefined()
     const known = contextWindowFor(loadConfig({ MODEL: 'kimi-k2.7-code' }))
     expect(known('kimi-k2.7-code')).toBe(262_144)
@@ -50,7 +59,14 @@ describe('config', () => {
     expect(w('claude-opus-4-1')).toBe(200_000)
     // Without MODEL, the override applies to every model.
     expect(contextWindowFor(loadConfig({ MODEL_CONTEXT_TOKENS: '64000' }))('anything')).toBe(64_000)
-    expect(describeConfig(c).context).toEqual({ window: 100_000, compactAt: 'off', nearAt: 80, toolResultMaxChars: 5000 })
+    expect(describeConfig(c).context).toEqual({
+      window: 100_000,
+      compactAt: 'off',
+      nearAt: 80,
+      notes: [50, 75],
+      compactKeep: 0.15,
+      toolResultMaxChars: 5000,
+    })
     expect(() => loadConfig({ MODEL_CONTEXT_TOKENS: '10' })).toThrow(/MODEL_CONTEXT_TOKENS/)
     expect(() => loadConfig({ CONTEXT_COMPACT_AT: '120' })).toThrow(/CONTEXT_COMPACT_AT/)
   })

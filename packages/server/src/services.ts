@@ -516,6 +516,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     contextWindow: contextWindowFor(config),
     compactAt: config.CONTEXT_COMPACT_AT,
     contextNearAt: config.CONTEXT_NEAR_AT,
+    contextNotes: config.CONTEXT_NOTES,
+    compactKeep: config.CONTEXT_COMPACT_KEEP,
     toolResultMaxChars: config.TOOL_RESULT_MAX_CHARS,
   })
 

@@ -105,3 +105,33 @@ Check helpers (`src/checks.ts`): `answeredInThread`, `atMostSentences`,
 context helpers, every scenario passing and failing with a scripted model, the
 runner's selection, repetition, concurrency, timeouts and errors, the report and
 table, `.env` loading). They use the scripted model from `@mp/model` and need no key.
+
+## The context benchmark
+
+`npm run bench:context` compares context strategies on one long task (see
+[CONTEXT.md](../../CONTEXT.md)): audit a paged incident archive about three
+times bigger than the context window, then report the audit reference from
+page 1 and every incident whose final severity is SEV1 (corrections on later
+pages change some), each with its exact root-cause location and on-call
+engineer. Pages are read one at a time through a cursor chain. The archive is
+generated from a seed, so every arm reads the same text.
+
+| arm | context strategy |
+|-----|------------------|
+| `classic` | classic compaction: at 85% the whole history is summarised (`CONTEXT_COMPACT_KEEP=0`), no notes, no context tools |
+| `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
+| `managed` | everything: notes at 50/75%, the free-space turn at 80%, `sessions.rewind`/`offload`/`restore`/`compact`/`contents`, compaction at 85% |
+
+```sh
+npm run bench:context                                   # every arm, 3 runs each, a 64k window
+npm run bench:context -- --arms classic,managed --repeat 5 --window 48000 --pages 20
+```
+
+Options: `--arms`, `--repeat` (default 3), `--concurrency` (default 3),
+`--window` (the window the harness enforces, default 64000; the model's real
+one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),
+`--timeout <s>` (default 1800). It prints a table per arm (exact answers, F1,
+extras, the audit reference, model calls, prompt tokens and the cached share,
+peak prompt, compactions, collapses, offloads, pages re-read, time) and writes
+every run, with a trace of its model calls, tool calls and context events, to
+`results/context-<timestamp>.json`.
