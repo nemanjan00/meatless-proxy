@@ -211,6 +211,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
   /** Pages read so far, in a feed. */
   const consumed = new Set<number>()
   const ins = o.instructions ? instructionsFor(archive) : undefined
+  const said = new Set<number>()
   // Filled in once the app is up: the page tool posts messages through it.
   let s!: Awaited<ReturnType<typeof startEvalApp>>['ctx']['services']
   const trace: string[] = []
@@ -248,7 +249,9 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
           consumed.add(i)
           // A person's message while the work goes on: delivered like any message to the session, seen at the next step.
           const say = ins && (i === ins.constraintAfter ? ins.constraint : i === ins.correctionAfter ? ins.correction : undefined)
-          if (say) {
+          // Once each: a page read again (after a compaction, say) doesn't make the person say it twice.
+          if (say && !said.has(i)) {
+            said.add(i)
             await s.sessions.addToInbox({
               sessionId: ctx.sessionId,
               eventId: `evt_bench_${i}`,

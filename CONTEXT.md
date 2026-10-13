@@ -67,8 +67,9 @@ its full detail.
 The one exception is a **request boundary**. When a new request arrives, a
 finished earlier request (the message that asked for it, the work, the reply)
 can be collapsed whole, so the next task starts with only what it needs. The
-request being worked on is never collapsed: a collapse that would replace it
-is refused.
+request being worked on is never summarised: a collapse that covers it, or
+a message the person sent while the work went on, keeps it word for word
+right after the summary.
 
 ### Keep the cached prefix
 
@@ -282,6 +283,15 @@ changed) is where only the dense session can answer at all.
 
 ## Benchmark
 
+**Current result** (third round, 2026-10-14): on one long task, managed is
+**13–57% cheaper** on the report than classic compaction, and the gap grows
+with the facts the task has to keep (managed's cost stays nearly flat,
+classic's summaries and compactions grow). Managed never lost a fact;
+classic lost one that a late correction made relevant after it was
+summarised. Lookups by id cost managed **a fifth to a tenth** of re-reading
+(22–62k against about 280k). On a one-time source, classic couldn't answer
+at all. The rounds below show how we got there, including where classic won.
+
 `npm run bench:context` ([packages/evals](packages/evals/README.md#the-context-benchmark))
 runs one long task under different strategies, with the same model, archive
 and window. The task: read a paged incident archive (20 pages, about 206k
@@ -391,7 +401,7 @@ counted on its own, not as a wrong answer.
   nothing else held it. They failed honestly: every one of the six answers
   said the details weren't in its notes and that it wouldn't guess, none
   invented a ticket. Both managed arms answered from their own history.
-- **A fresh session is the cheapest way to answer a targeted lookup when the
+- *(Superseded in round three, with `sessions.search`.)* **A fresh session is the cheapest way to answer a targeted lookup when the
   source can be read again.** On the archive, a new session answered the
   follow-up for 27–29k, less than every arm: classic's re-read (30k), and
   far less than the managed arms answering from history (126k–159k). A new
@@ -401,7 +411,7 @@ counted on its own, not as a wrong answer.
   What the data supports so far: the dense session wins when the detail
   **can't** be read again (the feed, where a fresh session can't answer at
   all, and classic abstained), not as a cheaper lookup.
-- **Answering from history still costs more than re-reading** when
+- *(Superseded in round three, with `sessions.search`.)* **Answering from history still costs more than re-reading** when
   re-reading is possible. The question names an incident, not a page, and an
   index of arguments (`read_page {page: 3}`) doesn't say where the incident
   is, so the model browsed `sessions.contents` and restored page after page.
@@ -431,7 +441,7 @@ entries ended up with the same key"). Every run at commit `ddf1143`, with
 |-------|-----|----------------|---------------|-------------------|-------------|-----------|------|----------------------------|------------------------|
 | 12 | classic | 12/12 (3/3 runs) | 656k | 312k | 2 | 0 | 69 s | 15/15, 276k | 9/9, 322k |
 | 12 | managed | 12/12 (3/3) | 659k | **270k** (−13%) | 0 | 3 | 56 s | 15/15, **22k** | 6/9¹, 233k |
-| 40 | classic | 39 or 40/40 (2/3)² | 983k | 478k | 3 | 0 | 116 s | 15/15, 282k | 9/9, 327k |
+| 40 | classic | 40/40 in 2 runs, 39/40 in 1² | 983k | 478k | 3 | 0 | 116 s | 15/15, 282k | 9/9, 327k |
 | 40 | managed | 40/40 (3/3) | 644k | **273k** (−43%) | 0 | 3 | 81 s | 15/15, **30k** | 9/9, 271k |
 | 80 | classic | 80/80 (3/3) | 1009k | 522k | 3 | 0 | 156 s | 15/15, 270k | 9/9, 297k |
 | 80 | managed | 80/80 (3/3) | 692k | **313k** (−40%) | 0 | 4 | 104 s | 15/15, **48k** | 9/9, 285k |
@@ -443,8 +453,8 @@ A **fresh session** answering the same five follow-ups from zero: 30/30 right,
 noise floor for the other comparisons).
 
 ¹ One run lost the question: it collapsed a stretch that included the fuzzy
-question itself, then answered with its earlier report. Fixed since: a
-collapse can't replace a request made in the current run.
+question itself, then answered with its earlier report. Fixed since: a request made in the current run is
+kept word for word after a collapse that covers it.
 ² One run lost an incident a correction on page 16 upgraded to SEV1: its
 record was on an early page, and the summary had no reason to keep a minor
 incident. The model said so ("its original record is not in the archive, so
@@ -456,11 +466,20 @@ I have no file:line or on-call"), and left it out.
   the facts (about 3.5k tokens each at 12 facts, 5.5k at 80, 7.3k at 150, just
   under the 8,000-token cap), so each compaction costs more and comes sooner.
   At 150 it needed a fourth. The gap is 40–43% at 40–80 facts and 57% at 150.
-- **Classic stays accurate, but pays for it,** with one exception: a
-  correction that makes an early, unremarkable record matter after it was
-  summarised (40 facts, one run). That's relevance decided late, inside the
-  main task, and the managed arm, whose original entries stay findable,
-  never lost one.
+- **Classic lost what became relevant late.** At 40 facts, a correction on
+  page 16 upgraded an incident to SEV1 whose record was on an early page.
+  Classic's summary had no reason to keep a minor incident, so by then its
+  location and engineer were gone; the model said so ("its original record
+  is not in the archive, so I have no file:line or on-call") and left it
+  out. Managed, whose original entries stay findable, never lost one. That's
+  the failure people meet in practice: a detail that looked unimportant when
+  it was summarised turns out to matter, inside the main task, not in a
+  follow-up.
+- **Otherwise classic stays accurate, and pays for it.** 150 facts was close
+  to its limit: summaries of about 7.3k of the 8,000 tokens the summary call
+  may write. That commit (`ddf1143`) didn't have the retry for a cut-off
+  summary yet (it came in `bfed127`), and none was cut: every classic report
+  at 150 facts had all 150.
 - **Lookups by id: the session that read everything is the cheapest.** 22–62k
   for five follow-ups, against 270–291k for classic (which re-reads) and
   278–281k for a fresh session. `sessions.search` is what changed: in round
@@ -473,10 +492,53 @@ I have no file:line or on-call"), and left it out.
   entries by how many of the words they have, and its ready read starts where
   they come together. Not measured yet.
 
-Still to test: chains of tasks (the gap should grow with the number of tasks,
-since classic carries one summary of everything and managed collapses each
-finished request), long-lived sessions that hit the cache over weeks, and
-fuzzy lookups with the search fallback.
+### Chains of tasks (2026-10-14)
+
+Five tasks in one session (`--chain 5`), each auditing its own five pages of
+a 25-page archive, and from the second on asked about an incident from the
+task before. Commit `bfed127`, three runs per arm.
+
+| task | classic billed | managed billed | classic context at end | managed context at end |
+|------|----------------|----------------|------------------------|------------------------|
+| 1 | 47k | 51k | 33k | 36k |
+| 2 | 113k | 115k | 12k | 38k |
+| 3 | 144k | 141k | 7k | 25k |
+| 4 | 161k | 87k | 29k | 55k |
+| 5 | 163k | 134k | 28k | 39k |
+
+Every task right in both arms, the questions about earlier tasks included.
+Managed is **16% cheaper over the chain** (about 528k against 628k), but the
+gap doesn't grow with the number of tasks. On this shape classic's single
+compaction per task acts like a collapse of the finished task: the tasks
+share one fact each, so its summary stays small. The note at a new request
+didn't lead to a collapse at the boundary; the model carried on into the
+70% and 80% notes. A chain whose tasks build on each other is still to test.
+
+### Instructions during the work (2026-10-14)
+
+`--instructions`: while the report (40 facts) is written, the person sends a
+constraint after page 4 ("leave out every billing-worker incident, those go
+to a separate review") and after page 12 a correction that doesn't name the
+service again ("keep those after all, marked (review)"). Commit `a540240`.
+
+| arm | instructions followed | billed-equivalent | compactions | collapses |
+|-----|-----------------------|-------------------|-------------|-----------|
+| classic | 3/3 runs | 496k | 3 | 0 |
+| managed | 3/3 runs | 555k | 2–3 | 0 |
+
+- **Classic kept both instructions** through its compactions: its summary
+  prompt asks for decisions and who asked, and it carried the constraint
+  and the correction.
+- **Managed couldn't collapse at all**, and paid more for it. Its rewind at
+  80% covered the person's constraint, and the harness refused a collapse
+  that would replace a request made in the run. The model didn't try again
+  around it, so automatic compaction took over. Fixed since: the request is
+  kept word for word right after the summary instead (better than any
+  paraphrase), and the collapse goes ahead. Not measured yet.
+
+Still to test: instructions with the request carried through a collapse,
+fuzzy lookups with the passage-ranked search, chains of tasks that build on
+each other, and long-lived sessions that hit the cache over weeks.
 
 ## How it works
 

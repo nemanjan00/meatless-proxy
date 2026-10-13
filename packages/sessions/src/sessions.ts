@@ -447,8 +447,15 @@ export function createSessions(opts: SessionsOptions): Sessions {
           }
         : {}),
       ...(kept.length ? { keptEntries: kept.length, keptFrom: kept[0]!.id } : {}),
+      ...(o.carry?.length ? { carried: o.carry } : {}),
     })
     let tip = summary
+    // Requests in the replaced part come back word for word, right after the summary, before the kept part.
+    if (o.carry?.length) {
+      const carried = dropped.filter((e) => o.carry!.includes(e.id))
+      if (carried.length !== o.carry.length) throw new ValidationError('only entries of the replaced part can be carried over')
+      tip = (await copyChain(t.store, tip.id, carried, who)) ?? tip
+    }
     if (owner) {
       const a = owner.content as unknown as AssistantContent
       const trimmed: AssistantContent = { ...a, toolCalls: (a.toolCalls ?? []).filter((c) => carriedCalls.includes(c.id)) }

@@ -676,26 +676,35 @@ describe('run control', () => {
       expect(await err({ from: 'call_r4' })).toMatch(/in this turn/)
     })
 
-    it("never summarises away a request made in this run: the task isn't work to collapse", async () => {
+    it('keeps a request made in this run word for word after the summary, never summarised', async () => {
       const t = await stack()
       const { c1, ctx } = await readingThenRewind(t, ['call_r4'])
-      await t.sessions.append(t.run.id, {
+      const r4 = await t.sessions.append(t.run.id, {
         kind: 'tool_result',
         content: { toolCallId: 'call_r4', name: 'docs.read', output: 'four' },
       })
-      // The person's follow-up lies between the reads and this turn: collapsing across it, or jumping back past it, is refused.
-      const across = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r4', summary: 'read four' }, ctx)
-      expect(across.isError).toBe(true)
-      expect((across.output as any).error).toMatch(/request made in this run.*separately/)
-      const back = await t.call('sessions.rewind', { from: c1.callId, summary: 'dead end' }, ctx)
-      expect((back.output as any).error).toMatch(/request made in this run/)
-      // The stretch before it collapses fine.
-      expect(
-        (await t.call('sessions.rewind', { from: c1.callId, to: 'call_r3', summary: 'read three' }, ctx)).isError,
-      ).toBeFalsy()
-      // The run's own input counts too: jumping back to the very start would drop the task.
-      const path = await t.sessions.runHistory(t.run.id)
-      expect((await t.call('sessions.rewind', { toEntry: path[0]!.id, summary: 'x' }, ctx)).isError).toBe(true)
+      const before = await t.sessions.runHistory(t.run.id)
+      const message = before.find((e) => e.kind === 'user' && (e.content as any).text === 'thanks, and the invoice?')!
+      // The person's follow-up lies inside the stretch: the collapse goes ahead, and carries it over.
+      const r = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r4', summary: 'read four' }, ctx)
+      expect(r.isError).toBeFalsy()
+      expect((r.output as any).carriedNote).toMatch(/kept word for word right after the summary/)
+      const c = r.control![0] as { toEntry: string; summary: string; keepAfter: string; carry: string[] }
+      expect(c.carry).toEqual([message.id])
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_rewind', name: 'sessions.rewind', output: 'ok' },
+      })
+      await t.sessions.rewind(t.run.id, c.toEntry, c.summary, { keepAfter: c.keepAfter, carry: c.carry })
+      const after = await t.sessions.runHistory(t.run.id)
+      const at = after.findIndex((e) => e.kind === 'summary')
+      expect(after[at + 1]!.kind).toBe('user')
+      expect((after[at + 1]!.content as any).text).toBe('thanks, and the invoice?')
+      expect(after[at]!.meta.carried).toEqual([message.id])
+      // A carried request is still this run's: a later collapse carries it again.
+      const again = await t.call('sessions.rewind', { from: after[at]!.id, summary: 'x' }, t.ctx({ runId: t.run.id }))
+      expect((again.control![0] as { carry?: string[] }).carry).toEqual([after[at + 1]!.id])
+      expect(r4.id).toBeTruthy()
     })
 
     it('collapses a whole finished task from the next one, its collapses included, with an index that leads into them', async () => {

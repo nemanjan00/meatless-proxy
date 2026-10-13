@@ -1118,16 +1118,23 @@ export function registerSessionTools(kit: Kit): void {
       const reminder =
         'Your summary now stands for what it replaced, so it must hold every fact, id, path, decision and open item from it you still need. Then rely on it and go on with the work: the harness appended an index of the tool calls it replaced, with the entries holding their results, for the rare detail the summary lacks.'
       const unknown = (id: string) => fail(`${id} is not a tool call or entry in this run's history`)
-      /** A request this run is working on, among entries to be replaced: summarising it away loses the task. */
-      const requestIn = async (entries: Entry[]): Promise<Entry | undefined> => {
-        for (const e of entries) if (await isRequestOf(e, ctx.runId)) return e
-        return undefined
+      /**
+       * Requests this run is working on, among entries to be replaced (its task, and what the person asked while
+       * it worked): a summary mustn't paraphrase them, so they come back word for word right after it.
+       */
+      const requestsIn = async (entries: Entry[]): Promise<Entry[]> => {
+        const out: Entry[] = []
+        for (const e of entries) if (await isRequestOf(e, ctx.runId)) out.push(e)
+        return out
       }
-      const keepsRequest = (e: Entry) =>
-        fail(
-          `that would replace ${e.id}, a request made in this run (what you are working on now): summaries keep work, not the task. ` +
-            'Collapse the stretch before it and the one after it separately.',
-        )
+      const carriedNote = (carried: Entry[]): Record<string, Json> =>
+        carried.length
+          ? {
+              carried: carried.map((e) => e.id),
+              carriedNote: `${carried.length === 1 ? 'A request' : `${carried.length} requests`} made in this run ${carried.length === 1 ? 'is' : 'are'} kept word for word right after the summary, not summarised.`,
+            }
+          : {}
+      const carry = (carried: Entry[]): { carry?: string[] } => (carried.length ? { carry: carried.map((e) => e.id) } : {})
 
       if (!toId) {
         const point = rewindPoint(path, fromId)
@@ -1136,19 +1143,19 @@ export function registerSessionTools(kit: Kit): void {
         if (current >= 0 && i >= current)
           return fail(`${fromId} is in this turn: jump back to a tool call of an earlier turn, or collapse with from and to`)
         const dropped = path.slice(i + 1)
-        const request = await requestIn(dropped)
-        if (request) return keepsRequest(request)
+        const carried = await requestsIn(dropped)
         const indexed = summary + stretchIndex(dropped, new Set([ctx.callId]), perChar)
         return {
           output: {
             rewindTo: point.id,
             dropped: { entries: dropped.length, toolCalls: dropped.flatMap(callsOf).filter((c) => c.id !== ctx.callId).length },
             note: 'Everything after that point is dropped, including this call and its result.',
+            ...carriedNote(carried),
             context: context(dropped),
             reminder,
             ...ephemeral,
           },
-          control: [{ type: 'rewind', toEntry: point.id, summary: indexed }],
+          control: [{ type: 'rewind', toEntry: point.id, summary: indexed, ...carry(carried) }],
         }
       }
 
@@ -1172,8 +1179,7 @@ export function registerSessionTools(kit: Kit): void {
         return fail(`${toId} has no result yet; name a call that has finished`)
       if (end < start) return fail(`${toId} comes before ${fromId}: from is where the stretch starts, to where it ends`)
       const stretch = path.slice(start, end + 1)
-      const request = await requestIn(stretch)
-      if (request) return keepsRequest(request)
+      const carried = await requestsIn(stretch)
       const answeredLater = new Set(path.slice(end + 1).map(answeredCall))
       const toolCalls = stretch.flatMap(callsOf).filter((c) => c.id !== ctx.callId && !answeredLater.has(c.id)).length
       const skip = new Set([ctx.callId, ...[...answeredLater].filter((x): x is string => !!x)])
@@ -1184,11 +1190,20 @@ export function registerSessionTools(kit: Kit): void {
           // What follows the stretch, plus this call's result (and, when the stretch ends in this turn, a copy of it).
           keptEntries: path.length - end + (current >= 0 && end >= current ? 1 : 0),
           note: 'Everything after the stretch stays word for word, this call and its result included.',
+          ...carriedNote(carried),
           context: context(stretch),
           reminder,
           ...ephemeral,
         },
-        control: [{ type: 'rewind', toEntry: path[start - 1]!.id, summary: indexed, keepAfter: stretch[stretch.length - 1]!.id }],
+        control: [
+          {
+            type: 'rewind',
+            toEntry: path[start - 1]!.id,
+            summary: indexed,
+            keepAfter: stretch[stretch.length - 1]!.id,
+            ...carry(carried),
+          },
+        ],
       }
     },
   )

@@ -2163,7 +2163,9 @@ was. The session page shows it ("context 112k / 200k").
   collapse each request whole, keeping only what the new work needs. Collapse
   summaries index the earlier summaries and messages inside them, so a collapse
   of collapses still leads to every part. A request made in the current run is
-  never collapsed away: the rewind refuses and says to collapse around it.
+  never summarised: a collapse or jump back that covers it (the run's own
+  request, or a message the person sent while it worked) keeps it word for
+  word right after the summary.
   It fires once per finished request: a later request gets the note only
   when a finished request hasn't been named in an earlier one.
 - **Notes don't nag.** Each threshold is noted once per generation of the

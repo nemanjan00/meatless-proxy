@@ -213,6 +213,11 @@ export interface RewindOptions {
   keepFrom?: string
   /** The last entry collapsed: everything after it is kept verbatim after the summary. */
   keepAfter?: string
+  /**
+   * Entries of the replaced part re-created word for word right after the summary, in their order: requests a
+   * summary mustn't paraphrase (what the person asked while the work went on).
+   */
+  carry?: string[]
   /** Added to the summary entry's meta. */
   meta?: Record<string, Json>
 }

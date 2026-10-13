@@ -510,6 +510,7 @@ export function createRunner(opts: RunnerOptions): Runner {
           await historyOp(run, 'sessions.rewind', () =>
             sessions.rewind(run.id, c.toEntry, c.summary, {
               ...(c.keepAfter ? { keepAfter: c.keepAfter } : {}),
+              ...(c.carry?.length ? { carry: c.carry } : {}),
               meta: notedMeta(run),
             }),
           )
