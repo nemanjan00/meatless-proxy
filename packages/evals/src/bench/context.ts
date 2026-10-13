@@ -105,6 +105,7 @@ export interface FollowUp {
   of: number
   answer: string
   stats: PhaseStats
+  error?: string
 }
 
 export interface BenchRun {
@@ -191,7 +192,15 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       )
     },
   })
-  const { ctx } = app
+  const { ctx, logs } = app
+  let logsSeen = 0
+  /** Warnings and errors the app logged since the last call, into the trace. */
+  const traceLogs = () => {
+    for (const l of logs.slice(logsSeen))
+      if (l.level === 'warn' || l.level === 'error')
+        trace.push(`[${l.level}] ${l.msg}${l.fields.err !== undefined ? `: ${String(l.fields.err)}` : ''}`)
+    logsSeen = logs.length
+  }
   const s = ctx.services
   // Counted from live events: a later collapse folds earlier tool calls (rewinds included) out of the history.
   let stats = emptyStats()
@@ -253,6 +262,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     await ctx.settle(o.timeoutMs)
     const done = await s.sessions.requireRun(run.id)
     stats.durationMs = Date.now() - started
+    traceLogs()
     return {
       state: done.data.state,
       answer: typeof done.data.result?.output === 'string' ? done.data.result.output : '',
@@ -294,6 +304,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       correct: scoreFollowUps(xs, p.answer) === xs.length,
       right: scoreFollowUps(xs, p.answer),
       of: xs.length,
+      ...(p.error ? { error: p.error } : {}),
       answer: p.answer,
       stats: p.stats,
     })

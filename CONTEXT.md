@@ -322,10 +322,42 @@ What we saw in the managed arm:
   follow-up can only be answered from the session's own history, and a
   **fresh session** baseline asks the same follow-up from zero.
 
-Not tested yet, and where the design should pay off: detail that can't be
-read again (people's messages, events, results that change), long-lived
-sessions that hit the cache over weeks, and sessions asking a dense session
-instead of re-reading.
+### Second round (2026-10-13)
+
+The same task, with the collapse index, authoritative summaries and restore
+costs, and with the `managed-late` arm (one note at 70%). On the **archive**,
+pages can be read again; on the **feed**, each page can be read once, so the
+follow-up (the ticket and deploy id of a minor incident on page 3) can only
+be answered from what the session kept.
+
+| source | arm | report correct | calls | billed-equivalent | collapses | restores | time | follow-up right | follow-up billed |
+|--------|-----|----------------|-------|-------------------|-----------|----------|------|-----------------|------------------|
+| archive | classic | 12/12 (3/3 runs) | 23 | 310k | 0 | 0 | 70 s | 3/3 | 30k |
+| archive | managed-late | 12/12 (3/3) | 21 | **265k** | 2 | 0 | 57 s | 2/3 | 104k (60k–215k) |
+| archive | managed | 12/12 (3/3) | 29 | 410k (355k–431k) | 5 | 0 | 102 s | 3/3 | 126k (48k–221k) |
+| feed | classic | 12/12 (3/3) | 23 | 306k | 0 | 0 | 88 s | **0/3** | 4k |
+| feed | safety-net | 12/12 (3/3) | 23 | 316k | 0 | 0 | 72 s | **0/3** | 5k |
+| feed | managed-late | 12/12 (3/3) | 21 | **267k** | 2 | 0 | 56 s | 2/3 | 42k (0k–87k) |
+| feed | managed | 12/12 (3/3) | 27 | 401k (267k–456k) | 6 | 10 | 108 s | **3/3** | 64k (40k–183k) |
+
+- **One late note beats two early ones.** With a single note at 70%, the
+  model collapses twice, in big pieces, never restores, and never reaches
+  compaction: **15% cheaper than classic compaction** on billed cost, and
+  faster. The 50/75% arm still churns.
+- **Detail that can't be read again is where classic compaction fails.** On
+  the feed, classic and safety-net answered the follow-up wrong in all six
+  runs: the summary had no reason to keep a minor incident's ticket, and
+  nothing else held it. The managed arms answered from their own history.
+- **Answering from history still costs more than re-reading** when
+  re-reading is possible: the model looks through `sessions.contents` and
+  restores entries instead of going straight to the one it needs.
+- **One failure, the same in both rounds:** a managed-late follow-up run
+  failed right after a `sessions.rewind` that reached back into the earlier
+  run. It's a harness error, not a model one, and it's being fixed.
+
+Still to test: how the arms scale as the facts to keep outgrow one summary,
+several late follow-ups on different pages, long-lived sessions that hit the
+cache over weeks, and sessions asking a dense session instead of re-reading.
 
 ## How it works
 
