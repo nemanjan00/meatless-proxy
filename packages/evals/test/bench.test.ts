@@ -70,9 +70,9 @@ describe('the follow-up question', () => {
 
 describe('arms', () => {
   it('compares classic compaction with ours, and only the managed arm gets the context tools', () => {
-    expect(ARMS.map((x) => x.name)).toEqual(['classic', 'safety-net', 'managed'])
+    expect(ARMS.map((x) => x.name)).toEqual(['classic', 'safety-net', 'managed-late', 'managed'])
     expect(ARMS.find((x) => x.name === 'classic')!.env).toMatchObject({ CONTEXT_COMPACT_KEEP: '0', CONTEXT_NOTES: 'off' })
-    expect(ARMS.filter((x) => x.contextTools).map((x) => x.name)).toEqual(['managed'])
+    expect(ARMS.filter((x) => x.contextTools).map((x) => x.name)).toEqual(['managed-late', 'managed'])
     expect(taskText(20)).toContain('20 pages')
   })
 })

@@ -21,6 +21,7 @@ const { values } = parseArgs({
     'max-steps': { type: 'string' },
     timeout: { type: 'string' },
     'no-follow-up': { type: 'boolean' },
+    source: { type: 'string' },
   },
 })
 const int = (v: string | undefined, def: number) => (v === undefined ? def : Number.parseInt(v, 10))
@@ -33,6 +34,7 @@ const opts = {
   maxSteps: int(values['max-steps'], 120),
   timeoutMs: int(values.timeout, 1800) * 1000,
   followUp: !values['no-follow-up'],
+  source: (values.source === 'feed' ? 'feed' : 'archive') as 'archive' | 'feed',
 }
 const names = (values.arms ?? ARMS.map((a) => a.name).join(',')).split(',').map((x) => x.trim())
 const arms = ARMS.filter((a) => names.includes(a.name))
@@ -49,7 +51,7 @@ const archive = buildArchive({ seed: opts.seed, pages: opts.pages })
 const chars = archive.pages.reduce((n, p) => n + p.length, 0)
 process.stderr.write(
   `bench:context ${describeModelEnv(modelEnv)}, window ${opts.window}, ${opts.pages} pages (${chars.toLocaleString('en-US')} chars), ` +
-    `arms ${arms.map((a) => a.name).join(', ')}, repeat ${repeat}\n`,
+    `${opts.source}, arms ${arms.map((a) => a.name).join(', ')}, repeat ${repeat}\n`,
 )
 
 const jobs = arms.flatMap((arm) => Array.from({ length: repeat }, (_, i) => ({ arm, i: i + 1 })))
@@ -79,6 +81,13 @@ await Promise.all(
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)
 const fmt = (n: number, d = 0) => n.toFixed(d)
+/** The same follow-up asked of a new session: how often it was right, and its prompt tokens. */
+const freshCell = (rs: BenchRun[]) => {
+  const fr = rs.flatMap((r) => (r.fresh ? [r.fresh] : []))
+  return fr.length
+    ? `${fr.filter((x) => x.correct).length}/${fr.length}, ${fmt(mean(fr.map((x) => x.stats.promptTokens)) / 1000)}k`
+    : '–'
+}
 const rows = arms.map((arm) => {
   const rs = runs.filter((r) => r.arm === arm.name)
   const m = (f: (r: BenchRun) => number) => mean(rs.map(f))
@@ -135,6 +144,7 @@ const rows = arms.map((arm) => {
           1,
         )
       : '–',
+    freshCell(rs),
   ]
 })
 const head = [
@@ -154,6 +164,7 @@ const head = [
   'follow-up tokens',
   'pages re-read',
   'follow-up restores',
+  'fresh session',
 ]
 const table = [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')
 process.stdout.write(`${table}\n`)

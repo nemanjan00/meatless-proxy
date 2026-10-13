@@ -120,6 +120,7 @@ generated from a seed, so every arm reads the same text.
 |-----|------------------|
 | `classic` | classic compaction: at 85% the whole history is summarised (`CONTEXT_COMPACT_KEEP=0`), no notes, no context tools |
 | `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
+| `managed-late` | everything, with one note at 70% instead of 50/75%: fewer, bigger collapses |
 | `managed` | everything: notes at 50/75%, the free-space turn at 80%, `sessions.rewind`/`offload`/`restore`/`compact`/`contents`, compaction at 85% |
 
 ```sh
@@ -127,7 +128,14 @@ npm run bench:context                                   # every arm, 3 runs each
 npm run bench:context -- --arms classic,managed --repeat 5 --window 48000 --pages 20
 ```
 
-Options: `--arms`, `--repeat` (default 3), `--concurrency` (default 3),
+After the report the same session gets a follow-up about details nobody asked
+for (a minor incident's ticket and deploy id on page 3), and a new session is
+asked the same question from zero, as the cost of not asking the session that
+already read the archive. With `--source feed` each page can be read only
+once, like events that arrive and are gone: the follow-up can then only be
+answered from the session's own history (and there's no fresh session).
+
+Options: `--arms`, `--source archive|feed` (default `archive`), `--no-follow-up`, `--repeat` (default 3), `--concurrency` (default 3),
 `--window` (the window the harness enforces, default 64000; the model's real
 one is bigger), `--pages` (default 20), `--seed`, `--max-steps` (default 120),
 `--timeout <s>` (default 1800). It prints a table per arm (exact answers, F1,

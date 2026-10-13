@@ -34,6 +34,12 @@ export const ARMS: Arm[] = [
     contextTools: false,
   },
   {
+    name: 'managed-late',
+    description: 'everything, with one note at 70% instead of 50/75%: fewer, bigger collapses',
+    env: { CONTEXT_NOTES: '70' },
+    contextTools: true,
+  },
+  {
     name: 'managed',
     description: 'everything: notes at 50/75%, free-space turn at 80%, collapse/offload tools, compaction at 85%',
     env: {},
@@ -51,6 +57,11 @@ export interface BenchOptions {
   timeoutMs: number
   /** Ask a follow-up question about a detail nobody asked for, after the report (default true). */
   followUp?: boolean
+  /**
+   * `archive`: pages can be read again (default). `feed`: each page can be read once, like events that arrive and
+   * are gone, so a later question can only be answered from the session's own history.
+   */
+  source?: 'archive' | 'feed'
 }
 
 /** What one phase of a run cost and did. */
@@ -83,13 +94,16 @@ export interface BenchRun {
   report: PhaseStats
   /** The follow-up question about a detail from an early page, asked in the same session after the report. */
   followUp?: { state: string; correct: boolean; answer: string; stats: PhaseStats }
+  /** The same question asked of a new session that starts from zero (archive source only): the cost of not asking. */
+  fresh?: { state: string; correct: boolean; answer: string; stats: PhaseStats }
   trace: string[]
   error?: string
 }
 
-export function taskText(pages: number): string {
+export function taskText(pages: number, source: 'archive' | 'feed' = 'archive'): string {
   return [
     `Audit the incident archive. Read it with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. There are ${pages} pages, read them all.`,
+    ...(source === 'feed' ? ['It is a one-time feed: each page can be read only once, and is gone after that.'] : []),
     'Then reply with the audit report and nothing else:',
     '- first line: the audit reference given on page 1;',
     '- then one line per incident whose final severity is SEV1 (a CORRECTION on a later page supersedes the original record), exactly in the form',
@@ -116,6 +130,8 @@ const emptyStats = (): PhaseStats => ({
 
 /** Runs one arm once: a fresh app, a session with the archive tool, the task, the follow-up, and the measurements. */
 export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive: Archive): Promise<BenchRun> {
+  /** Pages read so far, in a feed. */
+  const consumed = new Set<number>()
   const app = await startEvalApp({
     modelEnv: o.modelEnv,
     maxSteps: o.maxSteps,
@@ -140,11 +156,14 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
           const i = Number(a.page) - 1
           if (!Number.isInteger(i) || i < 0 || i >= archive.pages.length)
             return { output: { error: `no page ${a.page}: the archive has ${archive.pages.length}` }, isError: true }
+          if (o.source === 'feed' && consumed.has(i))
+            return { output: { error: `page ${a.page} was already read: the feed keeps no copy` }, isError: true }
           if (a.cursor !== archive.cursors[i])
             return {
               output: { error: `wrong cursor for page ${a.page}: it is at the end of page ${i} (the start cursor is "start")` },
               isError: true,
             }
+          consumed.add(i)
           return { output: archive.pages[i]! }
         },
       )
@@ -226,16 +245,34 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     let prompt = s.stdlib ? s.stdlib.employeePrompt({ employee, contact, now: s.clock.iso() }) : 'You are an employee.'
     // Without the context tools, the prompt's guidance about them would only confuse the model.
     if (!arm.contextTools) prompt = prompt.replace(/^- Context: .*$/m, '')
-    const session = await s.sessions.create({
-      employeeId: employee.id,
-      title: 'Incident archive audit',
-      toolset: ['archive.read_page', ...(arm.contextTools ? CONTEXT_TOOLS : [])],
-      entries: [{ kind: 'system', content: { text: prompt } }],
-    })
-    const report = await phase(session.id, taskText(archive.pages.length))
+    const newSession = (title: string) =>
+      s.sessions.create({
+        employeeId: employee.id,
+        title,
+        toolset: ['archive.read_page', ...(arm.contextTools ? CONTEXT_TOOLS : [])],
+        entries: [{ kind: 'system', content: { text: prompt } }],
+      })
+    const session = await newSession('Incident archive audit')
+    const report = await phase(session.id, taskText(archive.pages.length, o.source))
     trace.push('— follow-up —')
     const x = followUpIncident(archive)
-    const follow = o.followUp !== false && report.state === 'completed' ? await phase(session.id, followUpText(x)) : undefined
+    const asking = o.followUp !== false && report.state === 'completed'
+    const follow = asking ? await phase(session.id, followUpText(x)) : undefined
+    let fresh: Awaited<ReturnType<typeof phase>> | undefined
+    if (asking && o.source !== 'feed') {
+      trace.push('— fresh session —')
+      const other = await newSession('A question about the incident archive')
+      fresh = await phase(
+        other.id,
+        `The incident archive is read with archive.read_page, starting at { "page": 1, "cursor": "start" }; each page ends with the call for the next one. ${followUpText(x)}`,
+      )
+    }
+    const graded = (p: Awaited<ReturnType<typeof phase>>) => ({
+      state: p.state,
+      correct: scoreFollowUp(x, p.answer),
+      answer: p.answer,
+      stats: p.stats,
+    })
     return {
       arm: arm.name,
       repeat,
@@ -243,16 +280,8 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       score: scoreAnswer(archive, report.answer),
       answer: report.answer,
       report: report.stats,
-      ...(follow
-        ? {
-            followUp: {
-              state: follow.state,
-              correct: scoreFollowUp(x, follow.answer),
-              answer: follow.answer,
-              stats: follow.stats,
-            },
-          }
-        : {}),
+      ...(follow ? { followUp: graded(follow) } : {}),
+      ...(fresh ? { fresh: graded(fresh) } : {}),
       trace,
       ...(report.error ? { error: report.error } : {}),
     }
