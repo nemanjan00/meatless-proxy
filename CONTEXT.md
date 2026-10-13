@@ -256,6 +256,14 @@ Each session keeps its own slice dense, and what crosses between them is
 distilled. That's how a few dense contexts can cover a whole company without
 any of them running out of room.
 
+**What the benchmark says so far.** The cost argument above assumes the
+knowledge is expensive to rebuild. When the source can simply be read again
+and the question is one targeted lookup, a fresh session was cheaper than
+asking the session that had read everything (see [the benchmark](#benchmark)):
+a long context costs something on every call. The dense session's measured
+win is detail that **can't** be rebuilt (messages, events, results that
+changed), where a fresh session can't answer at all.
+
 ## Benchmark
 
 `npm run bench:context` ([packages/evals](packages/evals/README.md#the-context-benchmark))
@@ -273,15 +281,13 @@ for before (its ticket and deploy id).
 | `classic` | classic compaction: at 85% everything is summarised; no notes, no context tools |
 | `safety-net` | our automatic compaction alone: at 85%, keeping the latest 15% verbatim |
 | `managed-early` | everything, with notes at 50% and 75% (the default before the benchmark) |
-| `managed` | everything, as deployed: a note at 70%, the free-space turn at 80%, the context tools (`sessions.rewind`, `offload`, `restore`, `compact`, `contents`, `search`), compaction at 85% |
+| `managed` | everything, as deployed: a note at 70%, the free-space turn at 80%, the context tools (`sessions.rewind`, `offload`, `restore`, `compact`, `contents`, `search`¹), compaction at 85% |
+
+¹ Rounds one and two ran without `sessions.search`.
 
 A **fresh session** baseline asks the same follow-up of a new session that
 starts from zero, as the cost of not asking the session that already read the
 archive.
-
-Arm names changed as the benchmark went on: in the first two rounds,
-`managed` had notes at 50% and 75% (now `managed-early`), and `managed-late`
-had one note at 70%, which is now the default and the `managed` arm.
 
 ### First results (2026-10-13)
 
@@ -295,12 +301,12 @@ bound.
 |-----|----------------|---------------|--------|-------------------|-----------|----------|------|-----------------|------------------|
 | classic | 12/12 (3/3 runs) | 657k | 65% | 308k | 0 | 0 | 64 s | 3/3 | 30k |
 | safety-net | 12/12 (3/3) | 684k | 67% | 311k | 0 | 0 | 66 s | 3/3 | 35k |
-| managed | 12/12 (3/3) | 818k (743k–826k) | 62% | 418k (371k–420k) | 6 | 10 | 105 s | 3/3 | 65k (38k–269k) |
+| managed-early | 12/12 (3/3) | 818k (743k–826k) | 62% | 418k (371k–420k) | 6 | 10 | 105 s | 3/3 | 65k (38k–269k) |
 
 **Classic compaction wins this task**, by about a third on billed cost.
 Everything the report needs is twelve short lines, so any summary keeps it,
 and the archive can be read again, so the follow-up costs three page reads.
-What we saw in the managed arm:
+What we saw in the managed-early arm (round one's only managed arm):
 
 - **It collapses too early and too often.** A page is about 5.5k tokens, so
   five pages fill about 45% of the window. The 50% note suggests collapsing
@@ -325,8 +331,8 @@ What we saw in the managed arm:
   verbatim, and its result says the summary now stands for the stretch: rely
   on it, and read entries back only for a detail it lacks.
 - **Restores show their cost** ("adds about 5.5k tokens to your context").
-- **Fewer notes:** the `managed-late` arm has a single note at 70%
-  (`CONTEXT_NOTES=70`; now the default).
+- **Fewer notes:** the `managed` arm has a single note at 70%
+  (`CONTEXT_NOTES=70`, now the default); `managed-early` keeps 50% and 75%.
 - **A one-time source** (`--source feed`): each page can be read once, so a
   follow-up can only be answered from the session's own history, and a
   **fresh session** baseline asks the same follow-up from zero.
@@ -334,7 +340,8 @@ What we saw in the managed arm:
 ### Second round (2026-10-13)
 
 The same task, with the collapse index, authoritative summaries and restore
-costs, and with the `managed-late` arm (one note at 70%). On the **archive**,
+costs, and with the `managed` arm (one note at 70%) next to `managed-early`.
+On the **archive**,
 pages can be read again; on the **feed**, each page can be read once, so the
 follow-up (the ticket and deploy id of a minor incident on page 3) can only
 be answered from what the session kept.
@@ -346,17 +353,17 @@ counted on its own, not as a wrong answer.
 |--------|-----|----------------|-------|-------------------|-----------|----------|------|-----------------|------------------|------------------|---------------|
 | archive | classic | 12/12 (3/3 runs) | 23 | 310k | 0 | 0 | 70 s | 3/3 | 30k | 0 | 3/3, 27k |
 | archive | safety-net | 12/12 (3/3) | 23 | 311k | 0 | 0 | 69 s | 3/3 | 34k | 0 | 3/3, 27k |
-| archive | managed-late | 12/12 (3/3) | 21 | **265k** | 2 | 0 | 57 s | 2/2 | 159k (104k–215k) | 1 | 3/3, 29k |
-| archive | managed (50/75) | 12/12 (3/3) | 29 | 410k (355k–431k) | 5 | 0 | 102 s | 3/3 | 126k (48k–221k) | 0 | 3/3, 28k |
-| feed | classic | 12/12 (3/3) | 23 | 306k | 0 | 0 | 88 s | **0/3, all abstained** | 4k | 0 | – |
-| feed | safety-net | 12/12 (3/3) | 23 | 316k | 0 | 0 | 72 s | **0/3, all abstained** | 5k | 0 | – |
-| feed | managed-late | 12/12 (3/3) | 21 | **267k** | 2 | 0 | 56 s | 2/2 | 65k (42k–87k) | 1 | – |
-| feed | managed (50/75) | 12/12 (3/3) | 27 | 401k (267k–456k) | 6 | 10 | 108 s | **3/3** | 64k (40k–183k) | 0 | – |
+| archive | managed | 12/12 (3/3) | 21 | **265k** | 2 | 0 | 57 s | 2/2 | 159k (104k–215k) | 1 | 3/3, 29k |
+| archive | managed-early | 12/12 (3/3) | 29 | 410k (355k–431k) | 5 | 0 | 102 s | 3/3 | 126k (48k–221k) | 0 | 3/3, 28k |
+| feed | classic | 12/12 (3/3) | 23 | 306k | 0 | 0 | 88 s | **0/3, all abstained** | 4k | 0 | can't: pages consumed |
+| feed | safety-net | 12/12 (3/3) | 23 | 316k | 0 | 0 | 72 s | **0/3, all abstained** | 5k | 0 | can't: pages consumed |
+| feed | managed | 12/12 (3/3) | 21 | **267k** | 2 | 0 | 56 s | 2/2 | 65k (42k–87k) | 1 | can't: pages consumed |
+| feed | managed-early | 12/12 (3/3) | 27 | 401k (267k–456k) | 6 | 10 | 108 s | **3/3** | 64k (40k–183k) | 0 | can't: pages consumed |
 
 - **One late note beats two early ones.** With a single note at 70%, the
   model collapses twice, in big pieces, never restores, and never reaches
   compaction: **15% cheaper than classic compaction** on billed cost, and
-  faster. The 50/75% arm still churns: on the feed it read back 10 and 12
+  faster. `managed-early` still churns: on the feed it read back 10 and 12
   collapsed entries during the report in two of three runs (0 in the third),
   as in the first round, so it's a habit of that arm, not one bad run.
   `CONTEXT_NOTES` now defaults to 70.
@@ -365,7 +372,17 @@ counted on its own, not as a wrong answer.
   runs: the summary had no reason to keep a minor incident's ticket, and
   nothing else held it. They failed honestly: every one of the six answers
   said the details weren't in its notes and that it wouldn't guess, none
-  invented a ticket. The managed arms answered from their own history.
+  invented a ticket. Both managed arms answered from their own history.
+- **A fresh session is the cheapest way to answer a targeted lookup when the
+  source can be read again.** On the archive, a new session answered the
+  follow-up for 27–29k, less than every arm: classic's re-read (30k), and
+  far less than the managed arms answering from history (126k–159k). A new
+  session has a small context, finds the incident in three page reads, and
+  stops; a long session pays for its whole context on every call, cached or
+  not. So "ask the session that knows" (above) doesn't hold for this case.
+  What the data supports so far: the dense session wins when the detail
+  **can't** be read again (the feed, where a fresh session can't answer at
+  all, and classic abstained), not as a cheaper lookup.
 - **Answering from history still costs more than re-reading** when
   re-reading is possible. The question names an incident, not a page, and an
   index of arguments (`read_page {page: 3}`) doesn't say where the incident
@@ -375,9 +392,12 @@ counted on its own, not as a wrong answer.
   searches the session's own history, collapsed parts included, and each hit
   comes with a ready `restore { entryId, offset, length }` that reads the
   text around the match.
-- **One failure, the same in both rounds:** a managed-late follow-up run
-  failed right after a `sessions.rewind` that reached back into the earlier
-  run. It's a harness error, not a model one, and it's being fixed.
+- **Two harness failures:** a `managed` follow-up run failed right after a
+  `sessions.rewind` that reached back into the earlier run (archive), and
+  another before its first model call (feed). They're harness errors, not
+  model ones; the benchmark now records the error and the app's warnings so
+  they can be fixed. The archive `managed` follow-up figure is over the two
+  runs that finished.
 
 Still to test: how the arms scale as the facts to keep outgrow one summary,
 several late follow-ups on different pages, long-lived sessions that hit the
