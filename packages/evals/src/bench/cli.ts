@@ -93,7 +93,7 @@ const archive = opts.chain
   : buildArchive({ seed: opts.seed, pages: opts.pages, severe: opts.severe })
 const chars = archive.pages.reduce((n, p) => n + p.length, 0)
 process.stderr.write(
-  `bench:context at ${code.commit.slice(0, 7)}${code.dirty ? ' (with uncommitted changes)' : ''}, ${describeModelEnv(modelEnv)}, window ${opts.window}, ${opts.pages} pages (${chars.toLocaleString('en-US')} chars), ` +
+  `bench:context at ${code.commit.slice(0, 7)}${code.dirty ? ' (with uncommitted changes)' : ''}, ${describeModelEnv(modelEnv)}, window ${opts.window}, ${archive.pages.length} pages (${chars.toLocaleString('en-US')} chars), ` +
     `${opts.source}, arms ${arms.map((a) => a.name).join(', ')}, repeat ${repeat}\n`,
 )
 
