@@ -436,7 +436,9 @@ describe('run control', () => {
     await t.recordCall(t.run.id, 'docs.read', 'later')
     // Rewinding to the first call of a turn lands after the turn's last result.
     const rw = await t.call('sessions.rewind', { toEntry: id1, summary: 'read both' })
-    expect(rw.control).toEqual([{ type: 'rewind', toEntry: r2.id, summary: 'read both' }])
+    expect(rw.control).toEqual([{ type: 'rewind', toEntry: r2.id, summary: expect.stringMatching(/^read both\n\n\[index of/) }])
+    // The index names the dropped call and the entry holding its result.
+    expect((rw.control![0] as { summary: string }).summary).toMatch(/- docs\.read .* → entry ent_/)
     expect(a.id).toBeTruthy()
     const off = await t.call('sessions.offload', { entryId: id1, text: 'doc one' })
     expect((off.control![0] as any).entryId).toBe(r1.id)
@@ -514,8 +516,18 @@ describe('run control', () => {
       const r = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r3', summary: 'read one to three: a refund' }, ctx)
       expect(r.isError).toBeFalsy()
       expect(r.control).toEqual([
-        { type: 'rewind', toEntry: path[first - 1]!.id, summary: 'read one to three: a refund', keepAfter: r3.id },
+        {
+          type: 'rewind',
+          toEntry: path[first - 1]!.id,
+          summary: expect.stringMatching(/^read one to three: a refund\n\n\[index of what this summary replaced/),
+          keepAfter: r3.id,
+        },
       ])
+      // One line per collapsed read, each with the entry holding its result; never the rewind call itself.
+      const index = (r.control![0] as { summary: string }).summary.split('\n').filter((l) => l.startsWith('- '))
+      expect(index).toHaveLength(3)
+      expect(index.every((l) => /^- docs\.read \{\} → entry ent_\w+ \(≈\d+ tokens\)$/.test(l))).toBe(true)
+      expect((r.output as any).reminder).toMatch(/rely on it/)
       const o = r.output as any
       expect(o.collapsed).toEqual({ from: path[first]!.id, to: r3.id, entries: 5, toolCalls: 3 })
       // The answer, the message and this turn stay, plus this call's result.
@@ -594,7 +606,10 @@ describe('run control', () => {
       const t = await stack()
       const { c1, ctx } = await readingThenRewind(t)
       const r = await t.call('sessions.rewind', { from: c1.callId, summary: 'dead end' }, ctx)
-      expect(r.control).toEqual([{ type: 'rewind', toEntry: c1.entryId, summary: 'dead end' }])
+      expect(r.control).toEqual([
+        { type: 'rewind', toEntry: c1.entryId, summary: expect.stringMatching(/^dead end\n\n\[index of/) },
+      ])
+      expect((r.control![0] as { summary: string }).summary).not.toMatch(/sessions\.rewind/)
       expect(r.output).toMatchObject({ rewindTo: c1.entryId, dropped: { entries: 6, toolCalls: 2 } })
       expect((r.output as any).note).toMatch(/dropped/)
     })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildArchive, followUpIncident, scoreAnswer, scoreFollowUp } from '../src/bench/archive.ts'
-import { ARMS, taskText } from '../src/bench/context.ts'
+import { ARMS, type PhaseStats, taskText } from '../src/bench/context.ts'
+import { billed, median } from '../src/bench/summary.ts'
 
 describe('context benchmark archive', () => {
   it('is the same for the same seed and different for another', () => {
@@ -74,5 +75,36 @@ describe('arms', () => {
     expect(ARMS.find((x) => x.name === 'classic')!.env).toMatchObject({ CONTEXT_COMPACT_KEEP: '0', CONTEXT_NOTES: 'off' })
     expect(ARMS.filter((x) => x.contextTools).map((x) => x.name)).toEqual(['managed-late', 'managed'])
     expect(taskText(20)).toContain('20 pages')
+  })
+})
+
+describe('summary', () => {
+  const stats = (o: Partial<PhaseStats>): PhaseStats => ({
+    calls: 1,
+    promptTokens: 0,
+    cachedTokens: 0,
+    completionTokens: 0,
+    peakPrompt: 0,
+    compactions: 0,
+    compactionsFailed: 0,
+    collapses: 0,
+    offloads: 0,
+    restores: 0,
+    notes: 0,
+    reads: 0,
+    durationMs: 0,
+    ...o,
+  })
+
+  it('weighs cached reads at a tenth and output at five times an input token', () => {
+    expect(billed(stats({ promptTokens: 1000, cachedTokens: 600, completionTokens: 10 }))).toBe(400 + 60 + 50)
+    // A provider reporting more cached than prompt tokens can't make a call cheaper than all-cached.
+    expect(billed(stats({ promptTokens: 100, cachedTokens: 500 }))).toBe(10)
+  })
+
+  it('takes medians, so one runaway run does not hide the typical one', () => {
+    expect(median([100, 108, 492])).toBe(108)
+    expect(median([1, 2, 3, 4])).toBe(2.5)
+    expect(median([])).toBe(0)
   })
 })

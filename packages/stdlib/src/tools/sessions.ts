@@ -74,6 +74,36 @@ const rewindPoint = (path: Entry[], id: string): Entry | undefined => {
 /** Characters of an entry in a request, roughly: what the context estimates use. */
 const entryChars = (e: Entry): number => JSON.stringify(e.content).length
 
+/** `9.2k`, `850`: an estimated token count for a person or a model to read. */
+const kTok = (n: number): string => (n < 1000 ? String(Math.round(n)) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`)
+
+/** Lines an index of a collapsed stretch lists at most. */
+const INDEX_MAX = 40
+
+/**
+ * The index the harness appends to a collapse summary: each tool call the stretch replaced, with its arguments and
+ * the entry holding its result, so a later question can read back the one result it needs instead of searching.
+ */
+function stretchIndex(stretch: Entry[], skip: Set<string>, perChar: number): string {
+  const results = new Map<string, Entry>()
+  for (const e of stretch) {
+    const id = answeredCall(e)
+    if (id) results.set(id, e)
+  }
+  const lines: string[] = []
+  for (const e of stretch)
+    for (const c of (e.kind === 'assistant' ? (e.content as unknown as AssistantContent).toolCalls : undefined) ?? []) {
+      if (skip.has(c.id)) continue
+      const r = results.get(c.id)
+      const args = (c.arguments ?? '').replace(/\s+/g, ' ')
+      const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args
+      lines.push(`- ${c.name} ${shown}${r ? ` → entry ${r.id} (≈${kTok(entryChars(r) * perChar)} tokens)` : ''}`)
+    }
+  if (!lines.length) return ''
+  const more = lines.length > INDEX_MAX ? [`- … and ${lines.length - INDEX_MAX} more (sessions.contents lists them all)`] : []
+  return `\n\n[index of what this summary replaced: read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
+}
+
 /** The text a model saw for an entry (a tool result's output as it is rendered). */
 const entryText = (e: Entry): string => {
   const c = e.content as Record<string, unknown> | null
@@ -194,6 +224,12 @@ export function registerSessionTools(kit: Kit): void {
     if (!run || run.data.sessionId !== ctx.sessionId)
       throw new ValidationError('this tool needs to be called from a run of this session')
     return sessions.runHistory(run.id)
+  }
+
+  /** Tokens per character, as measured at the run's latest model call (3.5 characters a token before one). */
+  const perCharOf = async (ctx: ToolContext): Promise<number> => {
+    const last = (await sessions.getRun(ctx.runId))?.data.context
+    return last && last.chars > 0 && last.tokens > 0 ? last.tokens / last.chars : 1 / 3.5
   }
 
   /**
@@ -893,7 +929,8 @@ export function registerSessionTools(kit: Kit): void {
         'E.g. you read many files: from = the id of your first read call, to = the id of the last one, summary = what you learned from them. ' +
         'Jump back after a dead end: give only from, and everything after it (after its results, for a tool call) is dropped, replaced by your summary; that includes messages after it, so put what still matters in the summary. ' +
         'from and to are ids of your earlier tool calls, in this run or earlier ones: each tool result starts with [call <id>] (entry ids work too). ' +
-        "The summary is all that's left of the stretch: put in every fact, id, path, decision and open item you still need, verbatim where the rest of the work needs it (exact line numbers, quotes, figures). " +
+        "The summary is all that's left of the stretch and stands for it from then on: put in every fact, id, path, decision and open item you still need, and copy exact values verbatim (line numbers, ids, names, figures, quotes), never paraphrased. " +
+        'The harness appends an index of the replaced tool calls (their arguments and the entries holding their results), so one result can be read back later without searching. ' +
         'The harness names finished stretches worth collapsing, with their ids, when the context grows. ' +
         'For a long-lived session, also put decisions and the current state in the session document (sessions.save_metadata { document }): it outlasts the conversation.',
       effect: 'idempotent',
@@ -947,7 +984,7 @@ export function registerSessionTools(kit: Kit): void {
             }
           : {}
       const reminder =
-        'Your summary is all that is left of what was replaced: it must hold every fact, id, path, decision and open item from it you still need.'
+        'Your summary now stands for what it replaced, so it must hold every fact, id, path, decision and open item from it you still need. Then rely on it and go on with the work: the harness appended an index of the tool calls it replaced, with the entries holding their results, for the rare detail the summary lacks.'
       const unknown = (id: string) => fail(`${id} is not a tool call or entry in this run's history`)
 
       if (!toId) {
@@ -957,6 +994,7 @@ export function registerSessionTools(kit: Kit): void {
         if (current >= 0 && i >= current)
           return fail(`${fromId} is in this turn: jump back to a tool call of an earlier turn, or collapse with from and to`)
         const dropped = path.slice(i + 1)
+        const indexed = summary + stretchIndex(dropped, new Set([ctx.callId]), perChar)
         return {
           output: {
             rewindTo: point.id,
@@ -966,7 +1004,7 @@ export function registerSessionTools(kit: Kit): void {
             reminder,
             ...ephemeral,
           },
-          control: [{ type: 'rewind', toEntry: point.id, summary }],
+          control: [{ type: 'rewind', toEntry: point.id, summary: indexed }],
         }
       }
 
@@ -992,6 +1030,8 @@ export function registerSessionTools(kit: Kit): void {
       const stretch = path.slice(start, end + 1)
       const answeredLater = new Set(path.slice(end + 1).map(answeredCall))
       const toolCalls = stretch.flatMap(callsOf).filter((c) => c.id !== ctx.callId && !answeredLater.has(c.id)).length
+      const skip = new Set([ctx.callId, ...[...answeredLater].filter((x): x is string => !!x)])
+      const indexed = summary + stretchIndex(stretch, skip, perChar)
       return {
         output: {
           collapsed: { from: stretch[0]!.id, to: stretch[stretch.length - 1]!.id, entries: stretch.length, toolCalls },
@@ -1002,7 +1042,7 @@ export function registerSessionTools(kit: Kit): void {
           reminder,
           ...ephemeral,
         },
-        control: [{ type: 'rewind', toEntry: path[start - 1]!.id, summary, keepAfter: stretch[stretch.length - 1]!.id }],
+        control: [{ type: 'rewind', toEntry: path[start - 1]!.id, summary: indexed, keepAfter: stretch[stretch.length - 1]!.id }],
       }
     },
   )
@@ -1093,11 +1133,13 @@ export function registerSessionTools(kit: Kit): void {
         const offset = Math.max(0, Math.floor(Number(a.offset ?? 0)) || 0)
         const length = Math.min(PIECE_MAX, Math.max(1, Math.floor(Number(a.length ?? PIECE_MAX)) || PIECE_MAX))
         const end = Math.min(text.length, offset + length)
+        const perChar = await perCharOf(ctx)
         return ok({
           entryId: original.id,
           offset,
           end,
           total: text.length,
+          cost: `this piece adds about ${kTok((end - offset) * perChar)} tokens to your context; the whole entry is about ${kTok(text.length * perChar)}`,
           ...(end < text.length ? { next: `call again with offset ${end} for more` } : { done: true }),
           text: text.slice(offset, end),
         })
@@ -1107,7 +1149,15 @@ export function registerSessionTools(kit: Kit): void {
           `${id} is not offloaded in the current history: only offloaded entries can be put back. Read an entry with offset: 0; sessions.contents lists what was collapsed, compacted or offloaded`,
         )
       const original = (pointer.content as unknown as PointerContent).original
-      return { output: { restoring: original }, control: [{ type: 'restore', pointerEntryId: pointer.id }] }
+      const back = await records.store.entries.get(original)
+      const perChar = await perCharOf(ctx)
+      return {
+        output: {
+          restoring: original,
+          ...(back ? { cost: `adds about ${kTok(entryChars(back) * perChar)} tokens back to your context` } : {}),
+        },
+        control: [{ type: 'restore', pointerEntryId: pointer.id }],
+      }
     },
   )
 

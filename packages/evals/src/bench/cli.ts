@@ -1,12 +1,14 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { describeModelEnv, loadModelEnv } from '../env.ts'
 import { ARMS, buildArchive, runArm, type BenchRun } from './context.ts'
+import { summaryTable } from './summary.ts'
 
 /**
- * `npm run bench:context [-- --arms classic,managed] [--repeat N] [--concurrency N] [--window 64000] [--pages 20]`
+ * `npm run bench:context [-- --arms classic,managed] [--repeat N] [--concurrency N] [--window 64000] [--pages 20] [--source feed]`
+ * `npm run bench:context -- --summarize packages/evals/results/context-<timestamp>.json` re-prints a saved report's table.
  * Runs the context benchmark against the model from `.env`, prints a table per arm, and writes every run to
  * `packages/evals/results/context-<timestamp>.json`.
  */
@@ -22,8 +24,16 @@ const { values } = parseArgs({
     timeout: { type: 'string' },
     'no-follow-up': { type: 'boolean' },
     source: { type: 'string' },
+    summarize: { type: 'string' },
   },
 })
+if (values.summarize) {
+  // Re-print the table of a saved report (e.g. after changing how it's summarised).
+  const saved = JSON.parse(readFileSync(values.summarize, 'utf8')) as { runs: BenchRun[]; expected: string[] }
+  const names = [...new Set(saved.runs.map((r) => r.arm))]
+  process.stdout.write(`${summaryTable(names, saved.runs, saved.expected.length)}\n`)
+  process.exit(0)
+}
 const int = (v: string | undefined, def: number) => (v === undefined ? def : Number.parseInt(v, 10))
 const repeat = int(values.repeat, 3)
 const concurrency = int(values.concurrency, 3)
@@ -79,95 +89,13 @@ await Promise.all(
   }),
 )
 
-const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)
-const fmt = (n: number, d = 0) => n.toFixed(d)
-/** The same follow-up asked of a new session: how often it was right, and its prompt tokens. */
-const freshCell = (rs: BenchRun[]) => {
-  const fr = rs.flatMap((r) => (r.fresh ? [r.fresh] : []))
-  return fr.length
-    ? `${fr.filter((x) => x.correct).length}/${fr.length}, ${fmt(mean(fr.map((x) => x.stats.promptTokens)) / 1000)}k`
-    : '–'
-}
-const rows = arms.map((arm) => {
-  const rs = runs.filter((r) => r.arm === arm.name)
-  const m = (f: (r: BenchRun) => number) => mean(rs.map(f))
-  const fs = rs.flatMap((r) => (r.followUp ? [r.followUp] : []))
-  const mf = (f: (x: NonNullable<BenchRun['followUp']>) => number) => mean(fs.map(f))
-  return [
-    arm.name,
-    `${fmt(
-      m((r) => r.score.correct),
-      1,
-    )}/${archive.expected.length}`,
-    fmt(
-      m((r) => r.score.f1),
-      2,
-    ),
-    `${rs.filter((r) => r.score.auditRef).length}/${rs.length}`,
-    fmt(
-      m((r) => r.report.calls),
-      1,
-    ),
-    `${fmt(m((r) => r.report.promptTokens) / 1000)}k`,
-    `${fmt(
-      (100 * m((r) => r.report.cachedTokens)) /
-        Math.max(
-          1,
-          m((r) => r.report.promptTokens),
-        ),
-    )}%`,
-    `${fmt(m((r) => r.report.peakPrompt) / 1000, 1)}k`,
-    fmt(
-      m((r) => r.report.compactions),
-      1,
-    ),
-    fmt(
-      m((r) => r.report.collapses),
-      1,
-    ),
-    fmt(
-      m((r) => r.report.restores),
-      1,
-    ),
-    `${fmt(m((r) => r.report.durationMs) / 1000)} s`,
-    fs.length ? `${fs.filter((x) => x.correct).length}/${fs.length}` : '–',
-    fs.length ? `${fmt(mf((x) => x.stats.promptTokens) / 1000)}k` : '–',
-    fs.length
-      ? fmt(
-          mf((x) => x.stats.reads),
-          1,
-        )
-      : '–',
-    fs.length
-      ? fmt(
-          mf((x) => x.stats.restores),
-          1,
-        )
-      : '–',
-    freshCell(rs),
-  ]
-})
-const head = [
-  'arm',
-  'correct',
-  'F1',
-  'audit ref',
-  'calls',
-  'prompt tokens',
-  'cached',
-  'peak prompt',
-  'compactions',
-  'collapses',
-  'restores',
-  'time',
-  'follow-up right',
-  'follow-up tokens',
-  'pages re-read',
-  'follow-up restores',
-  'fresh session',
-]
-const table = [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')
-process.stdout.write(`${table}\n`)
+process.stdout.write(
+  `${summaryTable(
+    arms.map((a) => a.name),
+    runs,
+    archive.expected.length,
+  )}\n`,
+)
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'results')
 mkdirSync(dir, { recursive: true })

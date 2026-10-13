@@ -83,7 +83,7 @@ flowchart LR
 
 | | Offload | Collapse | Compaction |
 |---|---|---|---|
-| **Replaces** | one entry | a finished stretch of tool calls | all but the first entry and the latest ~15% |
+| **Replaces** | one entry | a finished stretch of tool calls | all but the first entry and the latest part (`CONTEXT_COMPACT_KEEP`, 15% of the window) |
 | **With** | a pointer and a preview | the model's own summary | a summary written by a separate call |
 | **Who decides** | the harness (huge results) or the model | the model, prompted by notes | the harness (or the model, explicitly) |
 | **Detail kept** | everything except that entry | everything outside the stretch | the first entry and the recent tail |
@@ -276,27 +276,51 @@ for before (its ticket and deploy id).
 
 ### First results (2026-10-13)
 
-Claude Sonnet 5.5, a 64k window, three runs per arm:
+Claude Sonnet 5.5, a 64k window, three runs per arm. Figures are medians,
+with the range when the runs differ. **Billed-equivalent** weighs tokens by
+price, in uncached input tokens: cached reads ×0.1, output ×5. Cache writes
+(×1.25) aren't reported by the provider, so the uncached part is a lower
+bound.
 
-| arm | report correct | report prompt tokens | cached | time | collapses | restores | follow-up right | follow-up tokens |
-|-----|---------------|----------------------|--------|------|-----------|----------|-----------------|------------------|
-| classic | 12/12 (3/3 runs) | 657k | 65% | 65 s | 0 | 0 | 3/3 | 108k (re-read 3 pages) |
-| safety-net | 12/12 (3/3) | 684k | 67% | 68 s | 0 | 0 | 3/3 | 152k (re-read 3 pages) |
-| managed | 12/12 (3/3) | 795k | 62% | 104 s | 5.7 | 7.0 | 3/3 | 232k (100k, 108k, 492k) |
+| arm | report correct | prompt tokens | cached | billed-equivalent | collapses | restores | time | follow-up right | follow-up billed |
+|-----|----------------|---------------|--------|-------------------|-----------|----------|------|-----------------|------------------|
+| classic | 12/12 (3/3 runs) | 657k | 65% | 308k | 0 | 0 | 64 s | 3/3 | 30k |
+| safety-net | 12/12 (3/3) | 684k | 67% | 311k | 0 | 0 | 66 s | 3/3 | 35k |
+| managed | 12/12 (3/3) | 818k (743k–826k) | 62% | 418k (371k–420k) | 6 | 10 | 105 s | 3/3 | 65k (38k–269k) |
 
-**Classic compaction wins this task.** Everything the report needs is twelve
-short lines, so any summary keeps it, and the archive can be read again, so
-the follow-up costs three page reads. What we saw in the managed arm:
+**Classic compaction wins this task**, by about a third on billed cost.
+Everything the report needs is twelve short lines, so any summary keeps it,
+and the archive can be read again, so the follow-up costs three page reads.
+What we saw in the managed arm:
 
-- **It collapses too early and too often.** The 50% note fires about every
-  five pages. The model collapses each time, and each collapse means the next
-  call re-sends a context the cache hasn't seen.
+- **It collapses too early and too often.** A page is about 5.5k tokens, so
+  five pages fill about 45% of the window. The 50% note suggests collapsing
+  them; the collapse drops the context by more than the 15-point re-arm
+  margin, which arms the 50% note again, and the cycle repeats. Each collapse
+  costs output (the summary) and a context the cache hasn't seen.
 - **It distrusts its own summaries.** In two of three runs, after a few
-  collapses, the model listed what it had collapsed and restored entries one
-  by one, then hit an automatic compaction anyway.
+  collapses, the model listed what it had collapsed and read entries back one
+  by one. The task asks for exact values and later pages carry corrections,
+  and a free-form summary doesn't say whether it kept everything exactly.
 - **The follow-up was answered from its own history** in two runs (three or
-  five restores, about the cost of classic's re-read). In the third it read
-  16 pages again.
+  five restores). In the third, the model didn't know which collapsed stretch
+  held page 3, so it read 16 pages again (269k billed).
+
+### What changed after the first round
+
+- **Collapse summaries carry an index.** The harness appends one line per
+  replaced tool call, with its arguments and the entry holding its result
+  (`- archive.read_page {"page":3,…} → entry ent_… (≈5.5k tokens)`), so a
+  later question reads back the one result it needs.
+- **The summary is authoritative.** The tool asks for exact values copied
+  verbatim, and its result says the summary now stands for the stretch: rely
+  on it, and read entries back only for a detail it lacks.
+- **Restores show their cost** ("adds about 5.5k tokens to your context").
+- **Fewer notes:** the `managed-late` arm has a single note at 70%
+  (`CONTEXT_NOTES=70`).
+- **A one-time source** (`--source feed`): each page can be read once, so a
+  follow-up can only be answered from the session's own history, and a
+  **fresh session** baseline asks the same follow-up from zero.
 
 Not tested yet, and where the design should pay off: detail that can't be
 read again (people's messages, events, results that change), long-lived
@@ -418,7 +442,7 @@ sequenceDiagram
 - **The summary prompt** asks for the goal and who asked, decisions, the
   current state, what's left, and verbatim whatever the rest needs (line
   numbers, quotes, figures, ids, paths, links), in about 2,000 words.
-- **The kept tail:** 15% of the window (`compactKeep`), or of the request when
+- **The kept tail:** 15% of the window (`CONTEXT_COMPACT_KEEP`), or of the request when
   that's smaller. It never starts with a tool result: a result whose call is
   summarised is summarised with it.
 - **Recorded:** the summary entry is marked `automatic`, the session document
