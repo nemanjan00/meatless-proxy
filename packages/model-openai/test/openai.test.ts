@@ -392,7 +392,32 @@ describe('openAiModel streaming', () => {
 
   it('surfaces an error event in the stream', async () => {
     handlers.push(sse([{ error: { message: 'context too long' } }]))
-    await expect(make().complete({ messages: [], onDelta: () => {} })).rejects.toThrow('context too long')
+    const err = await make()
+      .complete({ messages: [], onDelta: () => {} })
+      .catch((e) => e)
+    expect(err.message).toContain('context too long')
+    // A request error: not retried, and not "unavailable" (the run fails rather than retrying).
+    expect(err).not.toBeInstanceOf(UnavailableError)
+    expect(seen).toHaveLength(1)
+  })
+
+  it('retries an overload error event that comes before any output', async () => {
+    handlers.push(
+      sse([{ error: { type: 'overloaded_error', message: 'Overloaded' } }]),
+      sse([chunk({ content: 'ok' }, { finish_reason: 'stop' })]),
+    )
+    const r = await make().complete({ messages: [], onDelta: () => {} })
+    expect(r.message.content).toBe('ok')
+    expect(seen).toHaveLength(2)
+  })
+
+  it('reports an overload error event after output as unavailable, so the run retries instead of failing', async () => {
+    handlers.push(sse([chunk({ content: 'partial' }), { error: { type: 'api_error', message: 'Internal server error' } }]))
+    const err = await make()
+      .complete({ messages: [], onDelta: () => {} })
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(UnavailableError)
+    expect(seen).toHaveLength(1)
   })
 })
 

@@ -1,4 +1,4 @@
-import { type Clock, type Logger, MpError, silentLogger, systemClock, UnavailableError } from '@mp/core'
+import { type Clock, isMpError, type Logger, MpError, silentLogger, systemClock, UnavailableError } from '@mp/core'
 import {
   type ChatMessage,
   type ImagePart,
@@ -42,6 +42,10 @@ export interface OpenAiModelOptions {
 }
 
 const RETRYABLE = (status: number) => status === 408 || status === 429 || status >= 500
+
+/** An error event in a stream that means the provider is overloaded or failing, not that the request is wrong. */
+const TRANSIENT_STREAM_ERROR =
+  /overload|rate[ _-]?limit|too many requests|capacity|server[ _-]?error|api[ _-]?error|internal error|timeout|timed out|unavailable|\b(429|5\d\d)\b/i
 
 /** A ModelClient for any OpenAI-compatible Chat Completions endpoint. */
 export function openAiModel(opts: OpenAiModelOptions): ModelClient {
@@ -144,6 +148,8 @@ export function openAiModel(opts: OpenAiModelOptions): ModelClient {
         const response = stream ? await readStream(res, req, model, streamed) : parseResponse(await res.json(), model)
         return { ok: true, response }
       } catch (e) {
+        // A transient error event: retried like a 5xx, unless deltas already reached the caller (then the run retries).
+        if (isMpError(e, 'unavailable')) return { ok: false, failure: { retryable: !streamed.any, reason: e.message, error: e } }
         if (e instanceof MpError) return { ok: false, failure: { retryable: false, reason: e.message, error: e } }
         const failure = transportFailure(e, req, timedOut)
         // Once deltas reached the caller a retry would repeat them: fail instead.
@@ -345,7 +351,10 @@ async function readStream(res: Response, req: ModelRequest, model: string, strea
       throw new MpError('model_response', 'invalid JSON in model stream', { model, data: data.slice(0, 200) })
     }
     if (chunk?.error) {
-      throw new MpError('model_request', `model stream error: ${chunk.error.message ?? JSON.stringify(chunk.error)}`, { model })
+      const message = `model stream error: ${chunk.error.message ?? JSON.stringify(chunk.error)}`
+      // Providers report overload and server trouble as an error event in a stream that began fine: transient.
+      if (TRANSIENT_STREAM_ERROR.test(JSON.stringify(chunk.error))) throw new UnavailableError(message, { model })
+      throw new MpError('model_request', message, { model })
     }
     if (chunk.model) respModel = chunk.model
     if (chunk.usage) usage = mapUsage(chunk.usage)
