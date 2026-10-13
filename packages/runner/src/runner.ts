@@ -44,6 +44,8 @@ import {
   contextNoteDecision,
   contextNoteText,
   contextSuggestions,
+  earlierTasks,
+  taskBoundaryText,
   estimateTokens,
   isContextOverflow,
   kTokens,
@@ -57,17 +59,24 @@ import { createImageResolver, VISION_TAG, type LoadedImage } from './images.ts'
 
 export const RUNS_QUEUE = 'runs'
 
+/** How much more room the summary call of an automatic compaction gets when its first answer hit the limit. */
+const SUMMARY_RETRY_FACTOR = 2
+
 /** Bus topics the runner publishes about context management. */
 export const ContextTopics = {
   /** `{ runId, sessionId, automatic, tokensBefore, tokensAfter, window, keptEntries }` */
   compacted: 'context.compacted',
   /** `{ runId, sessionId, error }`: the summary call of an automatic compaction failed; the run carries on. */
   compactFailed: 'context.compact_failed',
+  /** `{ runId, sessionId }`: an automatic compaction's summary was cut off at its token limit, even after a retry. */
+  summaryTruncated: 'context.summary_truncated',
   /**
    * `{ runId, sessionId, tokens, window, percent, near, suggestions }`: the model was told how full its context is
    * (`near`: asked to free space in its next turn), with `suggestions` concrete things to free.
    */
   noted: 'context.noted',
+  /** `{ runId, sessionId, tokens, window, tasks, taskTokens }`: a new run was told about big finished requests above it. */
+  boundary: 'context.boundary',
   /** `{ runId, sessionId, callId, name, chars, entryId }`: an oversized tool result was kept as a preview. */
   resultOffloaded: 'context.result_offloaded',
 } as const
@@ -187,6 +196,11 @@ export interface RunnerOptions {
    * (`CONTEXT_COMPACT_AT`). Default 85; 0 turns it off.
    */
   compactAt?: number
+  /**
+   * Percent of the window that finished earlier requests must take, at the start of a run, for the model to be
+   * told it can collapse them, each whole (`CONTEXT_BOUNDARY_AT`). Default 30; 0 turns it off.
+   */
+  contextBoundaryAt?: number
   /** Share of the window kept verbatim after an automatic compaction (the latest entries). Default 0.15. */
   compactKeep?: number
   /** max_tokens of the summary call of an automatic compaction (reasoning included). Default 8000. */
@@ -254,6 +268,7 @@ export function createRunner(opts: RunnerOptions): Runner {
   const nearOn = nearAt > 0 && (!compactAt || nearAt < compactAt)
   const thresholds = [...new Set([...noteAt, ...(nearOn ? [nearAt] : [])])].sort((a, b) => a - b)
   const compactKeep = opts.compactKeep ?? 0.15
+  const boundaryAt = opts.contextBoundaryAt ?? 30
   const summaryMaxTokens = opts.compactSummaryMaxTokens ?? 8000
   const resultMaxChars = opts.toolResultMaxChars ?? 20_000
 
@@ -453,13 +468,20 @@ export function createRunner(opts: RunnerOptions): Runner {
   /**
    * A change to the history asked for by a tool. The tool checked it, but the history may have changed since
    * (another call of the same turn): a change that no longer applies leaves the history as it is and tells
-   * the model, instead of failing the run.
+   * the model, instead of failing the run. So does any other error of the change (logged): tidying the context
+   * must never cost the work. Only an outage (`unavailable`) goes up, so the run is retried.
    */
   const historyOp = async (run: Run, tool: string, op: () => Promise<unknown>) => {
     try {
       await op()
     } catch (err) {
-      if (!isMpError(err, 'validation')) throw err
+      if (isMpError(err, 'unavailable')) throw err
+      if (!isMpError(err, 'validation'))
+        baseLogger.error('a history change failed; the run goes on without it', {
+          runId: run.id,
+          tool,
+          err: errorMessage(err),
+        })
       await sessions.append(run.id, {
         kind: 'system',
         content: { text: `[harness] ${tool} was not applied: ${errorMessage(err)}. The history is unchanged.` },
@@ -595,35 +617,44 @@ export function createRunner(opts: RunnerOptions): Runner {
     if (a.prompt !== undefined && history[0]?.kind === 'system' && messages[0]?.role === 'system')
       messages[0] = { ...messages[0], content: a.prompt }
     messages.push({ role: 'user', content: COMPACTION_PROMPT })
-    const ask = (withTools: boolean) =>
+    let withTools = false
+    const ask = (maxTokens: number) =>
       model.complete({
         model: a.modelName,
         messages,
         ...(withTools && a.specs.length ? { tools: a.specs } : {}),
-        maxTokens: summaryMaxTokens,
+        maxTokens,
       })
+    const record = async (r: ModelResponse) => {
+      await hooks.decide(afterModelCall, { run, session, response: r, step: run.data.steps, model: r.model || a.modelName })
+      emit('usage.recorded', { runId: run.id, sessionId: session.id, usage: r.usage, purpose: 'compaction' })
+    }
     let response: ModelResponse
     try {
       try {
-        response = await ask(false)
+        response = await ask(summaryMaxTokens)
       } catch (err) {
         // Some providers want the tool definitions whenever the history has tool calls: try once more with them.
         if (!isMpError(err, 'model_request') || isContextOverflow(err) || !a.specs.length) throw err
         logger.warn('summary call without tools was refused; trying with them', { err: errorMessage(err) })
-        response = await ask(true)
+        withTools = true
+        response = await ask(summaryMaxTokens)
+      }
+      await record(response)
+      // A summary cut off at the token limit silently loses its end (often what's still to do): ask again with room.
+      if (response.finishReason === 'length') {
+        logger.warn('the compaction summary hit its token limit; asking again with more room', { maxTokens: summaryMaxTokens })
+        response = await ask(summaryMaxTokens * SUMMARY_RETRY_FACTOR)
+        await record(response)
       }
     } catch (err) {
       return { ok: false, error: errorMessage(err) }
     }
-    await hooks.decide(afterModelCall, {
-      run,
-      session,
-      response,
-      step: run.data.steps,
-      model: response.model || a.modelName,
-    })
-    emit('usage.recorded', { runId: run.id, sessionId: session.id, usage: response.usage, purpose: 'compaction' })
-    const text = (response.message.content ?? '').trim()
+    const truncated = response.finishReason === 'length'
+    if (truncated) emit(ContextTopics.summaryTruncated, { runId: run.id, sessionId: session.id })
+    const text = `${(response.message.content ?? '').trim()}${
+      truncated ? '\n\n[this summary was cut off at its length limit: whatever came after this point is missing]' : ''
+    }`.trim()
     if (!text) return { ok: false, error: `the summary call returned no text (finish reason ${response.finishReason})` }
     const summary = text.length > 40_000 ? `${text.slice(0, 40_000)}\n[summary cut at 40,000 characters]` : text
     const kept = history.length - cut
@@ -968,6 +999,31 @@ export function createRunner(opts: RunnerOptions): Runner {
         if (compactError !== undefined && (overflowAt === stepNow || tokens >= window))
           return pauseForContext(run, tokens, window, `, and automatic compaction failed: ${compactError}`)
 
+        // A new request on top of big finished ones: the moment to keep only what it needs (once per run, first step).
+        if (
+          boundaryAt > 0 &&
+          run.data.steps === 0 &&
+          !pendingCalls(history).length &&
+          !history.some((e) => e.meta.contextBoundary === true && e.meta.runId === runId)
+        ) {
+          const tasks = earlierTasks(history, runId, tokensPerChar(run.data.context), {
+            minTokens: Math.max(200, Math.round(window * 0.02)),
+          }).slice(0, 3)
+          const total = tasks.reduce((n, t) => n + t.tokens, 0)
+          if (tasks.length && total >= (window * boundaryAt) / 100) {
+            await sessions.append(runId, {
+              kind: 'system',
+              content: { text: taskBoundaryText(tokens, window, tasks) },
+              meta: { contextBoundary: true, contextTokens: tokens, contextWindow: window, transient: true },
+            })
+            history = await sessions.runHistory(runId)
+            messages = render(history)
+            chars = requestChars(messages, specs)
+            emit(ContextTopics.boundary, { runId, sessionId: session.id, tokens, window, tasks: tasks.length, taskTokens: total })
+            logger.info('model told about finished requests at a new one', { tokens, window, taskTokens: total })
+          }
+        }
+
         // Tell the model how full its context is and what is big, once per threshold. Never between a call and its result.
         let noted = run.data.context?.noted ?? notedInHistory(history)
         if (thresholds.length && !pendingCalls(history).length) {
@@ -975,9 +1031,14 @@ export function createRunner(opts: RunnerOptions): Runner {
           noted = d.noted
           if (d.note !== undefined) {
             const near = nearOn && d.note === nearAt
-            const suggestions = contextSuggestions(history, tokensPerChar(run.data.context), {
-              minTokens: Math.max(200, Math.round(window * 0.02)),
-            })
+            const minTokens = Math.max(200, Math.round(window * 0.02))
+            // Whole finished requests compete with stretches of the current work: the biggest come first.
+            const suggestions = [
+              ...earlierTasks(history, runId, tokensPerChar(run.data.context), { minTokens }),
+              ...contextSuggestions(history, tokensPerChar(run.data.context), { minTokens }),
+            ]
+              .sort((a, b) => b.tokens - a.tokens)
+              .slice(0, 3)
             const text = near
               ? contextNearText(tokens, window, compactAt || undefined, suggestions)
               : contextNoteText(tokens, window, compactAt || undefined, suggestions)

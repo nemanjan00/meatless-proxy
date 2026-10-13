@@ -20,7 +20,15 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
 }
 
-type Answered = { state: string; correct: boolean; right?: number; of?: number; invented?: number; abstained?: number }
+type Answered = {
+  state: string
+  correct: boolean
+  right?: number
+  of?: number
+  invented?: number
+  abstained?: number
+  unanswered?: number
+}
 
 /**
  * `14/15 (1 abstained)`: incidents answered right of those asked, over the runs that finished; wrong ones split
@@ -34,7 +42,10 @@ const rightOf = (xs: Answered[]) => {
   const of = ok.reduce((a, x) => a + (x.of ?? 1), 0)
   const inv = ok.reduce((a, x) => a + (x.invented ?? 0), 0)
   const abs = ok.reduce((a, x) => a + (x.abstained ?? 0), 0)
-  const why = [abs ? `${abs} abstained` : '', inv ? `${inv} invented` : ''].filter(Boolean).join(', ')
+  const una = ok.reduce((a, x) => a + (x.unanswered ?? 0), 0)
+  const why = [abs ? `${abs} abstained` : '', inv ? `${inv} invented` : '', una ? `${una} unanswered` : '']
+    .filter(Boolean)
+    .join(', ')
   return `${right}/${of}${why ? ` (${why})` : ''}`
 }
 /**
@@ -76,6 +87,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
     'restores',
     'compactions',
     'retries',
+    'context at end',
     'time',
     'follow-up right',
     'follow-up billed',
@@ -104,6 +116,7 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
       String(med((r) => r.report.restores)),
       String(med((r) => r.report.compactions)),
       String(rs.reduce((a, r) => a + (r.report.retries ?? 0) + (r.followUp?.stats.retries ?? 0), 0)),
+      spread(rs.map((r) => r.report.endPrompt ?? 0)),
       `${Math.round(med((r) => r.report.durationMs) / 1000)} s`,
       rightOf(fs),
       spread(fs.filter((x) => x.state === 'completed').map((x) => billed(x.stats))),
@@ -119,4 +132,44 @@ export function summaryTable(arms: string[], runs: BenchRun[], expected: number)
   return fr.length
     ? `${table}\n\nFresh session (the same follow-up, from zero; any arm): ${rightOf(fr)} right, ${spread(done.map((x) => billed(x.stats)))} billed-equivalent over ${done.length} runs.`
     : table
+}
+
+/**
+ * A chain of tasks, per arm and task: SEV1 rows right, the question about the earlier task, billed cost and the
+ * context left at the end (medians over the runs). Whether cost per task climbs along the chain is the point.
+ */
+export function chainTable(arms: string[], runs: BenchRun[]): string {
+  const head = [
+    'arm',
+    'task',
+    'rows right',
+    'earlier-task question',
+    'billed-equivalent',
+    'calls',
+    'compactions',
+    'collapses',
+    'context at end',
+  ]
+  const rows: string[][] = []
+  for (const arm of arms) {
+    const rs = runs.filter((r) => r.arm === arm && r.chain)
+    const tasks = Math.max(0, ...rs.map((r) => r.chain!.length))
+    for (let k = 0; k < tasks; k++) {
+      const ts = rs.flatMap((r) => (r.chain![k] ? [r.chain![k]!] : []))
+      const done = ts.filter((t) => t.state === 'completed')
+      const cross = done.filter((t) => t.cross !== undefined)
+      rows.push([
+        arm,
+        String(k + 1),
+        `${done.reduce((n, t) => n + t.correct, 0)}/${done.reduce((n, t) => n + t.expected, 0)}`,
+        cross.length ? `${cross.filter((t) => t.cross).length}/${cross.length}` : '–',
+        spread(done.map((t) => billed(t.stats))),
+        String(median(done.map((t) => t.stats.calls))),
+        String(median(done.map((t) => t.stats.compactions))),
+        String(median(done.map((t) => t.stats.collapses))),
+        spread(done.map((t) => t.stats.endPrompt)),
+      ])
+    }
+  }
+  return [head, head.map(() => '---'), ...rows].map((r) => `| ${r.join(' | ')} |`).join('\n')
 }

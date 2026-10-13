@@ -256,6 +256,11 @@ export const configSchema = z.object({
    */
   CONTEXT_NEAR_AT: z.coerce.number().min(0).max(99).default(80),
   /**
+   * Percent of the context window that finished earlier requests must take, when a new run starts, for the model to
+   * be told it can collapse each of them whole and keep only what the new work needs (0 = never).
+   */
+  CONTEXT_BOUNDARY_AT: z.coerce.number().min(0).max(99).default(30),
+  /**
    * Percents of the context window at which the model gets a note naming the biggest finished parts it could free,
    * comma-separated (`off` or `0` = no notes).
    */
@@ -480,6 +485,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
       nearAt: c.CONTEXT_NEAR_AT || 'off',
       notes: c.CONTEXT_NOTES.length ? c.CONTEXT_NOTES : 'off',
       compactKeep: c.CONTEXT_COMPACT_KEEP,
+      boundaryAt: c.CONTEXT_BOUNDARY_AT || 'off',
       toolResultMaxChars: c.TOOL_RESULT_MAX_CHARS || 'off',
     },
     toolsOnDemand: c.TOOLS_ON_DEMAND,

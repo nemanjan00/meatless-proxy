@@ -77,22 +77,76 @@ const entryChars = (e: Entry): number => JSON.stringify(e.content).length
 /** `9.2k`, `850`: an estimated token count for a person or a model to read. */
 const kTok = (n: number): string => (n < 1000 ? String(Math.round(n)) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`)
 
+/** Entries per word an any-word search looks through, to rank by how many words they have. */
+const CLOSEST_SCAN = 200
+
 /** Characters a search hit's ready read starts before the match, and reads. */
 const READ_BEFORE = 300
 const READ_LENGTH = 1500
 
-/** A ready sessions.restore call that reads the part of an entry around the first word of a search that it contains. */
+/** Words a search drops when it ranks by how many words an entry has: they're in everything. */
+const STOP_WORDS = new Set(
+  (
+    'a an the and or but of in on at to for from by with without as is are was were be been being it its this that ' +
+    'these those there here what which who whom whose when where why how because after before while about into over ' +
+    'under up down out off then than so not no yes do does did done has have had i you he she we they them their our ' +
+    'my your me us all any some each every more most other same such only own very can could should would will just ' +
+    'got get kept keep went go one two'
+  ).split(' '),
+)
+
+/**
+ * The terms of a search for ranking: lowercased words, without stop words and very short ones, cut to a stem that
+ * still matches as a substring ("entries" → "entr" finds "entry", "keys" → "key").
+ */
+export function searchTerms(text: string): string[] {
+  const stem = (w: string) => {
+    for (const [end, keep] of [
+      ['ies', ''],
+      ['ing', ''],
+      ['ed', 'e'],
+      ['es', ''],
+      ['s', ''],
+    ] as const)
+      if (w.endsWith(end) && w.length - end.length + keep.length >= 4 && !w.endsWith('ss')) return w.slice(0, -end.length) + keep
+    return w
+  }
+  const words = text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w))
+  return [...new Set(words.map(stem))]
+}
+
+/** Characters around a match a search hit's ready read covers. */
+const CLUSTER_SPAN = 600
+
+/**
+ * A ready sessions.restore call that reads the part of an entry where the search's terms come together: the
+ * window of CLUSTER_SPAN characters with the most different terms, so a long entry that mentions one term all
+ * over (a service name on every line) is read where the others are too.
+ */
 function readAround(e: Entry, query: string): { read?: { entryId: string; offset: number; length: number } } {
   const text = entryText(e).toLowerCase()
-  const at = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => text.indexOf(w))
-    .filter((i) => i >= 0)
-    .sort((a, b) => a - b)[0]
-  if (at === undefined) return {}
-  return { read: { entryId: e.id, offset: Math.max(0, at - READ_BEFORE), length: READ_LENGTH } }
+  const terms = query.trim().includes(' ') ? searchTerms(query) : [query.trim().toLowerCase()]
+  const hits: { at: number; term: number }[] = []
+  terms.forEach((t, term) => {
+    if (!t) return
+    for (let i = text.indexOf(t); i >= 0; i = text.indexOf(t, i + 1)) hits.push({ at: i, term })
+  })
+  if (!hits.length) return {}
+  hits.sort((x, y) => x.at - y.at)
+  let best = hits[0]!.at
+  let bestCount = 0
+  for (let i = 0; i < hits.length; i++) {
+    const seen = new Set<number>()
+    for (let j = i; j < hits.length && hits[j]!.at - hits[i]!.at <= CLUSTER_SPAN; j++) seen.add(hits[j]!.term)
+    if (seen.size > bestCount) {
+      bestCount = seen.size
+      best = hits[i]!.at
+    }
+  }
+  return { read: { entryId: e.id, offset: Math.max(0, best - READ_BEFORE), length: READ_LENGTH } }
 }
 
 /** Lines an index of a collapsed stretch lists at most. */
@@ -109,7 +163,22 @@ function stretchIndex(stretch: Entry[], skip: Set<string>, perChar: number): str
     if (id) results.set(id, e)
   }
   const lines: string[] = []
-  for (const e of stretch)
+  const firstLine = (e: Entry, max = 80) => {
+    const t =
+      entryText(e)
+        .replace(/\[index of what this summary replaced[\s\S]*$/, '')
+        .trim()
+        .split('\n')[0] ?? ''
+    return t.length > max ? `${t.slice(0, max)}…` : t
+  }
+  for (const e of stretch) {
+    // Earlier summaries and messages in the stretch are indexed too, so a collapse of collapses (a whole finished
+    // task) still leads to every part: each earlier summary carries its own index.
+    if (e.kind === 'summary')
+      lines.push(
+        `- an earlier summary → entry ${e.id} (≈${kTok(entryChars(e) * perChar)} tokens; its own index lists what it replaced): ${firstLine(e)}`,
+      )
+    else if (e.kind === 'user' || e.kind === 'event') lines.push(`- a message → entry ${e.id}: ${firstLine(e)}`)
     for (const c of (e.kind === 'assistant' ? (e.content as unknown as AssistantContent).toolCalls : undefined) ?? []) {
       if (skip.has(c.id)) continue
       const r = results.get(c.id)
@@ -117,6 +186,7 @@ function stretchIndex(stretch: Entry[], skip: Set<string>, perChar: number): str
       const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args
       lines.push(`- ${c.name} ${shown}${r ? ` → entry ${r.id} (≈${kTok(entryChars(r) * perChar)} tokens)` : ''}`)
     }
+  }
   if (!lines.length) return ''
   const more = lines.length > INDEX_MAX ? [`- … and ${lines.length - INDEX_MAX} more (sessions.contents lists them all)`] : []
   return `\n\n[index of what this summary replaced: find a detail in it with sessions.search { text, includeThisSession: true }, or read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
@@ -242,6 +312,19 @@ export function registerSessionTools(kit: Kit): void {
     if (!run || run.data.sessionId !== ctx.sessionId)
       throw new ValidationError('this tool needs to be called from a run of this session')
     return sessions.runHistory(run.id)
+  }
+
+  /**
+   * Whether an entry is a request made in a run: a message or event that run took in (its input, or one delivered
+   * while it worked). A copy made by an earlier collapse or offload counts as its original, so an old request
+   * copied forward isn't mistaken for a new one.
+   */
+  const isRequestOf = async (e: Entry, runId: string): Promise<boolean> => {
+    if (e.kind !== 'user' && e.kind !== 'event') return false
+    let at: Entry | null = e
+    for (let hops = 0; at && typeof at.meta.copiedFrom === 'string' && hops < 20; hops++)
+      at = await records.store.entries.get(at.meta.copiedFrom)
+    return !!at && at.meta.runId === runId
   }
 
   /** Tokens per character, as measured at the run's latest model call (3.5 characters a token before one). */
@@ -666,7 +749,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.search',
       description:
-        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order. Newest first; this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session's own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.",
+        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order, newest first; when no entry has them all, the entries with the most of them come back instead, ranked, so describing what you look for in your own words works too. this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session's own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.",
       effect: 'read',
       params: {
         properties: {
@@ -684,7 +767,26 @@ export function registerSessionTools(kit: Kit): void {
       const limit = Math.min(Math.max(1, a.limit ?? 10), 50)
       const own = a.includeThisSession === true
       const query = { text, allWords: true, employeeId: ctx.employeeId, ...(a.kinds ? { kinds: a.kinds } : {}) }
-      const hits = await sessions.search({ ...query, ...(own ? {} : { excludeSessionIds: [ctx.sessionId] }), limit })
+      const scope = own ? {} : { excludeSessionIds: [ctx.sessionId] }
+      let hits = await sessions.search({ ...query, ...scope, limit })
+      // No entry has every word: rank entries by how many of the words they have, so a question asked in other
+      // words than the text still finds it (with what matched, so the model can judge).
+      let closest: Map<string, number> | undefined
+      const terms = searchTerms(text)
+      if (!hits.total && terms.length >= 2) {
+        const tally = new Map<string, { hit: (typeof hits.items)[number]; n: number }>()
+        for (const term of terms) {
+          const r = await sessions.search({ ...query, text: term, allWords: false, ...scope, limit: CLOSEST_SCAN })
+          for (const h of r.items) {
+            const t = tally.get(h.entry.id)
+            if (t) t.n++
+            else tally.set(h.entry.id, { hit: h, n: 1 })
+          }
+        }
+        const ranked = [...tally.values()].filter((t) => t.n >= 2).sort((x, y) => y.n - x.n)
+        closest = new Map(ranked.map((t) => [t.hit.entry.id, t.n]))
+        hits = { items: ranked.slice(0, limit).map((t) => t.hit), total: ranked.length }
+      }
       const inThis = own ? 0 : (await sessions.search({ ...query, sessionIds: [ctx.sessionId], limit: 1 })).total
       const found = await sessions.searchSessions(text, { employeeId: ctx.employeeId, limit })
       return ok({
@@ -694,10 +796,16 @@ export function registerSessionTools(kit: Kit): void {
           sessionId: h.sessionId,
           ...(h.session ? { sessionTitle: h.session.data.title } : {}),
           snippet: h.snippet,
+          ...(closest ? { matched: `${closest.get(h.entry.id)} of ${terms.length} words` } : {}),
           // In this session's own history (collapsed or compacted parts included): where to read around the match.
           ...(h.sessionId === ctx.sessionId ? readAround(h.entry, text) : {}),
         })),
         totalEntries: hits.total,
+        ...(closest
+          ? {
+              closest: `No entry has every word, so these have the most of them (${terms.join(', ')}): check that one is what you are looking for.`,
+            }
+          : {}),
         ...(inThis
           ? { inThisSession: inThis, note: `${inThis} more in this session's own history: includeThisSession to list them` }
           : {}),
@@ -1006,6 +1114,16 @@ export function registerSessionTools(kit: Kit): void {
       const reminder =
         'Your summary now stands for what it replaced, so it must hold every fact, id, path, decision and open item from it you still need. Then rely on it and go on with the work: the harness appended an index of the tool calls it replaced, with the entries holding their results, for the rare detail the summary lacks.'
       const unknown = (id: string) => fail(`${id} is not a tool call or entry in this run's history`)
+      /** A request this run is working on, among entries to be replaced: summarising it away loses the task. */
+      const requestIn = async (entries: Entry[]): Promise<Entry | undefined> => {
+        for (const e of entries) if (await isRequestOf(e, ctx.runId)) return e
+        return undefined
+      }
+      const keepsRequest = (e: Entry) =>
+        fail(
+          `that would replace ${e.id}, a request made in this run (what you are working on now): summaries keep work, not the task. ` +
+            'Collapse the stretch before it and the one after it separately.',
+        )
 
       if (!toId) {
         const point = rewindPoint(path, fromId)
@@ -1014,6 +1132,8 @@ export function registerSessionTools(kit: Kit): void {
         if (current >= 0 && i >= current)
           return fail(`${fromId} is in this turn: jump back to a tool call of an earlier turn, or collapse with from and to`)
         const dropped = path.slice(i + 1)
+        const request = await requestIn(dropped)
+        if (request) return keepsRequest(request)
         const indexed = summary + stretchIndex(dropped, new Set([ctx.callId]), perChar)
         return {
           output: {
@@ -1048,6 +1168,8 @@ export function registerSessionTools(kit: Kit): void {
         return fail(`${toId} has no result yet; name a call that has finished`)
       if (end < start) return fail(`${toId} comes before ${fromId}: from is where the stretch starts, to where it ends`)
       const stretch = path.slice(start, end + 1)
+      const request = await requestIn(stretch)
+      if (request) return keepsRequest(request)
       const answeredLater = new Set(path.slice(end + 1).map(answeredCall))
       const toolCalls = stretch.flatMap(callsOf).filter((c) => c.id !== ctx.callId && !answeredLater.has(c.id)).length
       const skip = new Set([ctx.callId, ...[...answeredLater].filter((x): x is string => !!x)])

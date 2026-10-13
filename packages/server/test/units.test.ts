@@ -65,6 +65,7 @@ describe('config', () => {
       nearAt: 80,
       notes: [70],
       compactKeep: 0.15,
+      boundaryAt: 30,
       toolResultMaxChars: 5000,
     })
     expect(() => loadConfig({ MODEL_CONTEXT_TOKENS: '10' })).toThrow(/MODEL_CONTEXT_TOKENS/)

@@ -2156,6 +2156,14 @@ was. The session page shows it ("context 112k / 200k").
   is still to do, and update the session document. If it goes on without
   freeing space and the context reaches the compaction threshold, automatic
   compaction runs.
+- **A new request is a boundary.** When a run starts and finished earlier
+  requests (each with all its work: collapses, replies) take at least 30% of
+  the window (`CONTEXT_BOUNDARY_AT`), a note before its first model call names
+  the biggest of them with ready `rewind { from, to, summary }` calls that
+  collapse each request whole, keeping only what the new work needs. Collapse
+  summaries index the earlier summaries and messages inside them, so a collapse
+  of collapses still leads to every part. A request made in the current run is
+  never collapsed away: the rewind refuses and says to collapse around it.
 - **Notes don't nag.** Each threshold is noted once per generation of the
   context: it is armed again only after the context fell well below it (a
   compaction or a big collapse), not on small dips. At most one note per
@@ -2171,8 +2179,10 @@ was. The session page shows it ("context 112k / 200k").
   figures, ids, paths, links); the history becomes the first entry, that summary
   (marked *automatic*), and the most recent entries verbatim (about 15% of the
   window, `CONTEXT_COMPACT_KEEP`, a tool call always together with its results). It is recorded like
-  any compaction, and the detailed history stays in the database. If the
-  summary call fails the run carries on; if the request then can't fit, the
+  any compaction, and the detailed history stays in the database. A summary
+  cut off at its token limit is asked for again with twice the room; if it's
+  still cut, it's kept with a note that its end is missing. If the summary
+  call fails the run carries on; if the request then can't fit, the
   run pauses with a clear reason instead of failing. The session document
   gets a line under "Compactions" saying when it happened, with the summary
   (or its start); the section keeps the latest few, so it stays bounded.

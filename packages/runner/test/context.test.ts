@@ -1,10 +1,11 @@
-import { MpError, type Json } from '@mp/core'
+import { ConflictError, type Json, type LogLine, memoryLogger, MpError, UnavailableError } from '@mp/core'
 import { callTools, contextWindowOf, reply, type ModelRequest } from '@mp/model'
 import type { AssistantContent, PointerContent, SummaryContent } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import { describe, expect, it } from 'vitest'
 import {
   COMPACTION_PROMPT,
+  earlierTasks,
   COMPACTIONS_HEADING,
   compactionCut,
   contextNoteDecision,
@@ -311,6 +312,41 @@ describe('automatic compaction', () => {
     expect(compactionCut([...history, mk('e6', 'tool_result', { toolCallId: 'z', output: 'x'.repeat(5000) })], 10, 0.25)).toBe(7)
   })
 
+  it('asks again with more room when a summary hits its token limit, and says so when it is still cut', async () => {
+    const run = async (lengths: number) => {
+      let n = 0
+      const h = harness(
+        growScript(8, (req) => {
+          n++
+          // The first `lengths` summary calls stop at the limit.
+          return (
+            n <= lengths
+              ? { message: { role: 'assistant', content: `PARTIAL ${req.maxTokens}` }, finishReason: 'length' }
+              : { message: { role: 'assistant', content: `FULL ${req.maxTokens}` }, finishReason: 'stop' }
+          ) as never
+        }),
+        { contextWindow: () => 2000, compactAt: 85, contextNotes: [] },
+      )
+      withGrow(h)
+      const cut: unknown[] = []
+      h.bus.subscribe(ContextTopics.summaryTruncated, (m) => void cut.push(m.payload))
+      const s = await h.session(['grow'])
+      const r = await h.start(s.id, 'grow it')
+      expect((await h.runner.execute(r.id)).status).toBe('completed')
+      const sums = (await h.sessions.history(s.id)).filter((e) => e.kind === 'summary')
+      return { first: (sums[0]!.content as unknown as SummaryContent).text, calls: h.model.calls.filter(isSummaryCall), cut }
+    }
+    // Cut once: the retry has twice the room, and its full summary is what's kept.
+    const once = await run(1)
+    expect(once.calls.slice(0, 2).map((c) => c.maxTokens)).toEqual([8000, 16000])
+    expect(once.first).toBe('FULL 16000')
+    expect(once.cut).toHaveLength(0)
+    // Cut twice: the second answer is kept, marked as cut off, and the event says so.
+    const twice = await run(2)
+    expect(twice.first).toMatch(/^PARTIAL 16000\n\n\[this summary was cut off at its length limit/)
+    expect(twice.cut.length).toBeGreaterThanOrEqual(1)
+  })
+
   it('carries on when the summary call fails', async () => {
     const h = harness(
       growScript(6, () => new Error('provider hiccup')),
@@ -559,6 +595,104 @@ describe('collapsing a stretch (rewind with keepAfter)', () => {
       /^\[harness\] sessions\.rewind was not applied: .*ent_gone.*The history is unchanged\.$/,
     )
     expect(kinds(path)).toEqual(['system', 'user', 'assistant', 'tool_result', 'system', 'assistant'])
+  })
+
+  it('goes on when a history change fails for any other reason, and logs it; an outage still goes up', async () => {
+    const lines: LogLine[] = []
+    const h = harness([callTools([{ name: 'collapse', id: 'call_c' }]), reply('done')], { logger: memoryLogger(lines) })
+    h.tool({ name: 'collapse' }, async (_a, ctx) => {
+      const path = await h.sessions.runHistory(ctx.runId)
+      return { output: 'collapsed', control: [{ type: 'rewind', toEntry: path[0]!.id, summary: 'x' }] }
+    })
+    const real = h.sessions.rewind
+    h.sessions.rewind = async () => {
+      throw new ConflictError('the run moved underneath')
+    }
+    const s = await h.session(['collapse'])
+    const run = await h.start(s.id)
+    expect((await h.runner.execute(run.id)).status).toBe('completed')
+    const path = await h.sessions.history(s.id)
+    expect(path.some((e) => e.meta.historyOpFailed === 'sessions.rewind')).toBe(true)
+    expect(lines.some((l) => l.level === 'error' && l.fields.err === 'the run moved underneath')).toBe(true)
+
+    // An outage isn't swallowed: the run goes back for a retry.
+    const h2 = harness([callTools([{ name: 'collapse', id: 'call_c' }]), reply('done')])
+    h2.tool({ name: 'collapse' }, async (_a, ctx) => {
+      const p = await h2.sessions.runHistory(ctx.runId)
+      return { output: 'collapsed', control: [{ type: 'rewind', toEntry: p[0]!.id, summary: 'x' }] }
+    })
+    h2.sessions.rewind = async () => {
+      throw new UnavailableError('database down')
+    }
+    const s2 = await h2.session(['collapse'])
+    const run2 = await h2.start(s2.id)
+    await expect(h2.runner.execute(run2.id)).rejects.toThrow('database down')
+    expect(real).toBeTruthy()
+  })
+})
+
+describe('a new request on top of finished ones', () => {
+  const twoTasks = async (chars: number) => {
+    let n = 0
+    const h = harness(
+      () => {
+        n++
+        // Task 1: three reads and an answer; task 2: an answer straight away.
+        if (n <= 3) return callTools([{ name: 'grow', id: `call_g${n}` }])
+        return reply(n === 4 ? 'task 1 done' : 'task 2 done')
+      },
+      { contextWindow: () => 4000, compactAt: 0, contextNearAt: 0, contextNotes: [] },
+    )
+    withGrow(h, chars)
+    const boundary: unknown[] = []
+    h.bus.subscribe(ContextTopics.boundary, (m) => void boundary.push(m.payload))
+    const s = await h.session(['grow'])
+    const r1 = await h.start(s.id, 'task 1: read the three files')
+    expect((await h.runner.execute(r1.id)).status).toBe('completed')
+    const r2 = await h.start(s.id, 'task 2: something else')
+    expect((await h.runner.execute(r2.id)).status).toBe('completed')
+    return { h, s, boundary, r2 }
+  }
+
+  it('suggests collapsing a big finished request whole, once, before the first call of the next', async () => {
+    const { h, s, boundary } = await twoTasks(2000)
+    const path = await h.sessions.history(s.id)
+    const notes = path.filter((e) => e.meta.contextBoundary === true)
+    expect(notes).toHaveLength(1)
+    const text = (notes[0]!.content as { text: string }).text
+    const request1 = path.find((e) => e.kind === 'user' && (e.content as { text: string }).text.startsWith('task 1'))!
+    expect(text).toContain('"task 1: read the three files" and all its work')
+    expect(text).toContain(`sessions.rewind { from: "${request1.id}", to: "`)
+    expect(boundary).toHaveLength(1)
+    // It came before task 2's first model call, after its request.
+    const second = h.model.calls[4]!
+    expect(JSON.stringify(second.messages)).toContain('earlier requests that are done')
+  })
+
+  it('stays quiet when the finished requests are small', async () => {
+    const { h, s, boundary } = await twoTasks(50)
+    expect((await h.sessions.history(s.id)).some((e) => e.meta.contextBoundary === true)).toBe(false)
+    expect(boundary).toHaveLength(0)
+  })
+
+  it('finds earlier tasks: from each request to the last entry before the next, never the current one', () => {
+    const mk = (id: string, kind: string, content: Json, meta: Record<string, Json> = {}) =>
+      ({ id, kind, content, meta }) as unknown as Entry
+    const history = [
+      mk('e0', 'system', { text: 'sys' }),
+      mk('e1', 'user', { text: 'first task' }, { runId: 'run_1' }),
+      mk('e2', 'assistant', { text: null, toolCalls: [{ id: 'a', name: 't', arguments: '{}' }] }, { runId: 'run_1' }),
+      mk('e3', 'tool_result', { toolCallId: 'a', name: 't', output: 'r'.repeat(800) }, { runId: 'run_1' }),
+      mk('e4', 'assistant', { text: 'done' }, { runId: 'run_1' }),
+      mk('e5', 'user', { text: 'second task' }, { runId: 'run_2' }),
+      mk('e6', 'assistant', { text: 'working' }, { runId: 'run_2' }),
+    ]
+    expect(earlierTasks(history, 'run_2', 0.25)).toEqual([
+      { kind: 'task', from: 'e1', to: 'e4', request: 'first task', tokens: expect.any(Number) },
+    ])
+    // A copy of an old request made by this run is still old: it doesn't start the current work.
+    const copied = [...history.slice(0, 5), mk('e5', 'user', { text: 'second task' }, { runId: 'run_2', copiedFrom: 'x' })]
+    expect(earlierTasks(copied, 'run_2', 0.25).map((t) => (t as { from: string }).from)).toEqual(['e1'])
   })
 })
 

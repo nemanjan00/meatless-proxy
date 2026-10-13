@@ -8,6 +8,9 @@ import {
   scoreAnswer,
   scoreFollowUps,
   classifyFollowUps,
+  chainTasks,
+  chainTaskText,
+  scoreChainTask,
   classifyFuzzy,
   fuzzyIncidents,
   fuzzyText,
@@ -85,6 +88,11 @@ export interface BenchOptions {
   followUps?: number
   /** Incidents a second follow-up describes in other words, without their ids (default 0: none). */
   fuzzyFollowUps?: number
+  /**
+   * Instead of one report: a chain of this many tasks in one session, each auditing its own run of pages and, from
+   * the second on, asked about an incident from the task before (default 0: off).
+   */
+  chain?: number
 }
 
 /** What one phase of a run cost and did. */
@@ -96,6 +104,8 @@ export interface PhaseStats {
   completionTokens: number
   /** The biggest prompt sent, in tokens. */
   peakPrompt: number
+  /** The prompt of the phase's last model call: the context it leaves for what comes next. */
+  endPrompt: number
   /** Automatic compactions plus sessions.compact calls. */
   compactions: number
   compactionsFailed: number
@@ -122,6 +132,8 @@ export interface FollowUp {
   invented: number
   /** Wrong answers that said the details weren't available. */
   abstained: number
+  /** Incidents the answer never got to (e.g. it answered something else). */
+  unanswered?: number
   answer: string
   stats: PhaseStats
   error?: string
@@ -140,6 +152,8 @@ export interface BenchRun {
   fresh?: FollowUp
   /** Follow-ups that describe incidents instead of naming them, asked after the others in the same session. */
   fuzzy?: FollowUp
+  /** A chain of tasks (with `chain`): each one's answer and what it cost. */
+  chain?: { task: number; state: string; correct: number; expected: number; cross?: boolean; stats: PhaseStats }[]
   trace: string[]
   error?: string
 }
@@ -162,6 +176,7 @@ const emptyStats = (): PhaseStats => ({
   cachedTokens: 0,
   completionTokens: 0,
   peakPrompt: 0,
+  endPrompt: 0,
   compactions: 0,
   compactionsFailed: 0,
   collapses: 0,
@@ -172,6 +187,15 @@ const emptyStats = (): PhaseStats => ({
   retries: 0,
   durationMs: 0,
 })
+
+/** Two phases' stats together (peaks the larger, the end of the later). */
+const addStats = (a: PhaseStats, b: PhaseStats): PhaseStats => {
+  const out = { ...a }
+  for (const k of Object.keys(b) as (keyof PhaseStats)[]) out[k] = a[k] + b[k]
+  out.peakPrompt = Math.max(a.peakPrompt, b.peakPrompt)
+  out.endPrompt = b.endPrompt
+  return out
+}
 
 /** Runs one arm once: a fresh app, a session with the archive tool, the task, the follow-up, and the measurements. */
 export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive: Archive): Promise<BenchRun> {
@@ -261,6 +285,7 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       stats.cachedTokens += u.cachedTokens ?? 0
       stats.completionTokens += u.completionTokens ?? 0
       stats.peakPrompt = Math.max(stats.peakPrompt, u.promptTokens ?? 0)
+      if (m.payload.purpose !== 'compaction') stats.endPrompt = u.promptTokens ?? 0
       trace.push(`${m.payload.purpose === 'compaction' ? 'summary call' : 'model call'} ${k(u.promptTokens)}`)
     }),
     s.bus.subscribe<{ name?: string; isError?: boolean }>('tool.result', (m) => {
@@ -309,6 +334,28 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
         entries: [{ kind: 'system', content: { text: prompt } }],
       })
     const session = await newSession('Incident archive audit')
+    if (o.chain) {
+      const tasks = chainTasks(archive, o.chain)
+      const chain: NonNullable<BenchRun['chain']> = []
+      for (const [k, t] of tasks.entries()) {
+        trace.push(`— task ${k + 1} —`)
+        const p = await phase(session.id, chainTaskText(t, k, tasks.length))
+        chain.push({ task: k + 1, state: p.state, ...scoreChainTask(t, p.answer), stats: p.stats })
+        if (p.state !== 'completed') break
+      }
+      const all = chain.reduce((n, c) => n + c.correct, 0)
+      const of = tasks.reduce((n, t) => n + t.expected.length, 0)
+      return {
+        arm: arm.name,
+        repeat,
+        state: chain.every((c) => c.state === 'completed') && chain.length === tasks.length ? 'completed' : 'failed',
+        score: { correct: all, expected: of, extra: 0, wrongDetail: 0, missing: of - all, auditRef: true, f1: of ? all / of : 1 },
+        answer: '',
+        report: chain.reduce((sum, c) => addStats(sum, c.stats), emptyStats()),
+        chain,
+        trace,
+      }
+    }
     const report = await phase(session.id, taskText(archive.pages.length, o.source))
     trace.push('— follow-up —')
     const xs = followUpIncidents(archive, o.followUps ?? 1)

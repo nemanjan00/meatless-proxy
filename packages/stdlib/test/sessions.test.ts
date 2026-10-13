@@ -1,3 +1,4 @@
+import { searchTerms } from '../src/tools/sessions.ts'
 import type { Json } from '@mp/core'
 import { describe, expect, it } from 'vitest'
 import { stack } from './helpers.ts'
@@ -267,6 +268,45 @@ describe('sessions.wait for a delivery', () => {
   })
 })
 
+describe('searching in other words', () => {
+  it('cuts searches to terms that still match as substrings', () => {
+    expect(searchTerms('the media-cdn incident where two cache entries ended up with the same key')).toEqual([
+      'media-cdn',
+      'incident',
+      'cache',
+      'entr',
+      'ende',
+      'key',
+    ])
+  })
+
+  it('finds an entry by most of its words when none has them all, and reads where they come together', async () => {
+    const t = await stack()
+    const record = (id: string, service: string, symptom: string, cause: string, ticket: string) =>
+      `${id} · service: ${service}\nSummary: ${symptom} after deploy ab12.\nRoot cause: ${cause} in src/x.ts:10.\nOn call: Ana Lopez. Follow-up: ${ticket}.\n` +
+      `  ${service} worker-1 INFO req=abc dur=10ms\n`.repeat(6)
+    const page = [
+      record('INC-11111', 'media-cdn', 'stale results served', 'connection pool exhaustion', 'TKT-1111'),
+      record('INC-22222', 'checkout', 'stuck jobs in the queue', 'a cache key collision', 'TKT-2222'),
+      record('INC-33333', 'media-cdn', 'stuck jobs in the queue', 'a cache key collision', 'TKT-3333'),
+      record('INC-44444', 'media-cdn', 'duplicate notifications', 'an expired client certificate', 'TKT-4444'),
+    ].join('\n')
+    await t.recordCall(t.run.id, 'archive.read_page', page)
+    const question = 'the media-cdn incident where jobs piled up in the queue, because two cache entries had the same key'
+    const s = await t.out('sessions.search', { text: question, includeThisSession: true })
+    expect(s.closest).toMatch(/No entry has every word/)
+    expect(s.entries[0].matched).toMatch(/^\d+ of \d+ words$/)
+    // The read lands on the record where the words come together, not on the first media-cdn one.
+    const piece = await t.out('sessions.restore', s.entries[0].read)
+    expect(piece.text).toContain('INC-33333')
+    expect(piece.text).toContain('TKT-3333')
+    // A search with every word still works the plain way.
+    const exact = await t.out('sessions.search', { text: 'TKT-4444 certificate', includeThisSession: true })
+    expect(exact.closest).toBeUndefined()
+    expect(exact.entries).toHaveLength(1)
+  })
+})
+
 describe('finding sessions', () => {
   it('look_up, list, search, tree and get', async () => {
     const t = await stack()
@@ -476,7 +516,12 @@ describe('run control', () => {
 
   describe('sessions.rewind with from and to', () => {
     /** Three reads over two turns, the answer and a new message, then the turn that calls sessions.rewind. */
-    async function readingThenRewind(t: Awaited<ReturnType<typeof stack>>, extraCalls: string[] = []) {
+    /** `message`: the kind of the entry between the answer and the rewind turn (a person's follow-up, or a note). */
+    async function readingThenRewind(
+      t: Awaited<ReturnType<typeof stack>>,
+      extraCalls: string[] = [],
+      message: 'user' | 'system' = 'user',
+    ) {
       const c1 = await t.recordCall(t.run.id, 'docs.read', 'one')
       const a2 = await t.sessions.append(t.run.id, {
         kind: 'assistant',
@@ -497,7 +542,7 @@ describe('run control', () => {
         content: { toolCallId: 'call_r3', name: 'docs.read', output: 'three' },
       })
       await t.sessions.append(t.run.id, { kind: 'assistant', content: { text: 'PAY-7 needs a refund' } })
-      await t.sessions.append(t.run.id, { kind: 'user', content: { text: 'thanks, and the invoice?' } })
+      await t.sessions.append(t.run.id, { kind: message, content: { text: 'thanks, and the invoice?' } })
       const callId = 'call_rewind'
       const ids = [...extraCalls, callId]
       const current = await t.sessions.append(t.run.id, {
@@ -558,7 +603,7 @@ describe('run control', () => {
 
     it('collapses up to a result in the current turn: the later calls, this one included, stay', async () => {
       const t = await stack()
-      const { c1, callId, ctx } = await readingThenRewind(t, ['call_r4', 'call_r5'])
+      const { c1, callId, ctx } = await readingThenRewind(t, ['call_r4', 'call_r5'], 'system')
       const r4 = await t.sessions.append(t.run.id, {
         kind: 'tool_result',
         content: { toolCallId: 'call_r4', name: 'docs.read', output: 'four' },
@@ -607,9 +652,73 @@ describe('run control', () => {
       expect(await err({ from: 'call_r4' })).toMatch(/in this turn/)
     })
 
+    it("never summarises away a request made in this run: the task isn't work to collapse", async () => {
+      const t = await stack()
+      const { c1, ctx } = await readingThenRewind(t, ['call_r4'])
+      await t.sessions.append(t.run.id, {
+        kind: 'tool_result',
+        content: { toolCallId: 'call_r4', name: 'docs.read', output: 'four' },
+      })
+      // The person's follow-up lies between the reads and this turn: collapsing across it, or jumping back past it, is refused.
+      const across = await t.call('sessions.rewind', { from: c1.callId, to: 'call_r4', summary: 'read four' }, ctx)
+      expect(across.isError).toBe(true)
+      expect((across.output as any).error).toMatch(/request made in this run.*separately/)
+      const back = await t.call('sessions.rewind', { from: c1.callId, summary: 'dead end' }, ctx)
+      expect((back.output as any).error).toMatch(/request made in this run/)
+      // The stretch before it collapses fine.
+      expect(
+        (await t.call('sessions.rewind', { from: c1.callId, to: 'call_r3', summary: 'read three' }, ctx)).isError,
+      ).toBeFalsy()
+      // The run's own input counts too: jumping back to the very start would drop the task.
+      const path = await t.sessions.runHistory(t.run.id)
+      expect((await t.call('sessions.rewind', { toEntry: path[0]!.id, summary: 'x' }, ctx)).isError).toBe(true)
+    })
+
+    it('collapses a whole finished task from the next one, its collapses included, with an index that leads into them', async () => {
+      const t = await stack()
+      // Task 1: three reads, the first two collapsed as a subtask, then the answer.
+      const c1 = await t.recordCall(t.run.id, 'docs.read', 'one')
+      const c2 = await t.recordCall(t.run.id, 'docs.read', 'two')
+      await t.recordCall(t.run.id, 'docs.read', 'three')
+      const sub = await t.call('sessions.rewind', { from: c1.callId, to: c2.callId, summary: 'subtask 1: one and two' })
+      const sc = sub.control![0] as { toEntry: string; summary: string; keepAfter: string }
+      await t.sessions.rewind(t.run.id, sc.toEntry, sc.summary, { keepAfter: sc.keepAfter })
+      const answer = await t.sessions.append(t.run.id, { kind: 'assistant', content: { text: 'task 1 done: PAY-7' } })
+      await t.sessions.transition(t.run.id, 'running', 'completed')
+      await t.sessions.commit(t.run.id)
+
+      // Task 2, a new request in a new run: the whole of task 1 is finished work, request included.
+      const run2 = await t.sessions.createRun({
+        sessionId: t.session.id,
+        cause: { type: 'manual' },
+        input: [{ kind: 'user', content: { text: 'now task 2' } }],
+      })
+      await t.sessions.transition(run2.id, 'queued', 'running')
+      const path = await t.sessions.runHistory(run2.id)
+      const request1 = path.find((e) => e.kind === 'user')!
+      const ctx = t.ctx({ runId: run2.id })
+      const mega = await t.call(
+        'sessions.rewind',
+        { from: request1.id, to: answer.id, summary: 'task 1: PAY-7 needs a refund' },
+        ctx,
+      )
+      expect(mega.isError).toBeFalsy()
+      const summary = (mega.control![0] as { summary: string }).summary
+      // The index leads into the earlier summary (which has its own index), the old request, and the read left over.
+      expect(summary).toMatch(/- an earlier summary → entry ent_\w+ .*subtask 1: one and two/)
+      expect(summary).toMatch(/- a message → entry ent_\w+: /)
+      expect(summary).toMatch(/- docs\.read \{\} → entry ent_/)
+      const mc = mega.control![0] as { toEntry: string; summary: string; keepAfter: string }
+      await t.sessions.rewind(run2.id, mc.toEntry, mc.summary, { keepAfter: mc.keepAfter })
+      const after = await t.sessions.runHistory(run2.id)
+      // The first entry, task 1's summary, and task 2's request, word for word.
+      expect(after.map((e) => e.kind)).toEqual(['system', 'summary', 'user'])
+      expect((after[2]!.content as { text: string }).text).toBe('now task 2')
+    })
+
     it('jumps back without to, and says what it drops', async () => {
       const t = await stack()
-      const { c1, ctx } = await readingThenRewind(t)
+      const { c1, ctx } = await readingThenRewind(t, [], 'system')
       const r = await t.call('sessions.rewind', { from: c1.callId, summary: 'dead end' }, ctx)
       expect(r.control).toEqual([
         { type: 'rewind', toEntry: c1.entryId, summary: expect.stringMatching(/^dead end\n\n\[index of/) },
@@ -639,8 +748,9 @@ describe('run control', () => {
   it('rewind checks the entry is on the current path', async () => {
     const t = await stack()
     const path = await t.sessions.runHistory(t.run.id)
-    const r = await t.call('sessions.rewind', { toEntry: path[0]!.id, summary: 'tried a, found b' })
-    expect(r.control).toEqual([{ type: 'rewind', toEntry: path[0]!.id, summary: 'tried a, found b' }])
+    const at = path.length - 1
+    const r = await t.call('sessions.rewind', { toEntry: path[at]!.id, summary: 'tried a, found b' })
+    expect(r.control).toEqual([{ type: 'rewind', toEntry: path[at]!.id, summary: 'tried a, found b' }])
     expect((await t.call('sessions.rewind', { toEntry: 'ent_nope', summary: 'x' })).isError).toBe(true)
   })
 

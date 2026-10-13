@@ -81,6 +81,48 @@ export function contextNoteDecision(
 export type ContextSuggestion =
   | { kind: 'collapse'; from: string; to: string; calls: number; names: string; tokens: number }
   | { kind: 'offload'; callId: string; name: string; tokens: number }
+  /** A finished earlier request and all its work, from the request to its last entry. */
+  | { kind: 'task'; from: string; to: string; request: string; tokens: number }
+
+/** Whether an entry is a request made in `runId` (its input, or one delivered while it worked), not a copy of an older one. */
+const isNewRequest = (e: Entry, runId: string) =>
+  (e.kind === 'user' || e.kind === 'event') && e.meta.runId === runId && typeof e.meta.copiedFrom !== 'string'
+
+/**
+ * Earlier requests in a history that are done, each with all of its work (collapses and replies included): from
+ * the request to the entry before the next request. The requests of the current run, and everything from the
+ * first of them on, are the current work and never count. Biggest first; none under `minTokens`.
+ */
+export function earlierTasks(
+  history: Entry[],
+  runId: string,
+  perChar: number,
+  o: { minTokens?: number } = {},
+): ContextSuggestion[] {
+  const current = history.findIndex((e) => isNewRequest(e, runId))
+  const end = current < 0 ? history.length : current
+  const starts: number[] = []
+  for (let i = 1; i < end; i++) if (history[i]!.kind === 'user' || history[i]!.kind === 'event') starts.push(i)
+  const tasks: Extract<ContextSuggestion, { kind: 'task' }>[] = []
+  starts.forEach((s, k) => {
+    const last = (starts[k + 1] ?? end) - 1
+    if (last <= s) return
+    const span = history.slice(s, last + 1)
+    // A task still waiting on a tool call isn't finished.
+    const answered = new Set(span.map(answeredCall).filter(Boolean))
+    if (span.some((e) => callsOfEntry(e).some((c) => !answered.has(c.id)))) return
+    const text = ((history[s]!.content as { text?: unknown } | null)?.text ?? '') as string
+    const first = String(text).trim().split('\n')[0] ?? ''
+    tasks.push({
+      kind: 'task',
+      from: history[s]!.id,
+      to: history[last]!.id,
+      request: first.length > 70 ? `${first.slice(0, 70)}…` : first,
+      tokens: span.reduce((n, e) => n + entryTokens(e, perChar), 0),
+    })
+  })
+  return tasks.filter((t) => t.tokens >= (o.minTokens ?? 0)).sort((a, b) => b.tokens - a.tokens)
+}
 
 const callsOfEntry = (e: Entry) =>
   e.kind === 'assistant' ? ((e.content as unknown as AssistantContent | null)?.toolCalls ?? []) : []
@@ -180,6 +222,11 @@ export function contextSuggestions(
 
 /** One suggestion as a line of a note, with the call to make. */
 export function suggestionLine(x: ContextSuggestion): string {
+  if (x.kind === 'task')
+    return (
+      `- the earlier request "${x.request}" and all its work, ${x.from} … ${x.to}, ≈ ${kTokens(x.tokens)} tokens: ` +
+      `sessions.rewind { from: "${x.from}", to: "${x.to}", summary } keeping only what the current work still needs`
+    )
   if (x.kind === 'collapse')
     return (
       `- ${x.from} … ${x.to} (${x.names}) ≈ ${kTokens(x.tokens)} tokens: once you've noted what you need from them, ` +
@@ -322,5 +369,16 @@ export function isContextOverflow(err: unknown): boolean {
   if (status !== undefined && status !== 400 && status !== 413 && status !== 422) return false
   return /context[ _-]?(length|window|size)|maximum context|too many tokens|prompt is too long|input is too long|exceeds? the (max|maximum|model)|token limit|context_length_exceeded/i.test(
     err.message,
+  )
+}
+
+/** The note at the start of a run whose history holds big finished requests: the moment to keep only what's needed. */
+export function taskBoundaryText(tokens: number, window: number, tasks: ContextSuggestion[]): string {
+  const total = tasks.reduce((n, t) => n + t.tokens, 0)
+  return (
+    `[context: about ${kTokens(tokens)} of ${kTokens(window)} tokens, ${kTokens(total)} of it earlier requests that are done] ` +
+    'A new request is a good point to keep only what it needs. Unless you need their detail now, collapse them, each into a ' +
+    'summary of what the current work still needs from it (decisions, results, exact ids); the detail stays findable with sessions.search:\n' +
+    tasks.map(suggestionLine).join('\n')
   )
 }

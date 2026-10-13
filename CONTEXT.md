@@ -443,6 +443,7 @@ flowchart TD
 | Percent | Setting | What happens |
 |---------|---------|--------------|
 | any | `TOOL_RESULT_MAX_CHARS` (20,000) | oversized results are offloaded as they arrive |
+| new request | `CONTEXT_BOUNDARY_AT` (30) | finished earlier requests take ≥ 30% of the window: a note with ready calls to collapse each whole |
 | 70% | `CONTEXT_NOTES` | an advisory `system` note with up to three suggestions |
 | 80% | `CONTEXT_NEAR_AT` | a `user` turn: free space now (collapse, or compact with your own summary) |
 | 85% | `CONTEXT_COMPACT_AT` | automatic compaction before the next model call |
@@ -527,6 +528,12 @@ sequenceDiagram
   replaced.
 - **Provider quirks:** if a provider refuses the summary call without the tool
   definitions, it's retried once with them.
+- **A summary cut off at its limit** (8,000 tokens) is asked for again with
+  twice the room. If it's still cut, it's kept with a note saying its end is
+  missing, rather than silently losing it.
+- **A history change that fails** (a rewind, offload or compaction that can't
+  be applied) leaves the history as it was and tells the model; the run goes
+  on. Only an outage stops it, to be retried.
 - **By the model:** `sessions.compact { summary }`, which the 80% instruction
   offers as an alternative to collapsing.
 
@@ -544,6 +551,7 @@ history. An ephemeral run (router, triggers) leaves the session as it was.
 | `CONTEXT_COMPACT_AT` | 85 | percent for automatic compaction; 0 turns it off |
 | `CONTEXT_NEAR_AT` | 80 | percent for the "free space now" turn; 0 turns it off |
 | `CONTEXT_NOTES` | 70 | percents for the advisory notes, comma-separated; `off` turns them off |
+| `CONTEXT_BOUNDARY_AT` | 30 | percent of the window finished earlier requests must take for the note at a new request; 0 turns it off |
 | `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim; 0 summarises everything |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | automatic offload of big results; 0 turns it off |
 

@@ -8,7 +8,10 @@ import {
   scoreFollowUp,
   scoreFollowUps,
   classifyFollowUps,
+  chainTaskText,
+  chainTasks,
   classifyFuzzy,
+  scoreChainTask,
   fuzzyIncidents,
   fuzzyText,
 } from '../src/bench/archive.ts'
@@ -97,6 +100,7 @@ describe('summary', () => {
     cachedTokens: 0,
     completionTokens: 0,
     peakPrompt: 0,
+    endPrompt: 0,
     compactions: 0,
     compactionsFailed: 0,
     collapses: 0,
@@ -145,9 +149,21 @@ describe('wrong follow-ups', () => {
   it('tells abstaining from inventing', () => {
     const a = buildArchive()
     const [x] = followUpIncidents(a, 1)
-    expect(classifyFollowUps([x!], `${x!.ticket}, deploy ${x!.deploy}`)).toEqual({ right: 1, invented: 0, abstained: 0 })
-    expect(classifyFollowUps([x!], "I don't have its details and won't guess.")).toEqual({ right: 0, invented: 0, abstained: 1 })
-    expect(classifyFollowUps([x!], 'TKT-0001, deploy zzzz')).toEqual({ right: 0, invented: 1, abstained: 0 })
+    expect(classifyFollowUps([x!], `${x!.ticket}, deploy ${x!.deploy}`)).toEqual({
+      right: 1,
+      invented: 0,
+      abstained: 0,
+      unanswered: 0,
+    })
+    expect(classifyFollowUps([x!], `I don't have the details of ${x!.id} and won't guess.`)).toEqual({
+      right: 0,
+      invented: 0,
+      abstained: 1,
+      unanswered: 0,
+    })
+    // An answer that never gets to the incident (the question was lost) is unanswered, not an honest no.
+    expect(classifyFollowUps([x!], 'AUD-XXXX\nINC-00000 | a.ts:1 | Ana Lopez').unanswered).toBe(1)
+    expect(classifyFollowUps([x!], 'TKT-0001, deploy zzzz')).toEqual({ right: 0, invented: 1, abstained: 0, unanswered: 0 })
   })
 })
 
@@ -160,6 +176,10 @@ describe('report errors', () => {
     const s = scoreAnswer(a, [a.auditRef, wrong, ...rest].join('\n'))
     expect(s).toMatchObject({ correct: a.expected.length - 2, wrongDetail: 1, missing: 1, extra: 0 })
     expect(second).toBeTruthy()
+    // Owning up to a missing one in prose isn't a wrong value.
+    const id = first!.split(' | ')[0]
+    const owned = scoreAnswer(a, [a.auditRef, `Note: ${id} was upgraded, but I no longer have its record.`, ...rest].join('\n'))
+    expect(owned).toMatchObject({ wrongDetail: 0, missing: 2 })
   })
 })
 
@@ -188,6 +208,33 @@ describe('fuzzy follow-ups', () => {
       '2: TKT-0001, deploy zzzz',
       "3: I can't tell which one that is.",
     ].join('\n')
-    expect(classifyFuzzy(xs, answer)).toEqual({ right: 1, invented: 1, abstained: 1 })
+    expect(classifyFuzzy(xs, answer)).toEqual({ right: 1, invented: 1, abstained: 1, unanswered: 0 })
+    expect(classifyFuzzy(xs, 'AUD-XXXX\nINC-00000 | a.ts:1 | Ana Lopez').unanswered).toBe(3)
+  })
+})
+
+describe('a chain of tasks', () => {
+  it('splits the archive into tasks of five pages, each with its own answer and a question about the task before', () => {
+    const a = buildArchive({ pages: 25, corrections: false })
+    expect(a.corrections).toEqual([])
+    const tasks = chainTasks(a, 5)
+    expect(tasks.map((t) => [t.first, t.last])).toEqual([
+      [0, 4],
+      [5, 9],
+      [10, 14],
+      [15, 19],
+      [20, 24],
+    ])
+    expect(tasks[0]!.cursor).toBe('start')
+    expect(tasks[0]!.cross).toBeUndefined()
+    for (const [k, t] of tasks.entries()) {
+      if (k) expect(t.cross!.page).toBeGreaterThanOrEqual(tasks[k - 1]!.first)
+      if (k) expect(t.cross!.page).toBeLessThanOrEqual(tasks[k - 1]!.last)
+      expect(chainTaskText(t, k, 5)).toContain(`"cursor": "${t.cursor}"`)
+    }
+    const t = tasks[2]!
+    const answer = [...t.expected, `CROSS: ${t.cross!.onCall}, ${t.cross!.ticket}`].join('\n')
+    expect(scoreChainTask(t, answer)).toEqual({ correct: t.expected.length, expected: t.expected.length, cross: true })
+    expect(scoreChainTask(t, t.expected.slice(1).join('\n'))).toMatchObject({ correct: t.expected.length - 1, cross: false })
   })
 })

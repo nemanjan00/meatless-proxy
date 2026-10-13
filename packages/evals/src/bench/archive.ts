@@ -44,6 +44,8 @@ export interface ArchiveOptions {
   perPage?: number
   /** Severity-1 incidents as first recorded (some are then downgraded, and others upgraded, by corrections). */
   severe?: number
+  /** Corrections on later pages (default true). Off for a chain of tasks, whose answers stay within their pages. */
+  corrections?: boolean
 }
 
 const FIRST = ['Ana', 'Bo', 'Cara', 'Dev', 'Eli', 'Fen', 'Gus', 'Hana', 'Ivo', 'Jun', 'Kai', 'Lea', 'Mio', 'Nils', 'Ola', 'Pia']
@@ -164,11 +166,13 @@ export function buildArchive(o: ArchiveOptions = {}): Archive {
   const sev1 = incidents.filter((x) => x.severity === 1)
   const sev2 = incidents.filter((x) => x.severity === 2 && x.page < pageCount - 4)
   const corrections: Correction[] = []
-  for (const x of [sev1[1], sev1[Math.floor(sev1.length / 2)]]) {
-    if (x) corrections.push({ id: x.id, severity: 2, page: Math.min(pageCount - 1, x.page + 4 + r.int(4)) })
-  }
-  for (const x of [sev2[3], sev2[Math.floor(sev2.length / 2)]]) {
-    if (x) corrections.push({ id: x.id, severity: 1, page: Math.min(pageCount - 1, x.page + 4 + r.int(4)) })
+  if (o.corrections !== false) {
+    for (const x of [sev1[1], sev1[Math.floor(sev1.length / 2)]]) {
+      if (x) corrections.push({ id: x.id, severity: 2, page: Math.min(pageCount - 1, x.page + 4 + r.int(4)) })
+    }
+    for (const x of [sev2[3], sev2[Math.floor(sev2.length / 2)]]) {
+      if (x) corrections.push({ id: x.id, severity: 1, page: Math.min(pageCount - 1, x.page + 4 + r.int(4)) })
+    }
   }
 
   const finalSeverity = new Map(incidents.map((x) => [x.id, x.severity as number]))
@@ -247,7 +251,14 @@ export function scoreAnswer(archive: Archive, answer: string): Score {
   const norm = (s: string) => s.replace(/[`*]/g, '').replace(/\s+/g, ' ').trim()
   const text = norm(answer)
   const expectedById = new Map(archive.expected.map((l) => [l.split(' | ')[0]!, norm(l)]))
-  const mentioned = new Set(text.match(/INC-\d{5}/g) ?? [])
+  // Wrong values are rows that name an incident with the wrong details; a mention in prose ("left out, its
+  // record is gone") is a missing one that the answer owns up to.
+  const mentioned = new Set(
+    answer
+      .split('\n')
+      .filter((l) => /INC-\d{5}\s*\|/.test(l))
+      .map((l) => l.match(/INC-\d{5}/)![0]),
+  )
   let correct = 0
   let wrongDetail = 0
   for (const [id, line] of expectedById) {
@@ -328,17 +339,36 @@ export function scoreFollowUps(xs: Incident[], answer: string): number {
  * How follow-up answers went, per incident: right (both details), invented (a ticket or deploy id that isn't its
  * own: a hallucination), or abstained (said it doesn't have them). For an employee, inventing is far worse.
  */
-export function classifyFollowUps(xs: Incident[], answer: string): { right: number; invented: number; abstained: number } {
-  const lines = xs.length === 1 ? [answer] : answer.split('\n')
-  let right = 0
-  let invented = 0
+export type FollowUpOutcome = { right: number; invented: number; abstained: number; unanswered: number }
+
+/**
+ * How follow-up answers went, per incident: right (both details), invented (a ticket or deploy id that isn't its
+ * own: a hallucination), abstained (said it doesn't have them), or unanswered (the answer never gets to it, e.g.
+ * the model lost the question and answered something else).
+ */
+export function classifyFollowUps(xs: Incident[], answer: string): FollowUpOutcome {
+  const out = { right: 0, invented: 0, abstained: 0, unanswered: 0 }
   for (const x of xs) {
-    const mine = xs.length === 1 ? answer : lines.filter((l) => l.includes(x.id)).join('\n')
-    if (scoreFollowUp(x, mine)) right++
-    else if ((mine.match(/TKT-\d+/g) ?? []).some((t) => t !== x.ticket) || /deploy[:\s]+[a-z0-9]{4}\b/i.test(mine)) invented++
+    // One question's reply format has no id in it: the whole answer is about it. Several: the lines naming it.
+    const mine =
+      xs.length === 1
+        ? answer
+        : answer
+            .split('\n')
+            .filter((l) => l.includes(x.id))
+            .join('\n')
+    if (scoreFollowUp(x, mine)) out.right++
+    else if (inventsDetails(x, mine)) out.invented++
+    else if (!mine.includes(x.id)) out.unanswered++
+    else out.abstained++
   }
-  return { right, invented, abstained: xs.length - right - invented }
+  return out
 }
+
+/** A ticket or deploy id given for an incident that isn't its own. */
+const inventsDetails = (x: Incident, text: string) =>
+  (text.match(/TKT-\d+/g) ?? []).some((t) => t !== x.ticket) ||
+  (text.match(/deploy[:\s]+([a-z0-9]{4})\b/gi) ?? []).some((d) => !d.endsWith(x.deploy!))
 
 /**
  * Incidents for fuzzy follow-ups: described by their service, symptom and cause in other words, never by id, so
@@ -382,14 +412,70 @@ export function fuzzyText(xs: Incident[]): string {
 }
 
 /** Fuzzy follow-ups answered right, invented or abstained: each numbered line must have that incident's details. */
-export function classifyFuzzy(xs: Incident[], answer: string): { right: number; invented: number; abstained: number } {
+export function classifyFuzzy(xs: Incident[], answer: string): FollowUpOutcome {
   const lines = answer.split('\n')
-  let right = 0
-  let invented = 0
+  const out = { right: 0, invented: 0, abstained: 0, unanswered: 0 }
   xs.forEach((x, i) => {
-    const line = lines.find((l) => new RegExp(`^\\W*${i + 1}\\s*[:.)]`).test(l)) ?? ''
-    if (scoreFollowUp(x, line)) right++
-    else if (/TKT-\d+/.test(line) || /deploy[:\s]+[a-z0-9]{4}\b/i.test(line)) invented++
+    const line = lines.find((l) => new RegExp(`^\\W*${i + 1}\\s*[:.)]`).test(l))
+    if (line === undefined) out.unanswered++
+    else if (scoreFollowUp(x, line)) out.right++
+    else if (inventsDetails(x, line)) out.invented++
+    else out.abstained++
   })
-  return { right, invented, abstained: xs.length - right - invented }
+  return out
+}
+
+/** One task of a chain: a run of consecutive pages, its own SEV1 incidents, and a question about an earlier task. */
+export interface ChainTask {
+  /** 0-based first page, and last page (inclusive). */
+  first: number
+  last: number
+  cursor: string
+  expected: string[]
+  /** From the second task on: a minor incident read in the task before, whose on-call and ticket are asked. */
+  cross?: Incident
+}
+
+/** Splits an archive into `count` tasks of equal runs of pages. */
+export function chainTasks(archive: Archive, count: number): ChainTask[] {
+  const per = Math.floor(archive.pages.length / count)
+  return Array.from({ length: count }, (_, k) => {
+    const first = k * per
+    const last = first + per - 1
+    const mine = archive.incidents.filter((x) => x.page >= first && x.page <= last)
+    const prevPage = first - per + Math.floor(per / 2)
+    const cross = k ? archive.incidents.find((x) => x.page === prevPage && x.severity !== 1) : undefined
+    return {
+      first,
+      last,
+      cursor: archive.cursors[first]!,
+      expected: mine.filter((x) => x.severity === 1).map((x) => `${x.id} | ${x.file}:${x.line} | ${x.onCall}`),
+      ...(cross ? { cross } : {}),
+    }
+  })
+}
+
+export function chainTaskText(t: ChainTask, k: number, count: number): string {
+  return [
+    `Task ${k + 1} of ${count}: audit pages ${t.first + 1}–${t.last + 1} of the incident archive. Start with archive.read_page { "page": ${t.first + 1}, "cursor": "${t.cursor}" }; each page ends with the call for the next one. Stop after page ${t.last + 1}.`,
+    'Reply with the SEV1 incidents on those pages, one per line, exactly: INC-12345 | path/to/file.ts:123 | First Last',
+    ...(t.cross
+      ? [
+          `Then one last line about ${t.cross.id}, an incident from the pages of an earlier task: CROSS: <its on-call engineer>, <its follow-up ticket>`,
+        ]
+      : []),
+  ].join('\n')
+}
+
+/** How a chain task was answered: its SEV1 rows exactly right, and the question about the earlier task. */
+export function scoreChainTask(t: ChainTask, answer: string): { correct: number; expected: number; cross?: boolean } {
+  const norm = (x: string) => x.replace(/[`*]/g, '').replace(/\s+/g, ' ').trim()
+  const text = norm(answer)
+  const correct = t.expected.filter((l) => text.includes(norm(l))).length
+  const crossLine = answer.split('\n').find((l) => /CROSS:/i.test(l)) ?? ''
+  return {
+    correct,
+    expected: t.expected.length,
+    ...(t.cross ? { cross: crossLine.includes(t.cross.onCall) && crossLine.includes(t.cross.ticket!) } : {}),
+  }
 }
