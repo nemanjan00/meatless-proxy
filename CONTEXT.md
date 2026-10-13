@@ -256,13 +256,13 @@ Each session keeps its own slice dense, and what crosses between them is
 distilled. That's how a few dense contexts can cover a whole company without
 any of them running out of room.
 
-**What the benchmark says so far.** The cost argument above assumes the
-knowledge is expensive to rebuild. When the source can simply be read again
-and the question is one targeted lookup, a fresh session was cheaper than
-asking the session that had read everything (see [the benchmark](#benchmark)):
-a long context costs something on every call. The dense session's measured
-win is detail that **can't** be rebuilt (messages, events, results that
-changed), where a fresh session can't answer at all.
+**What the benchmark says so far** ([the benchmark](#benchmark)). Asking the
+session that read everything is now the cheapest way to look things up by id:
+22–62k for five lookups, against about 280k for a fresh session that reads
+them again. Before `sessions.search` it wasn't: one lookup cost 159k, more
+than a fresh session's 27–29k. Lookups in other words than the source's are
+even so far. Detail that can't be read again (messages, events, results that
+changed) is where only the dense session can answer at all.
 
 ## Benchmark
 
@@ -399,9 +399,66 @@ counted on its own, not as a wrong answer.
   they can be fixed. The archive `managed` follow-up figure is over the two
   runs that finished.
 
-Still to test: how the arms scale as the facts to keep outgrow one summary,
-several late follow-ups on different pages, long-lived sessions that hit the
-cache over weeks, and sessions asking a dense session instead of re-reading.
+### Third round: scaling the facts (2026-10-14)
+
+The same 20 pages, with more facts the report has to keep exactly: 12, 40, 80
+and 150 SEV1 incidents. After the report, **five follow-ups by id** (minor
+incidents on pages spread across the archive) and **three fuzzy follow-ups**
+(an incident described in other words, without its id: "the media-cdn
+incident where background jobs piled up and stopped moving, because two cache
+entries ended up with the same key"). Every run at commit `ddf1143`, with
+`sessions.search` and the 70% note. Three runs per arm and size; medians.
+
+| facts | arm | report correct | prompt tokens | billed-equivalent | compactions | collapses | time | 5 follow-ups by id, billed | 3 fuzzy, right, billed |
+|-------|-----|----------------|---------------|-------------------|-------------|-----------|------|----------------------------|------------------------|
+| 12 | classic | 12/12 (3/3 runs) | 656k | 312k | 2 | 0 | 69 s | 15/15, 276k | 9/9, 322k |
+| 12 | managed | 12/12 (3/3) | 659k | **270k** (−13%) | 0 | 3 | 56 s | 15/15, **22k** | 6/9¹, 233k |
+| 40 | classic | 39 or 40/40 (2/3)² | 983k | 478k | 3 | 0 | 116 s | 15/15, 282k | 9/9, 327k |
+| 40 | managed | 40/40 (3/3) | 644k | **273k** (−43%) | 0 | 3 | 81 s | 15/15, **30k** | 9/9, 271k |
+| 80 | classic | 80/80 (3/3) | 1009k | 522k | 3 | 0 | 156 s | 15/15, 270k | 9/9, 297k |
+| 80 | managed | 80/80 (3/3) | 692k | **313k** (−40%) | 0 | 4 | 104 s | 15/15, **48k** | 9/9, 285k |
+| 150 | classic | 150/150 (3/3) | 1360k | 755k | 4 | 0 | 264 s | 15/15, 291k | 9/9, 290k |
+| 150 | managed | 150/150 (3/3) | 703k | **325k** (−57%) | 0 | 5 | 127 s | 15/15, **62k** | 9/9, 435k |
+
+A **fresh session** answering the same five follow-ups from zero: 30/30 right,
+278–281k billed at every size (range 254k–303k, about 15% run to run: the
+noise floor for the other comparisons).
+
+¹ One run lost the question: it collapsed a stretch that included the fuzzy
+question itself, then answered with its earlier report. Fixed since: a
+collapse can't replace a request made in the current run.
+² One run lost an incident a correction on page 16 upgraded to SEV1: its
+record was on an early page, and the summary had no reason to keep a minor
+incident. The model said so ("its original record is not in the archive, so
+I have no file:line or on-call"), and left it out.
+
+- **The managed report costs about the same at any size; classic's grows.**
+  Managed: 270k → 325k from 12 to 150 facts. Classic: 312k → 755k. Classic
+  re-summarises everything at each compaction, and its summaries grow with
+  the facts (about 3.5k tokens each at 12 facts, 5.5k at 80, 7.3k at 150, just
+  under the 8,000-token cap), so each compaction costs more and comes sooner.
+  At 150 it needed a fourth. The gap is 40–43% at 40–80 facts and 57% at 150.
+- **Classic stays accurate, but pays for it,** with one exception: a
+  correction that makes an early, unremarkable record matter after it was
+  summarised (40 facts, one run). That's relevance decided late, inside the
+  main task, and the managed arm, whose original entries stay findable,
+  never lost one.
+- **Lookups by id: the session that read everything is the cheapest.** 22–62k
+  for five follow-ups, against 270–291k for classic (which re-reads) and
+  278–281k for a fresh session. `sessions.search` is what changed: in round
+  two, without it, one follow-up cost the same arm 159k.
+- **Fuzzy lookups are even, not won.** Both arms got 9/9 from 40 facts on;
+  managed was cheaper up to 80 facts and dearer at 150 (435k vs 290k).
+  Without the id, search had to match the record's own words, and the
+  description used others; the model fell back to restoring or re-reading
+  pages. Fixed since: a search that finds no entry with every word ranks
+  entries by how many of the words they have, and its ready read starts where
+  they come together. Not measured yet.
+
+Still to test: chains of tasks (the gap should grow with the number of tasks,
+since classic carries one summary of everything and managed collapses each
+finished request), long-lived sessions that hit the cache over weeks, and
+fuzzy lookups with the search fallback.
 
 ## How it works
 
