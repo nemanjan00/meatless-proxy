@@ -64,8 +64,9 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
   - **A new request** (`boundaryAt`, 30%; 0 = off): at a run's first step,
     finished earlier requests (`earlierTasks`) that take that share of the
     window get a note (`taskBoundaryText`, `meta.contextBoundary`,
-    `context.boundary`), once per request. Requests named in an earlier
-    run's note and still there are collapsed by the harness itself
+    `context.boundary`), once per request. Requests a note named that are
+    still there after the model's next turn (or at the next run, for an
+    earlier run's note) are collapsed by the harness itself
     (`boundaryCollapse`): one `sessions.rewind` from the first to the last,
     carrying each request and its final reply word for word after the
     summary, the rest indexed (`collapseIndex`); `meta.boundaryCollapse`,

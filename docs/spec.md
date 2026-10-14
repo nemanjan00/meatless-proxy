@@ -2168,9 +2168,11 @@ was. The session page shows it ("context 112k / 200k").
   word right after the summary.
   It fires once per finished request: a later request gets the note only
   when a finished request hasn't been named in an earlier one. The note says
-  what happens to requests left as they are: at the next request, when they
-  still take that share of the window, the harness collapses them itself, in
-  one stretch from the first to the last. Each request and the final reply to
+  what happens to requests left as they are: after the model's next turn,
+  when they still take that share of the window, the harness collapses them
+  itself, in one stretch from the first to the last (waiting for the next
+  request was too late: by then a collapse at 80% or a compaction had folded
+  them in with the new work). Each request and the final reply to
   it stay word for word right after the summary; the work in between becomes
   an index of its tool calls and their result entries, findable with search
   and readable with restore. No model call is made for it.

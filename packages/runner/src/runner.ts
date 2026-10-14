@@ -1019,12 +1019,14 @@ export function createRunner(opts: RunnerOptions): Runner {
         if (compactError !== undefined && (overflowAt === stepNow || tokens >= window))
           return pauseForContext(run, tokens, window, `, and automatic compaction failed: ${compactError}`)
 
-        // Finished requests the model was told about at an earlier request and kept: the harness collapses them
-        // itself, keeping each request and its final reply word for word (once per run, first step).
-        if (boundaryAt > 0 && run.data.steps === 0 && !pendingCalls(history).length) {
+        // Finished requests the model was told about and kept: after its first turn with the note (or at the next
+        // request, for a note it got earlier), the harness collapses them itself, keeping each request and its final
+        // reply word for word. Waiting longer is too late: by the next request a collapse at 80% or a compaction has
+        // folded them in with the new work.
+        if (boundaryAt > 0 && stepNow <= 1 && !pendingCalls(history).length) {
           const named = new Set(
             history.flatMap((e) =>
-              e.meta.contextBoundary === true && e.meta.runId !== runId && Array.isArray(e.meta.boundaryTasks)
+              e.meta.contextBoundary === true && (e.meta.runId !== runId || stepNow === 1) && Array.isArray(e.meta.boundaryTasks)
                 ? (e.meta.boundaryTasks as string[])
                 : [],
             ),

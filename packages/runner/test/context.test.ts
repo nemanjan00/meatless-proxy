@@ -730,6 +730,35 @@ describe('a new request on top of finished ones', () => {
     expect((await h.sessions.history(s.id)).some((e) => e.meta.contextBoundary === true)).toBe(true)
   })
 
+  it('collapses after one turn in the same run when the model went on without collapsing', async () => {
+    let n = 0
+    const h = harness(
+      () => {
+        n++
+        // Task 1: three reads and an answer. Task 2: two more reads (ignoring the note), then an answer.
+        if (n <= 3 || n === 5 || n === 6) return callTools([{ name: 'grow', id: `call_g${n}` }])
+        return reply(n === 4 ? 'task 1 done' : 'task 2 done')
+      },
+      { contextWindow: () => 4000, compactAt: 0, contextNearAt: 0, contextNotes: [] },
+    )
+    withGrow(h, 2000)
+    const collapsed: { runId: string }[] = []
+    h.bus.subscribe(ContextTopics.boundaryCollapsed, (m) => void collapsed.push(m.payload as { runId: string }))
+    const s = await h.session(['grow'])
+    const r1 = await h.start(s.id, 'task 1: read the three files')
+    expect((await h.runner.execute(r1.id)).status).toBe('completed')
+    const r2 = await h.start(s.id, 'task 2: two more')
+    expect((await h.runner.execute(r2.id)).status).toBe('completed')
+    expect(collapsed.map((c) => c.runId)).toEqual([r2.id])
+    // The model's second call of task 2 still saw task 1's reads; its third didn't.
+    expect(JSON.stringify(h.model.calls[4]!.messages)).toContain('x'.repeat(500))
+    expect(JSON.stringify(h.model.calls[5]!.messages)).not.toContain('call_g1')
+    const path = await h.sessions.history(s.id)
+    const texts = path.map((e) => (e.content as { text?: string }).text)
+    expect(texts).toContain('task 1 done')
+    expect(texts).toContain('task 2 done')
+  })
+
   it("leaves a finished request alone when the model wasn't told about it yet", async () => {
     const { h, s } = await twoTasks(2000)
     expect((await h.sessions.history(s.id)).some((e) => e.meta.boundaryCollapse === true)).toBe(false)

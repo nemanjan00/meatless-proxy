@@ -386,7 +386,7 @@ export function taskBoundaryText(tokens: number, window: number, tasks: ContextS
     `[context: about ${kTokens(tokens)} of ${kTokens(window)} tokens, ${kTokens(total)} of it earlier requests that are done] ` +
     'A new request is a good point to keep only what it needs. Unless you need their detail now, collapse them, each into a ' +
     'summary of what the current work still needs from it (decisions, results, exact ids); the detail stays findable with sessions.search. ' +
-    'Left as they are, the harness collapses them at the next request, keeping each request and the final reply to it word for word:\n' +
+    'Left as they are, the harness collapses them after your next turn, keeping each request and the final reply to it word for word:\n' +
     tasks.map(suggestionLine).join('\n')
   )
 }
