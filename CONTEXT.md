@@ -166,7 +166,12 @@ Two variants:
   stays findable. Work made of tasks stays bounded: each task starts from the
   prompt, short summaries of the tasks before, and its own request. It's
   suggested once per finished request, when they take 30% of the window
-  (`CONTEXT_BOUNDARY_AT`).
+  (`CONTEXT_BOUNDARY_AT`). If the model goes on without it, the harness
+  collapses the finished requests itself after the model's next turn: each
+  request and the final reply to it stay word for word, the work in between
+  becomes an index. Left to the model alone, it never happened: the model
+  went on with the new task, and by the next request a collapse at 80% or a
+  compaction had folded the old task in with the new work.
 
 ### 3 · Compaction: the safety net
 
@@ -278,8 +283,9 @@ session that read everything is now the cheapest way to look things up by id:
 22–62k for five lookups, against about 280k for a fresh session that reads
 them again. Before `sessions.search` it wasn't: one lookup cost 159k, more
 than a fresh session's 27–29k. Lookups in other words than the source's are
-right in both, and only a little cheaper in the dense session (275k against
-319k): word matching can't yet tell a paraphrase. Detail that can't be read again (messages, events, results that
+right in both (one abstention in nine), and somewhat cheaper in the dense
+session (257k against 327k), but it still restores 8–17 entries to find
+three: word matching can't yet tell a paraphrase. Detail that can't be read again (messages, events, results that
 changed) is where only the dense session can answer at all.
 
 ## Benchmark
@@ -287,14 +293,17 @@ changed) is where only the dense session can answer at all.
 **Current result (2026-10-14).** On one long task, managed is **13–57%
 cheaper** on the report than classic compaction, and the gap grows with the
 facts the task has to keep: managed's cost stays nearly flat, while classic's
-summaries and compactions grow. Managed never lost a fact. Classic lost one
-that a late correction made relevant after it was summarised. With
-instructions given while the work goes on, both follow them and managed is
-**30% cheaper**. Lookups by id cost managed **a fifth to a tenth** of
-re-reading. Lookups described in other words are right in both and only a
-little cheaper in managed. On a one-time source, classic couldn't answer
-follow-ups at all. Every round, with how we got here and where classic won,
-is in **[docs/benchmark.md](docs/benchmark.md)**.
+summaries and compactions grow. Managed never lost a fact. Classic lost ones
+that a late correction made relevant after they were summarised. Over a
+chain of five tasks in one session, managed is **24% cheaper**, with the
+same cost per task from the second on and no compaction: the harness
+collapses each finished task at the next request. With instructions given
+while the work goes on, both follow them and managed is **30% cheaper**.
+Lookups by id cost managed **a tenth** of re-reading. Lookups described in
+other words are right in both and somewhat cheaper in managed, but not
+targeted. On a one-time source, classic couldn't answer follow-ups at all.
+Every round, with how we got here and where classic won, is in
+**[docs/benchmark.md](docs/benchmark.md)**.
 
 `npm run bench:context` ([packages/evals](packages/evals/README.md#the-context-benchmark))
 runs one long task under different strategies, with the same model (Claude
@@ -321,20 +330,30 @@ uncached input tokens: cached reads ×0.1, output ×5.
 
 | | classic | managed |
 |---|---|---|
-| 5 lookups by id, billed ([`27654a4`](docs/benchmark.md#lookups-in-other-words-with-the-search-fallback-2026-10-14)) | 15/15, 290k (re-reads the archive) | 15/15, **36k** |
-| 3 lookups in other words ([`27654a4`](docs/benchmark.md#lookups-in-other-words-with-the-search-fallback-2026-10-14)) | 9/9, 319k | 9/9, 275k |
+| 5 lookups by id, billed ([`b5597bc`](docs/benchmark.md#lookups-in-other-words-with-query-expansion-and-keywords-2026-10-14)) | 15/15, 297k (re-reads the archive) | 15/15, **23k** |
+| 3 lookups in other words ([`b5597bc`](docs/benchmark.md#lookups-in-other-words-with-query-expansion-and-keywords-2026-10-14)) | 9/9, 327k (re-reads 18–20 pages) | 8/9 (1 abstained), 257k, 8–17 restores |
 | same 5 by id, fresh session from zero | 281k | |
 | one-time source, a detail nobody asked for ([round two](docs/benchmark.md#second-round-2026-10-13)) | 0/3, all abstained | 2/2 |
 | two instructions sent mid-task ([`47bc622`](docs/benchmark.md#instructions-during-the-work-2026-10-14)) | 3/3 followed, 488k | 3/3 followed, **340k** (−30%) |
 
-**Chains of tasks** (five in one session, [`bfed127`](docs/benchmark.md#chains-of-tasks-2026-10-14)):
-managed is 16% cheaper over the chain, and the gap doesn't grow. The tasks
-barely depend on each other, so classic's compaction per task acts like a
-collapse of the finished one.
+**Chains of tasks** (five in one session, each asking about the task before; [`5898b42`](docs/benchmark.md#chains-with-the-collapse-at-a-new-request-2026-10-14)):
 
-Still to test: chains of tasks that build on each other, long-lived sessions
-that hit the cache over weeks, and search by meaning for questions phrased
-differently from the source.
+| task | classic billed | managed billed | managed context at end |
+|------|----------------|----------------|------------------------|
+| 1 | 46k | 47k | 36k |
+| 2 | 116k | 83k | 39k |
+| 3 | 146k | 82k | 40k |
+| 4 | 80k | 84k | 41k |
+| 5 | 122k | 87k | 42k |
+| whole chain | 507k (504k–809k), 3–5 compactions | **383k** (381k–384k), none | |
+
+Every task right in both arms. Managed answered each question about the task
+before with one search and one restore, from the index its collapse left.
+
+Still to test: chains whose tasks build on each other's results,
+long-lived sessions that hit the cache over weeks, and search by meaning for
+questions phrased differently from the source (query expansion and summary
+keywords cut restores from 17–25 to 8–17 per run, not to a few).
 
 ## How it works
 
@@ -376,7 +395,7 @@ flowchart TD
 | Percent | Setting | What happens |
 |---------|---------|--------------|
 | any | `TOOL_RESULT_MAX_CHARS` (20,000) | oversized results are offloaded as they arrive |
-| new request | `CONTEXT_BOUNDARY_AT` (30) | finished earlier requests take ≥ 30% of the window: a note with ready calls to collapse each whole |
+| new request | `CONTEXT_BOUNDARY_AT` (30) | finished earlier requests take ≥ 30% of the window: a note with ready calls to collapse each whole; still there after the model's next turn, the harness collapses them |
 | 70% | `CONTEXT_NOTES` | an advisory `system` note with up to three suggestions |
 | 80% | `CONTEXT_NEAR_AT` | a `user` turn: free space now (collapse, or compact with your own summary) |
 | 85% | `CONTEXT_COMPACT_AT` | automatic compaction before the next model call |
@@ -398,8 +417,13 @@ flowchart TD
   gets a note naming the biggest, with ready `sessions.rewind { from, to,
   summary }` calls. It fires once per finished request: the note records the
   requests it named, and a later request gets one only if some finished
-  request hasn't been named yet, so a model that kept its finished work isn't
-  told again. The first entry (the prompt) is never part of a request, so it
+  request hasn't been named yet. Requests a note named that are still there
+  after the model's next turn (or at the next run, for an earlier run's note)
+  the harness collapses itself (`boundaryCollapse`): one stretch from the
+  first to the last, each request and its final reply carried word for word
+  after the summary, the rest indexed, no model call. Before a run's first
+  model call, sizes use the previous run's measured tokens per character
+  (dense text can run half the default 3.5 characters a token). The first entry (the prompt) is never part of a request, so it
   stays first, and the cached prefix is the prompt plus the earliest summary.
 - **Picking suggestions** (`contextSuggestions`). Walk the history up to the
   latest tool-call turn (that's still current work). Group consecutive
@@ -494,7 +518,7 @@ history. An ephemeral run (router, triggers) leaves the session as it was.
 | `CONTEXT_COMPACT_AT` | 85 | percent for automatic compaction; 0 turns it off |
 | `CONTEXT_NEAR_AT` | 80 | percent for the "free space now" turn; 0 turns it off |
 | `CONTEXT_NOTES` | 70 | percents for the advisory notes, comma-separated; `off` turns them off |
-| `CONTEXT_BOUNDARY_AT` | 30 | percent of the window finished earlier requests must take for the note at a new request; 0 turns it off |
+| `CONTEXT_BOUNDARY_AT` | 30 | percent of the window finished earlier requests must take for the note at a new request and the harness's collapse after it; 0 turns both off |
 | `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim; 0 summarises everything |
 | `TOOL_RESULT_MAX_CHARS` | 20000 | automatic offload of big results; 0 turns it off |
 

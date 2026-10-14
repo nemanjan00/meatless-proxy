@@ -132,6 +132,6 @@ mkdirSync(dir, { recursive: true })
 const file = join(dir, `context-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 writeFileSync(
   file,
-  JSON.stringify({ model: describeModelEnv(modelEnv), code, ...opts, expected: archive.expected, runs }, null, 2),
+  `${JSON.stringify({ model: describeModelEnv(modelEnv), code, ...opts, expected: archive.expected, runs }, null, 2)}\n`,
 )
 process.stderr.write(`report: ${file}\n`)

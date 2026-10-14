@@ -227,7 +227,10 @@ gap doesn't grow with the number of tasks. On this shape classic's single
 compaction per task acts like a collapse of the finished task: the tasks
 share one fact each, so its summary stays small. The note at a new request
 didn't lead to a collapse at the boundary; the model carried on into the
-70% and 80% notes. A chain whose tasks build on each other is still to test.
+70% and 80% notes. *(Corrected below: the note never fired in this round. A
+new run estimated its context at the default 3.5 characters a token, and
+these pages run about 1.9, so the finished task looked half its size.)* A
+chain whose tasks build on each other is still to test.
 
 ## Instructions during the work (2026-10-14)
 
@@ -274,3 +277,85 @@ A fresh session answering the five by id: 30/30, 281k.
   jobs in the queue". Lookups by id stay cheap: an exact string is word
   matching's best case. Closing the gap for questions in other words needs
   search by meaning (embeddings), not done.
+
+## Lookups in other words, with query expansion and keywords (2026-10-14)
+
+Two cheap steps before search by meaning: `sessions.search`'s description
+asks for a few short queries, one idea each, with the words the material
+would use and their synonyms, instead of one long phrase; and collapse and
+compaction summaries end with a `Keywords:` line of the words a later
+question might use. The examples in the prompts are unrelated to the
+benchmark's questions. 40 facts, commit `b5597bc`.
+
+| arm | report correct | report billed | 5 by id | 3 fuzzy | fuzzy restores per run |
+|-----|----------------|---------------|---------|---------|------------------------|
+| classic | 40/40 in 1 run, 39/40 in 2 | 346k | 15/15, 297k, re-read in 3/3 | 9/9, 327k | 0 (re-reads 18–20 pages) |
+| managed | 40/40 (3/3) | **302k** (−13%) | 15/15, **23k**, re-read in 0/3 | 8/9 (1 abstained), **257k** (247k–411k) | 8–17 |
+
+- **Fewer restores, not few.** 8–17 restores per fuzzy run, against 17–25
+  before; one run also re-read 10 pages. Cost fell a little (257k against
+  275k), within the noise of three runs.
+- **One abstention.** The model searched with the archive's own words
+  ("5xx", "missing index") and still concluded the record wasn't there, and
+  said so rather than guessing. A miss with the right words means the gap is
+  not only paraphrase: how the model reads hits matters too.
+- **Classic lost facts again**: 39/40 in two of three runs, the same
+  late-correction loss as round three. The report gap is smaller this time
+  (−13%, against −44% in the previous round), because classic needed two
+  compactions instead of three. Run-to-run noise on the report is large.
+
+Verdict: query expansion and keywords helped some, but didn't make lookups
+in other words targeted. Search by meaning is still the open step.
+
+## Chains, with the collapse at a new request (2026-10-14)
+
+The same five-task chain (`--chain 5`), three runs per arm, after two fixes:
+
+1. **The note fires** (`b969e3b`): a run sizes its context with the previous
+   run's measured tokens per character until its own first call.
+2. **The harness collapses what the model keeps** (`5898b42`): finished
+   requests a note named that are still there after the model's next turn
+   are collapsed by the harness, in one stretch. Each request and the final
+   reply to it stay word for word after the summary, and the work becomes an
+   index.
+
+| commit | arm | chain billed (median, range) | compactions per run | collapses at a boundary | earlier-task questions |
+|--------|-----|------------------------------|---------------------|-------------------------|------------------------|
+| `bfed127` (round above) | classic | 629k (534k–911k) | 3–6 | – | 12/12 |
+| `bfed127` | managed | 528k (520k–551k) | 2–3 | 0 | 12/12 |
+| `b969e3b` (note fires) | classic | 378k (373k–504k) | 2–3 | – | 8/12 |
+| `b969e3b` | managed | 523k (475k–540k) | 1–2 | 0 | 12/12 |
+| `5898b42` (harness collapses) | classic | 507k (504k–809k) | 3–5 | – | 12/12 |
+| `5898b42` | managed | **383k** (381k–384k) | **0** | **4 of 4** | 12/12 |
+
+Per task at `5898b42` (medians):
+
+| task | classic billed | managed billed | classic context at end | managed context at end |
+|------|----------------|----------------|------------------------|------------------------|
+| 1 | 46k | 47k | 33k | 36k |
+| 2 | 116k | 83k | 12k | 39k |
+| 3 | 146k | 82k | 7k | 40k |
+| 4 | 80k | 84k | 51k | 41k |
+| 5 | 122k | 87k | 35k | 42k |
+
+- **A note alone made it worse.** With the note firing (`b969e3b`), the
+  model read it and went on with the new task. At 80% it collapsed its
+  current reads, folding the earlier task in with them, or compaction did.
+  That costs more than classic, which compacts once and moves on.
+- **The harness collapse made it flat.** At every boundary the finished task
+  went from about 41–47k to 17–20k of context, after one turn. No compaction
+  in any run, no collapse by the model, and the same cost per task from the
+  second on (82–87k). Its context grows by about 1k per task: the request
+  and reply kept word for word. Managed is **24% cheaper** over the chain
+  (383k against 507k), and its three runs are within 3k of each other, while
+  classic's range is 504k–809k.
+- **Earlier detail was found, not kept.** Each task's question about the
+  task before (a minor incident's engineer and ticket, never in a reply) was
+  answered with one `sessions.search` and one `sessions.restore`, right in
+  all 12.
+- **Classic's 8/12 at `b969e3b`**: four questions whose summary didn't keep
+  the earlier minor incident; at `5898b42` it got all 12. Which details a
+  summary keeps varies from run to run.
+
+The tasks still barely depend on each other. A chain whose tasks build on
+each other's results is the next test, now that the boundary collapse runs.
