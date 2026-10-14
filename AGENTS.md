@@ -14,6 +14,7 @@ the design documents.
 | [docs/stylebook.md](docs/stylebook.md) | How the web UI looks. Follow it for any UI change. |
 | [docs/employee.md](docs/employee.md) | How an AI employee behaves. |
 | [CONTEXT.md](CONTEXT.md) | How a session manages its context window: offload, collapse, compaction. |
+| [docs/benchmark.md](docs/benchmark.md) | Every round of the context benchmark: what was measured, what changed. |
 
 If you change behaviour, update the spec in the same change. If the spec and
 the code disagree, the code is wrong, or the spec needs a deliberate update.

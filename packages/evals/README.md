@@ -109,7 +109,8 @@ table, `.env` loading). They use the scripted model from `@mp/model` and need no
 ## The context benchmark
 
 `npm run bench:context` compares context strategies on one long task (see
-[CONTEXT.md](../../CONTEXT.md)): audit a paged incident archive about three
+[CONTEXT.md](../../CONTEXT.md), and every round's results in
+[docs/benchmark.md](../../docs/benchmark.md)): audit a paged incident archive about three
 times bigger than the context window, then report the audit reference from
 page 1 and every incident whose final severity is SEV1 (corrections on later
 pages change some), each with its exact root-cause location and on-call
