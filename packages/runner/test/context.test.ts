@@ -708,6 +708,28 @@ describe('a new request on top of finished ones', () => {
     expect(collapsed).toHaveLength(1)
   })
 
+  it("sizes a new request's history with the previous run's measured tokens per character, not the default", async () => {
+    // Dense text: 2 characters a token, as the provider reports. At the default 3.5 the finished task would look
+    // like ~1k tokens, under the 30% (1.2k) of the 4k window; measured, it is ~1.8k.
+    const dense = (req: ModelRequest) => ({ promptTokens: Math.round(JSON.stringify(req.messages).length / 2) })
+    let n = 0
+    const h = harness(
+      (req: ModelRequest) => {
+        n++
+        if (n <= 3) return callTools([{ name: 'grow', id: `call_g${n}` }], undefined, dense(req))
+        return reply(n === 4 ? 'task 1 done' : 'task 2 done', dense(req))
+      },
+      { contextWindow: () => 4000, compactAt: 0, contextNearAt: 0, contextNotes: [] },
+    )
+    withGrow(h, 1200)
+    const s = await h.session(['grow'])
+    const r1 = await h.start(s.id, 'task 1: read the three files')
+    expect((await h.runner.execute(r1.id)).status).toBe('completed')
+    const r2 = await h.start(s.id, 'task 2: something else')
+    expect((await h.runner.execute(r2.id)).status).toBe('completed')
+    expect((await h.sessions.history(s.id)).some((e) => e.meta.contextBoundary === true)).toBe(true)
+  })
+
   it("leaves a finished request alone when the model wasn't told about it yet", async () => {
     const { h, s } = await twoTasks(2000)
     expect((await h.sessions.history(s.id)).some((e) => e.meta.boundaryCollapse === true)).toBe(false)

@@ -494,6 +494,13 @@ export function createRunner(opts: RunnerOptions): Runner {
     }
   }
 
+  /** The latest measured context size of a session's earlier runs: tokens per character for a run that has none yet. */
+  const previousContext = async (run: Run): Promise<RunContextSize | undefined> => {
+    const runs = await sessions.runs({ sessionId: run.data.sessionId, newestFirst: true, limit: 5 })
+    return runs.find((r) => r.id !== run.id && r.data.context && r.data.context.chars > 0 && r.data.context.tokens > 0)?.data
+      .context
+  }
+
   /** What a summary records about the context notes so far, so the next run doesn't note the same thresholds again. */
   const notedMeta = (run: Run): Record<string, Json> => ({ contextNoted: run.data.context?.noted ?? 0 })
 
@@ -610,13 +617,15 @@ export function createRunner(opts: RunnerOptions): Runner {
     modelName: string
     window: number
     tokens: number
+    /** The measured context size to estimate with (this run's, or the previous run's before its first call). */
+    sizing: RunContextSize | undefined
     logger: Logger
   }): Promise<{ ok: true; kept: number } | { ok: false; error: string }> => {
     const { run, session, history, logger } = a
     // The kept tail is a share of the window, or of the request when it's smaller (the provider may have said
     // a request too long for a window the table overestimates).
     const budget = Math.floor(compactKeep * Math.min(a.window, a.tokens))
-    const cut = compactionCut(history, budget, tokensPerChar(run.data.context))
+    const cut = compactionCut(history, budget, tokensPerChar(a.sizing))
     if (cut <= 1) return { ok: false, error: 'nothing to summarise: the latest entries alone fill the context' }
     const messages = renderMessages(history.slice(0, cut))
     if (a.prompt !== undefined && history[0]?.kind === 'system' && messages[0]?.role === 'system')
@@ -871,6 +880,8 @@ export function createRunner(opts: RunnerOptions): Runner {
       await sessions.updateRun(runId, { wait: undefined } as any)
     }
 
+    /** The previous run's measured context size, looked up once (null: there is none). */
+    let measuredBefore: RunContextSize | null | undefined
     try {
       for (;;) {
         run = await sessions.requireRun(runId)
@@ -970,21 +981,25 @@ export function createRunner(opts: RunnerOptions): Runner {
           return m
         }
         const stepNow = run.data.steps
+        // Before its first model call a run hasn't measured tokens per character: the session's previous run has
+        // (text like code or tables can be twice as dense as the default assumes).
+        if (!run.data.context && measuredBefore === undefined) measuredBefore = (await previousContext(run)) ?? null
+        const sizing = run.data.context ?? measuredBefore ?? undefined
         let messages = render(history)
         let chars = requestChars(messages, specs)
-        let tokens = estimateTokens(chars, run.data.context)
+        let tokens = estimateTokens(chars, sizing)
 
         // The safety net: compact near the end of the window, or when the provider said the request is too long.
         let compactError: string | undefined
         if (compactAt > 0 && compactTried !== stepNow && (overflowAt === stepNow || tokens >= (window * compactAt) / 100)) {
           compactTried = stepNow
           const before = tokens
-          const r = await autoCompact({ run, session, history, prompt, specs, modelName, window, tokens, logger })
+          const r = await autoCompact({ run, sizing, session, history, prompt, specs, modelName, window, tokens, logger })
           if (r.ok) {
             history = await sessions.runHistory(runId)
             messages = render(history)
             chars = requestChars(messages, specs)
-            tokens = estimateTokens(chars, run.data.context)
+            tokens = estimateTokens(chars, sizing)
             emit(ContextTopics.compacted, {
               runId,
               sessionId: session.id,
@@ -1014,7 +1029,7 @@ export function createRunner(opts: RunnerOptions): Runner {
                 : [],
             ),
           )
-          const c = named.size ? boundaryCollapse(history, runId, tokensPerChar(run.data.context), named) : undefined
+          const c = named.size ? boundaryCollapse(history, runId, tokensPerChar(sizing), named) : undefined
           if (c && c.tokens >= (window * boundaryAt) / 100) {
             const meta = { ...notedMeta(run), boundaryCollapse: true }
             const done = await historyOp(run, 'boundary collapse', () =>
@@ -1029,7 +1044,7 @@ export function createRunner(opts: RunnerOptions): Runner {
               history = await sessions.runHistory(runId)
               messages = render(history)
               chars = requestChars(messages, specs)
-              tokens = estimateTokens(chars, run.data.context)
+              tokens = estimateTokens(chars, sizing)
               emit(ContextTopics.boundaryCollapsed, {
                 runId,
                 sessionId: session.id,
@@ -1054,7 +1069,7 @@ export function createRunner(opts: RunnerOptions): Runner {
           !pendingCalls(history).length &&
           !history.some((e) => e.meta.contextBoundary === true && e.meta.runId === runId)
         ) {
-          const all = earlierTasks(history, runId, tokensPerChar(run.data.context), {
+          const all = earlierTasks(history, runId, tokensPerChar(sizing), {
             minTokens: Math.max(200, Math.round(window * 0.02)),
           })
           // Once per finished request: a note fires only when one of them hasn't been named in an earlier note,
@@ -1094,8 +1109,8 @@ export function createRunner(opts: RunnerOptions): Runner {
             const minTokens = Math.max(200, Math.round(window * 0.02))
             // Whole finished requests compete with stretches of the current work: the biggest come first.
             const suggestions = [
-              ...earlierTasks(history, runId, tokensPerChar(run.data.context), { minTokens }),
-              ...contextSuggestions(history, tokensPerChar(run.data.context), { minTokens }),
+              ...earlierTasks(history, runId, tokensPerChar(sizing), { minTokens }),
+              ...contextSuggestions(history, tokensPerChar(sizing), { minTokens }),
             ]
               .sort((a, b) => b.tokens - a.tokens)
               .slice(0, 3)
