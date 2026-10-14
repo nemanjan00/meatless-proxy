@@ -289,7 +289,8 @@ with the facts the task has to keep (managed's cost stays nearly flat,
 classic's summaries and compactions grow). Managed never lost a fact;
 classic lost one that a late correction made relevant after it was
 summarised. Lookups by id cost managed **a fifth to a tenth** of re-reading
-(22–62k against about 280k). With instructions given while the work goes on,
+(22–62k against about 280k); lookups described in other words are right in
+both and only a little cheaper in managed (275k against 319k). With instructions given while the work goes on,
 both follow them and managed is **30% cheaper**. On a one-time source,
 classic couldn't answer at all. The rounds below show how we got there, including where classic won.
 
@@ -541,7 +542,27 @@ service again ("keep those after all, marked (review)"). Commit `a540240`.
   Managed then followed both instructions in every run, never needed a
   compaction, and was **30% cheaper** and a third faster than classic.
 
-Still to test: fuzzy lookups with the passage-ranked search, chains of tasks that build on
+### Lookups in other words, with the search fallback (2026-10-14)
+
+40 facts, five lookups by id and three fuzzy ones, at commit `27654a4`: the
+search that ranks entries by their best passage when none has every word.
+
+| arm | report correct | report billed | 5 by id | 3 fuzzy |
+|-----|----------------|---------------|---------|---------|
+| classic | 40/40 (3/3 runs) | 481k | 15/15, 290k, re-read the archive in 3/3 runs | 9/9, 319k |
+| managed | 40/40 (3/3) | **271k** (−44%) | 15/15, **36k**, re-read in 0/3 | 9/9, **275k** (225k–483k) |
+
+A fresh session answering the five by id: 30/30, 281k.
+
+- **Fuzzy lookups are right, and a little cheaper than classic, but not
+  targeted.** The same arm cost a median 636k before passage ranking; now
+  275k. It still restored 17–25 entries per run (one run re-read 17 pages),
+  because matching words can't tell that "background jobs piled up" is "stuck
+  jobs in the queue". Lookups by id stay cheap: an exact string is word
+  matching's best case. Closing the gap for questions in other words needs
+  search by meaning (embeddings), not done.
+
+Still to test: chains of tasks that build on
 each other, and long-lived sessions that hit the cache over weeks.
 
 ## How it works
