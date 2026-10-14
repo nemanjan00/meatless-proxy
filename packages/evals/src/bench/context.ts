@@ -404,7 +404,10 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
       )
     }
     let fuzzy: FollowUp | undefined
-    const fz = asking && (o.fuzzyFollowUps ?? 0) > 0 ? fuzzyIncidents(archive, o.fuzzyFollowUps!, xs) : []
+    // The same session only goes on once its last run finished: a run left paused (a provider outage, say) still
+    // holds the session, and starting another would fail the whole run and lose what was measured.
+    const sessionFree = !follow || follow.state === 'completed'
+    const fz = asking && sessionFree && (o.fuzzyFollowUps ?? 0) > 0 ? fuzzyIncidents(archive, o.fuzzyFollowUps!, xs) : []
     if (fz.length) {
       trace.push('— fuzzy follow-up —')
       const p = await phase(session.id, fuzzyText(fz))
