@@ -289,8 +289,9 @@ with the facts the task has to keep (managed's cost stays nearly flat,
 classic's summaries and compactions grow). Managed never lost a fact;
 classic lost one that a late correction made relevant after it was
 summarised. Lookups by id cost managed **a fifth to a tenth** of re-reading
-(22–62k against about 280k). On a one-time source, classic couldn't answer
-at all. The rounds below show how we got there, including where classic won.
+(22–62k against about 280k). With instructions given while the work goes on,
+both follow them and managed is **30% cheaper**. On a one-time source,
+classic couldn't answer at all. The rounds below show how we got there, including where classic won.
 
 `npm run bench:context` ([packages/evals](packages/evals/README.md#the-context-benchmark))
 runs one long task under different strategies, with the same model, archive
@@ -521,10 +522,12 @@ constraint after page 4 ("leave out every billing-worker incident, those go
 to a separate review") and after page 12 a correction that doesn't name the
 service again ("keep those after all, marked (review)"). Commit `a540240`.
 
-| arm | instructions followed | billed-equivalent | compactions | collapses |
-|-----|-----------------------|-------------------|-------------|-----------|
-| classic | 3/3 runs | 496k | 3 | 0 |
-| managed | 3/3 runs | 555k | 2–3 | 0 |
+| commit | arm | instructions followed | report correct | billed-equivalent | compactions | collapses | time |
+|--------|-----|-----------------------|----------------|-------------------|-------------|-----------|------|
+| `a540240` | classic | 3/3 runs | 40/40 (3/3) | 496k | 3 | 0 | 141 s |
+| `a540240` | managed | 3/3 runs | 40/40 (3/3) | 555k | 2–3 | 0 | 147 s |
+| `47bc622` | classic | 3/3 runs | 40/40 (3/3) | 488k | 3 | 0 | 130 s |
+| `47bc622` | managed | 3/3 runs | 40/40 (3/3) | **340k** (−30%) | 0 | 2 | 88 s |
 
 - **Classic kept both instructions** through its compactions: its summary
   prompt asks for decisions and who asked, and it carried the constraint
@@ -532,12 +535,13 @@ service again ("keep those after all, marked (review)"). Commit `a540240`.
 - **Managed couldn't collapse at all**, and paid more for it. Its rewind at
   80% covered the person's constraint, and the harness refused a collapse
   that would replace a request made in the run. The model didn't try again
-  around it, so automatic compaction took over. Fixed since: the request is
-  kept word for word right after the summary instead (better than any
-  paraphrase), and the collapse goes ahead. Not measured yet.
+  around it, so automatic compaction took over.
+- **Fixed, and measured** (`47bc622`): a request made in the run is kept
+  word for word right after the summary, and the collapse goes ahead.
+  Managed then followed both instructions in every run, never needed a
+  compaction, and was **30% cheaper** and a third faster than classic.
 
-Still to test: instructions with the request carried through a collapse,
-fuzzy lookups with the passage-ranked search, chains of tasks that build on
+Still to test: fuzzy lookups with the passage-ranked search, chains of tasks that build on
 each other, and long-lived sessions that hit the cache over weeks.
 
 ## How it works
