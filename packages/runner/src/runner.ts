@@ -46,6 +46,7 @@ import {
   contextSuggestions,
   earlierTasks,
   taskBoundaryText,
+  boundaryCollapse,
   estimateTokens,
   isContextOverflow,
   kTokens,
@@ -77,6 +78,7 @@ export const ContextTopics = {
   noted: 'context.noted',
   /** `{ runId, sessionId, tokens, window, tasks, taskTokens }`: a new run was told about big finished requests above it. */
   boundary: 'context.boundary',
+  boundaryCollapsed: 'context.boundary_collapsed',
   /** `{ runId, sessionId, callId, name, chars, entryId }`: an oversized tool result was kept as a preview. */
   resultOffloaded: 'context.result_offloaded',
 } as const
@@ -471,9 +473,10 @@ export function createRunner(opts: RunnerOptions): Runner {
    * the model, instead of failing the run. So does any other error of the change (logged): tidying the context
    * must never cost the work. Only an outage (`unavailable`) goes up, so the run is retried.
    */
-  const historyOp = async (run: Run, tool: string, op: () => Promise<unknown>) => {
+  const historyOp = async (run: Run, tool: string, op: () => Promise<unknown>): Promise<boolean> => {
     try {
       await op()
+      return true
     } catch (err) {
       if (isMpError(err, 'unavailable')) throw err
       if (!isMpError(err, 'validation'))
@@ -487,6 +490,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         content: { text: `[harness] ${tool} was not applied: ${errorMessage(err)}. The history is unchanged.` },
         meta: { historyOpFailed: tool },
       })
+      return false
     }
   }
 
@@ -999,6 +1003,49 @@ export function createRunner(opts: RunnerOptions): Runner {
         }
         if (compactError !== undefined && (overflowAt === stepNow || tokens >= window))
           return pauseForContext(run, tokens, window, `, and automatic compaction failed: ${compactError}`)
+
+        // Finished requests the model was told about at an earlier request and kept: the harness collapses them
+        // itself, keeping each request and its final reply word for word (once per run, first step).
+        if (boundaryAt > 0 && run.data.steps === 0 && !pendingCalls(history).length) {
+          const named = new Set(
+            history.flatMap((e) =>
+              e.meta.contextBoundary === true && e.meta.runId !== runId && Array.isArray(e.meta.boundaryTasks)
+                ? (e.meta.boundaryTasks as string[])
+                : [],
+            ),
+          )
+          const c = named.size ? boundaryCollapse(history, runId, tokensPerChar(run.data.context), named) : undefined
+          if (c && c.tokens >= (window * boundaryAt) / 100) {
+            const meta = { ...notedMeta(run), boundaryCollapse: true }
+            const done = await historyOp(run, 'boundary collapse', () =>
+              sessions.rewind(runId, c.toEntry, c.summary, {
+                keepAfter: c.keepAfter,
+                carry: c.carry,
+                meta,
+              }),
+            )
+            if (done) {
+              const before = tokens
+              history = await sessions.runHistory(runId)
+              messages = render(history)
+              chars = requestChars(messages, specs)
+              tokens = estimateTokens(chars, run.data.context)
+              emit(ContextTopics.boundaryCollapsed, {
+                runId,
+                sessionId: session.id,
+                requests: c.requests,
+                tokensBefore: before,
+                tokensAfter: tokens,
+                window,
+              })
+              logger.info('harness collapsed finished requests left after a note', {
+                requests: c.requests,
+                before,
+                after: tokens,
+              })
+            }
+          }
+        }
 
         // A new request on top of big finished ones: the moment to keep only what it needs (once per run, first step).
         if (

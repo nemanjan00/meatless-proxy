@@ -313,6 +313,8 @@ Include:
 - What is still to do: the remaining steps, in order.
 - Verbatim, everything the remaining work or the deliverable needs: exact line numbers, file paths, quotes, figures, ids, branches, links, ticket, thread and message ids. Copy them exactly; the earlier messages will be gone, so a paraphrase or "see above" loses them.
 
+- Last, a line "Keywords: …": the words a later question about this material might use, synonyms and everyday words included, so a search in other words finds it.
+
 Be concise and factual about everything else: at most about 2,000 words. The most recent messages are kept verbatim after your summary, so focus on what came before them.`
 
 /** The heading of the session document's section that records automatic compactions. */
@@ -383,7 +385,110 @@ export function taskBoundaryText(tokens: number, window: number, tasks: ContextS
   return (
     `[context: about ${kTokens(tokens)} of ${kTokens(window)} tokens, ${kTokens(total)} of it earlier requests that are done] ` +
     'A new request is a good point to keep only what it needs. Unless you need their detail now, collapse them, each into a ' +
-    'summary of what the current work still needs from it (decisions, results, exact ids); the detail stays findable with sessions.search:\n' +
+    'summary of what the current work still needs from it (decisions, results, exact ids); the detail stays findable with sessions.search. ' +
+    'Left as they are, the harness collapses them at the next request, keeping each request and the final reply to it word for word:\n' +
     tasks.map(suggestionLine).join('\n')
   )
+}
+
+/** The text a model saw for an entry (a tool result's output as it is rendered). */
+export function entryText(e: Entry): string {
+  const c = e.content as Record<string, unknown> | null
+  if (e.kind === 'tool_result') {
+    const out = c?.output
+    const body = typeof out === 'string' ? out : JSON.stringify(out)
+    return c?.isError ? `ERROR: ${body}` : body
+  }
+  if (c && typeof c.text === 'string') return c.text
+  return JSON.stringify(c)
+}
+
+/** Lines an index of a collapsed stretch lists at most. */
+export const INDEX_MAX = 40
+
+/**
+ * The index appended to a collapse summary: each tool call the stretch replaced, with its arguments and the entry
+ * holding its result, so a later question can read back the one result it needs instead of searching. Earlier
+ * summaries and messages in the stretch are listed too, so a collapse of collapses (a whole finished task) still
+ * leads to every part: each earlier summary carries its own index. Calls in `skip` are left out.
+ */
+export function collapseIndex(stretch: Entry[], skip: Set<string>, perChar: number): string {
+  const results = new Map<string, Entry>()
+  for (const e of stretch) {
+    const id = answeredCall(e)
+    if (id) results.set(id, e)
+  }
+  const lines: string[] = []
+  const firstLine = (e: Entry, max = 80) => {
+    const t =
+      entryText(e)
+        .replace(/\[index of what this summary replaced[\s\S]*$/, '')
+        .trim()
+        .split('\n')[0] ?? ''
+    return t.length > max ? `${t.slice(0, max)}…` : t
+  }
+  for (const e of stretch) {
+    if (e.kind === 'summary')
+      lines.push(
+        `- an earlier summary → entry ${e.id} (≈${kTokens(entryTokens(e, perChar))} tokens; its own index lists what it replaced): ${firstLine(e)}`,
+      )
+    else if (e.kind === 'user' || e.kind === 'event') lines.push(`- a message → entry ${e.id}: ${firstLine(e)}`)
+    for (const c of callsOfEntry(e)) {
+      if (skip.has(c.id)) continue
+      const r = results.get(c.id)
+      const args = (c.arguments ?? '').replace(/\s+/g, ' ')
+      const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args
+      lines.push(`- ${c.name} ${shown}${r ? ` → entry ${r.id} (≈${kTokens(entryTokens(r, perChar))} tokens)` : ''}`)
+    }
+  }
+  if (!lines.length) return ''
+  const more = lines.length > INDEX_MAX ? [`- … and ${lines.length - INDEX_MAX} more (sessions.contents lists them all)`] : []
+  return `\n\n[index of what this summary replaced: find a detail in it with sessions.search { text, includeThisSession: true }, or read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
+}
+
+/**
+ * The collapse the harness makes itself at a new request when the model left finished requests it was told about
+ * (`named`, the requests of an earlier boundary note) in its context: one stretch from the first of them to the end
+ * of the last, every request in it and the final reply to each kept word for word right after the summary, the work
+ * in between replaced by an index. Undefined when none of the named requests is still there.
+ */
+export function boundaryCollapse(
+  history: Entry[],
+  runId: string,
+  perChar: number,
+  named: Set<string>,
+): { toEntry: string; keepAfter: string; carry: string[]; summary: string; requests: number; tokens: number } | undefined {
+  const ignored = earlierTasks(history, runId, perChar).flatMap((t) => (t.kind === 'task' && named.has(t.from) ? [t] : []))
+  if (!ignored.length) return undefined
+  const at = (id: string) => history.findIndex((e) => e.id === id)
+  const start = Math.min(...ignored.map((t) => at(t.from)))
+  const end = Math.max(...ignored.map((t) => at(t.to)))
+  const stretch = history.slice(start, end + 1)
+  const carry: string[] = []
+  let reply: Entry | undefined
+  const close = () => {
+    if (reply) carry.push(reply.id)
+    reply = undefined
+  }
+  for (const e of stretch) {
+    if (isContextNote(e)) continue
+    if (e.kind === 'user' || e.kind === 'event') {
+      close()
+      carry.push(e.id)
+    } else if (e.kind === 'assistant' && !callsOfEntry(e).length && entryText(e).trim()) reply = e
+  }
+  close()
+  const requests = stretch.filter((e) => (e.kind === 'user' || e.kind === 'event') && !isContextNote(e)).length
+  const tokens = stretch.filter((e) => !isContextNote(e)).reduce((n, e) => n + entryTokens(e, perChar), 0)
+  const summary =
+    `[the harness collapsed ${requests === 1 ? 'an earlier request that is done' : `${requests} earlier requests that are done`} (about ${kTokens(tokens)} tokens), ` +
+    'which were left in the context after a note about them. ' +
+    `${requests === 1 ? 'The request and the final reply to it follow' : 'Each request and the final reply to it follow'} word for word; ` +
+    'the work in between is in the index below]' +
+    collapseIndex(
+      stretch.filter((e) => !isContextNote(e)),
+      new Set(),
+      perChar,
+    )
+  return { toEntry: history[start - 1]!.id, keepAfter: history[end]!.id, carry, summary, requests, tokens }
 }

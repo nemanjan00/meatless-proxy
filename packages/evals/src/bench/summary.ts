@@ -169,6 +169,7 @@ export function chainTable(arms: string[], runs: BenchRun[]): string {
     'calls',
     'compactions',
     'collapses',
+    'harness collapses',
     'context at end',
   ]
   const rows: string[][] = []
@@ -188,6 +189,7 @@ export function chainTable(arms: string[], runs: BenchRun[]): string {
         String(median(done.map((t) => t.stats.calls))),
         String(median(done.map((t) => t.stats.compactions))),
         String(median(done.map((t) => t.stats.collapses))),
+        String(median(done.map((t) => t.stats.harnessCollapses ?? 0))),
         spread(done.map((t) => t.stats.endPrompt)),
       ])
     }

@@ -61,6 +61,15 @@ Executes runs, as described in [docs/execution.md](../../docs/execution.md).
     Summaries record `meta.contextNoted`; a new run starts from that and the
     notes after it. At most one per model call, never while tool calls are
     open. Rewinds and compactions don't copy notes into the kept part.
+  - **A new request** (`boundaryAt`, 30%; 0 = off): at a run's first step,
+    finished earlier requests (`earlierTasks`) that take that share of the
+    window get a note (`taskBoundaryText`, `meta.contextBoundary`,
+    `context.boundary`), once per request. Requests named in an earlier
+    run's note and still there are collapsed by the harness itself
+    (`boundaryCollapse`): one `sessions.rewind` from the first to the last,
+    carrying each request and its final reply word for word after the
+    summary, the rest indexed (`collapseIndex`); `meta.boundaryCollapse`,
+    `context.boundary_collapsed`.
   - **Automatic compaction** at `compactAt` (85%; 0 = off), or when the
     provider says the request is too long: one model call without tools asks
     for a summary (`COMPACTION_PROMPT`, `compactSummaryMaxTokens` 8000), then

@@ -679,6 +679,40 @@ describe('a new request on top of finished ones', () => {
     expect(notes[0]!.meta.boundaryTasks).toHaveLength(1)
   })
 
+  it('collapses a finished request itself when the model kept it after the note: its request and reply stay word for word', async () => {
+    const { h, s } = await twoTasks(2000)
+    const collapsed: { requests: number; tokensBefore: number; tokensAfter: number }[] = []
+    h.bus.subscribe(ContextTopics.boundaryCollapsed, (m) => void collapsed.push(m.payload as (typeof collapsed)[number]))
+    const r3 = await h.start(s.id, 'task 3: one more')
+    expect((await h.runner.execute(r3.id)).status).toBe('completed')
+    expect(collapsed).toHaveLength(1)
+    expect(collapsed[0]!.requests).toBe(1)
+    expect(collapsed[0]!.tokensAfter).toBeLessThan(collapsed[0]!.tokensBefore)
+    const path = await h.sessions.history(s.id)
+    const at = path.findIndex((e) => e.meta.boundaryCollapse === true)
+    expect(at).toBeGreaterThan(0)
+    const summary = (path[at]!.content as { text: string }).text
+    expect(summary).toContain('the harness collapsed an earlier request that is done')
+    expect(summary).toContain('[index of what this summary replaced')
+    expect(summary).toContain('- grow ')
+    // Right after it: task 1's request and its final reply, then task 2 as it was, then task 3.
+    const texts = path.slice(at + 1).map((e) => (e.content as { text?: string }).text)
+    expect(texts.slice(0, 2)).toEqual(['task 1: read the three files', 'task 1 done'])
+    expect(texts).toContain('task 2: something else')
+    expect(path.some((e) => e.kind === 'tool_result')).toBe(false)
+    // Task 3's model call saw the collapsed history.
+    expect(JSON.stringify(h.model.calls.at(-1)!.messages)).not.toContain('x'.repeat(500))
+    // Once collapsed, a fourth request has nothing left to collapse.
+    const r4 = await h.start(s.id, 'task 4: last')
+    expect((await h.runner.execute(r4.id)).status).toBe('completed')
+    expect(collapsed).toHaveLength(1)
+  })
+
+  it("leaves a finished request alone when the model wasn't told about it yet", async () => {
+    const { h, s } = await twoTasks(2000)
+    expect((await h.sessions.history(s.id)).some((e) => e.meta.boundaryCollapse === true)).toBe(false)
+  })
+
   it('stays quiet when the finished requests are small', async () => {
     const { h, s, boundary } = await twoTasks(50)
     expect((await h.sessions.history(s.id)).some((e) => e.meta.contextBoundary === true)).toBe(false)

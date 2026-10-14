@@ -1994,7 +1994,7 @@ The model has tools for working with sessions:
 | fork           | fork a session at a given point                               |
 | loop           | split a session into *n* children, one per item               |
 | look up        | find sessions by id, title, status, any metadata field, link, or text in their document |
-| search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before. Every word must appear, in any order, anywhere in an entry: text, tool call arguments (a file written with `git.write_file`) and tool results. The searching session's own entries are left out by default (it has them, and newest first they crowded out the older sessions: live, a search for files written in earlier sessions returned only the current run's own entries) and counted instead; `includeThisSession` lists them. Snippets show tool call arguments decoded, not as escaped JSON |
+| search         | full-text search across other sessions' histories and documents (within what the employee may see), returning matching entries with snippets, so a session can find how similar work was done before. Every word must appear, in any order, anywhere in an entry: text, tool call arguments (a file written with `git.write_file`) and tool results. The searching session's own entries are left out by default (it has them, and newest first they crowded out the older sessions: live, a search for files written in earlier sessions returned only the current run's own entries) and counted instead; `includeThisSession` lists them. Snippets show tool call arguments decoded, not as escaped JSON. Words match as written, not by meaning, so its description asks for a few short queries, one idea each, in the words the material would use and their synonyms, rather than one long phrase |
 | get            | a session: metadata, document, checklist, links, its [outcome](#outcomes-and-who-asked), and its recent runs (the last 10, newest first; `runs` and `runsOffset` page): when, who asked (name and handles), the request in one line, the outcome |
 | list / tree    | list sessions, or get a session's parent, children, or whole tree, each with its [outcome](#outcomes-and-who-asked) |
 | contents       | a table of contents of the history: every collapse, jump back, compaction, run committed as a summary and offload, with the entries it replaced, their size, the summary's first line and how to get the detail back (`item` lists the entries of one stretch, each with a ready `restore` call that reads it) |
@@ -2167,7 +2167,17 @@ was. The session page shows it ("context 112k / 200k").
   request, or a message the person sent while it worked) keeps it word for
   word right after the summary.
   It fires once per finished request: a later request gets the note only
-  when a finished request hasn't been named in an earlier one.
+  when a finished request hasn't been named in an earlier one. The note says
+  what happens to requests left as they are: at the next request, when they
+  still take that share of the window, the harness collapses them itself, in
+  one stretch from the first to the last. Each request and the final reply to
+  it stay word for word right after the summary; the work in between becomes
+  an index of its tool calls and their result entries, findable with search
+  and readable with restore. No model call is made for it.
+- **Summaries carry their keywords.** A collapse summary and an automatic
+  compaction's summary end with a line of the words a later question about
+  the material might use, synonyms and everyday words included, so a search
+  phrased differently from the source still finds the summary.
 - **Notes don't nag.** Each threshold is noted once per generation of the
   context: it is armed again only after the context fell well below it (a
   compaction or a big collapse), not on small dips. At most one note per

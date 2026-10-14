@@ -48,13 +48,19 @@ export const ARMS: Arm[] = [
   {
     name: 'classic',
     description: 'classic compaction: at 85% the whole history is summarised, nothing else',
-    env: { CONTEXT_NOTES: 'off', CONTEXT_NEAR_AT: '0', CONTEXT_COMPACT_KEEP: '0', TOOL_RESULT_MAX_CHARS: '0' },
+    env: {
+      CONTEXT_NOTES: 'off',
+      CONTEXT_NEAR_AT: '0',
+      CONTEXT_BOUNDARY_AT: '0',
+      CONTEXT_COMPACT_KEEP: '0',
+      TOOL_RESULT_MAX_CHARS: '0',
+    },
     contextTools: false,
   },
   {
     name: 'safety-net',
     description: 'our automatic compaction alone: at 85%, keeping the latest 15% verbatim',
-    env: { CONTEXT_NOTES: 'off', CONTEXT_NEAR_AT: '0', TOOL_RESULT_MAX_CHARS: '0' },
+    env: { CONTEXT_NOTES: 'off', CONTEXT_NEAR_AT: '0', CONTEXT_BOUNDARY_AT: '0', TOOL_RESULT_MAX_CHARS: '0' },
     contextTools: false,
   },
   {
@@ -117,6 +123,8 @@ export interface PhaseStats {
   compactions: number
   compactionsFailed: number
   collapses: number
+  /** Collapses the harness made itself: finished requests the model kept after a boundary note. */
+  harnessCollapses: number
   offloads: number
   restores: number
   notes: number
@@ -189,6 +197,7 @@ const emptyStats = (): PhaseStats => ({
   compactions: 0,
   compactionsFailed: 0,
   collapses: 0,
+  harnessCollapses: 0,
   offloads: 0,
   restores: 0,
   notes: 0,
@@ -295,6 +304,12 @@ export async function runArm(arm: Arm, repeat: number, o: BenchOptions, archive:
     }),
     s.bus.subscribe<{ tasks?: number; taskTokens?: number }>('context.boundary', (m) => {
       trace.push(`boundary note: ${m.payload.tasks} finished requests, ${k(m.payload.taskTokens)}`)
+    }),
+    s.bus.subscribe<{ requests?: number; tokensBefore?: number; tokensAfter?: number }>('context.boundary_collapsed', (m) => {
+      stats.harnessCollapses++
+      trace.push(
+        `harness collapse of ${m.payload.requests} finished requests ${k(m.payload.tokensBefore)} → ${k(m.payload.tokensAfter)}`,
+      )
     }),
     s.bus.subscribe('context.result_offloaded', () => {
       stats.offloads++

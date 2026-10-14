@@ -106,6 +106,7 @@ describe('summary', () => {
     compactions: 0,
     compactionsFailed: 0,
     collapses: 0,
+    harnessCollapses: 0,
     offloads: 0,
     restores: 0,
     notes: 0,

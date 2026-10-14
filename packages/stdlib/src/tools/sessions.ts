@@ -14,6 +14,7 @@ import {
   type TreeNode,
 } from '@mp/sessions'
 import type { Entry, Ref } from '@mp/store'
+import { collapseIndex, entryText } from '@mp/runner'
 import { LOADED_TOOLS_META, loadedToolsOf, mcpToolName, type ToolContext } from '@mp/tools'
 import { RESERVED_META, Roles, checkRef, clip, fail, line, ok, pathValue, sessionBrief, str, type Kit } from '../kit.ts'
 import type { TaskSystemConfig } from '../types.ts'
@@ -150,61 +151,6 @@ function readAround(e: Entry, query: string): { read?: { entryId: string; offset
   const p = bestPassage(entryText(e), terms)
   if (!p.count) return {}
   return { read: { entryId: e.id, offset: Math.max(0, p.at - READ_BEFORE), length: READ_LENGTH } }
-}
-
-/** Lines an index of a collapsed stretch lists at most. */
-const INDEX_MAX = 40
-
-/**
- * The index the harness appends to a collapse summary: each tool call the stretch replaced, with its arguments and
- * the entry holding its result, so a later question can read back the one result it needs instead of searching.
- */
-function stretchIndex(stretch: Entry[], skip: Set<string>, perChar: number): string {
-  const results = new Map<string, Entry>()
-  for (const e of stretch) {
-    const id = answeredCall(e)
-    if (id) results.set(id, e)
-  }
-  const lines: string[] = []
-  const firstLine = (e: Entry, max = 80) => {
-    const t =
-      entryText(e)
-        .replace(/\[index of what this summary replaced[\s\S]*$/, '')
-        .trim()
-        .split('\n')[0] ?? ''
-    return t.length > max ? `${t.slice(0, max)}…` : t
-  }
-  for (const e of stretch) {
-    // Earlier summaries and messages in the stretch are indexed too, so a collapse of collapses (a whole finished
-    // task) still leads to every part: each earlier summary carries its own index.
-    if (e.kind === 'summary')
-      lines.push(
-        `- an earlier summary → entry ${e.id} (≈${kTok(entryChars(e) * perChar)} tokens; its own index lists what it replaced): ${firstLine(e)}`,
-      )
-    else if (e.kind === 'user' || e.kind === 'event') lines.push(`- a message → entry ${e.id}: ${firstLine(e)}`)
-    for (const c of (e.kind === 'assistant' ? (e.content as unknown as AssistantContent).toolCalls : undefined) ?? []) {
-      if (skip.has(c.id)) continue
-      const r = results.get(c.id)
-      const args = (c.arguments ?? '').replace(/\s+/g, ' ')
-      const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args
-      lines.push(`- ${c.name} ${shown}${r ? ` → entry ${r.id} (≈${kTok(entryChars(r) * perChar)} tokens)` : ''}`)
-    }
-  }
-  if (!lines.length) return ''
-  const more = lines.length > INDEX_MAX ? [`- … and ${lines.length - INDEX_MAX} more (sessions.contents lists them all)`] : []
-  return `\n\n[index of what this summary replaced: find a detail in it with sessions.search { text, includeThisSession: true }, or read one result back with sessions.restore { entryId, offset: 0 }]\n${[...lines.slice(0, INDEX_MAX), ...more].join('\n')}`
-}
-
-/** The text a model saw for an entry (a tool result's output as it is rendered). */
-const entryText = (e: Entry): string => {
-  const c = e.content as Record<string, unknown> | null
-  if (e.kind === 'tool_result') {
-    const out = c?.output as Json
-    const body = typeof out === 'string' ? out : JSON.stringify(out)
-    return c?.isError ? `ERROR: ${body}` : body
-  }
-  if (c && typeof c.text === 'string') return c.text
-  return JSON.stringify(c)
 }
 
 /** How far back sessions.message looks at the exchange between two sessions. */
@@ -752,11 +698,11 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.search',
       description:
-        "Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order, newest first; when no entry has them all, the entries with the most of them come back instead, ranked, so describing what you look for in your own words works too. this session's own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session's own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.",
+        'Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order, newest first; when no entry has them all, the entries with the most of them come back instead, ranked, so describing what you look for in your own words works too. Words match as written, not by meaning: when the words of a question may not be the material\'s, search a few short queries, one idea each, with the words the material would use and their synonyms (e.g. "cost", "invoice", "spend" for a bill that went up), rather than one long phrase. this session\'s own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session\'s own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.',
       effect: 'read',
       params: {
         properties: {
-          text: { type: 'string', description: 'Words to find, e.g. "README parser".' },
+          text: { type: 'string', description: 'Words to find, e.g. "README parser": a few words, one idea.' },
           kinds: { type: 'array', items: { type: 'string' }, description: 'Entry kinds, e.g. ["assistant", "tool_result"].' },
           limit: { type: 'number' },
           includeThisSession: { type: 'boolean', description: "Also search this session's own entries." },
@@ -1062,6 +1008,7 @@ export function registerSessionTools(kit: Kit): void {
         'Jump back after a dead end: give only from, and everything after it (after its results, for a tool call) is dropped, replaced by your summary; that includes messages after it, so put what still matters in the summary. ' +
         'from and to are ids of your earlier tool calls, in this run or earlier ones: each tool result starts with [call <id>] (entry ids work too). ' +
         "The summary is all that's left of the stretch and stands for it from then on: put in every fact, id, path, decision and open item you still need, and copy exact values verbatim (line numbers, ids, names, figures, quotes), never paraphrased. " +
+        'End it with a line "Keywords: …": the words a later question about this material might use, synonyms and everyday words included (e.g. "cost, invoice, spend, bill went up"), so a search in other words finds it. ' +
         'The harness appends an index of the replaced tool calls (their arguments and the entries holding their results), so one result can be read back later without searching. ' +
         'The harness names finished stretches worth collapsing, with their ids, when the context grows. ' +
         'For a long-lived session, also put decisions and the current state in the session document (sessions.save_metadata { document }): it outlasts the conversation.',
@@ -1078,7 +1025,11 @@ export function registerSessionTools(kit: Kit): void {
             description:
               'The id of a later tool call of yours (or an entry id): the stretch ends after its results. Leave it out to jump back instead.',
           },
-          summary: { type: 'string', description: 'What the stretch did and found: everything from it you still need.' },
+          summary: {
+            type: 'string',
+            description:
+              'What the stretch did and found: everything from it you still need. End with a line "Keywords: …" of words a later question about this material might use, synonyms included.',
+          },
           toEntry: { type: 'string', description: 'Older name of from, for a jump back.' },
         },
         required: ['summary'],
@@ -1144,7 +1095,7 @@ export function registerSessionTools(kit: Kit): void {
           return fail(`${fromId} is in this turn: jump back to a tool call of an earlier turn, or collapse with from and to`)
         const dropped = path.slice(i + 1)
         const carried = await requestsIn(dropped)
-        const indexed = summary + stretchIndex(dropped, new Set([ctx.callId]), perChar)
+        const indexed = summary + collapseIndex(dropped, new Set([ctx.callId]), perChar)
         return {
           output: {
             rewindTo: point.id,
@@ -1183,7 +1134,7 @@ export function registerSessionTools(kit: Kit): void {
       const answeredLater = new Set(path.slice(end + 1).map(answeredCall))
       const toolCalls = stretch.flatMap(callsOf).filter((c) => c.id !== ctx.callId && !answeredLater.has(c.id)).length
       const skip = new Set([ctx.callId, ...[...answeredLater].filter((x): x is string => !!x)])
-      const indexed = summary + stretchIndex(stretch, skip, perChar)
+      const indexed = summary + collapseIndex(stretch, skip, perChar)
       return {
         output: {
           collapsed: { from: stretch[0]!.id, to: stretch[stretch.length - 1]!.id, entries: stretch.length, toolCalls },
