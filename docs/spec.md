@@ -1144,7 +1144,7 @@ Core fields:
 | `team`     | string, optional      |                                                  |
 | `manager`  | contact id, optional  |                                                  |
 | `permissions` | string, optional   | what this person may ask for, in plain words; see [permissions](#permissions) |
-| `bio`      | text, optional        | free text; employees append dated notes to it ([what employees learn](#what-employees-learn-about-people)) |
+| `bio`      | text, optional        | who they are and how to work with them, in plain words; shown to employees when this person asks for something; employees append dated notes to it ([what employees learn](#what-employees-learn-about-people)) |
 | `learned`  | list, optional        | where learned fields and bio notes came from: employee, source, time, who accepted |
 
 Extension:
@@ -1166,6 +1166,17 @@ Behaviour:
   the integration's own directory ([identity from
   integrations](#identity-from-integrations)).
 - The model can look up contacts: by id, by handle, by name, or by any field.
+- **About the requester.** When a person's event starts a run (the router's,
+  or a work session started for their request), the run gets one system
+  entry after the session's history: their name, handles, role and team,
+  `permissions` and `bio` (up to 1200 characters). Admins use the bio to say
+  how to work with someone ("customer support, not technical: no jargon, and
+  give wording for the customer"). It's added once per person per session
+  and again only when their contact changes, and not at all for a contact
+  with nothing but a name, or for AIs and agents. It's information, not
+  instructions: what the person may ask for is still only what `permissions`
+  says. Who to tag about a project's bugs comes from its leads, in [your
+  projects](#projects), and from the employee's standing instructions.
 - A contact's projects, and the contact's role on each one, come from the
   [links between contacts and projects](#links-between-contacts-and-projects).
 
@@ -3346,7 +3357,7 @@ All of these update live over the WebSocket.
 
 - **Employee page** (`/employees/<id>`, linked from the employee switcher and
   Settings → Employees): its profile (handle, role, model, router context,
-  its accounts in each system), its **SSH public key** with a copy button,
+  its accounts in each system, personality and standing instructions), its **SSH public key** with a copy button,
   fingerprint, creation date and **Rotate** (with a confirmation that the
   old key stops working), its **Projects** ([assigning
   projects](#assigning-projects)), the [guided setup](#guided-setup) of its
@@ -3358,6 +3369,14 @@ All of these update live over the WebSocket.
   setting. A direct network shows its warning; where
   `DOCKER_DIRECT_NETWORK=false`, the control says direct means no network
   here.
+- **Settings → Employees** (admins) edits each employee's personality,
+  **standing instructions**, scope, model, network and tool lists. Standing
+  instructions are plain words for every session of that employee, e.g. "when
+  a bug report points at an obvious bug, fix it and open a merge request".
+  They sit in the employee prompt after the personality and never override
+  the employee rules or the hard limits. Work sessions get an edit at their
+  next run and the router context is rebuilt with it
+  ([whitelist and blacklist](#whitelist-and-blacklist-per-employee)).
 - **New employee** (admins), in Settings → Employees and on every employee
   page: a short dialog, then straight to the new employee's page with its
   integrations as the next step. See [adding an employee](#multiple-employees).

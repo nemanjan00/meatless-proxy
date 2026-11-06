@@ -41,7 +41,12 @@ export const contactSchema: KindSchema = {
     { name: 'team', type: 'string' },
     { name: 'manager', type: 'ref', ref: 'contact' },
     { name: 'permissions', type: 'string', description: 'What this contact may ask for, in plain words.' },
-    { name: 'bio', type: 'text' },
+    {
+      name: 'bio',
+      type: 'text',
+      description:
+        'Who they are and how to work with them, in plain words. Employees see it when this person asks for something.',
+    },
     { name: 'status', type: 'enum', values: ['active', 'left'] },
     {
       name: 'learned',

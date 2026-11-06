@@ -33,6 +33,7 @@ import { registerSessionMemory } from './session-memory.ts'
 import { registerThreadContext } from './thread-context.ts'
 import { backfillPrivateWork, upgradeEmployees, watchEmployeePrompts } from './upgrade.ts'
 import { registerSessionProjects } from './session-projects.ts'
+import { registerSessionRequester } from './session-requester.ts'
 import { createSetup, type Setup, setupRoutes } from './setup/index.ts'
 import { ensureSshKey } from './ssh.ts'
 import { buildServices, type AppOverrides, type Services } from './services.ts'
@@ -80,6 +81,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   registerSessionMemory(services)
   registerThreadContext(services)
   registerSessionProjects(services)
+  registerSessionRequester(services)
   registerKnowledgeUse(services)
   // Each scheduled task's last run follows its runs (src/schedules).
   trackScheduledRuns(services)

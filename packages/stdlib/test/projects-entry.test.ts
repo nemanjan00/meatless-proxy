@@ -111,7 +111,7 @@ describe('Your projects entry', () => {
     const a = await t.out('sessions.create', { title: 'a', instruction: 'what do you work on?' })
     const promptA = (await t.sessions.history(a.sessionId))[0]!.content
     const runA = await t.sessions.runHistory(a.runId)
-    expect(runA.map((e) => e.kind)).toEqual(['system', 'system', 'user'])
+    expect(runA.filter((e) => !e.meta.requesterEntry).map((e) => e.kind)).toEqual(['system', 'system', 'user'])
     expect((runA[1]!.content as { text: string }).text).toMatch(/no project is assigned/)
 
     // Assigned later: the next session knows, and its system prompt is the same bytes.
@@ -125,7 +125,7 @@ describe('Your projects entry', () => {
     // A fork of the first session gets the new list too, after the history it shares.
     const fork = await t.out('sessions.fork', { sessionId: a.sessionId, instruction: 'again' })
     const runF = await t.sessions.runHistory(fork.runId)
-    expect((runF.at(-2)!.content as { text: string }).text).toContain('Billing')
+    expect((runF.filter((e) => !e.meta.requesterEntry).at(-2)!.content as { text: string }).text).toContain('Billing')
   })
 })
 

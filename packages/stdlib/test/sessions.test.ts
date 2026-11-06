@@ -53,10 +53,11 @@ describe('sessions.create', () => {
     expect(hist.map((e) => e.kind)).toEqual(['system', 'system'])
     expect((hist[1]!.content as any).text).toBe('Refund ticket PAY-1.')
     expect((await t.checklists.status(s.id)).missing.map((i) => i.text)).toEqual(['Refund issued'])
-    // The run adds the employee's current projects after the session's history.
+    // The run adds the employee's current projects, then who asked, after the session's history.
     const runHist = await t.sessions.runHistory(o.runId)
-    expect(runHist.map((e) => e.kind)).toEqual(['system', 'system', 'system'])
+    expect(runHist.map((e) => e.kind)).toEqual(['system', 'system', 'system', 'system'])
     expect(runHist[2]!.meta.projectsEntry).toBeDefined()
+    expect(runHist[3]!.meta.requesterEntry).toBeDefined()
   })
 
   it('refuses bad input', async () => {
@@ -82,9 +83,10 @@ describe('sessions.fork', () => {
     const fork = await t.sessions.require(o.sessionId)
     expect(fork.data.parent).toEqual({ sessionId: t.session.id, entryId: asst.parent })
     const hist = await t.sessions.runHistory(o.runId)
-    expect(hist.map((e) => e.kind)).toEqual(['system', 'user', 'system', 'user'])
+    expect(hist.map((e) => e.kind)).toEqual(['system', 'user', 'system', 'system', 'user'])
     expect((hist[2]!.content as any).text).toContain('Your projects')
-    expect((hist[3]!.content as any).text).toBe('check the invoice')
+    expect((hist[3]!.content as any).text).toContain('About the requester')
+    expect((hist[4]!.content as any).text).toBe('check the invoice')
     expect(t.enqueued).toEqual([o.runId])
     const run = await t.sessions.requireRun(o.runId)
     expect(run.data.cause).toMatchObject({ type: 'fork', parentRunId: t.run.id })

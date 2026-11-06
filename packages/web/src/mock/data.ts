@@ -177,6 +177,7 @@ const KINDS: ApiKindSchema[] = [
       { name: 'contactId', type: 'ref', ref: 'contact', description: 'Its own contact record' },
       { name: 'scope', type: 'text', description: 'The slice of the company it covers' },
       { name: 'personality', type: 'text', description: 'Quirks in plain words. Shapes tone only.' },
+      { name: 'instructions', type: 'text', description: 'Standing instructions for every session.' },
       { name: 'model', type: 'string' },
       { name: 'tools', type: 'json', description: 'Allow and deny lists; the deny list wins' },
     ],

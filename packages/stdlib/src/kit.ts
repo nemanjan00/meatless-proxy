@@ -7,6 +7,7 @@ import type { EffectClass, ToolContext, ToolRegistry, ToolResult } from '@mp/too
 import { checkForkLimits } from '@mp/usage'
 import { employeePrompt } from './prompt.ts'
 import { projectsEntry } from './projects-entry.ts'
+import { requesterEntry } from './requester-entry.ts'
 import type { StdlibDeps } from './types.ts'
 
 /** Record kind remembering the output of a tool call by idempotency key, so retries don't repeat the effect. */
@@ -401,8 +402,11 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
       // Loop children skip it: they branch from the looping session's context, and their item stays last.
       const target = await sessions.require(sessionId)
       const projects = o.type === 'loop' ? null : await projectsEntry(deps, target.data.employeeId, sessionId)
+      // Who asked and how to work with them, once per person per session (unless their contact changed).
+      const requester = o.type === 'loop' || !ctx.requesterId ? null : await requesterEntry(deps, ctx.requesterId, sessionId)
       const input = [
         ...(projects ? [projects] : []),
+        ...(requester ? [requester] : []),
         ...(o.instruction ? [{ kind: 'user' as const, content: { text: o.instruction } }] : []),
       ]
       const run = await sessions.createRun({

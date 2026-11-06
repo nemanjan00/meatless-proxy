@@ -88,6 +88,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const d = employee.data
   const lists = toolLists(d)
   const [personality, setPersonality] = useState(d.personality ?? '')
+  const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [scope, setScope] = useState(d.scope ?? '')
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
@@ -95,6 +96,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [probe, setProbe] = useState('')
   useEffect(() => {
     setPersonality(d.personality ?? '')
+    setInstructions(d.instructions ?? '')
     setScope(d.scope ?? '')
     setModel(d.model ?? '')
     const l = toolLists(d)
@@ -112,6 +114,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       employee.id,
       {
         personality,
+        instructions,
         scope,
         model,
         ...(lists.flat
@@ -138,6 +141,15 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       </div>
       <Field id="emp-personality" label="Personality" hint="Tone only; never overrides the rules">
         <Textarea id="emp-personality" value={personality} onChange={(e) => setPersonality(e.target.value)} rows={3} />
+      </Field>
+      <Field id="emp-instructions" label="Instructions" hint="Standing instructions for every session; never override the rules">
+        <Textarea
+          id="emp-instructions"
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          rows={5}
+          placeholder="When a bug report points at an obvious bug in a repository you can reach, fix it and open a merge request."
+        />
       </Field>
       <Field id="emp-scope" label="Scope" hint="The slice of the company it covers">
         <Textarea id="emp-scope" value={scope} onChange={(e) => setScope(e.target.value)} rows={2} />

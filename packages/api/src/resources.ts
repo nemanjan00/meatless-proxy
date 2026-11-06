@@ -182,6 +182,8 @@ export interface EmployeeData extends Record<string, unknown> {
   scope?: string
   /** Plain-words personality: quirks, sign-off, tone. */
   personality?: string
+  /** Standing instructions for every session of this employee, in its system prompt. */
+  instructions?: string
   /** Tool allow and deny lists (names or patterns like `mcp.linear.*`). The deny list wins. */
   tools: { allow: string[]; deny: string[] }
   /** The same lists as stored by the server's directory (`tools` is the older shape). */

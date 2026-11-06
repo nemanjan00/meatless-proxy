@@ -104,6 +104,11 @@ function Profile({
           </Property>
         )}
         {d.personality && <Property label="Personality">{d.personality}</Property>}
+        {d.instructions && (
+          <Property label="Instructions">
+            <span className="whitespace-pre-wrap">{d.instructions}</span>
+          </Property>
+        )}
       </dl>
     </div>
   )

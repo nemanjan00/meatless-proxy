@@ -54,6 +54,14 @@ export {
   type ProjectsEntry,
 } from './projects-entry.ts'
 export {
+  lastRequesterText,
+  REQUESTER_ENTRY_META,
+  REQUESTER_HEADER,
+  requesterEntry,
+  requesterText,
+  type RequesterEntry,
+} from './requester-entry.ts'
+export {
   chatReportOf,
   createScheduleService,
   isTaskSession,

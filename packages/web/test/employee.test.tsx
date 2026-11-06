@@ -143,6 +143,23 @@ describe('new employee dialog', () => {
   })
 })
 
+describe('settings → employees', () => {
+  it('edits the standing instructions, and the employee page shows them', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    const box = within(editor).getByLabelText(/^Instructions/)
+    await user.clear(box)
+    await user.type(box, 'Open a merge request for obvious bugs.')
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    await waitFor(async () =>
+      expect((await data.api.getRecord('employee', EMP.billing)).data.instructions).toBe(
+        'Open a merge request for obvious bugs.',
+      ),
+    )
+  })
+})
+
 describe('settings → integrations', () => {
   it('is an overview that links to each employee’s guided setup', async () => {
     renderAt('/settings/integrations')
