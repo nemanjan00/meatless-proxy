@@ -333,6 +333,8 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         if (!wanted.some((x) => x.id === id.id)) wanted.push(id)
       }
       let restarted: string | undefined
+      // A restart keeps what it ran (its profile or image) unless it's given another.
+      let previous: { profile?: string; image?: string } | undefined
       const current = envOf(session)
       if (current) {
         const info = await runtime.getEnv(current.id)
@@ -381,6 +383,10 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           })
         }
         if (info?.status === 'running' && a.restart === true) {
+          previous = {
+            ...(typeof current.profile === 'string' ? { profile: current.profile } : {}),
+            ...(typeof current.image === 'string' && current.image !== 'build' ? { image: current.image } : {}),
+          }
           await runtime.destroyEnv(current.id)
           await kit.patchMeta(session.id, (m) => {
             delete m.env
@@ -433,9 +439,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const profiles = kit.deps.config.envProfiles ?? [...DEFAULT_ENV_PROFILES]
       let image = str(a.image)
       let profile: string | undefined
-      if (!image && str(a.profile)) {
-        const p = envProfile(profiles, a.profile)
-        if (!p) return fail(`no profile ${a.profile}: pick one of ${profiles.map((x) => x.name).join(', ')}`)
+      const given = str(a.profile) ?? (!image && !str(a.dockerfile) && a.build !== true ? previous?.profile : undefined)
+      if (!image && !given && !str(a.dockerfile) && a.build !== true && previous?.image) image = previous.image
+      if (!image && given) {
+        const p = envProfile(profiles, given)
+        if (!p) return fail(`no profile ${given}: pick one of ${profiles.map((x) => x.name).join(', ')}`)
         image = p.image
         profile = p.name
       }

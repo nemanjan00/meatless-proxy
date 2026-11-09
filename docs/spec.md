@@ -1703,7 +1703,10 @@ person follows a project's contributing guide.
   to a running container: `env.up` asked for repositories the running
   environment lacks says which (`missing`) and gives the exact call with
   `restart: true`, which tears it down and starts it again with them (files
-  outside the repositories and `/files` are lost). Since a restart loses
+  outside the repositories and `/files` are lost). A restart keeps the
+  profile or image the environment ran unless it's given another (live, a
+  restart to mount a checkout fell back to the default profile and lost the
+  analyst tools). Since a restart loses
   what was installed, the need is said before the work starts: an
   environment started with no repository says in its note that there is no
   `/workspace` and to restart with `repos` now if the work needs a

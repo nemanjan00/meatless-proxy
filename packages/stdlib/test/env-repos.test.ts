@@ -171,4 +171,17 @@ describe('env.up with several repositories', () => {
     const web = await t.out('git.checkout', { projectId: (await webProject(t)).id })
     expect(web.environment).toMatch(/^Your environment is running without this checkout\. Call env\.up/)
   })
+
+  it('a restart keeps the profile or image it ran, unless given another', async () => {
+    const t = await stack()
+    await t.out('env.up', { profile: 'analyst' })
+    await t.out('git.checkout', { projectId: t.project.id })
+    const up = await t.out('env.up', { restart: true })
+    expect(up.profile).toBe('analyst')
+    expect(t.containers.created.at(-1)!.image).toBe('nemanjan00/dev:analyst')
+    expect((await t.out('env.up', { restart: true, profile: 'librarian' })).profile).toBe('librarian')
+    await t.out('env.up', { restart: true, image: 'node:22' })
+    expect((await t.out('env.up', { restart: true })).image).toBe('node:22')
+    expect(t.containers.created.at(-1)!.image).toBe('node:22')
+  })
 })
