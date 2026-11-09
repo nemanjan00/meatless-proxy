@@ -1681,7 +1681,10 @@ person follows a project's contributing guide.
   of one project can be read next to another in one call. `/workspace` is
   the entry marked `primary`, else the first. Without `repos`, every checkout
   of the session is mounted and `/workspace` is the one named by `repo`, else
-  the most recent, and the result says which. The session's other checkouts
+  the most recent, and the result says which; a `repo` that isn't checked
+  out yet is checked out first, like a one-entry `repos` (live, a model
+  passed `repo` with no checkout and got an environment with no repository
+  at all). The session's other checkouts
   are always mounted too. The result lists every repository with its path,
   branch or ref, and whether it's writable.
 - **Git inside.** Each worktree's `.git` file points into the employee's
@@ -1700,7 +1703,15 @@ person follows a project's contributing guide.
   to a running container: `env.up` asked for repositories the running
   environment lacks says which (`missing`) and gives the exact call with
   `restart: true`, which tears it down and starts it again with them (files
-  outside the repositories and `/files` are lost).
+  outside the repositories and `/files` are lost). Since a restart loses
+  what was installed, the need is said before the work starts: an
+  environment started with no repository says in its note that there is no
+  `/workspace` and to restart with `repos` now if the work needs a
+  project's code or docs, and `git.checkout` of a repository the running
+  environment lacks says so (`environment`) with the `restart: true` call.
+  Live, most environments were started with only a profile, then a
+  checkout, then commands failed on a missing `/workspace` before the
+  restart.
 - **The employee's files at `/files`.** When the files are on disk here (the
   default `FILES_DIR` storage), every environment mounts the employee's own
   directory, `<FILES_DIR>/<employeeId>`, at `/files`, read-write: `/files` is

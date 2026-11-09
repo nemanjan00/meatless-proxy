@@ -14,7 +14,7 @@ import {
 } from '@mp/git'
 import type { Session } from '@mp/sessions'
 import type { ToolContext, ToolResult } from '@mp/tools'
-import { Roles, clip, fail, ok, str, worktreesOf, type Kit, type RefWorktreeMeta, type WorktreeMeta } from '../kit.ts'
+import { Roles, clip, envOf, fail, ok, str, worktreesOf, type Kit, type RefWorktreeMeta, type WorktreeMeta } from '../kit.ts'
 import type { StdlibDeps, WorktreeFs } from '../types.ts'
 import { INSTRUCTIONS_NOTE, nestedInstructions, rootInstructions, type AgentInstructions } from '../agent-instructions.ts'
 import { safeRelPath } from '../worktree-fs.ts'
@@ -406,11 +406,19 @@ export function registerGitTools(kit: Kit, git: GitCache, fs: WorktreeFs): void 
           ...(behind ? { behind } : {}),
         })
       }
+      // A running environment can't gain a mount: say so now, not after a command finds no /workspace.
+      const env = envOf(await kit.ownSession(undefined, ctx))
+      const unmounted = env && !(env.checkouts ?? []).some((c) => c.key === w.key && !c.ref)
       return ok({
         key: w.key,
         branch: w.branch,
         head: w.baseSha,
         where: CHECKOUT_NOTE,
+        ...(unmounted
+          ? {
+              environment: `Your environment is running without this checkout${env.checkouts?.length ? '' : ' (and without any repository: there is no /workspace)'}. Call env.up { restart: true } to mount it; anything outside the repositories and /files is lost.`,
+            }
+          : {}),
         ...(r.subdir ? { subdir: r.subdir } : {}),
         ...(r.root ? { instructions: { note: INSTRUCTIONS_NOTE, files: [instructionView(r.root)] } } : {}),
       })

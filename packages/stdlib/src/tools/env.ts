@@ -54,6 +54,10 @@ const repoView = (m: { containerPath: string; key: string; branch?: string; ref?
  */
 const GIT_SAFE_ENV = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' }
 
+/** env.up started without a repository: a later checkout means a restart, so say it before the work starts. */
+export const NO_REPOS_NOTE =
+  "No repository is mounted: there is no /workspace or /repos. Mounts can't be added while it runs, so if the work needs a project's code or docs, call env.up { restart: true, repos: [<project id>] } now, before installing anything."
+
 /** One entry of env.up `repos`: a project id or a checkout's key, or `{ project, ref?, repo?, primary? }`. */
 interface RepoRequest {
   target: string
@@ -316,8 +320,14 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       // What was asked for, identified before anything changes.
       const requests = a.repos === undefined ? null : parseRepoRequests(a.repos)
       if (typeof requests === 'string') return fail(requests)
+      // `repo` alone names the checkout for /workspace; one that isn't checked out yet is checked out, like repos.
+      const repoArg = requests === null ? str(a.repo) : undefined
+      const asked =
+        repoArg && !worktreesOf(session).some((w) => w.key === repoArg || w.projectId === repoArg || w.url === repoArg)
+          ? [{ target: repoArg, primary: true }]
+          : (requests ?? [])
       const wanted: Identified[] = []
-      for (const r of requests ?? []) {
+      for (const r of asked) {
         const id = await identify(session, r)
         if (typeof id === 'string') return fail(id)
         if (!wanted.some((x) => x.id === id.id)) wanted.push(id)
@@ -616,7 +626,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         note: [
           ...(restarted ? [restarted] : []),
           ...(fallbackNote ? [fallbackNote] : []),
-          ...(workspace ? [ENV_NOTE] : []),
+          ...(workspace ? [ENV_NOTE] : [NO_REPOS_NOTE]),
           net.direct || net.allow.length ? NETWORK_NOTE : NO_NETWORK_NOTE,
           ...(ownFiles ? [FILES_NOTE] : []),
         ].join(' '),

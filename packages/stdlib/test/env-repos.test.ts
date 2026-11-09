@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { NO_REPOS_NOTE } from '../src/tools/env.ts'
 import { REPO, stack, type Stack } from './helpers.ts'
 
 const WEB = 'https://github.com/acme/web.git'
@@ -141,5 +142,33 @@ describe('env.up with several repositories', () => {
     expect(sha2).not.toBe(sha1)
     expect(t.git.worktrees()).toHaveLength(1)
     void REPO
+  })
+
+  it('checks out a project named by repo alone, instead of starting without it', async () => {
+    const t = await stack()
+    const up = await t.out('env.up', { image: 'node:22', repo: t.project.id })
+    expect(up.checkout).toBe('github.com/acme/billing')
+    expect(mountsOf(t)[0]).toMatchObject({ containerPath: '/workspace' })
+    expect(up.note).not.toContain(NO_REPOS_NOTE)
+  })
+
+  it('says how to add a repository when it starts without one, before the work starts', async () => {
+    const t = await stack()
+    const up = await t.out('env.up', { image: 'node:22' })
+    expect(up.workspace).toBeUndefined()
+    expect(up.note).toContain(NO_REPOS_NOTE)
+  })
+
+  it('a checkout made while the environment runs without it says to restart, and the restart mounts it', async () => {
+    const t = await stack()
+    await t.out('env.up', { image: 'node:22' })
+    const co = await t.out('git.checkout', { projectId: t.project.id })
+    expect(co.environment).toMatch(/running without this checkout \(and without any repository: there is no \/workspace\)/)
+    expect(co.environment).toMatch(/env\.up \{ restart: true \}/)
+    const up = await t.out('env.up', { restart: true })
+    expect(up.checkout).toBe('github.com/acme/billing')
+    // Another checkout: the environment has a /workspace now, and only lacks this one.
+    const web = await t.out('git.checkout', { projectId: (await webProject(t)).id })
+    expect(web.environment).toMatch(/^Your environment is running without this checkout\. Call env\.up/)
   })
 })
