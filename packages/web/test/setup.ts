@@ -1,8 +1,12 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
 afterEach(() => cleanup())
+
+// findBy*/waitFor wait 1 s by default: a full run (a worker per file, in parallel) renders slower than that now
+// and then, and pages failed to appear in time on CI and locally. Tests still have 20 s each.
+configure({ asyncUtilTimeout: 5000 })
 
 // jsdom lacks these browser APIs used by Radix, Recharts and the layout code.
 class RO {
