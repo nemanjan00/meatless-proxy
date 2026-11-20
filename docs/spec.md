@@ -2889,6 +2889,32 @@ Routing inside the router context stays the agent's judgment. Deterministic
 routing (subscriptions, session tags) still goes first, so events for a
 subject with a subscribed session never reach the router at all.
 
+#### Watched channels
+
+An employee can **watch** channels: it reads what people post there without
+being asked, and joins in only when it can help, the way a colleague keeps an
+eye on #bugs. Admins set them in Settings → Employees: a Slack channel (by
+name or id; the employee's Slack app must be in it) or a harness channel (by
+name), each with an optional note on **when to get involved** ("bug reports
+from support").
+
+- **What reaches it.** A new message or thread reply that nobody else acts on
+  (no tag, no subscribed session expected to act, no trigger) goes to the
+  employee's router context as information, not as a request (`watch`). Not a
+  session's own message, one that tags an employee (the tag routes it), an
+  edit or reaction, or a message from an AI employee, so employees in the same
+  channel don't wake each other. Other bots (an alerting app) do count. With
+  its own Slack app, an employee watches through its own copy of a message.
+- **Deciding.** The employee prompt lists the channels it watches and their
+  notes, and the router judges each message against them and the standing
+  instructions. To get involved, it hands the message to a session as usual,
+  telling it that it is joining uninvited, so the reply is short and useful;
+  the session then owns the thread. Otherwise it ends with `NO_REPLY` and
+  commits nothing (a watched message it stays out of needs no decision line).
+  When unsure, it stays out.
+- **Cost.** Every such message is one router model call. Watch channels where
+  the employee is likely to be useful, not busy social ones.
+
 #### Subscriptions
 
 Triggers route *new* things, like a new task, to the context assigned to them.
@@ -3386,7 +3412,8 @@ All of these update live over the WebSocket.
   `DOCKER_DIRECT_NETWORK=false`, the control says direct means no network
   here.
 - **Settings → Employees** (admins) edits each employee's personality,
-  **standing instructions**, scope, model, network and tool lists. Standing
+  **standing instructions**, [watched channels](#watched-channels), scope,
+  model, network and tool lists. Standing
   instructions are plain words for every session of that employee, e.g. "when
   a bug report points at an obvious bug, fix it and open a merge request".
   They sit in the employee prompt after the personality and never override

@@ -7,9 +7,33 @@ describe('router instructions', () => {
   it("hand-offs carry the project's lead", () => {
     expect(ROUTER_INSTRUCTIONS).toContain('the project and who to ask about it (its lead')
   })
+
+  it('watched channels: get involved only when it helps, and stay out without a log line', () => {
+    expect(ROUTER_INSTRUCTIONS).toContain('Messages from a channel you watch')
+    expect(ROUTER_INSTRUCTIONS).toContain("end with NO_REPLY and don't commit")
+  })
 })
 
 describe('employeePrompt', () => {
+  it('lists the channels it watches, with when to get involved, and leaves the section out without any', async () => {
+    const t = await stack()
+    const contact = await t.directory.contacts.require(t.employee.data.contactId)
+    const base = { contact, now: '2026-09-29T09:00:00.000Z' }
+    expect(employeePrompt({ ...base, employee: t.employee })).not.toContain('## Channels you watch')
+    const employee = await t.directory.employees.update(t.employee.id, {
+      watch: [
+        { source: 'slack', channel: '#bugs', when: 'bug reports\nfrom support' },
+        { source: 'chat', channel: 'billing' },
+        { source: 'slack', channel: '  ' },
+      ],
+    })
+    const p = employeePrompt({ ...base, employee })
+    expect(p).toContain('## Channels you watch')
+    expect(p).toContain('- Slack #bugs: get involved when bug reports from support')
+    expect(p).toContain('- Harness chat #billing\n')
+    expect(p).not.toContain('Slack #  ')
+  })
+
   it('covers identity, personality, the rules, the stdlib and skills, and is stable', async () => {
     const t = await stack()
     const contact = await t.directory.contacts.require(t.employee.data.contactId)

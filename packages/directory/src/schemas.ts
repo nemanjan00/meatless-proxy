@@ -179,6 +179,20 @@ export const employeeSchema: KindSchema = {
         { name: 'branchPrefix', type: 'string' },
       ],
     },
+    {
+      name: 'watch',
+      type: 'list',
+      description:
+        'Channels this employee reads without being asked: a message there that nobody else picked up goes to its router, which decides whether to get involved.',
+      of: {
+        type: 'object',
+        fields: [
+          { name: 'source', type: 'enum', values: ['slack', 'chat'], required: true },
+          { name: 'channel', type: 'string', required: true, description: 'The channel id, or its name (without #).' },
+          { name: 'when', type: 'text', description: 'When to get involved there, in plain words.' },
+        ],
+      },
+    },
     { name: 'routerSessionId', type: 'ref', ref: 'session' },
     { name: 'limits', type: 'json' },
     { name: 'taskSystem', type: 'json', description: 'How real forks become tasks, e.g. {server, createTool, ...}.' },
@@ -209,6 +223,24 @@ export function invalidNetwork(v: unknown): string | null {
   return "network must be 'none', 'project', 'direct' or { allow: [hosts] }"
 }
 
+/**
+ * A channel an employee watches: Slack (its own app must be in the channel) or harness chat. `channel` is
+ * the channel's id or its name; `when` says when it is worth getting involved.
+ */
+export interface WatchedChannel {
+  source: 'slack' | 'chat'
+  channel: string
+  when?: string
+}
+
+/** Whether a watched channel is the one a message was posted in (by id, or by name ignoring case and a leading #). */
+export function watchesChannel(w: WatchedChannel, where: { source: 'slack' | 'chat'; id: string; name?: string }): boolean {
+  if (w.source !== where.source) return false
+  const want = w.channel.trim().replace(/^#/, '')
+  if (!want) return false
+  return want === where.id || (!!where.name && want.toLowerCase() === where.name.replace(/^#/, '').toLowerCase())
+}
+
 export interface EmployeeData extends Record<string, unknown> {
   contactId: string
   name: string
@@ -220,6 +252,7 @@ export interface EmployeeData extends Record<string, unknown> {
   model?: string
   network?: EmployeeNetwork
   git?: { name?: string; email?: string; branchPrefix?: string }
+  watch?: WatchedChannel[]
   routerSessionId?: string
   limits?: unknown
   taskSystem?: unknown

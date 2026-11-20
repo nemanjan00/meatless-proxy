@@ -37,6 +37,7 @@ const ROUTING_RULE: Record<string, Api.RoutingRule> = {
   employee_tag: 'employee_tag',
   thread_participant: 'employee_tag',
   trigger: 'trigger',
+  watch: 'watch',
   fallback: 'fallback',
 }
 

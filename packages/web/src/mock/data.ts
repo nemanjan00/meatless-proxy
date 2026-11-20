@@ -178,6 +178,7 @@ const KINDS: ApiKindSchema[] = [
       { name: 'scope', type: 'text', description: 'The slice of the company it covers' },
       { name: 'personality', type: 'text', description: 'Quirks in plain words. Shapes tone only.' },
       { name: 'instructions', type: 'text', description: 'Standing instructions for every session.' },
+      { name: 'watch', type: 'json', description: 'Channels it reads without being asked: [{ source, channel, when }].' },
       { name: 'model', type: 'string' },
       { name: 'tools', type: 'json', description: 'Allow and deny lists; the deny list wins' },
     ],

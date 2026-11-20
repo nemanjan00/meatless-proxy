@@ -11,6 +11,7 @@ async function setup(
   opts: {
     resolvers?: RecipientResolver[]
     participantsOf?: (e: any) => Promise<string[]>
+    watchersOf?: (e: any) => Promise<string[]>
     prepareEvent?: (e: MpEvent) => Promise<MpEvent>
     hasOwnCopies?: (source: string, employeeId: string) => Promise<boolean>
   } = {},
@@ -38,6 +39,7 @@ async function setup(
     procedureContext: async (id) => (id === 'prc_access' ? procedureCtx.id : null),
     ...(opts.resolvers ? { resolvers: opts.resolvers } : {}),
     ...(opts.participantsOf ? { participantsOf: opts.participantsOf } : {}),
+    ...(opts.watchersOf ? { watchersOf: opts.watchersOf } : {}),
     ...(opts.prepareEvent ? { prepareEvent: opts.prepareEvent } : {}),
     ...(opts.hasOwnCopies ? { hasOwnCopies: opts.hasOwnCopies } : {}),
   })
@@ -249,6 +251,71 @@ describe('router', () => {
     expect(bySession[author.id]).toBeUndefined()
     expect(bySession[t.routerA.id]).toMatchObject({ reason: 'employee_tag' })
     expect(chatTags(ev).sessions).toEqual([target.id])
+  })
+
+  it("sends a watched channel's unclaimed message to the watcher's router as information, in an ephemeral run", async () => {
+    const t = await setup({ watchersOf: async (e) => (e.data.payload?.channelId === 'ch_bugs' ? ['emp_a'] : []) })
+    const post = (payload: Record<string, Json>) =>
+      t.ingest({
+        source: 'chat',
+        type: 'message.posted',
+        subject: { system: 'mp', id: `msg_${Math.random()}` },
+        actorContactId: 'con_ana',
+        payload: payload as Json,
+      })
+    const ev = await post({ channelId: 'ch_bugs', text: 'checkout is broken for some customers' })
+    const res = await t.router.route(ev.id)
+    expect(res.deliveries).toHaveLength(1)
+    expect(res.deliveries[0]).toMatchObject({ sessionId: t.routerA.id, reason: 'watch', expectedToAct: false, trusted: false })
+    const outcome = res.deliveries[0]!.outcome as { type: string; runId: string }
+    // A model call that decides, not a silent note: the router may get involved.
+    expect(outcome.type).toBe('run')
+    expect((await t.sessions.getRun(outcome.runId))!.data.mode).toBe('ephemeral')
+    expect(await firstEvent(t.sessions, outcome.runId)).toMatchObject({ expectedToAct: false })
+    // Another channel: nobody watches it, and plain chat doesn't fall back.
+    expect(await t.router.plan(await post({ channelId: 'ch_random', text: 'lunch anyone?' }))).toEqual([])
+  })
+
+  it('leaves a watched channel message to whoever already acts on it, and never wakes a watcher for its own sessions', async () => {
+    const t = await setup({ watchersOf: async () => ['emp_a', 'emp_b'] })
+    // Tagged: the tagged employee acts, the other watcher isn't woken.
+    const tagged = await t.ingest({
+      source: 'chat',
+      type: 'message.posted',
+      actorContactId: 'con_ana',
+      payload: { channelId: 'ch_bugs', text: '@b look', tags: [{ type: 'employee', employeeId: 'emp_b' }] } as Json,
+    })
+    const plan = await t.router.plan(tagged)
+    expect(plan.map((d) => [d.sessionId, d.reason])).toEqual([[t.routerB.id, 'employee_tag']])
+    // A thread with a primary subscriber: that session acts, no watch.
+    const work = await t.mk('bug work')
+    await t.events.subscriptions.subscribe(work.id, { system: 'mp', id: 'msg_root' }, { primary: true })
+    const reply = await t.ingest({
+      source: 'chat',
+      type: 'message.replied',
+      subject: { system: 'mp', id: 'msg_root' },
+      actorContactId: 'con_ana',
+      payload: { channelId: 'ch_bugs', threadId: 'msg_root', text: 'still broken' } as Json,
+    })
+    expect((await t.router.plan(reply)).map((d) => d.reason)).toEqual(['subscription'])
+    // A session's own message wakes nobody's watch.
+    const own = await t.ingest({
+      source: 'chat',
+      type: 'message.posted',
+      payload: { channelId: 'ch_bugs', text: 'fixed', author: { kind: 'session', id: work.id } } as Json,
+    })
+    expect(await t.router.plan(own)).toEqual([])
+    // Two watchers, nobody acting: both routers decide for themselves.
+    const open = await t.ingest({
+      source: 'chat',
+      type: 'message.posted',
+      actorContactId: 'con_ana',
+      payload: { channelId: 'ch_bugs' } as Json,
+    })
+    expect((await t.router.plan(open)).map((d) => [d.sessionId, d.reason])).toEqual([
+      [t.routerA.id, 'watch'],
+      [t.routerB.id, 'watch'],
+    ])
   })
 
   it("sends a person's untagged follow-up to the employees already in the thread", async () => {

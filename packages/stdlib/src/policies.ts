@@ -219,9 +219,11 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
 
   if (config.routerDecisions !== false)
     offs.push(
-      hooks.on(beforeFinish, async ({ run, session, status }) => {
+      hooks.on(beforeFinish, async ({ run, session, status, output }) => {
         if (status !== 'completed' || session.data.meta?.role !== 'router' || run.data.mode !== 'ephemeral') return undefined
         if (run.data.commitSummary) return undefined
+        // A watched channel's message the router stays out of leaves nothing to record.
+        if (run.data.cause.note === 'watch' && output && /\bNO_REPLY\b/.test(output)) return undefined
         return {
           block:
             'you are a router context: record your decision before finishing. Call sessions.commit with a one-line summary: the subject, who asked, what it is about, and what you decided (answered directly / forwarded to @employee#slug / started @employee#slug (ses_…) / ran procedure X). That line is all you keep of this run.',

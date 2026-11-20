@@ -26,6 +26,7 @@ import { Page, SectionTitle } from '@/components/page.tsx'
 import { StatusIcon } from '@/components/status-icon.tsx'
 import { EmployeeAvatar, PersonAvatar } from '@/components/people.tsx'
 import { NetworkSetting } from '@/components/network-setting.tsx'
+import { WatchedChannels, cleanWatch } from '@/components/watched-channels.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
 import { RecordPicker } from '@/components/record-picker.tsx'
 import { Button } from '@/components/ui/button.tsx'
@@ -89,6 +90,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const lists = toolLists(d)
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [instructions, setInstructions] = useState(d.instructions ?? '')
+  const [watch, setWatch] = useState(d.watch ?? [])
   const [scope, setScope] = useState(d.scope ?? '')
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
@@ -97,6 +99,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   useEffect(() => {
     setPersonality(d.personality ?? '')
     setInstructions(d.instructions ?? '')
+    setWatch(d.watch ?? [])
     setScope(d.scope ?? '')
     setModel(d.model ?? '')
     const l = toolLists(d)
@@ -115,6 +118,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       {
         personality,
         instructions,
+        watch: cleanWatch(watch),
         scope,
         model,
         ...(lists.flat
@@ -150,6 +154,13 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           rows={5}
           placeholder="When a bug report points at an obvious bug in a repository you can reach, fix it and open a merge request."
         />
+      </Field>
+      <Field
+        id="emp-watch"
+        label="Watched channels"
+        hint="It reads what nobody picked up there, and joins in only when it's worth it"
+      >
+        <WatchedChannels value={watch} onChange={setWatch} />
       </Field>
       <Field id="emp-scope" label="Scope" hint="The slice of the company it covers">
         <Textarea id="emp-scope" value={scope} onChange={(e) => setScope(e.target.value)} rows={2} />

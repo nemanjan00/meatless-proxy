@@ -19,6 +19,10 @@ For each event, in order:
    chat thread): reason `thread_participant`.
 5. **Triggers** take work nobody has claimed, into their context (or a fork
    of it).
+   Then **watched channels** (`watchersOf`): a message nobody acts on goes to
+   each watching employee's router session as information (reason `watch`,
+   not expected to act, untrusted, ephemeral), which decides whether to get
+   involved.
 6. The **fallback** is the employee's router session, or the default router.
 
 Deliveries through subscriptions and tags are *trusted* (expected input).

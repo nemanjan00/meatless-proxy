@@ -372,6 +372,29 @@ describe('answer where asked: the agent may decide not to answer', async () => {
   })
 })
 
+describe('router decisions', () => {
+  it('a watched channel run that stays out (NO_REPLY) records nothing; any other router run must commit', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    const run = await t.sessions.requireRun(t.run.id)
+    const session = await t.sessions.require(t.session.id)
+    const router = { ...session, data: { ...session.data, meta: { role: 'router' } } }
+    const asRouter = (note: string, output: string) =>
+      t.hooks.decide(beforeFinish, {
+        run: { ...run, data: { ...run.data, mode: 'ephemeral', cause: { type: 'event', eventId: 'evt_x', note } } },
+        session: router,
+        status: 'completed',
+        output,
+      })
+    const needsCommit = (d: { block?: string } | undefined) => !!d?.block?.includes('record your decision')
+    expect(needsCommit(await asRouter('watch', 'NO_REPLY: people chatting'))).toBe(false)
+    // Getting involved is a decision like any other.
+    expect(needsCommit(await asRouter('watch', 'Started a session for the checkout bug'))).toBe(true)
+    // Asked directly, staying out still needs its line.
+    expect(needsCommit(await asRouter('fallback', 'NO_REPLY'))).toBe(true)
+  })
+})
+
 describe('router decision logs', async () => {
   const { isRouterLog } = await import('../src/policies.ts')
   const router = { data: { meta: { role: 'router' } } }

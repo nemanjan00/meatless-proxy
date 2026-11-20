@@ -135,6 +135,12 @@ and tags combine as described below:
    this can't loop.
 4. **Triggers.** The first matching trigger, by source, type and filters,
    delivers to its assigned context.
+   **Watched channels.** A new message or thread reply that still nobody acts
+   on, in a channel an employee [watches](spec.md#watched-channels), goes to
+   that employee's router session as information (`watch`: not expected to
+   act, untrusted, an ephemeral run). The router decides whether to get
+   involved. Not for a session's own message, one that tags an employee, or
+   one from an AI employee.
 5. **Fallback.** Anything left over goes to the router session of the employee
    whose scope covers the subject, or to the deployment's default router
    session.
@@ -152,7 +158,7 @@ issue completed, canceled or removed, a local project's branch merged or
 deleted (`local-git` `branch.merged` / `branch.deleted`). The closing event
 itself is delivered first, so the session still learns what happened.
 
-Only the router sessions in steps 3 and 5 involve a model. That's where
+Only the router sessions in steps 3, 4 (watched channels) and 5 involve a model. That's where
 [untrusted input](spec.md#untrusted-input) is judged critically, and where
 work nobody has claimed gets assigned.
 

@@ -16,8 +16,8 @@ import {
   type Hooks,
   type Logger,
 } from '@mp/core'
-import { createDirectory, type Directory, type Employee } from '@mp/directory'
-import { createEvents, createScheduledTasks, type Events, type ScheduledTasks } from '@mp/events'
+import { createDirectory, watchesChannel, type Directory, type Employee } from '@mp/directory'
+import { createEvents, createScheduledTasks, type Events, type MpEvent, type ScheduledTasks } from '@mp/events'
 import { createFiles, directoryStorage, migrateFileRecords, type FileStorage, type FilesService } from '@mp/files'
 import type { GitCache, LocalRepos } from '@mp/git'
 import { gitCliLocalRepos } from '@mp/git-cli'
@@ -64,7 +64,8 @@ import { scheduledTaskRecipients } from './schedules/recipients.ts'
 import { createLocalProjectForEmployee } from './local-projects/index.ts'
 
 /** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
-const OWN_COPY_SECRETS: Record<string, string> = { 'integration:slack': 'SLACK_SIGNING_SECRET' }
+const SLACK_SOURCE = 'integration:slack'
+const OWN_COPY_SECRETS: Record<string, string> = { [SLACK_SOURCE]: 'SLACK_SIGNING_SECRET' }
 
 /** Replacements for adapters and ambient services, mostly for tests. */
 export interface AppOverrides {
@@ -403,6 +404,40 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       .map((m) => ({ sessionId: m.id, reason: 'member' as const, expectedToAct: false, trusted: true, fork: false }))
   }
 
+  const hasOwnCopies = async (source: string, employeeId: string) => {
+    const name = OWN_COPY_SECRETS[source]
+    if (!name) return false
+    return (await secrets.list()).some((m) => m.name === name && m.scope.type === 'employee' && m.scope.id === employeeId)
+  }
+
+  // Employees watching the channel a message was posted in (docs/spec.md#watched-channels).
+  const watchersOf = async (event: MpEvent): Promise<string[]> => {
+    if (event.data.type !== 'message.posted' && event.data.type !== 'message.replied') return []
+    const p = event.data.payload as Record<string, unknown> | undefined
+    const where =
+      event.data.source === 'chat' && typeof p?.channelId === 'string'
+        ? { source: 'chat' as const, id: p.channelId }
+        : event.data.source === SLACK_SOURCE && typeof p?.channel === 'string'
+          ? { source: 'slack' as const, id: p.channel, ...(typeof p.channel_name === 'string' ? { name: p.channel_name } : {}) }
+          : null
+    if (!where) return []
+    const employees = (await directory.employees.list({ limit: 10_000 })).items.filter((e) => e.data.watch?.length)
+    if (!employees.length) return []
+    // AI employees talking in a watched channel don't wake each other (people and other bots do).
+    const actor = event.data.actorContactId ? await directory.contacts.get(event.data.actorContactId) : null
+    if (actor && actor.data.kind !== 'person') return []
+    const name = where.source === 'chat' ? (await chat.getChannel(where.id))?.data.name : where.name
+    const out: string[] = []
+    for (const e of employees) {
+      if (!e.data.watch!.some((w) => watchesChannel(w, { ...where, ...(name ? { name } : {}) }))) continue
+      // With its own app, an employee watches through its own copy of the message.
+      const copyFor = event.data.employeeId
+      if (copyFor && copyFor !== e.id && (await hasOwnCopies(event.data.source, e.id))) continue
+      out.push(e.id)
+    }
+    return out
+  }
+
   const router = createRouter({
     events: rawEvents,
     sessions,
@@ -416,15 +451,12 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     resolvers: [channelMembers, scheduledTaskRecipients(scheduledTasks)],
     // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
     // every event there, so its sessions skip other employees' copies.
-    hasOwnCopies: async (source, employeeId) => {
-      const name = OWN_COPY_SECRETS[source]
-      if (!name) return false
-      return (await secrets.list()).some((m) => m.name === name && m.scope.type === 'employee' && m.scope.id === employeeId)
-    },
+    hasOwnCopies,
     // Chat events show the saved descriptions of their images (made after the event was stored).
     prepareEvent: describedEvent(attachments),
     // Employees in a chat thread (their sessions posted in it, or it tagged them, e.g. an alert) hear a person's
     // untagged follow-up there.
+    watchersOf,
     participantsOf: async (event) => {
       const p = event.data.payload as { threadId?: unknown; messageId?: unknown } | undefined
       if (event.data.source !== 'chat' || event.data.type !== 'message.replied' || typeof p?.threadId !== 'string') return []

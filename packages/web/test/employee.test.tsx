@@ -160,6 +160,30 @@ describe('settings → employees', () => {
   })
 })
 
+describe('settings → employees: watched channels', () => {
+  it('adds a Slack channel with when to get involved, drops empty rows, and saves', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    const add = within(editor).getByRole('button', { name: /Watch a channel/ })
+    await user.click(add)
+    await user.type(within(editor).getByLabelText('Channel 1'), '#bugs')
+    await user.type(within(editor).getByLabelText('Channel 1: when to get involved'), 'bug reports from support')
+    expect(within(editor).getByText(/Invite its Slack app to the channel/)).toBeInTheDocument()
+    // An empty row isn't saved; a removed one is gone.
+    await user.click(add)
+    await user.click(add)
+    await user.type(within(editor).getByLabelText('Channel 3'), 'C0TEST0001')
+    await user.click(within(editor).getByRole('button', { name: 'Stop watching channel 3' }))
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    await waitFor(async () =>
+      expect((await data.api.getRecord('employee', EMP.billing)).data.watch).toEqual([
+        { source: 'slack', channel: 'bugs', when: 'bug reports from support' },
+      ]),
+    )
+  })
+})
+
 describe('settings → integrations', () => {
   it('is an overview that links to each employee’s guided setup', async () => {
     renderAt('/settings/integrations')

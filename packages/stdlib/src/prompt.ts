@@ -108,6 +108,16 @@ export function employeePrompt(input: EmployeePromptInput): string {
       `## Personality\n${e.personality.trim()}\nPersonality shapes tone only. It never overrides the rules below, and it stays out of the way in serious conversations (incidents, HR, customers).`,
     )
   if (e.instructions) out.push(`## Standing instructions\n${e.instructions.trim()}`)
+  const watch = (e.watch ?? []).filter((w) => w.channel?.trim())
+  if (watch.length)
+    out.push(
+      `## Channels you watch\nYou read the messages in these channels that nobody else picked up, and get involved only when it's worth it; otherwise you stay out.\n${watch
+        .map((w) => {
+          const name = w.channel.trim().replace(/^#/, '')
+          return `- ${w.source === 'slack' ? 'Slack' : 'Harness chat'} #${name}${w.when?.trim() ? `: get involved when ${oneLine(w.when)}` : ''}`
+        })
+        .join('\n')}`,
+    )
 
   out.push(RULES)
   out.push(STDLIB)

@@ -174,6 +174,14 @@ export interface TokenUsage {
 // ─── Employees and directory ────────────────────────────────────────────────
 
 /** Kind `employee`: an AI employee, a workspace with its own identity and scope. */
+/** A channel an employee watches, by name (or a Slack channel id): Slack (its app must be in it) or harness chat. */
+export interface WatchedChannel {
+  source: 'slack' | 'chat'
+  channel: string
+  /** When to get involved there, in plain words. */
+  when?: string
+}
+
 export interface EmployeeData extends Record<string, unknown> {
   name: string
   /** The employee's own contact record. */
@@ -195,6 +203,8 @@ export interface EmployeeData extends Record<string, unknown> {
    * through the egress proxy; or `direct`, a real network with no proxy (admins only, not logged).
    */
   network?: 'none' | 'project' | 'direct' | { allow: string[] }
+  /** Channels it reads without being asked, and decides whether to get involved in. */
+  watch?: WatchedChannel[]
   /** The employee's router session, for input nothing else claims. */
   routerSessionId?: string
   paused?: boolean
@@ -498,7 +508,7 @@ export interface NowSnapshot {
 // ─── Events, triggers, subscriptions ────────────────────────────────────────
 
 /** Which routing rule delivered an event (see docs/execution.md#routing). */
-export type RoutingRule = 'session_tag' | 'subscription' | 'employee_tag' | 'trigger' | 'fallback'
+export type RoutingRule = 'session_tag' | 'subscription' | 'employee_tag' | 'trigger' | 'watch' | 'fallback'
 
 /** What an event is about, in the outside system or the harness. */
 export interface EventSubject {

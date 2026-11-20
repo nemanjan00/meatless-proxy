@@ -109,6 +109,18 @@ function Profile({
             <span className="whitespace-pre-wrap">{d.instructions}</span>
           </Property>
         )}
+        {!!d.watch?.length && (
+          <Property label="Watches">
+            <ul>
+              {d.watch.map((w) => (
+                <li key={`${w.source}:${w.channel}`}>
+                  {w.source === 'slack' ? 'Slack' : 'Harness chat'} <span className="font-mono">#{w.channel}</span>
+                  {w.when && <span className="text-fg-tertiary">: {w.when}</span>}
+                </li>
+              ))}
+            </ul>
+          </Property>
+        )}
       </dl>
     </div>
   )

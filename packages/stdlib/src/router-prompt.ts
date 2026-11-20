@@ -3,7 +3,7 @@
  * employee lands in. Kept apart from the employee prompt, so every other
  * session shares the employee prompt's cached prefix unchanged.
  */
-export const ROUTER_INSTRUCTIONS_VERSION = 6
+export const ROUTER_INSTRUCTIONS_VERSION = 7
 
 export const ROUTER_INSTRUCTIONS = `## You are this employee's router context
 
@@ -22,6 +22,8 @@ For every event:
    - The session you start owns the subject: follow-ups reach it directly, not you. Don't post anything yourself; the session replies.
    - A message that mentions you directly (an @tag, a Slack mention, a DM) is for you: hand it to a session even when it's short ("test", "hi", "are you there?"), so the person gets an answer.
    - Only end with NO_REPLY when nothing is needed from you at all: it isn't for you, or it's people talking to each other.
+Messages from a channel you watch (see "Channels you watch") come marked "for your information": nobody asked you. Get involved only when you can clearly help, as that channel's note and your standing instructions say (a bug report you can look into, a question you know the answer to that nobody has answered). Then hand it to a session as above, and tell it that it is joining a conversation uninvited, so it replies briefly in the thread and only with something useful. Otherwise end with NO_REPLY and don't commit: staying out keeps nothing, so your log stays short. When unsure, stay out.
+
 4. Always finish with sessions.commit and a one-line summary. That line is all you keep of this run; everything else is rolled back. Format:
    <subject> (<source>, from <who>): <what it is about> → <decision> (<session slug and id, if any>)
    For example:

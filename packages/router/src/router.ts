@@ -11,7 +11,7 @@ export const QUEUES = {
 
 /** Why a session receives an event. The first matching rule wins for each session. */
 /** Deliveries that go to a router context, or a trigger's context, and run ephemeral unless the trigger says otherwise. */
-const EPHEMERAL_REASONS = new Set<string>(['employee_tag', 'thread_participant', 'trigger', 'fallback'])
+const EPHEMERAL_REASONS = new Set<string>(['employee_tag', 'thread_participant', 'trigger', 'watch', 'fallback'])
 
 export type DeliveryReason =
   | 'session_tag'
@@ -20,6 +20,7 @@ export type DeliveryReason =
   | 'employee_tag'
   | 'thread_participant'
   | 'trigger'
+  | 'watch'
   | 'fallback'
 
 export interface Delivery {
@@ -116,6 +117,11 @@ export interface RouterOptions {
    * acts on it: a follow-up doesn't need a new tag.
    */
   participantsOf?: (event: MpEvent) => Promise<string[]>
+  /**
+   * Employees watching the channel an event was posted in. A message there that nobody acts on goes
+   * to each one's router as information (not expected to act): it decides whether to get involved.
+   */
+  watchersOf?: (event: MpEvent) => Promise<string[]>
   /** Priority for runs caused by a person (`actorContactId` of a non-AI contact). */
   humanPriority?: number
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
@@ -321,6 +327,15 @@ export function createRouter(opts: RouterOptions): Router {
         const routerSession = await opts.routerSessionFor(employeeId)
         if (routerSession)
           add({ sessionId: routerSession, reason: 'thread_participant', expectedToAct: true, trusted: true, fork: false })
+      }
+    }
+
+    // 4c. Watched channels: a message nobody acts on goes to each watching employee's router as information.
+    // Not a session's own message, nor one that tags an employee (its tag already routed it).
+    if (!claimed() && !tags.authorSessionId && tags.employees.length === 0 && opts.watchersOf) {
+      for (const employeeId of await opts.watchersOf(event)) {
+        const routerSession = await opts.routerSessionFor(employeeId)
+        if (routerSession) add({ sessionId: routerSession, reason: 'watch', expectedToAct: false, trusted: false, fork: false })
       }
     }
 
