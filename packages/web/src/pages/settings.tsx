@@ -92,7 +92,6 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
-  const [scope, setScope] = useState(d.scope ?? '')
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
   const [deny, setDeny] = useState(lists.deny.join('\n'))
@@ -102,7 +101,6 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     setPersonality(d.personality ?? '')
     setInstructions(d.instructions ?? '')
     setWatch(d.watch ?? [])
-    setScope(d.scope ?? '')
     setModel(d.model ?? '')
     const l = toolLists(d)
     setAllow(l.allow.join('\n'))
@@ -123,7 +121,6 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           personality,
           instructions,
           watch: cleanWatch(watch),
-          scope,
           model,
           ...(lists.flat
             ? { toolAllow: lines(allow), toolDeny: lines(deny) }
@@ -173,9 +170,6 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
         hint="It reads what nobody picked up there, and joins in only when it's worth it"
       >
         <WatchedChannels value={watch} onChange={setWatch} />
-      </Field>
-      <Field id="emp-scope" label="Scope" hint="The slice of the company it covers">
-        <Textarea id="emp-scope" value={scope} onChange={(e) => setScope(e.target.value)} rows={2} />
       </Field>
       <Field id="emp-model" label="Model">
         <Input

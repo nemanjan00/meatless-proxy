@@ -186,8 +186,8 @@ export interface EmployeeData extends Record<string, unknown> {
   name: string
   /** The employee's own contact record. */
   contactId?: string
-  /** Short description of the slice of the company it covers. */
-  scope?: string
+  /** The slice of the company it covers: projects, teams and procedures (ids). */
+  scope?: { projects?: string[]; teams?: string[]; procedures?: string[] }
   /** Plain-words personality: quirks, sign-off, tone. */
   personality?: string
   /** Standing instructions for every session of this employee, in its system prompt. */

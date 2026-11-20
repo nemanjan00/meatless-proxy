@@ -55,7 +55,7 @@ function Profile({
   const allow = d.toolAllow ?? d.tools?.allow ?? []
   const deny = d.toolDeny ?? d.tools?.deny ?? []
   const handles = (contact?.handles ?? []).filter((h) => h.system !== 'mp')
-  const about = (typeof contact?.bio === 'string' && contact.bio) || (typeof d.scope === 'string' && d.scope) || null
+  const about = (typeof contact?.bio === 'string' && contact.bio) || null
   return (
     <div className="flex flex-col gap-4" data-testid="employee-profile">
       <div className="flex items-start gap-3">

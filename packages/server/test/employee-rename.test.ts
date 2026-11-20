@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { testApp, type TestApp } from './helpers.ts'
+import { testApp, until, type TestApp } from './helpers.ts'
 
 const apps: TestApp[] = []
 afterEach(async () => {
@@ -27,5 +27,27 @@ describe('renaming an employee through the records API', () => {
     expect((await s.directory.employees.require(bot.id)).data.name).toBe('Ledger')
     // Other edits still go through as before.
     expect((await t.req('PATCH', `/api/records/employee/${bot.id}`, { data: { instructions: 'Be brief.' } })).status).toBe(200)
+  })
+
+  it('accepts exactly what Settings → Employees saves (live, it sent scope as text and every save was refused)', async () => {
+    const t = await testApp({ workers: false })
+    apps.push(t)
+    const s = t.a.services
+    const bot = await s.directory.employees.create({ name: 'Billing Bot', toolAllow: ['**'] })
+    // Provisioning adds its SSH key right after it's created; the editor saves the version it shows.
+    await until(async () => !!(await s.directory.employees.require(bot.id)).data.sshPublicKey, 'the SSH key')
+    const { version } = await s.directory.employees.require(bot.id)
+    const editor = {
+      name: 'Foxy',
+      personality: '',
+      instructions: '',
+      watch: [{ source: 'slack', channel: 'bugs', when: 'bug reports from support' }],
+      model: '',
+      toolAllow: ['**'],
+      toolDeny: [],
+    }
+    const r = await t.req('PATCH', `/api/records/employee/${bot.id}`, { data: editor, version })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect((await s.directory.employees.require(bot.id)).data).toMatchObject({ name: 'Foxy', watch: editor.watch })
   })
 })
