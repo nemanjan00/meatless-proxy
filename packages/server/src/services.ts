@@ -55,6 +55,7 @@ import { loadStdlib, type StdlibModule } from './stdlib.ts'
 import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
+import { envSecretValues } from './env-secrets.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
@@ -672,6 +673,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       toolsetFor: async (employeeId: string) => tools.allowed(await toolListsFor(employeeId)).map((t) => t.name),
       ...(sandbox ? { sandbox } : {}),
       sshKeyFor: async (employeeId: string) => (await sshPrivateKey({ secrets }, employeeId)) ?? undefined,
+      // env.up secrets: the ones an admin allowed for the employee, never the harness's own (src/env-secrets).
+      envSecrets: (names: string[], ctx: { employeeId: string; projectId?: string }) => envSecretValues(secrets, names, ctx),
       // projects.create_local: a project on a repository the harness hosts, the employee a member (src/local-projects).
       localProjects: {
         create: (input: Parameters<typeof createLocalProjectForEmployee>[1]) => createLocalProjectForEmployee(services, input),

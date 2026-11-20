@@ -207,6 +207,8 @@ export interface EmployeeData extends Record<string, unknown> {
   watch?: WatchedChannel[]
   /** React 👀 to a Slack message as soon as it sets it to work. Unset: on. */
   ackReaction?: boolean
+  /** Secrets (names) it may put into its environments with env.up. */
+  envSecrets?: string[]
   /** The employee's router session, for input nothing else claims. */
   routerSessionId?: string
   paused?: boolean

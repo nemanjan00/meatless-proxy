@@ -198,6 +198,13 @@ export const employeeSchema: KindSchema = {
       type: 'boolean',
       description: 'React 👀 to a Slack message as soon as it sets this employee to work (default on).',
     },
+    {
+      name: 'envSecrets',
+      type: 'list',
+      of: { type: 'string' },
+      description:
+        "Secrets (by name, e.g. NPM_TOKEN) this employee may put into its environments with env.up secrets. Set by admins; the integrations' own credentials are never allowed.",
+    },
     { name: 'routerSessionId', type: 'ref', ref: 'session' },
     { name: 'limits', type: 'json' },
     { name: 'taskSystem', type: 'json', description: 'How real forks become tasks, e.g. {server, createTool, ...}.' },
@@ -260,6 +267,7 @@ export interface EmployeeData extends Record<string, unknown> {
   watch?: WatchedChannel[]
   /** React 👀 to a Slack message that sets it to work. Unset: on. */
   ackReaction?: boolean
+  envSecrets?: string[]
   routerSessionId?: string
   limits?: unknown
   taskSystem?: unknown

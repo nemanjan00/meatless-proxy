@@ -74,6 +74,8 @@ export interface StackOptions {
   localProjects?: boolean
   /** Tools on demand (tools.find, tools.load). Default on. */
   toolsOnDemand?: boolean
+  /** Secret values for env.up `secrets`. Default: none (environments get no secrets). */
+  envSecrets?: StdlibDeps['envSecrets']
 }
 
 /** Where a session's checkout is on disk (git.checkout no longer says: it isn't a path for the model). */
@@ -174,6 +176,7 @@ export async function stack(opts: StackOptions = {}) {
     ...(opts.containers === false ? {} : { containers }),
     ...(opts.sandbox === false ? {} : { sandbox }),
     ...(opts.localProjects === false ? {} : { localProjects }),
+    ...(opts.envSecrets ? { envSecrets: opts.envSecrets } : {}),
     enqueueRun:
       opts.enqueueRun ??
       (async (id) => {

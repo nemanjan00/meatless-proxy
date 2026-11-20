@@ -455,7 +455,8 @@ Open questions:
 
 - Stored encrypted in the database, or in an external secret store (Vault, a
   cloud secret manager) that the database only references?
-- How are secrets rotated, and do running environments pick up a new value?
+- How are secrets rotated? A running environment keeps the value it started
+  with (both are masked) until it restarts.
 
 ### Tool registry
 
@@ -1811,7 +1812,8 @@ page). It's for trusted employees only.
   - Nothing is published on the host's ports.
   - The rest of the container hardening is unchanged: non-root where
     configured, no new privileges, dropped capabilities (no raw sockets, so no
-    `ping`), limits, no Docker socket, and no secrets in the environment.
+    `ping`), limits, no Docker socket, and no secrets in the environment
+    beyond the ones it names (see [Secrets in environments](#secrets-in-environments)).
 - **What it doesn't stop, and the UI says so.** A direct network can reach the
   Docker host's LAN, other hosts' published ports and cloud metadata endpoints
   (169.254.169.254), and none of its traffic is logged. Blocking those would
@@ -1934,11 +1936,36 @@ screenshots.
   included. The session gets a note saying why, and that `env.up` starts a new
   one; the repositories and `/files` are kept.
 
+#### Secrets in environments
+
+- **Admins allow them per employee.** Settings → Employees → *Secrets in
+  environments* lists the secret names (e.g. `NPM_TOKEN`) the employee may
+  set in its environments. Its prompt lists them under "Secrets for your
+  environments". Nothing is allowed by default.
+- **The model names them, never sees them.** `env.up { secrets: ["NPM_TOKEN"] }`
+  sets each as an environment variable of the environment's main container,
+  resolved at call time in the employee's and the project's scope (tool
+  `env.up`, then project, employee, global). A name that isn't allowed or has
+  no value is refused before anything starts. Without `secrets`, env.up (and
+  env.exec starting an environment by itself) uses the ones the session asked
+  for last that are still allowed and set; `[]` asks for none. A running
+  environment keeps its secrets: changing them is a restart.
+- **The harness's own credentials never go in**, even when an admin lists the
+  name: the integrations' tokens and webhook secrets, the employee's SSH key
+  and MCP servers' secrets. With them a container could do what the tools
+  refuse, such as merging with the GitLab token.
+- **Masked.** The values (the current ones and the ones the environment started
+  with) are replaced with `[secret]` in env.exec and env.logs output, and in
+  the Environments page's logs and processes. Masking only catches the value as
+  it is: a command that encodes it (base64, split) gets it out. Allow only what
+  the employee's work needs.
+- **Every use is recorded:** a `secret.used` event and a log line with the
+  names, environment, session, run and call, never the values.
+
 Open questions:
 
 - How is the cache size limited, and when are unused mirrors removed?
 - Sharing the cache between several harness hosts is left for later.
-- How are secrets the project needs at runtime provided to its containers?
 - Is Docker the only runtime, or should the orchestration layer also allow
   others (Podman, Kubernetes, remote runners)?
 - Is one egress proxy shared by all environments (with per-environment

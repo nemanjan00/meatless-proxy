@@ -11,12 +11,14 @@ import {
   type Json,
 } from '@mp/core'
 import { LABEL_SANDBOX } from '@mp/sandbox'
+import { createRedactor } from '@mp/secrets'
 import type { Run, Session } from '@mp/sessions'
 import { DEFAULT_ENV_PROFILES, type EnvProfile } from '@mp/stdlib'
 import type { Actor } from '@mp/store'
 import { Hono } from 'hono'
 import { type Principal, principalOf, viewerOf } from '../auth/guard.ts'
 import type { ChatVisibility } from '../auth/visibility.ts'
+import { envSecretValues } from '../env-secrets.ts'
 import type { Services } from '../services.ts'
 import { ENV_USED_TOPIC, mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
 
@@ -457,6 +459,18 @@ export function isIdle(e: Api.Environment, now: number, idleMs: number): boolean
 export const stoppedNote = (name: string, envName: string) =>
   `${name} stopped this session's environment (${envName}) from the harness UI. Its containers, network and volumes are gone; env.up starts a new one if you still need it.`
 
+/** Masks the secrets env.up set in a session's environment (their current values), like env.exec's output does. */
+async function secretsRedactor(s: Services, session: Session | null): Promise<<T extends Json | string>(x: T) => T> {
+  const meta = sessionEnvOf(session) as { secrets?: unknown; projectId?: unknown } | null
+  const names = Array.isArray(meta?.secrets) ? meta.secrets.filter((x): x is string => typeof x === 'string') : []
+  if (!names.length || !session) return (x) => x
+  const values = await envSecretValues(s.secrets, names, {
+    employeeId: session.data.employeeId,
+    ...(typeof meta?.projectId === 'string' ? { projectId: meta.projectId } : {}),
+  })
+  return createRedactor(Object.values(values))
+}
+
 /**
  * Stops an environment like env.down: destroys it and removes it from its session's meta. The
  * session is told who stopped it: in the history of an idle session, or as an inbox item a working
@@ -655,7 +669,7 @@ export function environmentRoutes(s: Services, views: EnvironmentViews): Hono {
   app.get('/api/environments/:id/logs', async (c) => {
     const hit = await views.require(principalOf(c), c.req.param('id'))
     const tail = Math.min(Math.max(1, Number(c.req.query('tail') ?? 300) || 300), 5000)
-    const logs = await s.containers!.logs(hit.info.id, { tail })
+    const logs = (await secretsRedactor(s, hit.session))(await s.containers!.logs(hit.info.id, { tail }))
     // Keep the end: that's where the news is.
     return c.json({ envId: hit.info.id, logs: logs.length > 200_000 ? logs.slice(-200_000) : logs })
   })
@@ -664,7 +678,9 @@ export function environmentRoutes(s: Services, views: EnvironmentViews): Hono {
     const hit = await views.require(principalOf(c), c.req.param('id'))
     const rt = s.containers!
     if (!rt.processes) throw new UnavailableError('the container runtime cannot list processes')
-    return c.json({ envId: hit.info.id, containers: await rt.processes(hit.info.id) })
+    // A command line can carry a secret's value (e.g. a token passed as an argument).
+    const redact = await secretsRedactor(s, hit.session)
+    return c.json({ envId: hit.info.id, containers: redact((await rt.processes(hit.info.id)) as unknown as Json) })
   })
 
   return app

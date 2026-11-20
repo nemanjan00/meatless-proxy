@@ -84,6 +84,9 @@ export function toolLists(d: EmployeeData): { allow: string[]; deny: string[]; f
     : { allow: d.tools.allow ?? [], deny: d.tools.deny ?? [], flat }
 }
 
+/** Secret names typed in a box, separated by commas or spaces. */
+export const secretNames = (s: string) => [...new Set(s.split(/[\s,]+/).filter((x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(x)))]
+
 function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeData>; onSaved(): void }) {
   const api = useApi()
   const d = employee.data
@@ -93,6 +96,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
   const [ack, setAck] = useState(d.ackReaction !== false)
+  const [envSecrets, setEnvSecrets] = useState((d.envSecrets ?? []).join(', '))
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
   const [deny, setDeny] = useState(lists.deny.join('\n'))
@@ -103,6 +107,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     setInstructions(d.instructions ?? '')
     setWatch(d.watch ?? [])
     setAck(d.ackReaction !== false)
+    setEnvSecrets((d.envSecrets ?? []).join(', '))
     setModel(d.model ?? '')
     const l = toolLists(d)
     setAllow(l.allow.join('\n'))
@@ -124,6 +129,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           instructions,
           watch: cleanWatch(watch),
           ackReaction: ack,
+          envSecrets: secretNames(envSecrets),
           model,
           ...(lists.flat
             ? { toolAllow: lines(allow), toolDeny: lines(deny) }
@@ -188,6 +194,19 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       </Field>
       <Field id="emp-network" label="Network" hint="What its sandbox and environments can reach">
         <NetworkSetting employee={employee} admin onSaved={onSaved} />
+      </Field>
+      <Field
+        id="emp-env-secrets"
+        label="Secrets in environments"
+        hint="Secret names it may set in its environments with env.up, e.g. NPM_TOKEN; it never sees the values"
+      >
+        <Input
+          id="emp-env-secrets"
+          value={envSecrets}
+          onChange={(e) => setEnvSecrets(e.target.value)}
+          placeholder="None"
+          className="font-mono text-micro"
+        />
       </Field>
       <Field id="emp-allow" label="Allow list" hint="Names or patterns, one per line">
         <Textarea

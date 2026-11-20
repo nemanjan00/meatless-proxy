@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import type { Json } from '@mp/core'
+import { createRedactor } from '@mp/secrets'
 import { DESKTOP_DISPLAY, egressEntryCovered, invalidExpose, type ContainerRuntime, type EnvSpec } from '@mp/containers'
 import type { Session } from '@mp/sessions'
 import type { ToolContext, ToolHandler } from '@mp/tools'
@@ -186,7 +187,40 @@ export function headAndTail(text: string, keep = 3000): { text: string; cut: boo
 export const cutNote = (length: number) =>
   `output over ${length} characters: redirect it to a file (e.g. > /files/out.txt, or in /workspace) and read ranges with fs.read / git.read_file`
 
+/** A secret's name as env.up takes it: an environment variable's name. */
+const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** The secrets a session's environments get when env.up doesn't name any: the last ones it asked for. */
+const sessionSecretsOf = (session: Session): string[] => {
+  const v = session.data.meta?.envSecrets
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** Told when an environment has secrets. */
+const secretsNote = (names: string[]) =>
+  `Secrets set as environment variables: ${names.map((n) => `$${n}`).join(', ')}. Use them by name (e.g. in .npmrc as \${NPM_TOKEN}); never print them: their values are masked in outputs.`
+
 export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
+  /**
+   * The values each environment was started with, to mask them in its outputs even after a secret
+   * changes (the environment keeps the old value). Lost on a restart of the harness: then the current
+   * values are masked.
+   */
+  const injected = new Map<string, string[]>()
+
+  /** Masks an environment's secrets: the values it started with and their current ones. */
+  const redactorFor = async (session: Session, env: { id: string; projectId?: string; secrets?: string[] }) => {
+    const names = Array.isArray(env.secrets) ? env.secrets : []
+    if (!names.length) return <T extends Json | string>(x: T) => x
+    const now = kit.deps.envSecrets
+      ? await kit.deps.envSecrets(names, {
+          employeeId: session.data.employeeId,
+          ...(env.projectId ? { projectId: env.projectId } : {}),
+        })
+      : {}
+    return createRedactor([...Object.values(now), ...(injected.get(env.id) ?? [])])
+  }
+
   /**
    * The network from the employee's setting with the project (the checkout's, else the session's
    * first linked one), or the deployment default.
@@ -287,7 +321,13 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             type: 'boolean',
             description: 'Restart a running environment (to add repositories: mounts are fixed while it runs).',
           },
-          env: { type: 'object', description: 'Environment variables (no secrets: name secrets instead).' },
+          env: { type: 'object', description: 'Environment variables. Never put a secret here: name it in secrets.' },
+          secrets: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Secrets to set as environment variables, by name, e.g. ["NPM_TOKEN"]: only those your prompt lists under "Secrets for your environments". You never see the values; they are masked in outputs. Default: the ones this session asked for last; [] for none.',
+          },
           services: {
             type: 'array',
             description: 'Extra containers on the same network, e.g. [{name:"db", image:"postgres:18"}].',
@@ -332,6 +372,42 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         if (typeof id === 'string') return fail(id)
         if (!wanted.some((x) => x.id === id.id)) wanted.push(id)
       }
+      // Secrets, by name: the ones asked for (each must be allowed for the employee and have a value), else
+      // the ones this session asked for last (still allowed and set). Checked before anything restarts.
+      if (a.secrets !== undefined && (!Array.isArray(a.secrets) || a.secrets.some((x: unknown) => typeof x !== 'string')))
+        return fail('secrets must be a list of secret names, e.g. ["NPM_TOKEN"]')
+      const askedSecrets = a.secrets === undefined ? null : [...new Set((a.secrets as string[]).map((x) => x.trim()))]
+      const allowedSecrets = (await kit.employee(ctx.employeeId)).data.envSecrets ?? []
+      let secretNames = (askedSecrets ?? sessionSecretsOf(session)).filter((n) => askedSecrets || allowedSecrets.includes(n))
+      const badName = secretNames.find((n) => !SECRET_NAME.test(n))
+      if (badName) return fail(`not a secret name: ${JSON.stringify(badName)}`)
+      const notAllowed = secretNames.filter((n) => !allowedSecrets.includes(n))
+      if (notAllowed.length)
+        return fail(
+          `${notAllowed.join(', ')} ${notAllowed.length > 1 ? 'are' : 'is'} not allowed in your environments: an admin allows secrets for them in Settings → Employees`,
+          { allowed: allowedSecrets },
+        )
+      if (secretNames.length && !kit.deps.envSecrets) return fail('this deployment gives environments no secrets')
+      // The project the environment is likely for, for project-scoped secrets: the first repository asked for, else as before.
+      const first = wanted.find((x) => x.primary) ?? wanted[0]
+      const secretProject =
+        (first ? (first.kind === 'checkout' ? first.w.projectId : first.projectId) : undefined) ??
+        envOf(session)?.projectId ??
+        (await kit.projectsOf(session))[0]
+      const secretValues = secretNames.length
+        ? await kit.deps.envSecrets!(secretNames, {
+            employeeId: ctx.employeeId,
+            ...(secretProject ? { projectId: secretProject } : {}),
+          })
+        : {}
+      const unset = secretNames.filter((n) => secretValues[n] === undefined)
+      if (unset.length && askedSecrets)
+        return fail(
+          `no value for ${unset.join(', ')}: ask an admin to set ${unset.length > 1 ? 'them' : 'it'} in Settings → Secrets (the integrations' own tokens and the SSH key never go into environments)`,
+        )
+      secretNames = secretNames.filter((n) => secretValues[n] !== undefined)
+      const clash = secretNames.filter((n) => a.env && Object.hasOwn(a.env, n))
+      if (clash.length) return fail(`${clash.join(', ')} is both in env and in secrets: leave it out of env`)
       let restarted: string | undefined
       // A restart keeps what it ran (its profile or image) unless it's given another.
       let previous: { profile?: string; image?: string } | undefined
@@ -362,6 +438,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             ...(a.desktop === true && !current.desktop
               ? ['the environment is already running without a desktop: env.down, then env.up with desktop: true']
               : []),
+            ...(askedSecrets && [...askedSecrets].sort().join() !== [...(current.secrets ?? [])].sort().join()
+              ? [`the environment is already running with its own secrets: to change them, call ${restartCall(a)}`]
+              : []),
           ]
           return ok({
             envId: info.id,
@@ -379,6 +458,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             ...(current.network ? { network: current.network } : {}),
             ...(exposed.length ? { previews: exposed.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
             ...(current.desktop ? { desktop: desktopOf(session.id) } : {}),
+            ...(current.secrets?.length ? { secrets: current.secrets } : {}),
             ...(notes.length ? { note: notes.join('; ') } : {}),
           })
         }
@@ -575,6 +655,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const envVars = {
         ...(workspace ? GIT_SAFE_ENV : {}),
         ...(a.env ? Object.fromEntries(Object.entries(a.env).map(([k, v]) => [k, String(v)])) : {}),
+        ...Object.fromEntries(secretNames.map((n) => [n, secretValues[n]!])),
       }
       const spec: EnvSpec = {
         name: envNameFor(emp.key ?? emp.data.name, session.data.slug || session.id),
@@ -592,6 +673,20 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         labels: { 'mp.session': session.id, 'mp.employee': ctx.employeeId },
       }
       const info = await runtime.createEnv(spec)
+      if (secretNames.length) {
+        injected.set(info.id, Object.values(secretValues))
+        // Every use is recorded: which secrets, which session and call. Never the values.
+        const use = {
+          names: secretNames,
+          tool: 'env.up',
+          envId: info.id,
+          sessionId: session.id,
+          runId: ctx.runId,
+          callId: ctx.callId,
+        }
+        kit.deps.bus?.publish('secret.used', use)
+        ctx.logger.info('secrets set in an environment', use)
+      }
       const checkoutOf = (m: RepoMount, path: string) => ({
         key: m.key,
         path,
@@ -600,6 +695,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       })
       await kit.patchMeta(session.id, (m) => ({
         ...m,
+        envSecrets: secretNames,
         env: {
           id: info.id,
           name: info.name,
@@ -615,6 +711,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
             ? { checkouts: [checkoutOf(workspace, '/workspace'), ...repoMounts.map((r) => checkoutOf(r, r.containerPath))] }
             : {}),
           ...(a.services ? { services: (a.services as { name: unknown }[]).map((x) => String(x.name)) } : {}),
+          ...(secretNames.length ? { secrets: secretNames } : {}),
         },
       }))
       kit.deps.bus?.publish('env.changed', { sessionId: session.id, envId: info.id, op: 'up' })
@@ -631,12 +728,14 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
         ...(expose.length ? { previews: expose.map((port) => ({ port, url: previewLink(session.id, port) })) } : {}),
         ...(desktop ? { desktop: desktopOf(session.id) } : {}),
         ...(ownFiles ? { files: FILES_MOUNT } : {}),
+        ...(secretNames.length ? { secrets: secretNames } : {}),
         note: [
           ...(restarted ? [restarted] : []),
           ...(fallbackNote ? [fallbackNote] : []),
           ...(workspace ? [ENV_NOTE] : [NO_REPOS_NOTE]),
           net.direct || net.allow.length ? NETWORK_NOTE : NO_NETWORK_NOTE,
           ...(ownFiles ? [FILES_NOTE] : []),
+          ...(secretNames.length ? [secretsNote(secretNames)] : []),
         ].join(' '),
       })
     }),
@@ -690,8 +789,9 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       } finally {
         kit.deps.bus?.publish('env.exec.finished', execution)
       }
-      const stdout = headAndTail(r.stdout, 3000)
-      const stderr = headAndTail(r.stderr, 1500)
+      const redact = await redactorFor(session, env)
+      const stdout = headAndTail(redact(r.stdout), 3000)
+      const stderr = headAndTail(redact(r.stderr), 1500)
       const longest = Math.max(stdout.cut ? r.stdout.length : 0, stderr.cut ? r.stderr.length : 0)
       return {
         output: {
@@ -701,7 +801,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           stdout: stdout.text,
           stderr: stderr.text,
           ...(longest ? { note: cutNote(longest) } : {}),
-          ...(started ? { started } : {}),
+          ...(started ? { started: redact(started) } : {}),
           // Started before environments mounted the employee's files: say so, or /files looks missing.
           ...(kit.deps.config.filesDir && !env.files
             ? {
@@ -726,7 +826,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const env = envOf(session)
       if (!env) return fail('this session has no environment')
       const logs = await runtime.logs(env.id, { tail: Math.min(Math.max(1, a.tail ?? 200), 2000) })
-      return ok({ envId: env.id, logs: tail(logs, 12000) })
+      return ok({ envId: env.id, logs: tail((await redactorFor(session, env))(logs), 12000) })
     },
   )
 
@@ -813,6 +913,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const env = envOf(session)
       if (!env) return ok({ down: true, note: 'there was no environment' })
       await runtime.destroyEnv(env.id)
+      injected.delete(env.id)
       await kit.patchMeta(session.id, (m) => {
         delete m.env
         return m

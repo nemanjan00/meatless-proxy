@@ -96,6 +96,8 @@ export interface EnvMeta {
   checkouts?: { key: string; path: string; ref?: string; writable?: boolean }[]
   /** Its service containers' names. */
   services?: string[]
+  /** The secrets set in its environment variables (env.up `secrets`), by name. */
+  secrets?: string[]
 }
 
 export interface ParamSpec {

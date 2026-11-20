@@ -61,6 +61,12 @@ export interface StdlibDeps {
    */
   sshKeyFor?: (employeeId: string) => Promise<string | undefined>
   /**
+   * Values of secrets an environment asked for by name (env.up `secrets`), in the employee's (and the
+   * project's) scope. Names the harness keeps for itself (the integrations' tokens, the SSH key) are left
+   * out, like missing ones. Optional: without it environments get no secrets.
+   */
+  envSecrets?: (names: string[], ctx: { employeeId: string; projectId?: string }) => Promise<Record<string, string>>
+  /**
    * Creates a project on a new repository the harness hosts itself (`local:<slug>`), with the employee as a
    * member (`projects.create_local`). Optional: without it that tool isn't registered.
    */

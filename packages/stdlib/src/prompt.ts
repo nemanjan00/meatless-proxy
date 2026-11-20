@@ -118,6 +118,11 @@ export function employeePrompt(input: EmployeePromptInput): string {
         })
         .join('\n')}`,
     )
+  const envSecrets = (e.envSecrets ?? []).filter((n) => n.trim())
+  if (envSecrets.length)
+    out.push(
+      `## Secrets for your environments\nenv.up { secrets: [...] } sets these as environment variables in your environment, by name: ${envSecrets.join(', ')}. You never see their values: use them by name (e.g. $NPM_TOKEN), never print or commit them.`,
+    )
 
   out.push(RULES)
   out.push(STDLIB)

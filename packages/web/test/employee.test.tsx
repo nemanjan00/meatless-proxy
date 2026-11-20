@@ -186,6 +186,19 @@ describe('settings → employees: 👀 on pickup', () => {
   })
 })
 
+describe('settings → employees: secrets in environments', () => {
+  it('saves the secret names, dropping what is not a name', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    await user.type(within(editor).getByLabelText(/Secrets in environments/), 'NPM_TOKEN, PYPI_TOKEN not-a-name NPM_TOKEN')
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    await waitFor(async () =>
+      expect((await data.api.getRecord('employee', EMP.billing)).data.envSecrets).toEqual(['NPM_TOKEN', 'PYPI_TOKEN']),
+    )
+  })
+})
+
 describe('settings → employees: watched channels', () => {
   it('adds a Slack channel with when to get involved, drops empty rows, and saves', async () => {
     const user = userEvent.setup()
