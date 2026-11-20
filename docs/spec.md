@@ -977,6 +977,11 @@ Each integration has three parts:
     employee's own token is used, which then needs Maintainer; `main` must
     then be protected so only named people can merge.
   - The model never gets a tool to manage webhooks: it's the harness's job.
+- **👀 on pickup.** When a Slack message sets an employee to work (a run
+  started or woken by it), its bot reacts 👀 at once, before any model call,
+  so people see it was picked up. Not for a [watched
+  channel](#watched-channels) message the router only reads to decide. Admins
+  turn it off per employee in Settings → Employees (`ackReaction: false`).
 
 ##### Interactive questions in Slack
 
@@ -3425,7 +3430,7 @@ All of these update live over the WebSocket.
   here.
 - **Settings → Employees** (admins) edits each employee's **name**,
   personality, **standing instructions**, [watched channels](#watched-channels),
-  scope, model, network and tool lists. A rename also renames its contact and
+  whether it reacts 👀 on pickup in Slack, model, network and tool lists. A rename also renames its contact and
   moves its `@handle` to the new name (refused when another employee has it);
   messages already sent keep their links, and its Slack app's name is changed
   in Slack. Standing

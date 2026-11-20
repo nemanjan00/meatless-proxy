@@ -498,6 +498,54 @@ function integrationSuite(backend: Backend) {
     expect(subs.map((x) => x.data.sessionId)).toEqual([session.id])
   })
 
+  it('no 👀 for an employee that turned it off, nor for a watched channel message it only reads', async () => {
+    const s = t.a.services
+    const reactions = () => api.calls.filter((c) => c.path === 'reactions.add').length
+    /** The stored event for a Slack message, by its ts. */
+    const eventFor = async (ts: string) =>
+      (await s.rawEvents.query({ source: 'integration:slack' })).find(
+        (e) => (e.data.payload as { ts?: string } | undefined)?.ts === ts,
+      )
+    try {
+      await s.directory.employees.update(meatless, { ackReaction: false })
+      api.reset()
+      await post(
+        '/webhooks/slack/meatless',
+        slackRequest(SLACK_SECRET_A, mention('EvAck1', 'U_ANA', '<@UBOT> hello', '1700000020.000100')),
+      )
+      await settle()
+      expect(await eventFor('1700000020.000100')).toBeTruthy()
+      expect(reactions()).toBe(0)
+
+      // On again, watching C1: a plain message there makes the router decide, which isn't "on it".
+      await s.directory.employees.update(meatless, { ackReaction: true, watch: [{ source: 'slack', channel: 'C1' }] })
+      api.reset()
+      const plain = {
+        type: 'event_callback',
+        event_id: 'EvAck2',
+        api_app_id: 'AAPP',
+        team_id: 'T1',
+        authorizations: [{ user_id: 'UBOT', is_bot: true }],
+        event: {
+          type: 'message',
+          channel: 'C1',
+          channel_type: 'channel',
+          user: 'U_ANA',
+          text: 'checkout is slow today',
+          ts: '1700000021.000100',
+        },
+      }
+      await post('/webhooks/slack/meatless', slackRequest(SLACK_SECRET_A, plain))
+      await settle()
+      const event = await eventFor('1700000021.000100')
+      const runs = await s.sessions.runs({ sessionId: (await s.routerSessionFor(meatless))! })
+      expect(runs.some((r) => r.data.cause.eventId === event!.id && r.data.cause.note === 'watch')).toBe(true)
+      expect(reactions()).toBe(0)
+    } finally {
+      await s.directory.employees.update(meatless, { ackReaction: true, watch: [] })
+    }
+  })
+
   it('slack: a router run ending with its decision posts nothing back', async () => {
     const s = t.a.services
     api.reset()

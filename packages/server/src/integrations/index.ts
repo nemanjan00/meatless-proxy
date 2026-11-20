@@ -231,6 +231,8 @@ export async function createIntegrations(deps: IntegrationsDeps, opts: Integrati
     logger,
     specs,
     instanceFor: (spec, employeeId) => instanceFor(spec, employeeId),
+    acknowledges: async (employeeId) =>
+      (await deps.records.get<{ ackReaction?: boolean }>('employee', employeeId))?.data.ackReaction !== false,
   })
 
   const offAsk = specs.slack

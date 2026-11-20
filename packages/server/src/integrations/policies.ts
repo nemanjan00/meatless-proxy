@@ -146,6 +146,8 @@ export interface IntegrationPolicyDeps {
   /** The instance an employee's calls go through. */
   instanceFor(spec: IntegrationSpec, employeeId: string): Promise<IntegrationInstance>
   specs: Record<string, IntegrationSpec>
+  /** Whether an employee reacts 👀 to a Slack message that sets it to work (its `ackReaction`, on unless false). */
+  acknowledges?(employeeId: string): Promise<boolean>
 }
 
 /**
@@ -189,23 +191,30 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
     offs.push(
       // An instant "on it": as soon as a Slack message sets someone to work (a run started or woken),
       // the employee's bot reacts :eyes: to it, without waiting for a model call.
-      deps.bus.subscribe<{ eventId: string; deliveries?: { outcome?: string; runId?: string }[] }>('event.routed', async (m) => {
-        const working = (m.payload.deliveries ?? []).some((d) => d.outcome === 'run' || d.outcome === 'woke')
-        if (!working) return
-        try {
-          const event = await events.get(m.payload.eventId)
-          if (event?.data.source !== `integration:${slack.name}` || !event.data.employeeId) return
-          if (!/^message\./.test(event.data.type)) return
-          const p = (event.data.payload ?? {}) as { channel?: unknown; ts?: unknown }
-          if (typeof p.channel !== 'string' || typeof p.ts !== 'string') return
-          const instance = await deps.instanceFor(slack, event.data.employeeId)
-          if (!instance.hasToken) return
-          const r = await instance.callTool('react', { channel: p.channel, ts: p.ts, name: 'eyes' })
-          if (r.isError) logger.debug('slack: could not react to acknowledge', { eventId: event.id, output: r.output })
-        } catch (err) {
-          logger.debug('slack: could not react to acknowledge', { eventId: m.payload.eventId, err: errorMessage(err) })
-        }
-      }),
+      deps.bus.subscribe<{ eventId: string; deliveries?: { outcome?: string; runId?: string; reason?: string }[] }>(
+        'event.routed',
+        async (m) => {
+          // A watched channel's message only has the router decide whether to join in: no "on it" for that.
+          const working = (m.payload.deliveries ?? []).some(
+            (d) => (d.outcome === 'run' || d.outcome === 'woke') && d.reason !== 'watch',
+          )
+          if (!working) return
+          try {
+            const event = await events.get(m.payload.eventId)
+            if (event?.data.source !== `integration:${slack.name}` || !event.data.employeeId) return
+            if (!/^message\./.test(event.data.type)) return
+            if (deps.acknowledges && !(await deps.acknowledges(event.data.employeeId))) return
+            const p = (event.data.payload ?? {}) as { channel?: unknown; ts?: unknown }
+            if (typeof p.channel !== 'string' || typeof p.ts !== 'string') return
+            const instance = await deps.instanceFor(slack, event.data.employeeId)
+            if (!instance.hasToken) return
+            const r = await instance.callTool('react', { channel: p.channel, ts: p.ts, name: 'eyes' })
+            if (r.isError) logger.debug('slack: could not react to acknowledge', { eventId: event.id, output: r.output })
+          } catch (err) {
+            logger.debug('slack: could not react to acknowledge', { eventId: m.payload.eventId, err: errorMessage(err) })
+          }
+        },
+      ),
     )
   if (slack)
     offs.push(

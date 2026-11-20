@@ -92,6 +92,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
+  const [ack, setAck] = useState(d.ackReaction !== false)
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
   const [deny, setDeny] = useState(lists.deny.join('\n'))
@@ -101,6 +102,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     setPersonality(d.personality ?? '')
     setInstructions(d.instructions ?? '')
     setWatch(d.watch ?? [])
+    setAck(d.ackReaction !== false)
     setModel(d.model ?? '')
     const l = toolLists(d)
     setAllow(l.allow.join('\n'))
@@ -121,6 +123,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           personality,
           instructions,
           watch: cleanWatch(watch),
+          ackReaction: ack,
           model,
           ...(lists.flat
             ? { toolAllow: lines(allow), toolDeny: lines(deny) }
@@ -170,6 +173,9 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
         hint="It reads what nobody picked up there, and joins in only when it's worth it"
       >
         <WatchedChannels value={watch} onChange={setWatch} />
+      </Field>
+      <Field id="emp-ack" label="👀 on pickup" hint="Reacts in Slack as soon as a message sets it to work">
+        <Switch id="emp-ack" checked={ack} onCheckedChange={setAck} />
       </Field>
       <Field id="emp-model" label="Model">
         <Input

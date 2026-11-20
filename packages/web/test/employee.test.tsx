@@ -173,6 +173,19 @@ describe('settings → employees: rename', () => {
   })
 })
 
+describe('settings → employees: 👀 on pickup', () => {
+  it('turns the Slack pickup reaction off', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    const toggle = within(editor).getByRole('switch', { name: /👀 on pickup/ })
+    expect(toggle).toBeChecked()
+    await user.click(toggle)
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await data.api.getRecord('employee', EMP.billing)).data.ackReaction).toBe(false))
+  })
+})
+
 describe('settings → employees: watched channels', () => {
   it('adds a Slack channel with when to get involved, drops empty rows, and saves', async () => {
     const user = userEvent.setup()

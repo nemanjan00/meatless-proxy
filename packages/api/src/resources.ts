@@ -205,6 +205,8 @@ export interface EmployeeData extends Record<string, unknown> {
   network?: 'none' | 'project' | 'direct' | { allow: string[] }
   /** Channels it reads without being asked, and decides whether to get involved in. */
   watch?: WatchedChannel[]
+  /** React 👀 to a Slack message as soon as it sets it to work. Unset: on. */
+  ackReaction?: boolean
   /** The employee's router session, for input nothing else claims. */
   routerSessionId?: string
   paused?: boolean

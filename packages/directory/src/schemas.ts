@@ -193,6 +193,11 @@ export const employeeSchema: KindSchema = {
         ],
       },
     },
+    {
+      name: 'ackReaction',
+      type: 'boolean',
+      description: 'React 👀 to a Slack message as soon as it sets this employee to work (default on).',
+    },
     { name: 'routerSessionId', type: 'ref', ref: 'session' },
     { name: 'limits', type: 'json' },
     { name: 'taskSystem', type: 'json', description: 'How real forks become tasks, e.g. {server, createTool, ...}.' },
@@ -253,6 +258,8 @@ export interface EmployeeData extends Record<string, unknown> {
   network?: EmployeeNetwork
   git?: { name?: string; email?: string; branchPrefix?: string }
   watch?: WatchedChannel[]
+  /** React 👀 to a Slack message that sets it to work. Unset: on. */
+  ackReaction?: boolean
   routerSessionId?: string
   limits?: unknown
   taskSystem?: unknown
