@@ -43,3 +43,6 @@ export async function mayControlEnv(s: Services, p: Principal, session: Session 
   if (!session || p.access !== 'member') return false
   return (await requestersOf(s, session)).includes(p.contactId)
 }
+
+/** Bus topic: someone used an environment's preview or desktop (`{ envId, sockets: -1 | 0 | 1 }`). */
+export const ENV_USED_TOPIC = 'env.used'

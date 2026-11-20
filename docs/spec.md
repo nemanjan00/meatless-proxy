@@ -1918,6 +1918,17 @@ screenshots.
   - No VNC password is ever stored: the VNC servers only listen on localhost,
     and the signed, scoped preview cookie is what lets someone reach them.
 
+#### Idle environments
+
+- **Idle environments stop by themselves.** One nobody used for
+  `ENV_IDLE_STOP_MINUTES` (default 120; 0 turns it off) is stopped like Stop
+  on the Environments page, checked every few minutes where the workers run.
+  Unused means no `env.exec`, no run of its session in progress, and nobody
+  looking at its preview or desktop (an open preview or desktop socket keeps
+  it up; a request counts as use). Private sessions' environments are
+  included. The session gets a note saying why, and that `env.up` starts a new
+  one; the repositories and `/files` are kept.
+
 Open questions:
 
 - How is the cache size limited, and when are unused mirrors removed?
@@ -1929,9 +1940,8 @@ Open questions:
   allowlists), or does each environment get its own?
 - How long can an environment stay up, for example for someone to look at a
   running preview?
-- Housekeeping (TTLs for idle environments, pruning worktrees and unused
-  mirrors, dropping old ephemeral run entries) is left for later. For now an
-  admin stops idle environments by hand (Stop idle on the Environments page).
+- Housekeeping beyond idle environments (pruning worktrees and unused mirrors, dropping old
+  ephemeral run entries) is left for later.
 
 ### Sessions
 
@@ -3222,8 +3232,10 @@ It is built with shadcn/ui and styled after Linear. See the
     and **Stop**, for admins and the session's requester. Admins also have
     **Stop idle**: it lists every environment that is not busy (no `env.exec`,
     no run in progress) and has been idle an hour or more, and stops them all
-    like Stop (`POST /api/environments/stop-idle`). Nothing stops idle
-    environments by itself yet. Stopping tears the
+    like Stop (`POST /api/environments/stop-idle`). Someone viewing its preview
+    or desktop makes an environment busy. The harness also stops idle
+    environments by itself (`ENV_IDLE_STOP_MINUTES`, see
+    [idle environments](#idle-environments)). Stopping tears the
     environment down like `env.down`, and the session gets a note in its
     history ("… stopped this session's environment"): at once when it's idle,
     or as an inbox item its working run reads at its next step.

@@ -49,6 +49,7 @@ first by a small built-in loader; variables already set win.
 | `SANDBOX_USER` | `1000:1000` | The sandbox user, the same as the app's so both can write the files volume |
 | `SANDBOX_CPUS` / `SANDBOX_MEMORY_MB` / `SANDBOX_PIDS` | `1` / `1024` / `256` | Limits per employee's sandbox container |
 | `SANDBOX_IDLE_MINUTES` | `15` | Idle kernels, then idle containers, are stopped |
+| `ENV_IDLE_STOP_MINUTES` | `120` | Environments nobody used this long (no `env.exec`, no run, no one viewing the preview or desktop) are stopped; `0` turns it off |
 | `MCP_SERVERS` | `[]` | JSON array of MCP servers, or a path to a JSON file (see below) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` (JSON lines) |
 | `MP_BOOTSTRAP` | `true` | Seed an empty store at startup |

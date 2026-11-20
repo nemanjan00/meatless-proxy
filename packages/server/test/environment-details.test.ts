@@ -216,6 +216,55 @@ describe('idle time and Stop idle', () => {
   })
 })
 
+describe('stopping idle environments by itself', () => {
+  it('stops what nobody used for ENV_IDLE_STOP_MINUTES, telling its session, but not one someone is viewing', async () => {
+    const r2 = fakeRuntime({ clock: new ManualClock(Date.now() - 3 * HOUR) })
+    const t2 = await testApp({ workers: false, overrides: { containers: r2 }, env: { ENV_IDLE_STOP_MINUTES: '60' } })
+    try {
+      const s = t2.a.services
+      const emp = (await s.directory.employees.byHandle('meatless'))!.id
+      const up = async (title: string) => {
+        const ses = await s.sessions.create({ employeeId: emp, title })
+        const env = await r2.createEnv({
+          name: title.toLowerCase().replace(/\W+/g, '-'),
+          image: 'nemanjan00/dev:default',
+          labels: { 'mp.session': ses.id, 'mp.employee': emp },
+        })
+        await s.records.update('session', ses.id, { meta: { env: { id: env.id, name: env.name } } })
+        return { session: ses.id, env: env.id }
+      }
+      const idle = await up('Idle work')
+      const viewed = await up('Preview someone has open')
+      s.bus.publish('env.used', { envId: viewed.env, sockets: 1 })
+      // Viewing shows as busy on the Environments page too.
+      expect((await t2.req('GET', '/api/environments')).body.items.find((e: any) => e.envId === viewed.env).busy).toBe(true)
+
+      await t2.a.idleStopper.tick()
+      expect(await r2.getEnv(idle.env)).toBeNull()
+      expect(await r2.getEnv(viewed.env)).not.toBeNull()
+      const note = (await s.sessions.history(idle.session)).find(
+        (e) => e.kind === 'event' && (e.content as any).type === 'env.stopped',
+      )
+      expect((note!.content as any).text).toContain('after 60 minutes without use')
+      expect((await s.sessions.require(idle.session)).data.meta?.env).toBeUndefined()
+
+      // Once the viewer closes it, it counts as just used, not idle.
+      s.bus.publish('env.used', { envId: viewed.env, sockets: -1 })
+      await t2.a.idleStopper.tick()
+      expect(await r2.getEnv(viewed.env)).not.toBeNull()
+    } finally {
+      await t2.close()
+    }
+  })
+
+  it('is off at 0, and refuses less than 5 minutes', async () => {
+    const { loadConfig } = await import('../src/config.ts')
+    expect(loadConfig({}).ENV_IDLE_STOP_MINUTES).toBe(120)
+    expect(loadConfig({ ENV_IDLE_STOP_MINUTES: '0' }).ENV_IDLE_STOP_MINUTES).toBe(0)
+    expect(() => loadConfig({ ENV_IDLE_STOP_MINUTES: '2' })).toThrow(/ENV_IDLE_STOP_MINUTES/)
+  })
+})
+
 describe('helpers', () => {
   it('maps images to profiles, however the reference is written', () => {
     const profiles = [{ name: 'default', image: 'nemanjan00/dev:default', description: 'general work' }]

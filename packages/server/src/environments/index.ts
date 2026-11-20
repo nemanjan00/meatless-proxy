@@ -18,9 +18,9 @@ import { Hono } from 'hono'
 import { type Principal, principalOf, viewerOf } from '../auth/guard.ts'
 import type { ChatVisibility } from '../auth/visibility.ts'
 import type { Services } from '../services.ts'
-import { mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
+import { ENV_USED_TOPIC, mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
 
-export { mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
+export { ENV_USED_TOPIC, mayControlEnv, requestersOf, sessionEnvOf } from './access.ts'
 
 /** How often metrics are sampled while someone watches. */
 export const STATS_INTERVAL_MS = 5000
@@ -48,6 +48,9 @@ export class EnvironmentMonitor {
   private latest = new Map<string, EnvStats>()
   /** When each environment last started or finished an `env.exec` (this process only). */
   private lastExec = new Map<string, string>()
+  /** When each environment's preview or desktop was last used, and how many of their sockets are open (this process only). */
+  private lastView = new Map<string, string>()
+  private viewers = new Map<string, number>()
   /** Environment id → its session, as of the last round (null: not watching). */
   private known: Map<string, string | undefined> | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -81,6 +84,14 @@ export class EnvironmentMonitor {
         // A later command in the same environment may have started meanwhile.
         if (cur && (!m.payload.callId || cur.callId === m.payload.callId)) this.execs.delete(m.payload.envId!)
       }),
+      bus.subscribe<{ envId?: string; sockets?: number }>(ENV_USED_TOPIC, (m) => {
+        const { envId, sockets } = m.payload
+        if (typeof envId !== 'string') return
+        this.lastView.set(envId, new Date(m.at).toISOString())
+        const open = Math.max(0, (this.viewers.get(envId) ?? 0) + (sockets === 1 ? 1 : sockets === -1 ? -1 : 0))
+        if (open) this.viewers.set(envId, open)
+        else this.viewers.delete(envId)
+      }),
       bus.subscribe<{ envId?: string; op?: string }>('env.changed', (m) => {
         if (m.payload.op === 'down' && typeof m.payload.envId === 'string') this.forget(m.payload.envId)
       }),
@@ -105,10 +116,22 @@ export class EnvironmentMonitor {
     return this.lastExec.get(envId) ?? null
   }
 
+  /** When someone last used the environment's preview or desktop, as far as this process saw. */
+  lastViewOf(envId: string): string | null {
+    return this.lastView.get(envId) ?? null
+  }
+
+  /** How many preview or desktop sockets are open to the environment now (someone is looking at it). */
+  viewersOf(envId: string): number {
+    return this.viewers.get(envId) ?? 0
+  }
+
   forget(envId: string) {
     this.execs.delete(envId)
     this.latest.delete(envId)
     this.lastExec.delete(envId)
+    this.lastView.delete(envId)
+    this.viewers.delete(envId)
   }
 
   start() {
@@ -194,8 +217,11 @@ export class EnvironmentViews {
     private monitor: EnvironmentMonitor,
   ) {}
 
-  /** Every environment the viewer may see, newest first, with the filters applied. */
-  async list(p: Principal, q: Api.EnvironmentQuery = {}): Promise<Api.Environment[]> {
+  /**
+   * Every environment the viewer may see, newest first, with the filters applied. `system`: every
+   * one, private sessions' too (the harness's own housekeeping, never shown to anyone).
+   */
+  async list(p: Principal, q: Api.EnvironmentQuery = {}, system = false): Promise<Api.Environment[]> {
     const rt = this.s.containers
     if (!rt) return []
     // Main containers only: service containers belong to their environment, and code.run's sandbox isn't one.
@@ -204,7 +230,7 @@ export class EnvironmentViews {
       infos.map(async (info) => {
         // The list is a summary; one inspect gives the image ID, start time and limits.
         const full = await rt.getEnv(info.id).catch(() => null)
-        return this.view(p, full ? { ...info, ...full } : info)
+        return this.view(p, full ? { ...info, ...full } : info, system)
       }),
     )
     return views
@@ -215,13 +241,14 @@ export class EnvironmentViews {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
 
-  /** The environment and its session, when the viewer may see it; else null. */
-  async find(p: Principal, envId: string): Promise<{ info: EnvInfo; session: Session | null } | null> {
+  /** The environment and its session, when the viewer may see it (`system`: always); else null. */
+  async find(p: Principal, envId: string, system = false): Promise<{ info: EnvInfo; session: Session | null } | null> {
     const rt = this.s.containers
     if (!rt) return null
     const info = await rt.getEnv(envId)
     if (!info || info.labels[LABEL_SANDBOX]) return null
     const session = await this.sessionOf(info)
+    if (system) return { info, session }
     if (!session) return p.access === 'admin' ? { info, session: null } : null
     return (await this.visibility.canReadSession(viewerOf(p), session)) ? { info, session } : null
   }
@@ -264,11 +291,11 @@ export class EnvironmentViews {
     return session && sessionEnvOf(session)?.id === info.id ? session : null
   }
 
-  private async view(p: Principal, info: EnvInfo): Promise<Api.Environment | null> {
+  private async view(p: Principal, info: EnvInfo, system = false): Promise<Api.Environment | null> {
     const session = await this.sessionOf(info)
     // Left behind by a session that has moved on (or was removed): admins only.
-    if (!session && p.access !== 'admin') return null
-    if (session && !(await this.visibility.canReadSession(viewerOf(p), session))) return null
+    if (!system && !session && p.access !== 'admin') return null
+    if (!system && session && !(await this.visibility.canReadSession(viewerOf(p), session))) return null
     const meta = sessionEnvOf(session)
     const employeeId = session?.data.employeeId ?? info.labels['mp.employee']
     const [employee, requesterIds, runs] = await Promise.all([
@@ -316,8 +343,14 @@ export class EnvironmentViews {
         ? { cpus: info.limits.cpus ?? null, memoryBytes: info.limits.memoryBytes ?? null, pids: info.limits.pids ?? null }
         : null,
       startedAt: info.startedAt ?? null,
-      lastActiveAt: latest([this.monitor.lastExecOf(info.id), runActivity(lastRun), info.startedAt ?? info.createdAt]),
-      busy: !!exec || (!!lastRun && BUSY_RUN_STATES.has(lastRun.data.state)),
+      lastActiveAt: latest([
+        this.monitor.lastExecOf(info.id),
+        this.monitor.lastViewOf(info.id),
+        runActivity(lastRun),
+        info.startedAt ?? info.createdAt,
+      ]),
+      // Someone looking at its preview or desktop counts: it isn't stopped under them.
+      busy: !!exec || (!!lastRun && BUSY_RUN_STATES.has(lastRun.data.state)) || this.monitor.viewersOf(info.id) > 0,
       checkouts: Array.isArray(meta?.checkouts) ? meta.checkouts.map((c) => ({ key: String(c.key), path: String(c.path) })) : [],
       network,
       ports: Array.isArray(meta?.expose) ? meta.expose.filter((x) => Number.isInteger(x)) : [],
@@ -429,12 +462,17 @@ export const stoppedNote = (name: string, envName: string) =>
  * session is told who stopped it: in the history of an idle session, or as an inbox item a working
  * run reads at its next step (never in the middle of a tool call).
  */
-export async function stopEnvironment(s: Services, p: Principal, hit: { info: EnvInfo; session: Session | null }): Promise<void> {
+export async function stopEnvironment(
+  s: Services,
+  p: Principal,
+  hit: { info: EnvInfo; session: Session | null },
+  why?: { note: string; actor: Actor },
+): Promise<void> {
   const rt = s.containers
   if (!rt) throw new UnavailableError('containers are off')
   await rt.destroyEnv(hit.info.id)
   const session = hit.session
-  const actor: Actor = { type: 'contact', id: p.contactId }
+  const actor: Actor = why?.actor ?? { type: 'contact', id: p.contactId }
   if (session) {
     for (let attempt = 1; ; attempt++) {
       const cur = await s.sessions.require(session.id)
@@ -447,10 +485,86 @@ export async function stopEnvironment(s: Services, p: Principal, hit: { info: En
         if (!isMpError(e, 'conflict') || attempt >= 10) throw e
       }
     }
-    await noteInSession(s, session.id, stoppedNote(p.name, hit.info.name), `envstop:${hit.info.id}:${s.clock.now()}`, actor)
+    const note = why?.note ?? stoppedNote(p.name, hit.info.name)
+    await noteInSession(s, session.id, note, `envstop:${hit.info.id}:${s.clock.now()}`, actor)
   }
   s.bus.publish('env.changed', { ...(session ? { sessionId: session.id } : {}), envId: hit.info.id, op: 'down' })
-  s.logger.info('environment stopped from the UI', { envId: hit.info.id, by: p.contactId, sessionId: session?.id })
+  if (!why) s.logger.info('environment stopped from the UI', { envId: hit.info.id, by: p.contactId, sessionId: session?.id })
+}
+
+/** The note a session gets when the harness stops its environment for being idle. */
+export const idleStoppedNote = (envName: string, minutes: number) =>
+  `The harness stopped this session's environment (${envName}) after ${minutes} minutes without use (ENV_IDLE_STOP_MINUTES). Its containers, network and volumes are gone; the repositories and /files are kept. env.up starts a new one if you still need it.`
+
+/** Who stops idle environments on the harness's behalf. */
+const HARNESS: Principal = { contactId: 'system', name: 'The harness', access: 'admin', via: 'token' }
+
+/**
+ * Stops every environment idle for `minutes` or more by itself (docs/spec.md "Environments"): not busy
+ * (no `env.exec`, no run in progress, nobody looking at its preview or desktop), private sessions'
+ * included. Each session is told why. Returns the environments stopped.
+ */
+export async function stopIdleEnvironments(s: Services, views: EnvironmentViews, minutes: number): Promise<string[]> {
+  const now = s.clock.now()
+  const idle = (await views.list(HARNESS, {}, true)).filter((e) => isIdle(e, now, minutes * 60_000))
+  const stopped: string[] = []
+  for (const e of idle) {
+    try {
+      const hit = await views.find(HARNESS, e.envId, true)
+      if (!hit) continue
+      await stopEnvironment(s, HARNESS, hit, {
+        note: idleStoppedNote(hit.info.name, minutes),
+        actor: { type: 'system', id: 'env-idle-stop' },
+      })
+      stopped.push(e.envId)
+      s.logger.info('idle environment stopped', {
+        envId: e.envId,
+        sessionId: hit.session?.id,
+        idleSince: e.lastActiveAt,
+        idleMinutes: minutes,
+      })
+    } catch (err) {
+      s.logger.warn('could not stop an idle environment', { envId: e.envId, err: errorMessage(err) })
+    }
+  }
+  return stopped
+}
+
+/**
+ * Checks for idle environments every few minutes (a quarter of the idle time, at most 5 minutes) and
+ * stops them. Off when `minutes` is 0.
+ */
+export class IdleEnvironmentStopper {
+  private timer: ReturnType<typeof setInterval> | null = null
+  private running: Promise<unknown> | null = null
+
+  constructor(
+    private s: Services,
+    private views: EnvironmentViews,
+    private minutes: number,
+  ) {}
+
+  start() {
+    if (this.timer || !this.minutes || !this.s.containers) return
+    const every = Math.min(5 * 60_000, (this.minutes * 60_000) / 4)
+    this.timer = setInterval(() => void this.tick(), every)
+    this.timer.unref?.()
+  }
+
+  stop() {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+  }
+
+  /** One check. Checks never overlap. */
+  tick(): Promise<unknown> {
+    this.running ??= stopIdleEnvironments(this.s, this.views, this.minutes)
+      .catch((err) => this.s.logger.warn('idle environment check failed', { err: errorMessage(err) }))
+      .finally(() => {
+        this.running = null
+      })
+    return this.running
+  }
 }
 
 /** A note from the harness in a session's history: now when it's idle, else at its active run's next step. */

@@ -69,6 +69,11 @@ export interface PreviewProxyDeps {
   trustProxy: boolean
   /** The desktop port that is view-only (its viewer page doesn't send input either). */
   desktopViewPort?: number
+  /**
+   * Someone used an environment's preview or desktop: a request (`sockets` 0), or a socket opened (1)
+   * or closed (-1). An environment people are looking at isn't idle.
+   */
+  onUse?: (envId: string, sockets: -1 | 0 | 1) => void
 }
 
 type Resolved =
@@ -362,6 +367,7 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
   async function proxy(req: IncomingMessage, res: ServerResponse) {
     const r = await resolve(req)
     if (!r.ok) return page(req, res, r.status, r.message)
+    deps.onUse?.(r.grant.envId, 0)
     const refresh = r.refresh ? cookieHeader(req, r.grant) : null
     const up = request({
       host: r.target.host,
@@ -423,6 +429,11 @@ export function createPreviewProxy(deps: PreviewProxyDeps): { server: Server; cl
     }
     const r = desk ? await resolveDesktop(req, desk.envId, desk.port) : await resolve(req)
     if (!r.ok) return refuseUpgrade(socket, r.status)
+    if (deps.onUse) {
+      const { envId } = r.grant
+      deps.onUse(envId, 1)
+      socket.once('close', () => deps.onUse?.(envId, -1))
+    }
     // A desktop's socket is the bridge's own, at its root.
     const path = desk ? '/' : (req.url ?? '/')
     const upstream: Socket = connect({ host: r.target.host, port: r.target.port })

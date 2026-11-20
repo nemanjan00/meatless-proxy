@@ -7,7 +7,7 @@ import type { Session } from '@mp/sessions'
 import { Hono } from 'hono'
 import { principalOf, viewerOf } from '../auth/guard.ts'
 import { ChatVisibility } from '../auth/visibility.ts'
-import { mayControlEnv } from '../environments/access.ts'
+import { ENV_USED_TOPIC, mayControlEnv } from '../environments/access.ts'
 import { BadRequestError, jsonBody, requireString } from '../http/util.ts'
 import type { Services } from '../services.ts'
 import { previewMode, previewOrigin, refusePreviewOrigins, splitHost, type PreviewMode } from './origins.ts'
@@ -247,6 +247,8 @@ export function createPreviews(s: Services, opts: PreviewsOptions): Previews {
         secure,
         trustProxy: config.TRUST_PROXY,
         desktopViewPort: DESKTOP_PORTS.view,
+        // The Environments monitor counts it as use (src/environments): a viewed environment isn't idle.
+        onUse: (envId, sockets) => s.bus.publish(ENV_USED_TOPIC, { envId, sockets }),
       })
       server = p.server
       proxyClose = p.close

@@ -199,6 +199,15 @@ export const configSchema = z.object({
   ),
   /** The profile env.up uses when nothing else decides (see ENV_PROFILES). Default `default`. */
   ENV_DEFAULT_PROFILE: optStr,
+  /**
+   * Minutes an environment may go unused (no env.exec, no run in progress, nobody viewing its preview or
+   * desktop) before the harness stops it. 0 turns it off. Default 120.
+   */
+  ENV_IDLE_STOP_MINUTES: z.coerce
+    .number()
+    .min(0)
+    .default(120)
+    .refine((v) => v === 0 || v >= 5, 'must be 0 (off) or at least 5'),
   /** The sandbox user, `uid:gid`: the same as the app's, so both can write the files volume. */
   SANDBOX_USER: optStr.transform((v) => v ?? '1000:1000').refine((v) => /^\d+:\d+$/.test(v), 'must be uid:gid'),
   SANDBOX_CPUS: z.coerce.number().positive().default(1),
@@ -499,6 +508,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     toolsOnDemand: c.TOOLS_ON_DEMAND,
     imageDescriptions: c.IMAGE_DESCRIBE === 'off' ? 'off' : { when: c.IMAGE_DESCRIBE, model: c.IMAGE_DESCRIBE_MODEL ?? c.MODEL },
     sandbox: c.DOCKER_ENABLED && c.SANDBOX_ENABLED ? { image: c.SANDBOX_IMAGE } : 'off',
+    envIdleStopMinutes: c.ENV_IDLE_STOP_MINUTES || 'off',
     mcpServers: c.MCP_SERVERS.map((s) => s.name),
     bootstrap: c.MP_BOOTSTRAP,
     logLevel: c.LOG_LEVEL,

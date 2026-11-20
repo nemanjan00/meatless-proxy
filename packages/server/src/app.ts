@@ -23,7 +23,7 @@ import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
 import { gitlabHookProvisioning, type HookProvisioning, identityRoutes, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
-import { EnvironmentMonitor, EnvironmentViews, environmentRoutes } from './environments/index.ts'
+import { EnvironmentMonitor, EnvironmentViews, IdleEnvironmentStopper, environmentRoutes } from './environments/index.ts'
 import { procedureRoutes } from './procedures/index.ts'
 import { scheduleRoutes, trackScheduledRuns } from './schedules/index.ts'
 import { knowledgeRoutes, registerKnowledgeUse } from './knowledge/index.ts'
@@ -64,6 +64,8 @@ export interface App {
   previews: Previews
   /** What runs in each environment, and its metrics while someone watches (src/environments). */
   environments: EnvironmentMonitor
+  /** Stops environments nobody used for ENV_IDLE_STOP_MINUTES (src/environments). It starts with the workers. */
+  idleStopper: IdleEnvironmentStopper
   /** GitLab webhook self-provisioning (src/integrations/provisioning.ts), null when GitLab is disabled. It starts with the workers. */
   hookProvisioning: HookProvisioning | null
   /** Guided integration setup (src/setup): cached checks and webhook activity. */
@@ -155,7 +157,10 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))
   app.route('/', previews.routes)
-  app.route('/', environmentRoutes(services, new EnvironmentViews(services, auth.visibility, environments)))
+  const environmentViews = new EnvironmentViews(services, auth.visibility, environments)
+  app.route('/', environmentRoutes(services, environmentViews))
+  // Environments nobody used for ENV_IDLE_STOP_MINUTES are stopped, where the workers run.
+  const idleStopper = new IdleEnvironmentStopper(services, environmentViews, config.ENV_IDLE_STOP_MINUTES)
   app.route(
     '/',
     integrationStatusRoutes(services, () => hookProvisioning),
@@ -187,6 +192,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     mcp,
     previews,
     environments,
+    idleStopper,
     hookProvisioning,
     setup,
     async start(opts = {}) {
@@ -195,6 +201,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
         const recovered = await recoverQueues(services)
         if (recovered.events || recovered.runs || recovered.timers) log.info('queues rebuilt from the database', recovered)
         hookProvisioning?.start()
+        idleStopper.start()
       }
       environments.start()
       if (opts.http === false) return { port: null }
@@ -216,6 +223,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
       stopping ??= (async () => {
         log.info('shutting down')
         live.close()
+        idleStopper.stop()
         environments.close()
         metrics.close()
         await mcp.close()
