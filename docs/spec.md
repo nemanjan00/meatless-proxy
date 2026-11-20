@@ -3411,9 +3411,12 @@ All of these update live over the WebSocket.
   setting. A direct network shows its warning; where
   `DOCKER_DIRECT_NETWORK=false`, the control says direct means no network
   here.
-- **Settings → Employees** (admins) edits each employee's personality,
-  **standing instructions**, [watched channels](#watched-channels), scope,
-  model, network and tool lists. Standing
+- **Settings → Employees** (admins) edits each employee's **name**,
+  personality, **standing instructions**, [watched channels](#watched-channels),
+  scope, model, network and tool lists. A rename also renames its contact and
+  moves its `@handle` to the new name (refused when another employee has it);
+  messages already sent keep their links, and its Slack app's name is changed
+  in Slack. Standing
   instructions are plain words for every session of that employee, e.g. "when
   a bug report points at an obvious bug, fix it and open a merge request".
   They sit in the employee prompt after the personality and never override

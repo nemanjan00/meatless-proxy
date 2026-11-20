@@ -160,6 +160,19 @@ describe('settings → employees', () => {
   })
 })
 
+describe('settings → employees: rename', () => {
+  it('saves a new name', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    const box = within(editor).getByLabelText(/^Name/)
+    await user.clear(box)
+    await user.type(box, 'Ledger')
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await data.api.getRecord('employee', EMP.billing)).data.name).toBe('Ledger'))
+  })
+})
+
 describe('settings → employees: watched channels', () => {
   it('adds a Slack channel with when to get involved, drops empty rows, and saves', async () => {
     const user = userEvent.setup()

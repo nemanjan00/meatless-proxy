@@ -88,6 +88,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const api = useApi()
   const d = employee.data
   const lists = toolLists(d)
+  const [name, setName] = useState(d.name)
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
@@ -97,6 +98,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [deny, setDeny] = useState(lists.deny.join('\n'))
   const [probe, setProbe] = useState('')
   useEffect(() => {
+    setName(d.name)
     setPersonality(d.personality ?? '')
     setInstructions(d.instructions ?? '')
     setWatch(d.watch ?? [])
@@ -112,22 +114,29 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       .map((x) => x.trim())
       .filter(Boolean)
   const save = async () => {
-    await api.updateRecord<EmployeeData>(
-      'employee',
-      employee.id,
-      {
-        personality,
-        instructions,
-        watch: cleanWatch(watch),
-        scope,
-        model,
-        ...(lists.flat
-          ? { toolAllow: lines(allow), toolDeny: lines(deny) }
-          : { tools: { allow: lines(allow), deny: lines(deny) } }),
-      },
-      employee.version,
-    )
-    toast(`${d.name} saved`, { description: 'Tool and prompt changes reach running sessions at their next run.' })
+    try {
+      await api.updateRecord<EmployeeData>(
+        'employee',
+        employee.id,
+        {
+          ...(name.trim() && name.trim() !== d.name ? { name: name.trim() } : {}),
+          personality,
+          instructions,
+          watch: cleanWatch(watch),
+          scope,
+          model,
+          ...(lists.flat
+            ? { toolAllow: lines(allow), toolDeny: lines(deny) }
+            : { tools: { allow: lines(allow), deny: lines(deny) } }),
+        },
+        employee.version,
+      )
+    } catch (err) {
+      // e.g. a rename to a name another employee has.
+      toast.error(err instanceof Error ? err.message : String(err))
+      return
+    }
+    toast(`${name.trim() || d.name} saved`, { description: 'Tool and prompt changes reach running sessions at their next run.' })
     onSaved()
   }
   const allowed = probe.trim() ? toolAllowed(probe.trim(), lines(allow), lines(deny)) : null
@@ -143,6 +152,9 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           <NavLink to={`/employees/${employee.id}`}>Integrations, SSH key and activity</NavLink>
         </Button>
       </div>
+      <Field id="emp-name" label="Name" hint="Renaming changes its @handle too; its Slack app's name is set in Slack">
+        <Input id="emp-name" value={name} onChange={(e) => setName(e.target.value)} className="max-w-72" />
+      </Field>
       <Field id="emp-personality" label="Personality" hint="Tone only; never overrides the rules">
         <Textarea id="emp-personality" value={personality} onChange={(e) => setPersonality(e.target.value)} rows={3} />
       </Field>

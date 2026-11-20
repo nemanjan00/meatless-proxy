@@ -220,10 +220,12 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const patch: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(body.data as Record<string, unknown>)) patch[k] = v === null ? undefined : v
     try {
-      const r = await s.records.update(kind, id, patch, {
-        actor: await actor(c),
-        ...(typeof body.version === 'number' ? { expectedVersion: body.version } : {}),
-      })
+      const opts = { actor: await actor(c), ...(typeof body.version === 'number' ? { expectedVersion: body.version } : {}) }
+      // An employee's rename also renames its contact and moves its @handle (the directory does both).
+      const r =
+        kind === 'employee' && 'name' in patch
+          ? await s.directory.employees.update(id, patch as Parameters<typeof s.directory.employees.update>[1], opts)
+          : await s.records.update(kind, id, patch, opts)
       return c.json(r)
     } catch (e) {
       if (isMpError(e, 'conflict')) {
