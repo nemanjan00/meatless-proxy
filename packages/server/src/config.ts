@@ -365,6 +365,13 @@ export const configSchema = z.object({
   OIDC_CLIENT_ID: optStr,
   OIDC_CLIENT_SECRET: optStr,
   OIDC_REDIRECT_URL: url(['http:', 'https:']),
+  /** Optional, with the four above: only accounts of this Google Workspace domain (the id_token's `hd`) sign in. */
+  OIDC_HOSTED_DOMAIN: optStr
+    .refine(
+      (v) => v === undefined || /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(v),
+      'must be a bare domain, e.g. example.com (no scheme, @ or path)',
+    )
+    .transform((v) => v?.toLowerCase()),
   /** A bearer token that may read `/metrics` (besides admins). */
   METRICS_TOKEN: optStr.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters'),
   /** Domain of live previews (`<env>-<port>.<PREVIEW_DOMAIN>`): the only origins the UI may frame. */
@@ -435,6 +442,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const oidc = ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL'] as const
   if (oidc.some((k) => c[k]) && !oidc.every((k) => c[k]))
     issues.push(`OIDC: set all of ${oidc.join(', ')}, or none (missing ${oidc.filter((k) => !c[k]).join(', ')})`)
+  if (c.OIDC_HOSTED_DOMAIN && !oidc.every((k) => c[k])) issues.push(`OIDC_HOSTED_DOMAIN: needs ${oidc.join(', ')}`)
   const badEgress = c.DEFAULT_EGRESS.filter((e) => !parseEgressEntry(e))
   if (badEgress.length) issues.push(`DEFAULT_EGRESS: not hostname globs: ${badEgress.join(', ')}`)
   if (c.PREVIEW_PUBLIC_URL && c.PUBLIC_URL && new URL(c.PREVIEW_PUBLIC_URL).hostname === new URL(c.PUBLIC_URL).hostname)
@@ -495,7 +503,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
     bootstrap: c.MP_BOOTSTRAP,
     logLevel: c.LOG_LEVEL,
     publicUrl: c.PUBLIC_URL ?? null,
-    oidc: c.OIDC_ISSUER ? { issuer: c.OIDC_ISSUER, clientId: c.OIDC_CLIENT_ID } : 'off',
+    oidc: c.OIDC_ISSUER
+      ? { issuer: c.OIDC_ISSUER, clientId: c.OIDC_CLIENT_ID, hostedDomain: c.OIDC_HOSTED_DOMAIN ?? null }
+      : 'off',
     metricsToken: c.METRICS_TOKEN ? 'set' : 'unset',
     previews: c.PREVIEW_DOMAIN ? { domain: c.PREVIEW_DOMAIN, port: c.PREVIEW_PORT } : { port: c.PREVIEW_PORT },
   }

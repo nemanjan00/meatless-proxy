@@ -792,6 +792,8 @@ export interface DeploymentNetwork {
 export interface AuthConfig {
   /** Sign-in with the identity provider is configured (`/auth/oidc/start`). */
   oidc: boolean
+  /** Only accounts of this Google Workspace domain may sign in with it. */
+  hostedDomain?: string
 }
 
 /** `POST /api/auth/links`: a one-time sign-in link to hand to someone (works once, for 15 minutes). */

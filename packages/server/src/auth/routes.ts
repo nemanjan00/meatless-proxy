@@ -15,7 +15,7 @@ import {
   setSessionCookies,
   type Principal,
 } from './guard.ts'
-import { OidcClient, openCookie, sealCookie, type OidcPending } from './oidc.ts'
+import { OidcClient, OidcDomainError, openCookie, sealCookie, type OidcPending } from './oidc.ts'
 import { RateLimiter } from './rate-limit.ts'
 import {
   SESSION_TTL_MS,
@@ -71,6 +71,7 @@ export function authRoutes(s: Services, opts: AuthRoutesOptions): Hono {
             clientId: cfg.OIDC_CLIENT_ID,
             clientSecret: cfg.OIDC_CLIENT_SECRET,
             redirectUrl: cfg.OIDC_REDIRECT_URL,
+            ...(cfg.OIDC_HOSTED_DOMAIN ? { hostedDomain: cfg.OIDC_HOSTED_DOMAIN } : {}),
           },
           { ...(opts.fetch ? { fetch: opts.fetch } : {}), now },
         )
@@ -120,7 +121,12 @@ export function authRoutes(s: Services, opts: AuthRoutesOptions): Hono {
 
   // ── OIDC ─────────────────────────────────────────────────────────────────
 
-  app.get('/api/auth/config', (c) => c.json({ oidc: !!oidc } satisfies Api.AuthConfig))
+  app.get('/api/auth/config', (c) =>
+    c.json({
+      oidc: !!oidc,
+      ...(oidc?.settings.hostedDomain ? { hostedDomain: oidc.settings.hostedDomain } : {}),
+    } satisfies Api.AuthConfig),
+  )
 
   app.get('/auth/oidc/start', async (c) => {
     if (!oidc) return loginError(c, 'oidc_off')
@@ -151,6 +157,10 @@ export function authRoutes(s: Services, opts: AuthRoutesOptions): Hono {
       const q = c.req.query()
       email = (await oidc.finish({ ...q }, pending)).email
     } catch (err) {
+      if (err instanceof OidcDomainError) {
+        s.logger.warn('oidc sign-in refused: account not from the hosted domain', { hd: err.got ?? null })
+        return failed(c, 'oidc_domain')
+      }
       s.logger.warn('oidc sign-in failed', { err: errorMessage(err) })
       return failed(c, 'oidc_failed')
     }

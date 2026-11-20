@@ -14,6 +14,11 @@ export interface OidcSettings {
   clientSecret: string
   /** Our callback, e.g. `https://mp.example.com/auth/oidc/callback`. Must be registered with the provider. */
   redirectUrl: string
+  /**
+   * Only accounts of this Google Workspace domain may sign in: the id_token's `hd` claim must equal it
+   * (case-insensitive). It is also sent as the `hd` hint, which only filters Google's account chooser.
+   */
+  hostedDomain?: string
 }
 
 export interface OidcDeps {
@@ -48,6 +53,13 @@ export interface OidcIdentity {
 
 export class OidcError extends Error {
   override readonly name = 'OidcError'
+}
+
+/** The account is not from the required hosted domain. `got` is the id_token's `hd`, if any (never the email). */
+export class OidcDomainError extends OidcError {
+  constructor(readonly got: string | undefined) {
+    super(`the account is not from the required domain (hd: ${got ?? 'none'})`)
+  }
 }
 
 const SKEW_S = 60
@@ -105,6 +117,8 @@ export class OidcClient {
       nonce: pending.nonce,
       code_challenge: b64url(createHash('sha256').update(pending.verifier).digest()),
       code_challenge_method: 'S256',
+      // A hint only (anyone can remove it from the URL): finish() checks the signed `hd` claim.
+      ...(this.settings.hostedDomain ? { hd: this.settings.hostedDomain } : {}),
     }
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
     return { url: url.toString(), pending }
@@ -135,6 +149,12 @@ export class OidcClient {
     const tokens = (await res.json().catch(() => ({}))) as { id_token?: string; access_token?: string; error?: string }
     if (!res.ok || !tokens.id_token) throw new OidcError(`token exchange failed: ${tokens.error ?? res.status}`)
     const claims = await this.verifyIdToken(tokens.id_token, pending.nonce)
+    const want = this.settings.hostedDomain
+    if (want) {
+      // The signed claim only: an email address can be on a domain without the account being in its Workspace.
+      const hd = typeof claims.hd === 'string' ? claims.hd : undefined
+      if (hd?.toLowerCase() !== want.toLowerCase()) throw new OidcDomainError(hd)
+    }
     let email = typeof claims.email === 'string' ? claims.email : undefined
     let verified = claims.email_verified
     if (!email && d.userinfo_endpoint && tokens.access_token) {

@@ -105,6 +105,19 @@ describe('config', () => {
     expect(() => loadConfig({ OPENAI_BASE_URL: 'https://api.example.com/v1' })).toThrow(/MODEL/)
     expect(() => loadConfig({ MCP_SERVERS: '[{"name":"a","transport":"stdio"}]' })).toThrow(/needs a command/)
     expect(() => loadConfig({ MCP_SERVERS: '[not json' })).toThrow(/invalid JSON/)
+    const oidc = {
+      OIDC_ISSUER: 'https://accounts.example.com',
+      OIDC_CLIENT_ID: 'mp-test',
+      OIDC_CLIENT_SECRET: 'sk-test',
+      OIDC_REDIRECT_URL: 'https://mp.example.com/auth/oidc/callback',
+    }
+    const hosted = loadConfig({ ...oidc, OIDC_HOSTED_DOMAIN: 'Example.com' })
+    expect(hosted.OIDC_HOSTED_DOMAIN).toBe('example.com')
+    expect(describeConfig(hosted).oidc).toMatchObject({ hostedDomain: 'example.com' })
+    expect(loadConfig(oidc).OIDC_HOSTED_DOMAIN).toBeUndefined()
+    for (const bad of ['ana@example.com', 'https://example.com', 'example.com/x', 'example', '.example.com'])
+      expect(() => loadConfig({ ...oidc, OIDC_HOSTED_DOMAIN: bad }), bad).toThrow(/OIDC_HOSTED_DOMAIN: must be a bare domain/)
+    expect(() => loadConfig({ OIDC_HOSTED_DOMAIN: 'example.com' })).toThrow(/OIDC_HOSTED_DOMAIN: needs OIDC_ISSUER/)
     const dir = mkdtempSync(join(tmpdir(), 'mp-cfg-'))
     try {
       const file = join(dir, 'mcp.json')

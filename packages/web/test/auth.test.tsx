@@ -46,6 +46,14 @@ describe('sign-in', () => {
     expect(sso).toHaveAttribute('href', `/auth/oidc/start?next=${encodeURIComponent('/chat')}`)
   })
 
+  it('names the required domain when an account from another one was refused', async () => {
+    renderAt('/login?error=oidc_domain', (d) => {
+      signedOut(d)
+      d.api.authConfig = async () => ({ oidc: true, hostedDomain: 'example.com' })
+    })
+    expect(await screen.findByText(/This account is not from example\.com/)).toBeInTheDocument()
+  })
+
   it('goes to the login page when the API answers 401 later', async () => {
     renderAt('/now')
     await screen.findAllByTestId('now-card')

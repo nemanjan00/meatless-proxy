@@ -85,6 +85,7 @@ first by a small built-in loader; variables already set win.
 | `TRUST_PROXY` | `false` | Trust `x-forwarded-for` (rate limits) and `x-forwarded-proto` (cookies) from a reverse proxy |
 | `ADMIN_EMAIL` | none | Email of the admin contact the first start creates (or the existing contact made admin) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL` | none | Optional sign-in with an identity provider: all four or none. The redirect URL is `<PUBLIC_URL>/auth/oidc/callback` |
+| `OIDC_HOSTED_DOMAIN` | none | With the four above: only accounts of this Google Workspace domain sign in (a bare domain, e.g. `example.com`) |
 | `METRICS_TOKEN` | none | A bearer token (16+ characters) that may read `/metrics`, besides admins |
 | `PREVIEW_DOMAIN` | none | Live previews' domain: each preview is `<env>-<port>.<PREVIEW_DOMAIN>` (needs `PUBLIC_URL`, wildcard DNS and a wildcard certificate), and the UI may frame `https://*.<PREVIEW_DOMAIN>` and nothing else. See [Live previews](#live-previews) |
 | `PREVIEW_PORT` | `3001` | The preview listener. Without `PREVIEW_DOMAIN` it is the previews' origin (the harness's host on this port); with it, the reverse proxy sends `*.<PREVIEW_DOMAIN>` here. `0` turns previews off |
@@ -242,7 +243,14 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   provider's JWKS (RS256 or ES256; issuer, audience, expiry, nonce), state kept in
   an HMAC-signed cookie for 10 minutes. The person is matched to a contact by
   email (case-insensitive; an unverified email is refused). Unknown emails are
-  refused, nobody is created. No dependency: `fetch` and `node:crypto`.
+  refused, nobody is created. With `OIDC_HOSTED_DOMAIN` (Google Workspace), the
+  verified id_token's `hd` claim must equal it (case-insensitive); a missing or
+  other `hd` is refused as `oidc_domain` (logged with the `hd`, not the email),
+  whatever the email's domain, and counts as a failed sign-in. The same domain
+  goes out as the `hd` hint, which only filters Google's account chooser. It
+  complements the known-contacts rule, and with Google the consent screen's
+  "Internal" user type is a second, independent fence. No dependency: `fetch` and
+  `node:crypto`.
 - **API tokens** are the MCP tokens (`mcp_token` records, stored hashed): one
   token works as `Authorization: Bearer` on `/api`, `/ws` and `/mcp`. `GET|POST
   /api/auth/tokens`, `DELETE /api/auth/tokens/:id` (revoke). Your own tokens, or

@@ -9,7 +9,14 @@ import { cookiesOf, testApp, type TestApp } from './helpers.ts'
 interface Idp {
   issuer: string
   /** What the next token request answers with. */
-  next: { email?: string; emailVerified?: boolean; alg: 'RS256' | 'ES256'; tamper?: 'sig' | 'aud' | 'nonce' | 'exp' | 'iss' }
+  next: {
+    email?: string
+    emailVerified?: boolean
+    /** Google's hosted-domain claim (Workspace accounts). */
+    hd?: string
+    alg: 'RS256' | 'ES256'
+    tamper?: 'sig' | 'aud' | 'nonce' | 'exp' | 'iss'
+  }
   /** Codes handed out by /authorize: code → the request it answers. */
   codes: Map<string, { challenge: string; nonce: string; redirect: string }>
   tokenRequests: URLSearchParams[]
@@ -96,6 +103,7 @@ async function startIdp(clientId: string): Promise<Idp> {
         nonce: n.tamper === 'nonce' ? 'wrong' : pending.nonce,
         ...(n.email ? { email: n.email } : {}),
         ...(n.emailVerified !== undefined ? { email_verified: n.emailVerified } : {}),
+        ...(n.hd ? { hd: n.hd } : {}),
       }
       const key = n.tamper === 'sig' ? other.privateKey : n.alg === 'RS256' ? rsa.privateKey : ec.privateKey
       const idToken = jwt({ alg: n.alg, kid: n.alg === 'RS256' ? 'rsa1' : 'ec1', typ: 'JWT' }, claims, key, n.alg)
@@ -139,14 +147,14 @@ afterAll(async () => {
 })
 
 /** Runs the whole flow: start at the harness, "sign in" at the provider, come back to the callback. */
-async function flow(next = '/chat') {
-  const start = await t.a.app.request(`/auth/oidc/start?next=${encodeURIComponent(next)}`)
+async function flow(next = '/chat', app: TestApp = t) {
+  const start = await app.a.app.request(`/auth/oidc/start?next=${encodeURIComponent(next)}`)
   expect(start.status).toBe(302)
   const authorize = new URL(start.headers.get('location')!)
   const state = cookiesOf(start).mp_oidc!
   const atIdp = await fetch(authorize, { redirect: 'manual' })
   const back = new URL(atIdp.headers.get('location')!)
-  const callback = await t.a.app.request(`/auth/oidc/callback${back.search}`, { headers: { cookie: `mp_oidc=${state}` } })
+  const callback = await app.a.app.request(`/auth/oidc/callback${back.search}`, { headers: { cookie: `mp_oidc=${state}` } })
   return { authorize, callback, cookies: cookiesOf(callback) }
 }
 
@@ -214,12 +222,97 @@ describe('OIDC sign-in', () => {
     expect(f.headers.get('location')).toBe('/login?error=oidc_failed')
   })
 
+  it('signs in with or without an hd claim when no hosted domain is set, and sends no hd hint', async () => {
+    for (const hd of [undefined, 'example.com', 'other.example']) {
+      idp.next = { alg: 'RS256', email: 'ana@example.com', ...(hd ? { hd } : {}) }
+      const { authorize, callback } = await flow('/')
+      expect(authorize.searchParams.has('hd')).toBe(false)
+      expect(callback.headers.get('location'), hd).toBe('/')
+    }
+  })
+
   it('is off without configuration', async () => {
     const off = await testApp({ workers: false })
     try {
       expect((await off.a.app.request('/auth/oidc/start')).headers.get('location')).toBe('/login?error=oidc_off')
     } finally {
       await off.close()
+    }
+  })
+})
+
+describe('OIDC sign-in limited to a hosted domain', () => {
+  let d: TestApp
+  beforeAll(async () => {
+    d = await testApp({
+      workers: false,
+      env: {
+        OIDC_ISSUER: idp.issuer,
+        OIDC_CLIENT_ID: 'mp-test',
+        OIDC_CLIENT_SECRET: 'sk-test-secret',
+        OIDC_REDIRECT_URL: 'http://mp.local/auth/oidc/callback',
+        OIDC_HOSTED_DOMAIN: 'Example.com',
+      },
+    })
+    await d.a.services.directory.contacts.create({
+      name: 'Ana Example',
+      kind: 'person',
+      email: 'ana@example.com',
+      access: 'member',
+    })
+  })
+  afterAll(() => d.close())
+
+  it('asks Google for the domain, and tells the login page which it is', async () => {
+    idp.next = { alg: 'RS256', email: 'ana@example.com', hd: 'example.com' }
+    const { authorize } = await flow('/', d)
+    expect(authorize.searchParams.get('hd')).toBe('example.com')
+    expect((await d.req('GET', '/api/auth/config', undefined, { authorization: '' })).body).toEqual({
+      oidc: true,
+      hostedDomain: 'example.com',
+    })
+  })
+
+  it('signs in an account whose hd claim matches, ignoring case', async () => {
+    for (const hd of ['example.com', 'EXAMPLE.com']) {
+      idp.next = { alg: 'RS256', email: 'ana@example.com', hd }
+      const { callback, cookies } = await flow('/chat', d)
+      expect(callback.headers.get('location'), hd).toBe('/chat')
+      expect(cookies.mp_session).toMatch(/^mps_/)
+    }
+  })
+
+  it('refuses a missing hd (a personal account), another domain and a look-alike subdomain, whatever the email says', async () => {
+    const before = await d.a.services.store.records.count('auth_session')
+    for (const hd of [undefined, 'other.example', 'sub.example.com', 'example.com.evil.example']) {
+      idp.next = { alg: 'RS256', email: 'ana@example.com', ...(hd ? { hd } : {}) }
+      const { callback, cookies } = await flow('/', d)
+      expect(callback.headers.get('location'), hd).toBe('/login?error=oidc_domain')
+      expect(cookies.mp_session).toBeUndefined()
+    }
+    expect(await d.a.services.store.records.count('auth_session')).toBe(before)
+  })
+
+  it('counts a refused domain as a failed sign-in', async () => {
+    const limited = await testApp({
+      workers: false,
+      env: {
+        OIDC_ISSUER: idp.issuer,
+        OIDC_CLIENT_ID: 'mp-test',
+        OIDC_CLIENT_SECRET: 'sk-test-secret',
+        OIDC_REDIRECT_URL: 'http://mp.local/auth/oidc/callback',
+        OIDC_HOSTED_DOMAIN: 'example.com',
+      },
+    })
+    try {
+      idp.next = { alg: 'RS256', email: 'ana@example.com' }
+      // The default limit: 20 failed sign-ins per address per minute.
+      for (let i = 0; i < 20; i++)
+        expect((await flow('/', limited)).callback.headers.get('location')).toBe('/login?error=oidc_domain')
+      const start = await limited.a.app.request('/auth/oidc/start')
+      expect(start.headers.get('location')).toBe('/login?error=too_many_attempts')
+    } finally {
+      await limited.close()
     }
   })
 })

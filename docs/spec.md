@@ -346,7 +346,9 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   sends it to them (the harness doesn't send email itself).
   The link starts a session cookie (httpOnly, SameSite=Lax, rotating). Signing
   in through an identity provider (OIDC) is optional and configured with
-  `OIDC_*` variables.
+  `OIDC_*` variables. It signs in only people who already have a contact with
+  that verified email (nobody is created), and `OIDC_HOSTED_DOMAIN` limits it to
+  one Google Workspace domain: the signed `hd` claim must match.
 - **API tokens** for scripts and other agents, per contact, created and
   revoked in the UI. They're stored hashed, like MCP tokens, and are in fact
   the same tokens.

@@ -1,3 +1,4 @@
+import type { AuthConfig } from '@mp/api'
 import { KeyRound, Mail } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button.tsx'
@@ -12,6 +13,15 @@ export const LOGIN_ERRORS: Record<string, string> = {
   oidc_failed: "Signing in with your identity provider didn't work. Try again.",
   oidc_unavailable: "The identity provider can't be reached right now. Try again in a moment.",
   oidc_off: 'Single sign-on is not set up here. Use a sign-in link.',
+}
+
+/** The message for `/login?error=`: some need the login config (e.g. the required domain). */
+export function loginError(error: string, config?: AuthConfig): string {
+  if (error === 'oidc_domain')
+    return config?.hostedDomain
+      ? `This account is not from ${config.hostedDomain}. Sign in with your work account.`
+      : "This account is not from your organization's domain. Sign in with your work account."
+  return LOGIN_ERRORS[error] ?? 'Signing in did not work. Try again.'
 }
 
 /** A local path to return to after signing in. */
@@ -43,7 +53,7 @@ export function LoginPage() {
         <h1 className="text-title2 font-semibold text-foreground">Sign in</h1>
         {error && (
           <p role="alert" className="mt-3 rounded-md border border-[var(--red)]/40 bg-[var(--red)]/10 px-3 py-2 text-mini">
-            {LOGIN_ERRORS[error] ?? 'Signing in did not work. Try again.'}
+            {loginError(error, config.data)}
           </p>
         )}
         <div className="mt-4 flex gap-3 text-fg-tertiary">
