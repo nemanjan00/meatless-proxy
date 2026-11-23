@@ -139,10 +139,18 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
     }) as never)
   }
 
-  const post = async (args: { channel: string; text: string; thread_ts?: string | undefined }) => {
+  // Slack's own link previews: left to Slack unless asked (https://docs.slack.dev/messaging/unfurling-links-in-messages).
+  const unfurl = {
+    unfurl_links: z.boolean().optional().describe('false: no previews of links to pages (GitLab, Sentry, Slack messages, …)'),
+    unfurl_media: z.boolean().optional().describe('false: no previews of links to images and videos'),
+  }
+  type Unfurl = { unfurl_links?: boolean | undefined; unfurl_media?: boolean | undefined }
+  const unfurlParams = (a: Unfurl) => ({ unfurl_links: a.unfurl_links, unfurl_media: a.unfurl_media })
+
+  const post = async (args: { channel: string; text: string; thread_ts?: string | undefined } & Unfurl) => {
     const r = await client.call(
       'chat.postMessage',
-      { channel: args.channel, text: toSlackMrkdwn(args.text), thread_ts: args.thread_ts, mrkdwn: true },
+      { channel: args.channel, text: toSlackMrkdwn(args.text), thread_ts: args.thread_ts, mrkdwn: true, ...unfurlParams(args) },
       { write: true, json: true },
     )
     return compact({ channel: str(r.channel), ts: str(r.ts), thread_ts: args.thread_ts })
@@ -150,19 +158,20 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
 
   tool(
     'post_message',
-    'Post a message in a Slack channel or DM. Text is Slack mrkdwn (*bold*, _italic_, `code`, <@U123> mentions, <https://x|links>); common Markdown (**bold**, [text](url), - lists, # headings) is converted. To tag someone, write <@U123> with their Slack user id, the one shown after their name in messages ("Ana (slack U123)"): a plain "@Ana" or "@Ana (slack U123)" tags nobody. Several people can share a name, so take the id from the message they wrote or were mentioned in, or look them up with directory.find_contact (handles slack:U…); never guess it. Pass thread_ts to post inside a thread. Returns the new message ts.',
+    'Post a message in a Slack channel or DM. Text is Slack mrkdwn (*bold*, _italic_, `code`, <@U123> mentions, <https://x|links>); common Markdown (**bold**, [text](url), - lists, # headings) is converted. To tag someone, write <@U123> with their Slack user id, the one shown after their name in messages ("Ana (slack U123)"): a plain "@Ana" or "@Ana (slack U123)" tags nobody. Several people can share a name, so take the id from the message they wrote or were mentioned in, or look them up with directory.find_contact (handles slack:U…); never guess it. Pass thread_ts to post inside a thread. Pass unfurl_links: false and unfurl_media: false for no link previews. Returns the new message ts.',
     {
       channel,
       text: z.string().min(1).describe('Message text (mrkdwn)'),
       thread_ts: ts.optional().describe('Thread root ts, to reply in a thread'),
+      ...unfurl,
     },
     WRITE,
     post,
   )
   tool(
     'reply',
-    'Reply in a Slack thread. thread_ts is the ts of the thread root message (the subject of a Slack event is slack:<channel>/<thread_ts>). Text as for post_message: mrkdwn, mention people as <@U123>.',
-    { channel, thread_ts: ts.describe('Thread root ts'), text: z.string().min(1).describe('Reply text (mrkdwn)') },
+    'Reply in a Slack thread. thread_ts is the ts of the thread root message (the subject of a Slack event is slack:<channel>/<thread_ts>). Text as for post_message: mrkdwn, mention people as <@U123>; unfurl_links and unfurl_media as for post_message.',
+    { channel, thread_ts: ts.describe('Thread root ts'), text: z.string().min(1).describe('Reply text (mrkdwn)'), ...unfurl },
     WRITE,
     post,
   )
@@ -361,7 +370,7 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
   )
   tool(
     'post_blocks',
-    'Post a message built from Slack Block Kit blocks (https://docs.slack.dev/block-kit/): an array of 1 to 50 block objects, e.g. sections, dividers, context, images. text is the notification fallback. Buttons posted this way are not tracked: for questions, use ask. Returns the new message ts.',
+    'Post a message built from Slack Block Kit blocks (https://docs.slack.dev/block-kit/): an array of 1 to 50 block objects, e.g. sections, dividers, context, images. text is the notification fallback. Buttons posted this way are not tracked: for questions, use ask. Pass unfurl_links: false and unfurl_media: false for no link previews. Returns the new message ts.',
     {
       channel,
       thread_ts: ts.optional().describe('Thread root ts, to post inside a thread'),
@@ -369,13 +378,14 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
       blocks: z
         .union([z.array(z.record(z.string(), z.unknown())), z.string()])
         .describe('The blocks, as a JSON array (or its JSON text)'),
+      ...unfurl,
     },
     WRITE,
     async (a) => {
       const blocks = parseBlocks(a.blocks)
       const r = await client.call(
         'chat.postMessage',
-        { channel: a.channel, text: a.text, blocks, thread_ts: a.thread_ts, mrkdwn: true },
+        { channel: a.channel, text: a.text, blocks, thread_ts: a.thread_ts, mrkdwn: true, ...unfurlParams(a) },
         { write: true, json: true },
       )
       return compact({ channel: str(r.channel), ts: str(r.ts), thread_ts: a.thread_ts })

@@ -67,8 +67,8 @@ lines): for `invalid_blocks`, which block failed and why (`[ERROR] … [json-poi
 
 | Tool | Slack method | Arguments | Result |
 |------|--------------|-----------|--------|
-| `post_message` | `chat.postMessage` (mrkdwn) | `channel`, `text`, `thread_ts?` | `{ channel, ts, thread_ts? }` |
-| `reply` | `chat.postMessage` | `channel`, `thread_ts`, `text` | `{ channel, ts, thread_ts }` |
+| `post_message` | `chat.postMessage` (mrkdwn) | `channel`, `text`, `thread_ts?`, `unfurl_links?`, `unfurl_media?` | `{ channel, ts, thread_ts? }` |
+| `reply` | `chat.postMessage` | `channel`, `thread_ts`, `text`, `unfurl_links?`, `unfurl_media?` | `{ channel, ts, thread_ts }` |
 | `read_channel` | `conversations.history` | `channel`, `limit?` (20, max 200), `cursor?`, `oldest?`, `latest?` | `{ messages, next_cursor }`, newest first |
 | `read_thread` | `conversations.replies` | `channel`, `thread_ts`, `limit?` (50, max 200), `cursor?` | `{ messages, next_cursor }`, root first |
 | `react` | `reactions.add` | `channel`, `ts`, `name` (colons optional) | `{ ok }`; `already_reacted` → `{ ok, already }` |
@@ -78,9 +78,11 @@ lines): for `invalid_blocks`, which block failed and why (`[ERROR] … [json-poi
 | `list_channels` | `conversations.list` (public and private, not archived) | `member_only?` (default true), `limit?` (200), `cursor?` | `{ channels: [{ id, name, is_private?, is_member, topic?, purpose?, members? }], next_cursor }` |
 | `update_message` | `chat.update` | `channel`, `ts`, `text` | `{ channel, ts }`. The app can only edit its own messages (`cant_update_message`). |
 | `ask` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text`, `fields`, `buttons?`, `allow_multiple?` | `{ channel, ts, thread_ts?, ask }`; in the harness `{ channel, ts, thread_ts?, interactionId, subject }`. See [questions with inputs](#questions-with-inputs). |
-| `post_blocks` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text` (the fallback), `blocks` (a JSON array of 1-50 blocks, or its JSON text) | `{ channel, ts, thread_ts? }`. Slack's `invalid_blocks` comes with a hint. |
+| `post_blocks` | `chat.postMessage` with blocks | `channel`, `thread_ts?`, `text` (the fallback), `blocks` (a JSON array of 1-50 blocks, or its JSON text), `unfurl_links?`, `unfurl_media?` | `{ channel, ts, thread_ts? }`. Slack's `invalid_blocks` comes with a hint. |
 | `get_file` | `files.info` | `file_id` | Outside the harness, the file's metadata `{ id, name, mime, filetype, size, title, mode }`. In the harness, the server downloads it into the employee's files: `{ path, name, mime, size, text? }`. See [files](#files). |
 | `upload_file` | `files.getUploadURLExternal`, the upload, `files.completeUploadExternal` | `path`, `channel`, `thread_ts?`, `title?`, `comment?` | In the harness, the server reads `path` from the employee's files and uploads it: `{ fileId, channel, thread_ts?, permalink? }`. Outside the harness it refuses (`not_supported`): the plain MCP server has no files to read. See [files](#files). |
+
+`unfurl_links: false` and `unfurl_media: false` turn off Slack's link previews for that message (left to Slack when not given).
 
 A message looks like `{ ts, user?, bot_id?, subtype?, text, thread_ts?, reply_count?, reactions?: [{ name, count }], files?: [{ id, name }], edited? }`.
 

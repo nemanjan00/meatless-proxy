@@ -80,6 +80,30 @@ describe('slack MCP tools', () => {
     expect(slack.callsTo('chat.postMessage')[0]?.params.thread_ts).toBe('1712000002.000100')
   })
 
+  it('post_message, reply and post_blocks pass unfurl_links and unfurl_media through, and leave them out when not given', async () => {
+    await call('post_message', {
+      channel: 'C1',
+      text: 'brief <https://gitlab.example.com/x|MR>',
+      unfurl_links: false,
+      unfurl_media: false,
+    })
+    await call('reply', { channel: 'C1', thread_ts: '1712000002.000100', text: 'see', unfurl_links: false })
+    await call('post_blocks', {
+      channel: 'C1',
+      text: 'brief',
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '<https://sentry.example.com/1|issue>' } }],
+      unfurl_links: false,
+      unfurl_media: false,
+    })
+    const [msg, reply, blocks] = slack.callsTo('chat.postMessage').map((c) => c.params)
+    expect(msg).toMatchObject({ unfurl_links: false, unfurl_media: false })
+    expect(reply).toMatchObject({ unfurl_links: false })
+    expect(reply).not.toHaveProperty('unfurl_media')
+    expect(blocks).toMatchObject({ unfurl_links: false, unfurl_media: false })
+    await call('post_message', { channel: 'C1', text: 'plain' })
+    expect(slack.callsTo('chat.postMessage').at(-1)?.params).toEqual({ channel: 'C1', text: 'plain', mrkdwn: true })
+  })
+
   it('reply answers in a thread; a bad thread is a helpful error', async () => {
     const r = await call('reply', { channel: 'C1', thread_ts: '1712000002.000100', text: 'done' })
     expect(r.isError).toBe(false)
