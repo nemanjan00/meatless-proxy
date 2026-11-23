@@ -122,6 +122,11 @@ export interface RouterOptions {
    * to each one's router as information (not expected to act): it decides whether to get involved.
    */
   watchersOf?: (event: MpEvent) => Promise<string[]>
+  /**
+   * Whether an event nobody claimed is worth a run of the fallback router (`routerSessionId`). False drops
+   * it without a model call, e.g. a pipeline of a branch no session follows. Default: every event is.
+   */
+  wantsFallback?: (event: MpEvent, routerSessionId: string) => Promise<boolean>
   /** Priority for runs caused by a person (`actorContactId` of a non-AI contact). */
   humanPriority?: number
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
@@ -353,7 +358,8 @@ export function createRouter(opts: RouterOptions): Router {
       payload?.addressedToOthers === true || payload?.plainConversation === true || event.data.type.startsWith('reaction.')
     if (!claimed() && !tags.authorSessionId && !plainChat && !notForFallback) {
       const fallback = await opts.routerSessionFor(event.data.employeeId)
-      if (fallback) add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })
+      if (fallback && (!opts.wantsFallback || (await opts.wantsFallback(event, fallback))))
+        add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })
     }
 
     return [...out.values()]

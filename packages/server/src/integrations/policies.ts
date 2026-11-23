@@ -137,6 +137,26 @@ export async function subscribeOnce(events: Events, session: Session, subject: S
   return true
 }
 
+/** How long a Slack DM's new messages go to the session that last posted there, instead of the router. */
+export const DM_FOLLOW_MS = 60 * 60_000
+
+/** A Slack DM channel (`D…`), as opposed to a channel or a group DM. */
+export const isSlackDm = (channel: unknown): channel is string => typeof channel === 'string' && /^D[A-Z0-9]+$/.test(channel)
+
+/** The subject of a whole Slack DM (not one thread in it): the session that last posted there follows it. */
+export const slackDmSubject = (channel: string): Subject => ({ system: 'slack', id: channel })
+
+/**
+ * A session posted in a Slack DM: it follows the DM now, and any other session that did stops. Its
+ * subscription is renewed (ended and started again), so its `updatedAt` says when it last posted.
+ */
+export async function followSlackDm(events: Events, session: Session, channel: string): Promise<void> {
+  if (session.data.meta?.role === 'router' || !isSlackDm(channel)) return
+  const subject = slackDmSubject(channel)
+  await events.subscriptions.endForSubject(subject, `${session.id} posted in the DM`)
+  await events.subscriptions.subscribe(session.id, subject, { primary: true })
+}
+
 export interface IntegrationPolicyDeps {
   hooks: Hooks
   bus: EventBus
@@ -239,18 +259,45 @@ export function registerIntegrationPolicies(deps: IntegrationPolicyDeps): () => 
             logger.warn('slack reply not posted: Slack is not set up for this employee', { runId: run.id })
             return undefined
           }
-          const r = await instance.callTool('reply', { channel, thread_ts: threadTs, text: output! })
+          // In a DM, a message written at the top level is answered there: a thread under each message hides the answer.
+          const topLevel = isSlackDm(channel) && (event.data.payload as { is_reply?: unknown } | undefined)?.is_reply !== true
+          const r = topLevel
+            ? await instance.callTool('post_message', { channel, text: output! })
+            : await instance.callTool('reply', { channel, thread_ts: threadTs, text: output! })
           if (r.isError) {
             logger.warn('slack reply failed', { runId: run.id, output: r.output })
             return undefined
           }
           await subscribeOnce(events, session, event.data.subject, false)
+          await followSlackDm(events, session, channel)
         } catch (err) {
           logger.warn('slack reply: could not post the answer', { runId: run.id, err: errorMessage(err) })
         }
         return undefined
       }),
     )
+
+  if (slack) {
+    // A session that posts in Slack hears the answers: replies in that thread come to it, and in a DM, the
+    // person's next messages there too (for DM_FOLLOW_MS). Live, a "ping me when done" in a DM was
+    // answered there, and the person's follow-up in the DM started a new session through the router.
+    const posting = new Set([`mcp.${slack.name}.post_message`, `mcp.${slack.name}.reply`])
+    offs.push(
+      deps.hooks.onTransform(afterToolCall, async (p) => {
+        if (!posting.has(p.tool.name) || p.result.isError) return p
+        const out = (p.result.output ?? {}) as { channel?: unknown; ts?: unknown; thread_ts?: unknown }
+        if (typeof out.channel !== 'string') return p
+        const root = typeof out.thread_ts === 'string' ? out.thread_ts : typeof out.ts === 'string' ? out.ts : undefined
+        try {
+          if (root) await subscribeOnce(events, p.session, { system: 'slack', id: `${out.channel}/${root}` }, false)
+          await followSlackDm(events, p.session, out.channel)
+        } catch (err) {
+          logger.warn('could not follow the Slack conversation', { sessionId: p.session.id, err: errorMessage(err) })
+        }
+        return p
+      }),
+    )
+  }
 
   const gitlab = deps.specs.gitlab
   if (gitlab) {

@@ -149,7 +149,13 @@ and tags combine as described below:
    else (it mentions others and not this employee, `payload.addressedToOthers`:
    two employees' Slack apps both get it, and only the one mentioned acts),
    and not for reactions (the thread's owner gets them through its
-   subscription). A router's final text is its decision, never posted as a
+   subscription). Nor for GitLab events that aren't about the employee:
+   pushes, pipelines and jobs never (the session that pushed follows its
+   branch and merge request by subscription), merge requests and issues only
+   when assigned to it or asking its review, comments only when they mention
+   its GitLab username, and never its own actions. Live, nearly every
+   unclaimed GitLab event ended in "nothing to route", each a full router
+   call. A trigger still routes any of them: triggers come first. A router's final text is its decision, never posted as a
    reply: the session it starts answers.
 
 After an event is routed (bus `event.routed`), an event that closes its

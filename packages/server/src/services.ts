@@ -56,6 +56,8 @@ import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { envSecretValues } from './env-secrets.ts'
+import { gitlabWantsRouter } from './integrations/fallback.ts'
+import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
 import { selfContainer } from './previews/self.ts'
@@ -66,6 +68,7 @@ import { createLocalProjectForEmployee } from './local-projects/index.ts'
 
 /** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
 const SLACK_SOURCE = 'integration:slack'
+const GITLAB_SOURCE = 'integration:gitlab'
 const OWN_COPY_SECRETS: Record<string, string> = { [SLACK_SOURCE]: 'SLACK_SIGNING_SECRET' }
 
 /** Replacements for adapters and ambient services, mostly for tests. */
@@ -405,6 +408,31 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       .map((m) => ({ sessionId: m.id, reason: 'member' as const, expectedToAct: false, trusted: true, fork: false }))
   }
 
+  // A person's new message in a Slack DM goes to the session that last posted there, for a while
+  // (src/integrations/policies.ts followSlackDm), instead of the router starting another session.
+  const slackDmFollower: RecipientResolver = async (event) => {
+    if (event.data.source !== SLACK_SOURCE || event.data.type !== 'message.direct') return []
+    const p = event.data.payload as { channel?: unknown; is_reply?: unknown } | undefined
+    if (!isSlackDm(p?.channel) || p.is_reply === true) return []
+    const subs = await rawEvents.subscriptions.forSubject(slackDmSubject(p.channel))
+    const latest = subs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+    if (!latest || clock.now() - Date.parse(latest.updatedAt) > DM_FOLLOW_MS) return []
+    const session = await sessions.get(latest.data.sessionId)
+    if (!session || session.data.status === 'done' || session.data.status === 'abandoned') return []
+    // Each employee's app has its own DMs: only its own sessions follow them.
+    if (event.data.employeeId && session.data.employeeId !== event.data.employeeId) return []
+    return [
+      {
+        sessionId: session.id,
+        reason: 'subscription',
+        expectedToAct: true,
+        trusted: true,
+        fork: false,
+        subscriptionId: latest.id,
+      },
+    ]
+  }
+
   const hasOwnCopies = async (source: string, employeeId: string) => {
     const name = OWN_COPY_SECRETS[source]
     if (!name) return false
@@ -449,7 +477,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
     // A scheduled task's firing goes to its session (src/schedules/recipients.ts).
-    resolvers: [channelMembers, scheduledTaskRecipients(scheduledTasks)],
+    resolvers: [channelMembers, scheduledTaskRecipients(scheduledTasks), slackDmFollower],
     // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
     // every event there, so its sessions skip other employees' copies.
     hasOwnCopies,
@@ -458,6 +486,16 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     // Employees in a chat thread (their sessions posted in it, or it tagged them, e.g. an alert) hear a person's
     // untagged follow-up there.
     watchersOf,
+    // Unclaimed GitLab builds and pushes, and merge requests and comments not about the employee, cost a router
+    // run each for nothing (src/integrations/fallback.ts).
+    wantsFallback: async (event, routerSessionId) => {
+      if (event.data.source !== GITLAB_SOURCE) return true
+      const employeeId = (await sessions.get(routerSessionId))?.data.employeeId
+      const employee = employeeId ? await directory.employees.get(employeeId) : null
+      const contact = employee ? await directory.contacts.get(employee.data.contactId) : null
+      const username = contact?.data.handles?.find((h) => h.system === 'gitlab')?.id
+      return gitlabWantsRouter(event.data, username)
+    },
     participantsOf: async (event) => {
       const p = event.data.payload as { threadId?: unknown; messageId?: unknown } | undefined
       if (event.data.source !== 'chat' || event.data.type !== 'message.replied' || typeof p?.threadId !== 'string') return []
