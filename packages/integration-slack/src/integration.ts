@@ -9,7 +9,7 @@ import {
   type SlackUploadResult,
   uploadSlackFile,
 } from './files.ts'
-import { mapSlackEvent, type SelfIdentity, type SlackEnvelope, SLACK_SYSTEM } from './events.ts'
+import { mapSlackEvent, type SelfIdentity, type SlackEnvelope, type SlackMessage, SLACK_SYSTEM } from './events.ts'
 import { type BlockActionsPayload, handleBlockActions, type SlackInteractionStore } from './interactions.ts'
 import { verifySlackSignature } from './signature.ts'
 import { createSlackMcpServer } from './tools.ts'
@@ -44,6 +44,9 @@ export interface SlackIntegrationOptions {
 const CHANNEL_CACHE_MAX = 1000
 /** How long a failed channel lookup is remembered, so a broken lookup doesn't slow every event. */
 const CHANNEL_MISS_TTL_MS = 60_000
+/** Most thread roots cached at once, and for how long: a root can be edited, so not for long. */
+const ROOT_CACHE_MAX = 1000
+const ROOT_TTL_MS = 10 * 60_000
 /** Most permalinks cached at once. */
 const PERMALINK_CACHE_MAX = 5000
 
@@ -133,6 +136,25 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     return p
   }
 
+  // A thread's first message, for a mention or DM in that thread. Misses (no access, no such thread) are cached too.
+  const roots = new Map<string, { root: SlackMessage | undefined; until: number }>()
+  const threadRoot = async (channel: string, threadTs: string): Promise<SlackMessage | undefined> => {
+    const key = `${channel}/${threadTs}`
+    const hit = roots.get(key)
+    if (hit && hit.until > clock.now()) return hit.root
+    let root: SlackMessage | undefined
+    try {
+      const r = await quick.call('conversations.replies', { channel, ts: threadTs, limit: 1, inclusive: true }, {})
+      const first = ((r.messages ?? []) as SlackMessage[])[0]
+      root = first?.ts === threadTs ? first : undefined
+    } catch (err) {
+      logger.debug('slack thread root lookup failed', { channel, threadTs, err: errorMessage(err) })
+    }
+    roots.set(key, { root, until: clock.now() + (root ? ROOT_TTL_MS : CHANNEL_MISS_TTL_MS) })
+    if (roots.size > ROOT_CACHE_MAX) roots.delete(roots.keys().next().value as string)
+    return root
+  }
+
   // The app's own bot identity (auth.test), for ignoring its own messages. Looked up once, lazily.
   let authTest: Promise<{ userId?: string; botId?: string }> | undefined
   const ownIdentity = () => {
@@ -205,7 +227,7 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
       return { status: 200, events: [] }
     }
     if (env.type !== 'event_callback') return { status: 200, events: [] }
-    const event = await mapSlackEvent(env, { self: await selfFor(env), channelName })
+    const event = await mapSlackEvent(env, { self: await selfFor(env), channelName, threadRoot })
     logger.debug('slack event', {
       eventId: env.event_id,
       type: env.event?.type,

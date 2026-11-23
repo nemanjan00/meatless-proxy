@@ -145,7 +145,7 @@ shown instead). Lookups on the webhook path don't retry, because Slack wants an 
 | `message` with `channel_type: im` (a DM to the app, threaded or not) | `message.direct` | `thread_ts` or `ts` | same, without `channel_name` |
 | `message` / `message_changed` | `message.edited` | the edited message's thread | `channel, user, ts, thread_ts?, text, previous_text` |
 | `message` / `message_deleted` | `message.deleted` | the deleted message's thread | `channel, user?, ts, thread_ts?, previous_text?` |
-| `app_mention`, or a `message` mentioning the app | `message.mentioned` | `thread_ts` or `ts` | `channel, user, text, ts, thread_ts?, is_reply, mentions_app` |
+| `app_mention`, or a `message` mentioning the app | `message.mentioned` | `thread_ts` or `ts` | `channel, user, text, ts, thread_ts?, is_reply, thread_root?, mentions_app` |
 | `reaction_added` on a message | `reaction.added` | the reacted message's `ts` | `channel, user, reaction, ts, item_user, item_is_own` |
 
 Some events are ignored:
@@ -166,6 +166,12 @@ Notes:
   Both become one `message.mentioned` event with `mentions_app: true` (dedupe key `slack:msg:<channel>:<ts>`, whichever
   arrives first), so a mention is handled once. A `message` that mentions the app is `message.mentioned` too, not
   `message.posted` or `message.replied`.
+- A reply's event text says which thread it's in, by the root's ts: `Slack #general (reply in thread 1712000002.000100)
+  U1: …`, so the ts isn't taken for the reply's own. A mention or DM in a thread also quotes the thread's first message
+  (`(reply in thread 1712000002.000100, started by <@U1>: "deploy?")`, up to 500 characters, `started by you` for the
+  app's own) and puts it in `thread_root: { user?, bot_id?, text }`: a bare `@app` under a question is about that
+  question. The root is read with `conversations.replies` (`limit: 1`) and cached for 10 minutes; plain replies aren't
+  looked up, since the sessions following the thread have it. If it can't be read, the text names the thread only.
 - `reaction.added` uses the reacted message's own `ts`. For a reply in a thread, that isn't the thread root, because the
   event doesn't say which thread the message is in.
 

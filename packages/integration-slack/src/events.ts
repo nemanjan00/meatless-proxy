@@ -53,6 +53,8 @@ export interface MapContext {
   self: SelfIdentity
   /** The channel's name without `#`, if known. */
   channelName(channelId: string): Promise<string | undefined>
+  /** A thread's first message, if it can be read; shown with a mention or DM in that thread. */
+  threadRoot?(channelId: string, threadTs: string): Promise<SlackMessage | undefined>
 }
 
 /** Subtypes that are ordinary messages from a person or another bot. Everything else (joins, topic changes, …) is ignored. */
@@ -63,6 +65,9 @@ const isSelf = (m: SlackMessage | undefined, self: SelfIdentity) =>
   ((m.user !== undefined && self.userIds.has(m.user)) ||
     (m.bot_id !== undefined && self.botIds.has(m.bot_id)) ||
     (self.appId !== undefined && (m.app_id === self.appId || m.bot_profile?.app_id === self.appId)))
+
+/** Longest thread-root text quoted in a reply's event text; read_thread has the rest. */
+export const SLACK_MAX_ROOT_TEXT = 500
 
 const clip = (s: string) =>
   s.length > SLACK_MAX_TEXT
@@ -75,6 +80,18 @@ export const filesText = (files: SlackMessage['files']) =>
     .filter((f) => f.id)
     .map((f) => ` [file: ${(f.name ?? f.id)!.replace(/[\]\n]/g, ' ')}, slack file ${f.id}]`)
     .join('')
+
+/**
+ * Where a reply sits, for the event text: the thread's root ts, labelled so it isn't taken for the reply's own,
+ * and, when known, who started the thread and what it says (a bare mention in a thread is about its root).
+ */
+const threadLabel = (threadTs: string, root: SlackMessage | undefined, self: SelfIdentity) => {
+  if (!root) return ` (reply in thread ${threadTs})`
+  const who = isSelf(root, self) ? 'you' : root.user ? `<@${root.user}>` : (root.bot_id ?? 'someone')
+  const text = (root.text ?? '').replace(/\s+/g, ' ').trim()
+  const quoted = text.length > SLACK_MAX_ROOT_TEXT ? `${text.slice(0, SLACK_MAX_ROOT_TEXT)}… [read_thread for the rest]` : text
+  return ` (reply in thread ${threadTs}, started by ${who}: "${quoted}"${filesText(root.files)})`
+}
 
 const mentionsApp = (text: string | undefined, self: SelfIdentity) =>
   !!text && [...self.userIds].some((id) => text.includes(`<@${id}>`))
@@ -126,6 +143,9 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
     text,
     payload,
   })
+  const rootOf = async (threadTs: string) => (ctx.threadRoot ? ctx.threadRoot(channel, threadTs) : undefined)
+  const rootPayload = (root: SlackMessage | undefined) =>
+    root ? pick({ user: root.user, bot_id: root.bot_id, text: root.text ?? '' }) : undefined
   const common = async () => ({
     team_id: env.team_id,
     channel,
@@ -175,11 +195,13 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
       // to one `message.mentioned` event with one dedupe key, so it's handled once.
       const type = isDm ? 'message.direct' : mentioned ? 'message.mentioned' : reply ? 'message.replied' : 'message.posted'
       const who = ev.user ?? ev.bot_id ?? 'someone'
+      // The root is looked up only for what's addressed to this app: plain replies go to the sessions following the thread.
+      const root = reply && (mentioned || isDm) ? await rootOf(ev.thread_ts!) : undefined
       return base(
         type,
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${who}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
+        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${who}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
         pick({
           ...(await common()),
           user: ev.user,
@@ -189,6 +211,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
+          thread_root: rootPayload(root),
           mentions_app: mentioned,
           addressedToOthers: !isDm && !mentioned && addressedToOthers(ev.text, self) ? true : undefined,
           // A channel message that doesn't mention this app is people talking (the app's threads reach it by subscription).
@@ -201,11 +224,12 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
     case 'app_mention': {
       if (!ev.ts || isSelf(ev, self)) return null
       const reply = !!ev.thread_ts && ev.thread_ts !== ev.ts
+      const root = reply ? await rootOf(ev.thread_ts!) : undefined
       return base(
         'message.mentioned',
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? ' (thread reply)' : ''} ${ev.user ?? 'someone'}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
+        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${ev.user ?? 'someone'}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
         pick({
           ...(await common()),
           user: ev.user,
@@ -213,6 +237,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
+          thread_root: rootPayload(root),
           mentions_app: true,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
         }),

@@ -188,9 +188,55 @@ describe('event mapping', () => {
     expect(r.events[0]).toMatchObject({
       type: 'message.replied',
       subject: { system: 'slack', id: 'C1/1712345000.000100' },
-      text: 'Slack #general (thread reply) U1: answer',
+      text: 'Slack #general (reply in thread 1712345000.000100) U1: answer',
       payload: { is_reply: true, thread_ts: '1712345000.000100', ts: '1712345001.000200' },
     })
+    // A plain reply doesn't look the thread up: the sessions following it have it.
+    expect(slack.callsTo('conversations.replies')).toHaveLength(0)
+  })
+
+  it('a mention in a thread names the thread and quotes its first message, so a bare mention says what it is about', async () => {
+    const r = await deliver(msg({ user: 'U2', ts: '1712000009.000100', thread_ts: '1712000002.000100', text: '<@UBOT>' }))
+    expect(r.events[0]).toMatchObject({
+      type: 'message.mentioned',
+      subject: { system: 'slack', id: 'C1/1712000002.000100' },
+      text: 'Slack #general (reply in thread 1712000002.000100, started by <@U1>: "deploy?") U2: <@UBOT>',
+      payload: { thread_ts: '1712000002.000100', thread_root: { user: 'U1', text: 'deploy?' } },
+    })
+    // Slack sends the same mention as app_mention too: the root is read once.
+    const again = await deliver(
+      envelope({
+        type: 'app_mention',
+        channel: 'C1',
+        user: 'U2',
+        text: '<@UBOT>',
+        ts: '1712000009.000100',
+        thread_ts: '1712000002.000100',
+      }),
+    )
+    expect(again.events[0]?.text).toBe(r.events[0]?.text)
+    expect(slack.callsTo('conversations.replies')).toHaveLength(1)
+  })
+
+  it("a thread this app started is 'started by you'; a long root is clipped", async () => {
+    slack.channels
+      .get('C1')!
+      .messages.push(
+        { ts: '1712000010.000100', user: BOT_USER, bot_id: BOT_ID, text: 'build is red', thread_ts: '1712000010.000100' },
+        { ts: '1712000011.000100', user: 'U1', text: 'x'.repeat(2000), thread_ts: '1712000011.000100' },
+      )
+    const own = await deliver(msg({ ts: '1712000010.500100', thread_ts: '1712000010.000100', text: '<@UBOT> why?' }))
+    expect(own.events[0]?.text).toBe(
+      'Slack #general (reply in thread 1712000010.000100, started by you: "build is red") U1: <@UBOT> why?',
+    )
+    const long = await deliver(msg({ ts: '1712000011.500100', thread_ts: '1712000011.000100', text: '<@UBOT>' }))
+    expect(long.events[0]?.text).toContain(`"${'x'.repeat(500)}… [read_thread for the rest]")`)
+  })
+
+  it('when the thread cannot be read, the mention still names the thread', async () => {
+    const r = await deliver(msg({ channel: 'C2', ts: '9.5', thread_ts: '9.0', text: '<@UBOT> here' }))
+    expect(r.events[0]).toMatchObject({ type: 'message.mentioned', text: 'Slack #random (reply in thread 9.0) U1: <@UBOT> here' })
+    expect(r.events[0]?.payload).not.toHaveProperty('thread_root')
   })
 
   it('thread_broadcast and file_share are messages too', async () => {
