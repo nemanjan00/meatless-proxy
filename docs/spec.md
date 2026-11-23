@@ -2710,6 +2710,10 @@ session later.
   `sessionMode: fresh` forks the session for each firing instead, for work
   where history only gets in the way. A follow-up runs in the session that left
   it.
+- **New tools.** At each firing the task's session gets the tools the employee
+  has gained since it was made (a new integration tool, a newly connected MCP
+  server), so a daily task isn't stuck with the tools of the day it was set
+  up. Nothing is taken away. A follow-up's session is left as it is.
 - **Firing.** At each slot the scheduler ingests one `scheduled_task.fired`
   event (source `schedule`, dedupe key `scheduled_task:<id>:<slot>`), and the
   router delivers it to the task's session as a trusted, direct delivery that

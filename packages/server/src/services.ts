@@ -505,7 +505,15 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     routerSessionFor,
     procedureContext: async (procedureId) => (await directory.procedures.get(procedureId))?.data.contextSessionId ?? null,
     // A scheduled task's firing goes to its session (src/schedules/recipients.ts).
-    resolvers: [channelMembers, scheduledTaskRecipients(scheduledTasks), slackDmFollower],
+    resolvers: [
+      channelMembers,
+      scheduledTaskRecipients(scheduledTasks, {
+        sessions,
+        toolsetFor: async (employeeId) => tools.allowed(await toolListsFor(employeeId)).map((t) => t.name),
+        logger: logger.child({ component: 'schedules' }),
+      }),
+      slackDmFollower,
+    ],
     // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
     // every event there, so its sessions skip other employees' copies.
     hasOwnCopies,

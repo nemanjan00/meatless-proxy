@@ -180,6 +180,50 @@ describe('scheduled tasks fire', () => {
     expect(textOf(requests.at(-1)!).split('Check the error budget\n\n(Scheduled task').length).toBe(2)
   })
 
+  it("a task's session gets tools added after it was made when it fires; a note's session is left alone", async () => {
+    const { s, employee, ana, fire } = await setup()
+    const task = await s.schedules!.create(
+      {
+        employeeId: employee.id,
+        instruction: 'Post the daily brief',
+        when: { type: 'cron', cron: '0 9 * * *' },
+        timezone: 'UTC',
+      },
+      SYSTEM,
+    )
+    const before = (await s.sessions.require(task.data.sessionId!)).data.toolset
+    expect(before).not.toContain('mcp.chat.search')
+    const other = await s.sessions.create({ employeeId: employee.id, title: 'Some work', toolset: ['sessions.message'] })
+    await s.schedules!.followUp(
+      {
+        employeeId: employee.id,
+        sessionId: other.id,
+        note: 'Check again',
+        when: { type: 'once', at: '2026-09-29T10:00:00.000Z' },
+        timezone: 'UTC',
+        requesterId: ana.id,
+      },
+      SYSTEM,
+    )
+    // A tool registered later, as a newly connected server's would be.
+    s.tools.register(
+      {
+        name: 'mcp.chat.search',
+        description: 'Search.',
+        parameters: { type: 'object', properties: {} },
+        effect: 'read',
+        source: 'mcp',
+      },
+      async () => ({ output: { ok: true } }),
+    )
+    await fire(Date.parse('2026-09-29T10:00:10Z'))
+    expect(await s.sessions.runs({ sessionId: other.id })).toHaveLength(1)
+    expect((await s.sessions.require(other.id)).data.toolset).toEqual(['sessions.message'])
+    await fire(Date.parse('2026-09-30T09:00:10Z'))
+    expect(await s.sessions.runs({ sessionId: task.data.sessionId! })).toHaveLength(1)
+    expect((await s.sessions.require(task.data.sessionId!)).data.toolset).toEqual([...before, 'mcp.chat.search'])
+  })
+
   it('a one-off missed while the harness was down is marked missed, not run late; a deleted task fires nowhere', async () => {
     const { s, employee, requests, fire, quiet } = await setup()
     const task = await s.schedules!.create(
