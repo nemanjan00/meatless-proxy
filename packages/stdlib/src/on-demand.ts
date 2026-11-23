@@ -163,7 +163,7 @@ export const ON_DEMAND_GROUPS: readonly ToolGroup[] = [
     name: 'slack',
     about: 'forms, files, channels, users, DMs',
     tools: ['mcp.slack.*'],
-    list: 'mcp.slack.ask/upload_file/get_file/post_blocks/read_channel/list_channels/lookup_user/open_dm/update_message/unreact',
+    list: 'mcp.slack.ask/upload_file/get_file/post_blocks/read_channel/search/list_channels/lookup_user/open_dm/update_message/unreact',
   },
   {
     name: 'gitlab',

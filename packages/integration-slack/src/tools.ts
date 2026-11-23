@@ -1,4 +1,4 @@
-import { errorMessage, isMpError, type Logger, MpError } from '@mp/core'
+import { type Clock, errorMessage, isMpError, type Logger, MpError, systemClock } from '@mp/core'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
@@ -113,13 +113,22 @@ const limit = (max: number, def: number) =>
 /** list_channels: the most pages of conversations.list one call reads to find the app's channels. */
 const LIST_PAGES = 10
 const cursor = z.string().optional().describe('next_cursor from the previous page')
+const userId = z.string().regex(/^[UW][A-Z0-9]+$/, 'a Slack user id, e.g. U0123ABCD')
+/** search: how far back it reads by default and at most, and the most Slack calls one search makes. */
+const SEARCH_HOURS = 24
+const SEARCH_MAX_HOURS = 24 * 7
+const SEARCH_CALLS = 200
 const emoji = z.string().min(1).describe('Emoji name without colons, e.g. eyes or white_check_mark')
 
 const READ = { readOnlyHint: true, openWorldHint: true } as const
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const
 
+/** Lowercased words of a query; a quoted "phrase" is one word. */
+const queryWords = (q: string) =>
+  [...q.toLowerCase().matchAll(/"([^"]+)"|(\S+)/g)].map((m) => (m[1] ?? m[2])!.trim()).filter((w) => w.length > 0)
+
 /** Builds the MCP server exposing the Slack tools over `client`. */
-export function createSlackMcpServer(client: SlackClient, logger: Logger): McpServer {
+export function createSlackMcpServer(client: SlackClient, logger: Logger, clock: Clock = systemClock): McpServer {
   const server = new McpServer({ name: 'slack', version: '0.0.0' })
   const tool = <S extends z.ZodRawShape>(
     name: string,
@@ -298,6 +307,97 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger): McpSe
         if (!next || channels.length >= want) break
       }
       return { channels, next_cursor: next }
+    },
+  )
+  tool(
+    'search',
+    `Search recent messages in the channels the app is in (not DMs), thread replies included: by words, author and who is mentioned. Reads the last since_hours (default ${SEARCH_HOURS}, max ${SEARCH_MAX_HOURS}) of each channel, so it finds threads started in that time. Give at least one of query, from, mentions. Returns matches newest first, each with channel, channel_name, ts and thread_ts (read_thread for the conversation); truncated: true means it stopped early (narrow it with channels or since_hours).`,
+    {
+      query: z.string().optional().describe('Words that must all appear, any case; "quoted phrase" for an exact phrase'),
+      from: userId.optional().describe('Only messages by this Slack user id (U…)'),
+      mentions: userId.optional().describe('Only messages that tag this Slack user id (<@U…>)'),
+      channels: z.array(z.string().min(1)).optional().describe('Only these channel ids (default: every channel the app is in)'),
+      since_hours: z.number().min(0.1).max(SEARCH_MAX_HOURS).optional().describe(`How far back (default ${SEARCH_HOURS})`),
+      limit: limit(200, 50),
+    },
+    READ,
+    async (a) => {
+      const words = queryWords(a.query ?? '')
+      if (!words.length && !a.from && !a.mentions) throw new MpError('validation', 'give query, from or mentions')
+      const want = a.limit ?? 50
+      const oldest = ((clock.now() - (a.since_hours ?? SEARCH_HOURS) * 3600_000) / 1000).toFixed(6)
+      let calls = 0
+      let truncated = false
+      const slack = async (method: string, params: Obj) => {
+        if (calls >= SEARCH_CALLS) {
+          truncated = true
+          return null
+        }
+        calls++
+        return client.call(method, params)
+      }
+
+      // The channels to read: the given ones, or every channel the app is in.
+      const channels: { id: string; name?: string | undefined }[] = (a.channels ?? []).map((id) => ({ id }))
+      if (!channels.length) {
+        let next: string | null | undefined
+        do {
+          const r = await slack('conversations.list', {
+            types: 'public_channel,private_channel',
+            exclude_archived: true,
+            limit: 1000,
+            cursor: next ?? undefined,
+          })
+          if (!r) break
+          for (const c of (r.channels as Obj[]) ?? [])
+            if (c.is_member === true && str(c.id)) channels.push({ id: str(c.id)!, name: str(c.name) })
+          next = nextCursor(r)
+        } while (next)
+      }
+
+      const matches = (m: Obj) => {
+        const text = typeof m.text === 'string' ? m.text : ''
+        const lower = text.toLowerCase()
+        if (a.from && m.user !== a.from) return false
+        if (a.mentions && !new RegExp(`<@${a.mentions}(\\|[^>]*)?>`).test(text)) return false
+        return words.every((w) => lower.includes(w))
+      }
+      const found: Obj[] = []
+      const skipped: { channel: string; error: string }[] = []
+      for (const ch of channels) {
+        const roots: Obj[] = []
+        try {
+          let next: string | null | undefined
+          do {
+            const r = await slack('conversations.history', { channel: ch.id, oldest, limit: 200, cursor: next ?? undefined })
+            if (!r) break
+            roots.push(...((r.messages as Obj[]) ?? []))
+            next = nextCursor(r)
+          } while (next)
+          const all = [...roots]
+          for (const root of roots) {
+            if (!num(root.reply_count) || !str(root.ts)) continue
+            const r = await slack('conversations.replies', { channel: ch.id, ts: root.ts, oldest, limit: 1000 })
+            if (!r) break
+            // The root comes back too: it's already in.
+            all.push(...((r.messages as Obj[]) ?? []).filter((m) => m.ts !== root.ts))
+          }
+          for (const m of all)
+            if (str(m.ts)! >= oldest && matches(m)) found.push({ channel: ch.id, channel_name: ch.name, ...compactMessage(m) })
+        } catch (err) {
+          // One channel the app can't read doesn't spoil the search.
+          skipped.push({ channel: ch.id, error: slackErrorCode(err) ?? errorMessage(err) })
+        }
+        if (truncated) break
+      }
+      found.sort((x, y) => (String(x.ts) < String(y.ts) ? 1 : -1))
+      return compact({
+        messages: found.slice(0, want).map((m) => compact(m)),
+        total: found.length,
+        channels_searched: channels.length,
+        skipped: skipped.length ? skipped : undefined,
+        truncated: truncated || found.length > want,
+      })
     },
   )
   tool(

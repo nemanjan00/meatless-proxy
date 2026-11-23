@@ -324,7 +324,7 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
 
   return {
     name: 'slack',
-    createMcpServer: () => createSlackMcpServer(client, logger),
+    createMcpServer: () => createSlackMcpServer(client, logger, clock),
     handleWebhook,
     resolveUser,
     downloadFile,

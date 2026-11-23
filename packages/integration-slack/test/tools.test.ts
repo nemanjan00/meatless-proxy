@@ -55,6 +55,7 @@ describe('slack MCP tools', () => {
         'read_channel',
         'read_thread',
         'reply',
+        'search',
         'unreact',
         'update_message',
         'upload_file',
