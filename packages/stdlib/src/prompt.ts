@@ -17,6 +17,17 @@ export interface EmployeePromptInput {
   toolsOnDemand?: boolean
 }
 
+/** A multi-line note under a list item: its lines kept, indented, at most `max` characters. */
+const noteLines = (s: string, max = 1500) => {
+  const lines = s
+    .trim()
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const t = lines.length > 1 ? `\n${lines.map((l) => `  ${l}`).join('\n')}` : (lines[0] ?? '')
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`
+}
+
 const oneLine = (s: string | undefined, max = 200) => {
   const t = (s ?? '').replace(/\s+/g, ' ').trim()
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`
@@ -115,7 +126,7 @@ export function employeePrompt(input: EmployeePromptInput): string {
       `## Channels you watch\nYou read the messages in these channels that nobody else picked up, and get involved only when it's worth it; otherwise you stay out.\n${watch
         .map((w) => {
           const name = w.channel.trim().replace(/^#/, '')
-          return `- ${w.source === 'slack' ? 'Slack' : 'Harness chat'} #${name}${w.when?.trim() ? `: get involved when ${oneLine(w.when)}` : ''}`
+          return `- ${w.source === 'slack' ? 'Slack' : 'Harness chat'} #${name}${w.when?.trim() ? `: get involved when${noteLines(w.when).startsWith('\n') ? ':' : ' '}${noteLines(w.when)}` : ''}`
         })
         .join('\n')}`,
     )

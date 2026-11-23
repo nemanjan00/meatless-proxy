@@ -22,14 +22,19 @@ describe('employeePrompt', () => {
     expect(employeePrompt({ ...base, employee: t.employee })).not.toContain('## Channels you watch')
     const employee = await t.directory.employees.update(t.employee.id, {
       watch: [
-        { source: 'slack', channel: '#bugs', when: 'bug reports\nfrom support' },
+        { source: 'slack', channel: '#bugs', when: 'bug reports from support' },
+        { source: 'slack', channel: 'deploys', when: '- a failed deploy: look at the logs\n\n- a question nobody answered  ' },
         { source: 'chat', channel: 'billing' },
         { source: 'slack', channel: '  ' },
       ],
     })
     const p = employeePrompt({ ...base, employee })
     expect(p).toContain('## Channels you watch')
-    expect(p).toContain('- Slack #bugs: get involved when bug reports from support')
+    expect(p).toContain('- Slack #bugs: get involved when bug reports from support\n')
+    // A note of several lines keeps them, indented under its channel.
+    expect(p).toContain(
+      '- Slack #deploys: get involved when:\n  - a failed deploy: look at the logs\n  - a question nobody answered\n',
+    )
     expect(p).toContain('- Harness chat #billing\n')
     expect(p).not.toContain('Slack #  ')
   })
