@@ -36,7 +36,7 @@ export function isMuted(i: InboxItem, prefs: Pick<NotificationPrefs, 'mutedChann
   return !!i.channelId && prefs.mutedChannels.includes(i.channelId)
 }
 
-/** The document title with the unread count in front: `(3) meatless-proxy`. */
+/** The document title with the unread count in front: `(3) vegan`. */
 export function titleWithCount(title: string, unread: number): string {
   const base = title.replace(/^\(\d+\+?\)\s*/, '')
   return unread > 0 ? `(${unread > 99 ? '99+' : unread}) ${base}` : base

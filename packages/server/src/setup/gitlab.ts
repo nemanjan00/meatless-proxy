@@ -38,7 +38,9 @@ const ROLE: Record<number, string> = {
 export const roleName = (level: number) => ROLE[level] ?? `level ${level}`
 
 /** The title of the employee's SSH key on GitLab. */
-export const keyTitle = (handle: string) => `meatless-proxy ${handle}`
+export const keyTitle = (handle: string) => `vegan ${handle}`
+/** The titles keys of the employee got before (the project's old name): still replaced after a rotation. */
+const oldKeyTitles = (handle: string) => [`meatless-proxy ${handle}`]
 
 /** The instance: an employee (or global) `GITLAB_BASE_URL` secret, else the deployment's, else gitlab.com. */
 export function gitlabBase(ctx: SetupContext): { url: string; source: 'secret' | 'config' | 'default' } {
@@ -556,10 +558,11 @@ export const gitlabSetup: IntegrationSetupModule = {
       if ('status' in u) throw new ValidationError(`GitLab rejected the token (HTTP ${u.status}).`)
       const title = keyTitle(ctx.handle)
       const keys = await listKeys(ctx, token)
-      const stale = keys.filter((k) => k.title === title && sshFingerprint(k.key) !== fingerprint)
+      const titles = [title, ...oldKeyTitles(ctx.handle)]
+      const stale = keys.filter((k) => titles.includes(k.title ?? '') && sshFingerprint(k.key) !== fingerprint)
       const removeStale = async () => {
         for (const k of stale) await gitlabApi(ctx, token, `/user/keys/${k.id}`, { method: 'DELETE' }).catch(() => null)
-        return stale.length ? ` Removed the old key “${title}”.` : ''
+        return stale.length ? ` Removed the old key “${stale[0]!.title}”.` : ''
       }
       if (keys.some((k) => sshFingerprint(k.key) === fingerprint))
         return `The key is already on @${u.user.username}.${await removeStale()}`

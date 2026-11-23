@@ -137,7 +137,7 @@ export function createInstance(
       const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
       const server = integration.createMcpServer()
       await server.connect(serverSide)
-      const c = new Client({ name: 'meatless-proxy', version: '0.0.0' }, { capabilities: {} })
+      const c = new Client({ name: 'vegan', version: '0.0.0' }, { capabilities: {} })
       await c.connect(clientSide)
       return c
     })()

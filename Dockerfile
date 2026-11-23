@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# meatless-proxy: one image with the API, web UI, WebSocket, MCP server and workers.
+# vegan: one image with the API, web UI, WebSocket, MCP server and workers.
 
 # ── Build: install dependencies and build the web UI ─────────────────────────
 FROM node:26-slim AS build

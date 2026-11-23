@@ -6,7 +6,7 @@ import { comparable, listAll, remapIds, sameValue, skillKey } from './common.ts'
 import { parseCsv, type CsvRow } from './csv.ts'
 import { parseMarkdown } from './frontmatter.ts'
 import {
-  INDEX_FORMAT,
+  isIndexFormat,
   KIND_ORDER,
   type FieldChange,
   type ImportPlan,
@@ -97,8 +97,7 @@ function readFolder(tree: Tree, errors: PlanIssue[], warnings: PlanIssue[]): { i
     if (path === 'index.json') {
       try {
         const idx = JSON.parse(text)
-        if (idx?.format !== INDEX_FORMAT)
-          warnings.push({ source: path, message: `unknown format ${JSON.stringify(idx?.format)}` })
+        if (!isIndexFormat(idx?.format)) warnings.push({ source: path, message: `unknown format ${JSON.stringify(idx?.format)}` })
         links = Array.isArray(idx?.links) ? idx.links : []
       } catch (e) {
         errors.push({ source: path, message: `not valid JSON: ${errorMessage(e)}` })

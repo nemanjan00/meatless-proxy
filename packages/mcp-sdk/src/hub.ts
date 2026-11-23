@@ -106,7 +106,7 @@ export function needsAuthError(server: string, message = 'needs authorization'):
 export function createMcpHub(opts: CreateMcpHubOptions = {}): SdkMcpHub {
   const log = (opts.logger ?? silentLogger).child({ component: 'mcp-sdk' })
   const clock = opts.clock ?? systemClock
-  const clientInfo = opts.clientInfo ?? { name: 'meatless-proxy', version: '0.0.0' }
+  const clientInfo = opts.clientInfo ?? { name: 'vegan', version: '0.0.0' }
   const factory = opts.transportFactory ?? defaultTransport(log)
   const timeout = opts.requestTimeoutMs ?? 60_000
   const handlers = new Set<(n: McpNotification) => void>()

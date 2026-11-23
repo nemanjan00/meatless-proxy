@@ -623,7 +623,7 @@ describe('secrets', () => {
 
   it('every employee has an SSH keypair: public key on the record, private key a secret', async () => {
     const e = await t.req('GET', `/api/records/employee/${employeeId}`)
-    expect(e.body.data.sshPublicKey).toMatch(/^ssh-ed25519 AAAA\S+ meatless@meatless-proxy$/)
+    expect(e.body.data.sshPublicKey).toMatch(/^ssh-ed25519 AAAA\S+ meatless@vegan$/)
     const secrets = (await t.req('GET', '/api/secrets')).body
     expect(secrets).toEqual(
       expect.arrayContaining([

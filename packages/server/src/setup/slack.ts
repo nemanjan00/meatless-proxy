@@ -61,7 +61,7 @@ export function slackManifest(
   return {
     display_information: {
       name: name.slice(0, 35),
-      description: `${name}, an AI employee (meatless-proxy)`.slice(0, 139),
+      description: `${name}, an AI employee (vegan)`.slice(0, 139),
       background_color: '#1f2937',
     },
     features: {

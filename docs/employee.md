@@ -2,7 +2,7 @@
 
 A *meat proxy* is a person who relays messages between colleagues and an AI:
 someone asks them a question, they paste it into a chatbot, and they paste the
-answer back. meatless-proxy keeps the useful part of that role and drops the
+answer back. vegan keeps the useful part of that role and drops the
 person in the middle. This document defines the role the system fills: what the
 employee knows, how it talks to people, and how it handles work it is given.
 

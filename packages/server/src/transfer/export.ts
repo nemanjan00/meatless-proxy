@@ -10,6 +10,7 @@ import { assignSlugs, exportable, listAll, orderedFields, safeDocPath } from './
 import { stringifyMarkdown } from './frontmatter.ts'
 import {
   INDEX_FORMAT,
+  isIndexFormat,
   INDEX_VERSION,
   type IndexEntry,
   type IndexLink,
@@ -151,7 +152,7 @@ function writable(dir: string): boolean {
   const idx = join(dir, 'index.json')
   if (!existsSync(idx)) return false
   try {
-    return JSON.parse(readFileSync(idx, 'utf8')).format === INDEX_FORMAT
+    return isIndexFormat(JSON.parse(readFileSync(idx, 'utf8')).format)
   } catch {
     return false
   }

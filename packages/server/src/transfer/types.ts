@@ -14,7 +14,12 @@ export type TransferKind = 'contact' | 'employee' | 'project' | 'procedure' | 's
 export const KIND_ORDER: TransferKind[] = ['contact', 'employee', 'project', 'procedure', 'skill', 'doc', 'memory', 'link']
 
 /** The folder format's marker in `index.json`. */
-export const INDEX_FORMAT = 'meatless-proxy.knowledge'
+export const INDEX_FORMAT = 'vegan.knowledge'
+/** The marker of folders exported under the project's old name: still read. */
+export const LEGACY_INDEX_FORMATS: readonly string[] = ['meatless-proxy.knowledge']
+/** Whether an `index.json` format is this folder format, under its current or an old name. */
+export const isIndexFormat = (format: unknown) =>
+  format === INDEX_FORMAT || (typeof format === 'string' && LEGACY_INDEX_FORMATS.includes(format))
 export const INDEX_VERSION = 1
 
 export interface IndexEntry {

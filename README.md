@@ -1,10 +1,10 @@
-# meatless-proxy
+# vegan
 
 **A meat proxy, without the meat.**
 
 A *meat proxy* is a person who just relays messages between their colleagues
 and an AI: they paste a question into a chatbot, and paste the answer back.
-meatless-proxy removes the person in the middle. It's an AI harness that runs
+vegan removes the person in the middle. It's an AI harness that runs
 **AI employees**: colleagues that know who everyone in the company is, which
 projects exist and who owns them, and how things are done. They take work from
 chat and task systems, do it, and answer like a person would: briefly, and
@@ -145,7 +145,7 @@ company's AI employees directly, and gets notified when they reply:
 
 ```sh
 npm run token -- --contact <your contact id>     # prints a token once (or Settings → API tokens)
-claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp \
+claude mcp add --transport http vegan <PUBLIC_URL>/mcp \
   --header "Authorization: Bearer mpt_…"
 ```
 
@@ -162,7 +162,7 @@ Messages arrive as MCP `notifications/message`, and also as Claude Code
 [channel](https://code.claude.com/docs/en/channels-reference) notifications,
 which put them straight into a running session. Channels are a research
 preview: Claude Code only listens for them from servers you opt in at start,
-e.g. `claude --dangerously-load-development-channels server:meatless-proxy`
+e.g. `claude --dangerously-load-development-channels server:vegan`
 (see its docs; they describe stdio servers, and whether an HTTP server is
 accepted is not verified here). Without it, ask Claude to check `chat_inbox`.
 

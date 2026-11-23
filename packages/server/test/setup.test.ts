@@ -481,7 +481,7 @@ function setupSuite(backend: Backend) {
       expect(fake.world.gitlab.keys).toHaveLength(1)
       const key = (await t.req('GET', `/api/employees/${emp}/ssh-key`)).body
       expect(sshFingerprint(fake.world.gitlab.keys[0]!.key)).toBe(key.fingerprint)
-      expect(fake.world.gitlab.keys[0]!.title).toMatch(/^meatless-proxy billing-\d+$/)
+      expect(fake.world.gitlab.keys[0]!.title).toMatch(/^vegan billing-\d+$/)
 
       // Idempotent: a second click changes nothing.
       const again = await act('gitlab', 'add-ssh-key')
@@ -489,7 +489,8 @@ function setupSuite(backend: Backend) {
       expect(again.body.message).toMatch(/already on @billing-bot/)
       expect(fake.world.gitlab.keys).toHaveLength(1)
 
-      // After a rotation, adding replaces the old key.
+      // After a rotation, adding replaces the old key, also one titled with the project's old name.
+      fake.world.gitlab.keys[0]!.title = fake.world.gitlab.keys[0]!.title!.replace(/^vegan /, 'meatless-proxy ')
       await t.req('POST', `/api/employees/${emp}/ssh-key`, {})
       expect(stepOf(await status('gitlab'), 'ssh-key').status).toBe('todo')
       const replaced = await act('gitlab', 'add-ssh-key')

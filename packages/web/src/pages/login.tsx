@@ -48,7 +48,7 @@ export function LoginPage() {
           <span className="flex size-6 items-center justify-center rounded-md bg-brand text-tiny font-semibold text-white">
             mp
           </span>
-          <span className="font-medium">meatless-proxy</span>
+          <span className="font-medium">vegan</span>
         </div>
         <h1 className="text-title2 font-semibold text-foreground">Sign in</h1>
         {error && (

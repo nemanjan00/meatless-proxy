@@ -546,7 +546,7 @@ Connect Claude Code:
 
 ```sh
 npm run token -- --contact <contactId>        # prints the token once
-claude mcp add --transport http meatless-proxy <PUBLIC_URL>/mcp --header "Authorization: Bearer mpt_…"
+claude mcp add --transport http vegan <PUBLIC_URL>/mcp --header "Authorization: Bearer mpt_…"
 ```
 
 ## Composition

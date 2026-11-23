@@ -1,6 +1,6 @@
-# meatless-proxy spec
+# vegan spec
 
-meatless-proxy is an AI harness: the runtime that hosts the AI employee defined
+vegan is an AI harness: the runtime that hosts the AI employee defined
 in [employee.md](employee.md). It connects the model to the company's people,
 systems and tasks.
 
@@ -50,7 +50,7 @@ about.
 ### No single operator
 
 Most harnesses have one operator: one person at a terminal who gives the
-instructions, reads the output and approves every step. meatless-proxy has no
+instructions, reads the output and approves every step. vegan has no
 single operator in the loop. Instead, it **talks to the whole company**:
 
 - Anyone can reach it through the chat and task systems it's connected to, and
@@ -110,7 +110,7 @@ everything in [Sessions](#sessions) applies to it.
 
 ## Structure
 
-Common harness features come first. The features that make meatless-proxy
+Common harness features come first. The features that make vegan
 different are summarised at the end, in [Unique features](#unique-features).
 
 How it all runs is in [execution.md](execution.md), the execution model (a
@@ -3639,7 +3639,7 @@ Open questions:
 ## Unique features
 
 Most of the sections above are what any serious harness needs. These are the
-parts that make meatless-proxy different. Each one is specified in detail in
+parts that make vegan different. Each one is specified in detail in
 the section it links to.
 
 ### Context that is never lost

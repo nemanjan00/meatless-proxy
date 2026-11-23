@@ -278,7 +278,7 @@ every employee that should be on Slack.
 ```yaml
 display_information:
   name: Meatless
-  description: AI employees, through meatless-proxy
+  description: AI employees, through vegan
   background_color: "#1f2937"
 features:
   app_home:

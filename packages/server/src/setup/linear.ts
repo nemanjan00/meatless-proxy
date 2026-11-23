@@ -175,7 +175,7 @@ export const linearSetup: IntegrationSetupModule = {
             input: {
               url,
               secret,
-              label: `meatless-proxy ${ctx.handle}`.slice(0, 50),
+              label: `vegan ${ctx.handle}`.slice(0, 50),
               resourceTypes: LINEAR_RESOURCE_TYPES,
               allPublicTeams: true,
             },

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for coding agents working on **meatless-proxy**, an AI harness
+Instructions for coding agents working on **vegan**, an AI harness
 that runs AI employees who talk to a whole company. Read this first, then
 the design documents.
 

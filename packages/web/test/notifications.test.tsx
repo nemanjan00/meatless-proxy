@@ -55,7 +55,7 @@ class FakeNotification {
 }
 
 beforeEach(() => {
-  document.title = 'meatless-proxy'
+  document.title = 'vegan'
   setVisibility('visible')
   FakeNotification.permission = 'granted'
   FakeNotification.next = 'granted'
@@ -305,9 +305,9 @@ describe('notification helpers', () => {
   })
 
   it('puts the count in the title once', () => {
-    expect(titleWithCount('meatless-proxy', 3)).toBe('(3) meatless-proxy')
-    expect(titleWithCount('(3) meatless-proxy', 4)).toBe('(4) meatless-proxy')
-    expect(titleWithCount('(4) meatless-proxy', 0)).toBe('meatless-proxy')
+    expect(titleWithCount('vegan', 3)).toBe('(3) vegan')
+    expect(titleWithCount('(3) vegan', 4)).toBe('(4) vegan')
+    expect(titleWithCount('(4) vegan', 0)).toBe('vegan')
     expect(titleWithCount('x', 250)).toBe('(99+) x')
   })
 

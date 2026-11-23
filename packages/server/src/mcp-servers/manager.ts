@@ -819,7 +819,7 @@ export class McpServers {
     return {
       storage: secretOAuthStorage(this.d.secrets, rec.data.name, employeeId),
       redirectUrl,
-      clientName: 'meatless-proxy',
+      clientName: 'vegan',
       ...(a.scopes?.length ? { scopes: a.scopes } : {}),
       ...(a.clientId ? { clientId: a.clientId } : {}),
       ...(a.clientSecretSecret

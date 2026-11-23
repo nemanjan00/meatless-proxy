@@ -79,7 +79,7 @@ function fakeKey(seed: string, n: number) {
     body += alphabet[(h >>> 0) % 64]
   }
   return {
-    publicKey: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${body} ${seed}@meatless-proxy`,
+    publicKey: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${body} ${seed}@vegan`,
     fingerprint: `SHA256:${body.split('').reverse().join('')}`,
   }
 }
@@ -376,11 +376,11 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
           'Add its SSH key',
           st['ssh-key']!,
           st['ssh-key'] === 'done'
-            ? `On @${handle} as “meatless-proxy ${handle}”.`
+            ? `On @${handle} as “vegan ${handle}”.`
             : connected
               ? `Not on @${handle} yet. Add it, so the employee can push over SSH.`
               : 'Needs a working token, or add the key by hand.',
-          { publicKey: key.publicKey, fingerprint: key.fingerprint, title: `meatless-proxy ${handle}` },
+          { publicKey: key.publicKey, fingerprint: key.fingerprint, title: `vegan ${handle}` },
         ),
         st.projects === 'todo'
           ? s('projects', 'Give it access to projects', 'todo', 'Needs a working token.')
@@ -640,7 +640,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
         return result(
           id,
           name,
-          was === 'done' ? `The key is already on @${handle}.` : `Added the key to @${handle} as “meatless-proxy ${handle}”.`,
+          was === 'done' ? `The key is already on @${handle}.` : `Added the key to @${handle} as “vegan ${handle}”.`,
         )
       }
       if (name === 'gitlab' && action === 'add-projects') {
@@ -745,7 +745,7 @@ export function createMockSetupApi(h: MockSetupHelpers): SetupApi {
 
 function slackManifestOf(name: string, handle: string, requestUrl: string): Json {
   return {
-    display_information: { name, description: `${name}, an AI employee (meatless-proxy)`, background_color: '#1f2937' },
+    display_information: { name, description: `${name}, an AI employee (vegan)`, background_color: '#1f2937' },
     features: { bot_user: { display_name: handle, always_online: true } },
     oauth_config: { scopes: { bot: SCOPES.split(', ') } },
     settings: { event_subscriptions: { request_url: requestUrl, bot_events: ['app_mention', 'message.channels', 'message.im'] } },

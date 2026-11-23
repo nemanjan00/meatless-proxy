@@ -1,6 +1,6 @@
 # Security
 
-meatless-proxy runs AI employees that act on company systems, so security
+vegan runs AI employees that act on company systems, so security
 reports are taken seriously.
 
 ## Reporting a vulnerability

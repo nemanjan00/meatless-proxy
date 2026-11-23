@@ -5,7 +5,7 @@ import { configFromEnv } from './env.ts'
 
 /** Applies pending database migrations and exits (`npm run migrate`). */
 const config = configFromEnv()
-const log = jsonLogger(config.LOG_LEVEL, { service: 'meatless-proxy', task: 'migrate' })
+const log = jsonLogger(config.LOG_LEVEL, { service: 'vegan', task: 'migrate' })
 if (!config.DATABASE_URL) {
   log.error('DATABASE_URL is not set: nothing to migrate')
   process.exit(1)

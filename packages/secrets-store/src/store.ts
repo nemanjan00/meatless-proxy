@@ -45,6 +45,7 @@ export class SecretDecryptError extends MpError {
 }
 
 // A fixed, public salt: the master key is expected to be long and random; scrypt makes weak keys slower to guess.
+// It has the project's old name, and must stay as it is: every stored secret was encrypted with a key derived with it.
 const SALT = 'meatless-proxy/secrets/v1'
 
 /** Derives the 32-byte AES key and a short public key id from the master key. */

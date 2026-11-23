@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. meatless-proxy is experimental and moves fast, so the
+Thanks for looking. vegan is experimental and moves fast, so the
 best way to help is to open an issue first and talk about what you want to
 change.
 

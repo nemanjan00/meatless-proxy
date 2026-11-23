@@ -44,7 +44,7 @@ const authorOf = (p: Principal): Author => ({
 })
 
 /** The harness itself, as the author of a new repository's first commit when no person asked for it. */
-const HARNESS_AUTHOR: Author = { name: 'meatless-proxy', email: 'harness@users.noreply.invalid' }
+const HARNESS_AUTHOR: Author = { name: 'vegan', email: 'harness@users.noreply.invalid' }
 
 /** A project's first local repository: its index in `repositories` and slug. */
 export function localRepoOf(project: Project): { index: number; slug: string; repo: Repository } | null {

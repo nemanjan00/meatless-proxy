@@ -61,7 +61,7 @@ async function hasKey(s: KeyDeps, employeeId: string) {
  */
 async function generate(s: KeyDeps, employeeId: string): Promise<string> {
   const e = await s.directory.employees.require(employeeId)
-  const pair = newSshKeyPair(`${e.key ?? e.data.name}@meatless-proxy`)
+  const pair = newSshKeyPair(`${e.key ?? e.data.name}@vegan`)
   await s.secrets.set(SSH_KEY_SECRET, pair.privateKey, { type: 'employee', id: employeeId }, 'system')
   await s.records.update('employee', employeeId, { sshPublicKey: pair.publicKey, sshKeyCreatedAt: s.clock.iso() })
   s.logger.info('ssh keypair generated', { employeeId })

@@ -21,7 +21,7 @@ export interface StoredOAuthOptions {
   storage: OAuthStorage
   /** Where the authorization server sends the person back, e.g. `https://harness.example.com/oauth/mcp/callback`. */
   redirectUrl: string
-  /** Shown to the person on the consent screen. Default `meatless-proxy`. */
+  /** Shown to the person on the consent screen. Default `vegan`. */
   clientName?: string
   /** Scopes to ask for. Default: what the server advertises. */
   scopes?: string[]
@@ -68,7 +68,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
 
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: this.opts.clientName ?? 'meatless-proxy',
+      client_name: this.opts.clientName ?? 'vegan',
       redirect_uris: [this.opts.redirectUrl],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],

@@ -211,7 +211,7 @@ describe('export', () => {
     const all = treeText(t1)
     expect(all).not.toMatch(/sshPublicKey|sshKeyCreatedAt|routerSessionId|createdAt|updatedAt|ssh-ed25519/)
     const index = JSON.parse(t1.get('index.json')!)
-    expect(index.format).toBe('meatless-proxy.knowledge')
+    expect(index.format).toBe('vegan.knowledge')
     expect(index.records).toHaveLength(13)
     expect(index.links).toEqual([
       { from: { kind: 'memory', id: expect.any(String) }, to: { kind: 'contact', id: ana.id }, role: 'about' },
@@ -272,6 +272,18 @@ describe('import from an export folder', () => {
     const benBacklinks = (await b.records.backlinks({ kind: 'contact', id: ben.id })).map((r) => r.kind)
     expect(benBacklinks).toEqual(['doc'])
     expect((await b.records.backlinks({ kind: 'project', id: search.id })).map((r) => r.kind).sort()).toEqual(['contact', 'doc'])
+  })
+
+  it("reads a folder exported under the project's old name", async () => {
+    const a = await app()
+    await seed(a)
+    const tree = await exportTree(a)
+    const idx = JSON.parse(tree.get('index.json')!)
+    tree.set('index.json', JSON.stringify({ ...idx, format: 'meatless-proxy.knowledge' }))
+    const plan = await planImport(await app(), { tree })
+    expect(plan.errors).toEqual([])
+    expect(plan.warnings).toEqual([])
+    expect(plan.counts.create).toBeGreaterThan(0)
   })
 
   it('is idempotent: importing the same folder twice, or into the app it came from, changes nothing', async () => {

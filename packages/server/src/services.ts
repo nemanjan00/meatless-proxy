@@ -202,7 +202,7 @@ function missingModel(): ModelClient {
 /** Wires every adapter and service. This is the only place that knows the concrete adapters. */
 export async function buildServices(config: Config, o: AppOverrides = {}): Promise<Services> {
   const clock = o.clock ?? systemClock
-  const logger = o.logger ?? jsonLogger(config.LOG_LEVEL, { service: 'meatless-proxy' })
+  const logger = o.logger ?? jsonLogger(config.LOG_LEVEL, { service: 'vegan' })
   const bus = o.bus ?? createEventBus({ logger, now: () => clock.now() })
   const hooks = createHooks()
 
@@ -654,7 +654,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       authProviderFor: (server) => mcpServers?.authProviderFor(server),
       logger: logger.child({ component: 'mcp' }),
       clock,
-      clientInfo: { name: 'meatless-proxy', version: '0.0.0' },
+      clientInfo: { name: 'vegan', version: '0.0.0' },
     })
   }
 
