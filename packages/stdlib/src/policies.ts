@@ -2,7 +2,7 @@ import { subscriptionScope } from './subscription-presets.ts'
 import { errorMessage, globMatch, type Hooks } from '@mp/core'
 import type { ChatEventPayload } from '@mp/chat'
 import { beforeDeliver } from '@mp/router'
-import { afterModelCall, afterRun, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
+import { afterModelCall, afterRun, afterToolCall, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
 import type { AssistantContent, Run, Session, ToolResultContent } from '@mp/sessions'
 import type { Entry } from '@mp/store'
 import { worktreesOf } from './kit.ts'
@@ -66,6 +66,19 @@ function lastAssistantText(entries: Entry[]): string | undefined {
     if (t) return t
   }
   return undefined
+}
+
+/** Tools a router hands work over with, and the verb its decision line uses for each. */
+const ROUTER_HANDOFFS: Record<string, string> = {
+  'sessions.create': 'started',
+  'sessions.fork': 'started',
+  'sessions.message': 'forwarded to',
+  'procedures.run': 'ran',
+}
+
+const oneLine = (s: string, max: number) => {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
 }
 
 /** Tools a router only looks things up with: calling them doesn't make a decision worth recording. */
@@ -223,9 +236,49 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
 
   if (config.routerDecisions !== false)
     offs.push(
+      // A router run that handed the work over is done: the harness records the decision and ends the run, where
+      // the model made two more calls (sessions.commit, then a final text nobody reads).
+      hooks.onTransform(afterToolCall, async (p) => {
+        const { run, session, tool, result } = p
+        if (session.data?.meta?.role !== 'router' || run.data?.mode !== 'ephemeral' || result.isError) return p
+        const verb = ROUTER_HANDOFFS[tool.name]
+        // A handoff that waits (e.g. for children's results) isn't the end of the run.
+        if (!verb || run.data.commitSummary || result.control?.some((c) => c.type === 'suspend')) return p
+        const o = (result.output ?? {}) as Record<string, unknown>
+        const to = (o.to ?? {}) as Record<string, unknown>
+        const str = (x: unknown) => (typeof x === 'string' && x ? x : undefined)
+        const handle = (await deps.directory.employees.get(session.data.employeeId))?.key
+        const slug = str(o.slug)
+        const sessionId = str(o.sessionId) ?? str(to.sessionId)
+        // As the router's own lines read: `→ started @meatless#pay-9-refunds (ses_…)`, `→ ran procedure X (ses_…)`.
+        const target = [
+          str(o.procedure) ? `procedure ${o.procedure}` : slug && handle ? `@${handle}#${slug}` : (str(to.tag) ?? slug),
+          sessionId ? `(${sessionId})` : undefined,
+        ].filter(Boolean)
+        const event = run.data.cause.eventId ? await deps.events.get(run.data.cause.eventId) : null
+        const what = event
+          ? oneLine(String(event.data.text ?? `${event.data.source} ${event.data.type} ${event.data.subjectKey ?? ''}`), 140)
+          : oneLine(run.data.cause.note ?? 'request', 140)
+        const summary = `${what} → ${verb}${target.length ? ` ${target.join(' ')}` : ''}`
+        return {
+          ...p,
+          result: {
+            ...result,
+            control: [
+              ...(result.control ?? []),
+              { type: 'commit' as const, summary },
+              { type: 'end' as const, status: 'completed' as const, output: NO_REPLY },
+            ],
+          },
+        }
+      }),
+    )
+  if (config.routerDecisions !== false)
+    offs.push(
       hooks.on(beforeFinish, async ({ run, session, status, output }) => {
         if (status !== 'completed' || session.data.meta?.role !== 'router' || run.data.mode !== 'ephemeral') return undefined
-        if (run.data.commitSummary) return undefined
+        // The run as it is now: a handoff's commit (above) lands on it after the runner read it.
+        if (run.data.commitSummary || (await deps.sessions.getRun(run.id))?.data.commitSummary) return undefined
         // A watched channel's message the router stays out of leaves nothing to record.
         if (run.data.cause.note === 'watch' && output && /\bNO_REPLY\b/.test(output)) return undefined
         // Nor does an event that isn't a message (a merge request, an issue update) it found nothing to do for,

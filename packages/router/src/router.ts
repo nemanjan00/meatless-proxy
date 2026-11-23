@@ -282,7 +282,16 @@ export function createRouter(opts: RouterOptions): Router {
           subscriptionId: s.id,
         })
       }
+      // No primary subscriber got it (its session is gone) and nothing tags anyone: the oldest remaining one acts,
+      // as the conversation's owner now. Live, the reply reached it only as a note, and a trigger had the router
+      // forward it to that same session.
+      const viaSubs = [...out.values()].filter((d) => d.reason === 'subscription')
+      if (!anyTags && !toOthers && viaSubs.length && !viaSubs.some((d) => d.expectedToAct)) viaSubs[0]!.expectedToAct = true
     }
+    // A session follows this subject: the conversation has an owner, so triggers, watchers, participants and the
+    // fallback don't run a router on it too (tags still do). Live, each such router run forwarded the same
+    // message to the subscribed session again.
+    const followed = () => [...out.values()].some((d) => d.reason === 'subscription')
 
     // 2b. Extra recipients from higher layers (e.g. channel members).
     for (const resolve of opts.resolvers ?? []) {
@@ -305,7 +314,7 @@ export function createRouter(opts: RouterOptions): Router {
     }
 
     // 4. Triggers, only for work nobody has claimed yet.
-    if (!claimed()) {
+    if (!claimed() && !followed()) {
       const triggers = await opts.events.triggers.match(event)
       const t = triggers[0]
       if (t) {
@@ -326,7 +335,7 @@ export function createRouter(opts: RouterOptions): Router {
 
     // 4b. Untagged follow-ups from a person go to the employees already in the conversation (when no trigger took them).
     const untagged = tags.sessions.length === 0 && tags.employees.length === 0
-    if (!claimed() && untagged && !tags.authorSessionId && opts.participantsOf && human) {
+    if (!claimed() && !followed() && untagged && !tags.authorSessionId && opts.participantsOf && human) {
       for (const employeeId of await opts.participantsOf(event)) {
         let handled = false
         for (const d of out.values()) {
@@ -342,7 +351,7 @@ export function createRouter(opts: RouterOptions): Router {
 
     // 4c. Watched channels: a message nobody acts on goes to each watching employee's router as information.
     // Not a session's own message, nor one that tags an employee (its tag already routed it).
-    if (!claimed() && !tags.authorSessionId && tags.employees.length === 0 && opts.watchersOf) {
+    if (!claimed() && !followed() && !tags.authorSessionId && tags.employees.length === 0 && opts.watchersOf) {
       for (const employeeId of await opts.watchersOf(event)) {
         const routerSession = await opts.routerSessionFor(employeeId)
         if (routerSession) add({ sessionId: routerSession, reason: 'watch', expectedToAct: false, trusted: false, fork: false })
@@ -361,7 +370,7 @@ export function createRouter(opts: RouterOptions): Router {
     // too, like plain chat: live, both employees' routers ran on a remark meant for nobody.
     const notForFallback =
       payload?.addressedToOthers === true || payload?.plainConversation === true || event.data.type.startsWith('reaction.')
-    if (!claimed() && !tags.authorSessionId && !plainChat && !notForFallback) {
+    if (!claimed() && !followed() && !tags.authorSessionId && !plainChat && !notForFallback) {
       const fallback = await opts.routerSessionFor(event.data.employeeId)
       if (fallback && (!opts.wantsFallback || (await opts.wantsFallback(event, fallback))))
         add({ sessionId: fallback, reason: 'fallback', expectedToAct: true, trusted: false, fork: false })

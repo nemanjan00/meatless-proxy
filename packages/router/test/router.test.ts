@@ -253,6 +253,43 @@ describe('router', () => {
     expect(chatTags(ev).sessions).toEqual([target.id])
   })
 
+  it('a subject a session follows never also runs a router: no trigger, watch or fallback, and a lone non-primary subscriber acts', async () => {
+    const t = await setup({ watchersOf: async () => ['emp_a'] })
+    await t.events.triggers.create({
+      name: 'DMs',
+      employeeId: 'emp_a',
+      match: { source: 'integration:slack', type: 'message.direct' },
+      target: { type: 'router' },
+    })
+    const work = await t.mk('work')
+    const thread = { system: 'slack', id: 'D0TEST0001/1780000000.000100' }
+    // Not primary (another session was, and is gone): it acts now, and the trigger doesn't fire.
+    await t.events.subscriptions.subscribe(work.id, thread, { primary: false })
+    const dm = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.direct',
+      subject: thread,
+      actorContactId: 'con_ana',
+      payload: { channel: 'D0TEST0001', text: 'no chart?' } as Json,
+    })
+    expect((await t.router.plan(dm)).map((d) => [d.sessionId, d.reason, d.expectedToAct])).toEqual([
+      [work.id, 'subscription', true],
+    ])
+    // Addressed to someone else: the follower only notes it, and no watcher's router runs on it either.
+    const channelThread = { system: 'slack', id: 'C0TEST0001/1780000000.000200' }
+    await t.events.subscriptions.subscribe(work.id, channelThread, { primary: true })
+    const aside = await t.ingest({
+      source: 'integration:slack',
+      type: 'message.replied',
+      subject: channelThread,
+      actorContactId: 'con_ana',
+      payload: { channel: 'C0TEST0001', text: '<@U0TEST0002> can you check?', addressedToOthers: true } as Json,
+    })
+    expect((await t.router.plan(aside)).map((d) => [d.sessionId, d.reason, d.expectedToAct])).toEqual([
+      [work.id, 'subscription', false],
+    ])
+  })
+
   it("sends a watched channel's unclaimed message to the watcher's router as information, in an ephemeral run", async () => {
     const t = await setup({ watchersOf: async (e) => (e.data.payload?.channelId === 'ch_bugs' ? ['emp_a'] : []) })
     const post = (payload: Record<string, Json>) =>

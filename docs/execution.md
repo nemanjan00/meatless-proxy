@@ -120,8 +120,12 @@ and tags combine as described below:
    filter, so both stay plain data. If the event carries tags, only
    tagged sessions are marked *expected to act*. Without tags, the subscriber
    marked **primary** at subscribe time is expected to act. The others get it
-   as context. This is the proposed answer to "which subscriber handles each
-   event".
+   as context. When no primary subscriber got it (its session is gone), the
+   oldest remaining one acts, unless the message is addressed to someone
+   else. A subject a session follows has an owner: follow-ups, triggers,
+   watched channels and the fallback never also run a router on it (tags
+   still do). Live, those router runs forwarded the same message to the
+   subscribed session a second time.
    **Resolvers** registered by higher layers add recipients. For example, the
    sessions that are members of a chat channel get its messages, but aren't
    expected to act, and a [scheduled task](spec.md#scheduled-tasks)'s firing

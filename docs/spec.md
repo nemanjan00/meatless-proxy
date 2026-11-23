@@ -2934,6 +2934,11 @@ For every event, a router run:
    decision summary on top of the router's head (`sessions.commit` with a
    summary), e.g. `PAY-123 (Linear, from Ana): refund of a double charge →
    @meatless#pay-123-refund (ses_…)`. The next run starts with it in context.
+   When it hands the work over (`sessions.create`, `sessions.fork`,
+   `sessions.message`, `procedures.run`, without waiting), the harness
+   writes that line from the event and the handoff and ends the run there:
+   the model makes one call per routed request, not three (the handoff,
+   `sessions.commit`, and a final text nobody reads).
 
 A [policy hook](#policy-hooks) makes sure no router run ends without
 recording its decision, except when there was nothing to decide: a watched

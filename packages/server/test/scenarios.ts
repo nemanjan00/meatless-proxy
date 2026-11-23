@@ -179,6 +179,8 @@ export function scenarioSuite(backend: Backend) {
     const routerId = (await s.routerSessionFor())!
     const routerRuns = await s.sessions.runs({ sessionId: routerId })
     expect(routerRuns.map((r) => [r.data.state, r.data.mode])).toEqual([['completed', 'ephemeral']])
+    // One model call: the harness records the handoff and ends the run (no sessions.commit, no final text).
+    expect(routerRuns[0]!.data.steps).toBe(1)
     const event = await s.rawEvents.require(routerRuns[0]!.data.cause.eventId!)
     expect((event.data as any).routing.deliveries[0].reason).toBe('trigger')
     // Rolled back with a summary: the router's committed history is its prompt, its instructions and one decision.
