@@ -149,6 +149,28 @@ describe('follow-ups in a thread that tagged an employee', () => {
   })
 })
 
+describe('the router model', () => {
+  it('runs router contexts on ROUTER_MODEL and the work they start on MODEL', async () => {
+    const seen: [boolean, string | undefined][] = []
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        seen.push([router, req.model])
+        if (router) return callTools([{ name: 'sessions.create', args: { title: 'Work', instruction: 'Do it.' } }])
+        return reply('NO_REPLY')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script, env: { ROUTER_MODEL: 'cheap-router-model' } })
+    const general = (await t.a.services.chat.channelByName('general'))!.id
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless please do the thing' })
+    await settle(t)
+    expect(seen.filter(([r]) => r).map(([, m]) => m)).toEqual(['cheap-router-model'])
+    expect(seen.filter(([r]) => !r).length).toBeGreaterThan(0)
+    expect(seen.filter(([r]) => !r).every(([, m]) => m !== 'cheap-router-model')).toBe(true)
+  })
+})
+
 describe('the router prompt cache', () => {
   it("marks the end of the router's decision log, so the next run reads it from the cache", async () => {
     const requests: ModelRequest[] = []
@@ -164,10 +186,16 @@ describe('the router prompt cache', () => {
     )
     t = await testApp({ script })
     const s = t.a.services
+    await s.memory.remember({
+      kind: 'fact',
+      summary: 'Invoices are sent on Fridays.',
+      scope: { type: 'company' },
+      actor: { type: 'system', id: 'test' },
+    } as never)
     const general = (await s.chat.channelByName('general'))!.id
     await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless first thing' })
     await settle(t)
-    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless second thing' })
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless when do invoices go out?' })
     await settle(t)
     const routerCalls = requests.filter((r) =>
       r.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context')),
@@ -176,8 +204,15 @@ describe('the router prompt cache', () => {
     const marked = second.messages.findIndex((m) => m.cache)
     // On the first run's decision line: everything before it is the same as in the first run's request plus that line.
     expect(second.messages[marked]!.content).toContain('first thing')
-    expect(second.messages.slice(marked + 1).some((m) => (m.content ?? '').includes('second thing'))).toBe(true)
+    expect(second.messages.slice(marked + 1).some((m) => (m.content ?? '').includes('invoices go out'))).toBe(true)
+    // The second request recalled a memory the first didn't.
+    expect(second.messages.some((m) => (m.content ?? '').includes('Invoices are sent on Fridays'))).toBe(true)
+    expect(routerCalls[0]!.messages.some((m) => (m.content ?? '').includes('Invoices are sent on Fridays'))).toBe(false)
     expect(second.messages.filter((m) => m.cache)).toHaveLength(1)
+    // The system messages (hoisted to the top of the prompt by Anthropic) are the same in both runs, though each
+    // run has its own notes (here: a memory recalled for one request only).
+    const system = (r: ModelRequest) => r.messages.filter((m) => m.role === 'system').map((m) => m.content)
+    expect(system(second)).toEqual(system(routerCalls[0]!))
   })
 })
 

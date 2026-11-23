@@ -171,7 +171,13 @@ with a base URL, an API key and a model name.
   run reads that prefix from the cache. Without it, a proxy in front of
   Claude caches only the very start and the end of each prompt, and a
   router, whose decision log grows by a line before every new request, read
-  about half of each first call from the cache.
+  about half of each first call from the cache. System entries after that
+  point (memories recalled for the request, the projects list, context
+  notes) are sent as user messages marked as harness notes: Anthropic moves
+  every system message to the top of the prompt, so a per-request one
+  changed the start of every request.
+- **Router model** (`ROUTER_MODEL`): router contexts run on it when set (same
+  provider); the sessions they start and forks of them run on `MODEL`.
 - **Web search** comes from an MCP server (Brave Search, Tavily, SearXNG, …)
   added in Settings → MCP servers, globally or per employee: its tools are
   offered like any other. The model itself must support tool calling, so a
@@ -2957,7 +2963,8 @@ For every event, a router run:
    `sessions.commit`, and a final text nobody reads).
 
 A [policy hook](#policy-hooks) makes sure no router run ends without
-recording its decision, except when there was nothing to decide: a watched
+recording its decision (when it ends with `NO_REPLY` after a message, the
+harness writes that line itself), except when there was nothing to decide: a watched
 channel's message it stays out of, or an event that isn't a message (a merge
 request update, an issue change) it ends with `NO_REPLY` having only looked
 things up. Asked in a message, staying out is still recorded. When the log of decisions grows long, the router

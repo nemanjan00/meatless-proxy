@@ -57,6 +57,11 @@ describe('watched channels', () => {
     await watch([{ source: 'slack', channel: 'bugs' }])
     expect(await plan(slackMessage({ text: 'login fails' }, { actorContactId: ana.id }))).toEqual([[router, 'watch', false]])
     expect(await plan(slackMessage({ channel: 'C0TEST0002', channel_name: 'general' }))).toEqual([])
+    // A message for someone else, or a bare acknowledgement, doesn't either.
+    expect(await plan(slackMessage({ text: '<@U0TEST0002> can you look?', addressedToOthers: true }))).toEqual([])
+    for (const text of ['thanks!', ':+1:', '👍', 'ok', '<@U0TEST0002> +1'])
+      expect(await plan(slackMessage({ text })), text).toEqual([])
+    expect(await plan(slackMessage({ text: 'ok, but login still fails' }))).toEqual([[router, 'watch', false]])
     // Edits and reactions don't wake it.
     expect(await plan({ ...slackMessage({}), type: 'message.edited' })).toEqual([])
     // Another AI employee talking there doesn't wake it.

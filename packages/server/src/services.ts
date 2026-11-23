@@ -69,6 +69,24 @@ import { createLocalProjectForEmployee } from './local-projects/index.ts'
 /** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
 const SLACK_SOURCE = 'integration:slack'
 const GITLAB_SOURCE = 'integration:gitlab'
+
+/** A message that says nothing to act on: emoji, mentions and punctuation only, or a short thanks or ok. */
+export function isAcknowledgement(text: unknown): boolean {
+  if (typeof text !== 'string') return false
+  const rest = text
+    .replace(/<[@#!][^>]*>/g, ' ')
+    .replace(/:[\w+-]+:/g, ' ')
+    .replace(/\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200d|\ufe0f/gu, ' ')
+    .replace(/[^\p{L}\p{N}+]+/gu, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    rest.length === 0 ||
+    /^(ok|okay|k|kk|thx|thanks|thank you|thanks a lot|ty|tnx|lol|haha|nice|great|cool|\+1|yes|yep|yup|no|nope|done|sure|np|got it)$/.test(
+      rest,
+    )
+  )
+}
 const OWN_COPY_SECRETS: Record<string, string> = { [SLACK_SOURCE]: 'SLACK_SIGNING_SECRET' }
 
 /** Replacements for adapters and ambient services, mostly for tests. */
@@ -457,6 +475,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
           ? { source: 'slack' as const, id: p.channel, ...(typeof p.channel_name === 'string' ? { name: p.channel_name } : {}) }
           : null
     if (!where) return []
+    // Nothing for a watcher: a message for someone else (it mentions only others), or a bare acknowledgement.
+    // Live, watched channels' chatter was most of what the router read, almost all of it ending in NO_REPLY.
+    if (p?.addressedToOthers === true || isAcknowledgement(p?.text)) return []
     const employees = (await directory.employees.list({ limit: 10_000 })).items.filter((e) => e.data.watch?.length)
     if (!employees.length) return []
     // AI employees talking in a watched channel don't wake each other (people and other bots do).
@@ -588,6 +609,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     toolListsFor: offeredToolListsFor,
     currentToolset,
     // Tools on demand: a session that can load tools (tools.load in its toolset) is offered its core set and what it loaded.
+    // Router contexts on ROUTER_MODEL when set (a fork of one does the work: it has no router role).
+    modelFor: (session) => (session.data.meta?.role === 'router' ? config.ROUTER_MODEL : undefined),
     onDemand: (session) => (config.TOOLS_ON_DEMAND ? services.stdlib?.onDemandFor(session.data.toolset) : undefined),
     currentPrompt: async (session, stored) => (sessionPrompt ? sessionPrompt(session, stored) : undefined),
     projectOf,

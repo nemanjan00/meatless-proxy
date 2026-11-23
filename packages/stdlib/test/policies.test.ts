@@ -390,8 +390,12 @@ describe('router decisions', () => {
     expect(needsCommit(await asRouter('watch', 'NO_REPLY: people chatting'))).toBe(false)
     // Getting involved is a decision like any other.
     expect(needsCommit(await asRouter('watch', 'Started a session for the checkout bug'))).toBe(true)
-    // Asked directly, staying out still needs its line.
-    expect(needsCommit(await asRouter('fallback', 'NO_REPLY'))).toBe(true)
+    // Asked directly, staying out still gets its line: the harness writes it, no more model calls.
+    expect(needsCommit(await asRouter('fallback', 'NO_REPLY: just a thanks'))).toBe(false)
+    expect((await t.sessions.requireRun(run.id)).data).toMatchObject({
+      commit: true,
+      commitSummary: 'request → NO_REPLY (just a thanks)',
+    })
   })
 
   it('an event that is not a message, with nothing to do, records nothing unless the router acted', async () => {
@@ -415,7 +419,8 @@ describe('router decisions', () => {
     expect(needsCommit(await finish(mr, 'NO_REPLY: not about me'))).toBe(false)
     expect(needsCommit(await finish(mr, 'Started a session for the review'))).toBe(true)
     const dm = await ingest('integration:slack', 'message.direct')
-    expect(needsCommit(await finish(dm, 'NO_REPLY'))).toBe(true)
+    expect(needsCommit(await finish(dm, 'NO_REPLY'))).toBe(false)
+    expect((await t.sessions.requireRun(t.run.id)).data.commitSummary).toMatch(/message\.direct.* → NO_REPLY$/)
   })
 })
 

@@ -288,6 +288,14 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
           const event = await deps.events.get(run.data.cause.eventId)
           const acted = results(await runEntries(deps, run)).some((r) => !r.isError && !ROUTER_LOOKUPS.test(r.name))
           if (event && !event.data.type.startsWith('message.') && !acted) return undefined
+          // Asked in a message and staying out: the harness records that line itself, where the model made two more
+          // calls (sessions.commit, then its final text again).
+          const what = event
+            ? oneLine(String(event.data.text ?? `${event.data.source} ${event.data.type} ${event.data.subjectKey ?? ''}`), 140)
+            : 'request'
+          const why = oneLine(output.replace(/^[\s\S]*?\bNO[_ -]?REPLY\b\]?:?\s*/i, ''), 140)
+          await deps.sessions.updateRun(run.id, { commit: true, commitSummary: `${what} → NO_REPLY${why ? ` (${why})` : ''}` })
+          return undefined
         }
         return {
           block:

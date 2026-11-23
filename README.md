@@ -241,6 +241,7 @@ within two minutes is told so instead of posting it again.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
+| `ROUTER_MODEL` | `MODEL` | the model of router contexts (same provider), e.g. a cheaper one: they only decide where work goes; the work they start uses `MODEL` |
 | `MODEL_CACHE_MARKERS` | `auto` | prompt cache breakpoints at the end of each run's starting history: `auto` is on for Claude models; `on` or `off` to say so |
 | `MODEL_VISION` | `auto` | whether the model can see images: `auto` asks the provider's model list, then goes by the model's name; `true` or `false` to say so |
 | `MODEL_IMAGE_MAX_SIDE` | 1568 | images for the model are downscaled to this many pixels on the longest side (PNG; other types pass through) |

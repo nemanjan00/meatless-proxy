@@ -67,7 +67,7 @@ describe('memory at session start', () => {
     expect(committed.some((e) => (e.content as any)?.text?.startsWith?.(SESSION_MEMORY_HEADER))).toBe(false)
     // And the model saw the memory before the request.
     const msgs = requests[0]!.messages.map((m) => m.content ?? '')
-    const mi = msgs.findIndex((m) => m.startsWith(SESSION_MEMORY_HEADER))
+    const mi = msgs.findIndex((m) => m.includes(`\n${SESSION_MEMORY_HEADER}`))
     const ei = msgs.findIndex((m) => m.includes('How do I rotate the staging database password?'))
     expect(mi).toBeGreaterThan(0)
     expect(ei).toBeGreaterThan(mi)

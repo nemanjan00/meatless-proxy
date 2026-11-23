@@ -22,8 +22,13 @@ export const UNTRUSTED_NOTE =
  * middle of a step) get a synthetic "no result" tool message, because the API
  * requires every tool call to be answered.
  */
+/** How a system note after the run's starting history is shown: from the harness, not from a person. */
+export const HARNESS_NOTE = '[harness note, not from a person]'
+
 export function renderMessages(entries: Entry[], o: { cacheAfter?: string } = {}): ChatMessage[] {
   const out: ChatMessage[] = []
+  // Past the history the run started from: its own input and notes (recalled memories, projects, context notes).
+  let pastBase = false
   // The last system or user message rendered so far: where a cache breakpoint can go (a text part).
   let markable = -1
   const mark = () => {
@@ -38,7 +43,14 @@ export function renderMessages(entries: Entry[], o: { cacheAfter?: string } = {}
     const c = e.content as any
     switch (e.kind) {
       case 'system':
-        out.push({ role: 'system', content: (c as SystemContent).text })
+        // After the run's starting history, a note to the model, not the system prompt: Anthropic (and proxies to
+        // it) hoists every system message to the top of the prompt, so a per-run one (memories recalled for this
+        // request) changed the start of every request and only the tools were read from the cache.
+        out.push(
+          pastBase
+            ? { role: 'user', content: `${HARNESS_NOTE}\n${(c as SystemContent).text}` }
+            : { role: 'system', content: (c as SystemContent).text },
+        )
         break
       case 'user':
         out.push({ role: 'user', content: (c as UserContent).text })
@@ -115,7 +127,10 @@ export function renderMessages(entries: Entry[], o: { cacheAfter?: string } = {}
     mark()
     // The end of the history the run started from: the same prefix for every request of this run and the
     // next one's, so a cache breakpoint there is written once and read after (the rest changes each run).
-    if (o.cacheAfter && e.id === o.cacheAfter && markable >= 0) out[markable] = { ...out[markable]!, cache: true }
+    if (o.cacheAfter && e.id === o.cacheAfter) {
+      pastBase = true
+      if (markable >= 0) out[markable] = { ...out[markable]!, cache: true }
+    }
   }
   return out
 }

@@ -216,7 +216,8 @@ describe('context notes', () => {
     expectPairsIntact(path)
     // The model saw them, right before its next call.
     const sawNote = h.model.calls.filter((c) =>
-      c.messages.some((m) => m.role === 'system' && /^\[context:/.test(m.content ?? '')),
+      // A note after the run's starting history: sent as a harness note, so the system prompt stays the same.
+      c.messages.some((m) => m.role === 'user' && /^\[harness note[^\n]*\]\n\[context:/.test(m.content ?? '')),
     )
     expect(sawNote.length).toBeGreaterThan(0)
     // The run records how full its context was at the last call.

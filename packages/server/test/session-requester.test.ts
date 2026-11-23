@@ -53,7 +53,7 @@ describe('about the requester', () => {
     expect((entry!.content as { text: string }).text).toContain('Support agent, Customer success')
     expect((entry!.content as { text: string }).text).toContain('no jargon')
     const msgs = requests[0]!.messages.map((m) => m.content ?? '')
-    const ai = msgs.findIndex((m) => m.startsWith(REQUESTER_HEADER))
+    const ai = msgs.findIndex((m) => m.includes(`\n${REQUESTER_HEADER}`))
     const ei = msgs.findIndex((m) => m.includes('invoices are blank'))
     expect(ai).toBeGreaterThan(0)
     expect(ei).toBeGreaterThan(ai)

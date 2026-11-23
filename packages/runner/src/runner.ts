@@ -174,6 +174,8 @@ export interface RunnerOptions {
    * loads it and runs: the call is valid, and the tool stays loaded.
    */
   onDemand?: (session: Session) => ((name: string) => boolean) | undefined
+  /** The model a session's runs use when it names none (e.g. a cheaper one for router contexts). Default: the client's. */
+  modelFor?: (session: Session) => string | undefined
   /**
    * The current text of a session's first entry (the employee prompt it was created with), read when a
    * run starts; undefined keeps it. The model sees the current text in place of the stored one.
@@ -973,7 +975,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         }
 
         const { specs } = await toolSpecsFor(session, history)
-        const modelName = session.data.model ?? model.defaultModel
+        const modelName = session.data.model ?? opts.modelFor?.(session) ?? model.defaultModel
         const window = windowOf(modelName)
         const base = run.data.base
         const render = (h: Entry[]) => {

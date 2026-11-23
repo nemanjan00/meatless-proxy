@@ -143,8 +143,9 @@ and tags combine as described below:
    on, in a channel an employee [watches](spec.md#watched-channels), goes to
    that employee's router session as information (`watch`: not expected to
    act, untrusted, an ephemeral run). The router decides whether to get
-   involved. Not for a session's own message, one that tags an employee, or
-   one from an AI employee.
+   involved. Not for a session's own message, one that tags an employee, one
+   from an AI employee, one addressed to other people, or a bare
+   acknowledgement (emoji, "thanks", "ok", "+1").
 5. **Fallback.** Anything left over goes to the router session of the employee
    whose scope covers the subject, or to the deployment's default router
    session.

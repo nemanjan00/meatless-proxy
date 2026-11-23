@@ -133,6 +133,11 @@ export const configSchema = z.object({
   OPENAI_BASE_URL: url(['http:', 'https:']),
   OPENAI_API_KEY: optStr,
   MODEL: optStr,
+  /**
+   * The model of router contexts, on the same provider: they only decide where work goes, so a cheaper one
+   * often does. The work they start uses MODEL. Default: MODEL.
+   */
+  ROUTER_MODEL: optStr,
   SECRETS_KEY: optStr.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters'),
   DATA_DIR: optStr.transform((v) => resolve(v ?? './.data/app')),
   GIT_CACHE_DIR: optStr,
@@ -502,7 +507,12 @@ export function describeConfig(c: Config): Record<string, unknown> {
     store: c.DATABASE_URL ? `postgres (schema ${c.DATABASE_SCHEMA ?? 'public'})` : 'memory',
     queue: c.REDIS_URL ? `bullmq (prefix ${c.REDIS_PREFIX ?? 'mp'})` : 'memory',
     model: c.OPENAI_BASE_URL
-      ? { baseUrl: c.OPENAI_BASE_URL, model: c.MODEL, apiKey: c.OPENAI_API_KEY ? 'set' : 'unset' }
+      ? {
+          baseUrl: c.OPENAI_BASE_URL,
+          model: c.MODEL,
+          ...(c.ROUTER_MODEL ? { routerModel: c.ROUTER_MODEL } : {}),
+          apiKey: c.OPENAI_API_KEY ? 'set' : 'unset',
+        }
       : 'none',
     secretsKey: c.SECRETS_KEY ? 'set' : 'ephemeral',
     dataDir: c.DATA_DIR,
