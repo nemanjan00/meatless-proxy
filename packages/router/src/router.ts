@@ -127,6 +127,11 @@ export interface RouterOptions {
    * it without a model call, e.g. a pipeline of a branch no session follows. Default: every event is.
    */
   wantsFallback?: (event: MpEvent, routerSessionId: string) => Promise<boolean>
+  /**
+   * The toolset of a fork made to handle one event (a trigger with `fork`), when it shouldn't be the context's
+   * own: a router context's is routing-only, and its forks do the work. Default: the context's.
+   */
+  forkToolset?: (context: Session) => Promise<string[] | undefined>
   /** Priority for runs caused by a person (`actorContactId` of a non-AI contact). */
   humanPriority?: number
   /** Whether an event's actor is a person (as opposed to an AI employee or a system). */
@@ -419,7 +424,8 @@ export function createRouter(opts: RouterOptions): Router {
     let runSession = session
     let fork: Session | undefined
     if (d.fork) {
-      fork = await opts.sessions.fork(sessionId, { title: forkTitle(session.data.title, event) })
+      const toolset = opts.forkToolset ? await opts.forkToolset(session) : undefined
+      fork = await opts.sessions.fork(sessionId, { title: forkTitle(session.data.title, event), ...(toolset ? { toolset } : {}) })
       sessionId = fork.id
       runSession = fork
     }

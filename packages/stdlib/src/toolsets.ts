@@ -165,4 +165,28 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'sessions.follow_up',
   // Recording what it learns about people is work too: the session the router starts has it, with the conversation to cite.
   'directory.update_contact',
+  // MCP servers' and integrations' tools, but the few in ROUTER_MCP_TOOLS: live, a router carried every tool of
+  // every connected server (187 tools, about two thirds of each ~150k-token call) to decide where work goes.
+  'mcp.**',
 ]
+
+/**
+ * MCP tools a router keeps although `mcp.**` is excluded: answering and asking in Slack, reading the thread
+ * or channel a request came from, and looking at the ticket or merge request it is about.
+ */
+export const ROUTER_MCP_TOOLS: readonly string[] = [
+  'mcp.slack.reply',
+  'mcp.slack.post_message',
+  'mcp.slack.react',
+  'mcp.slack.ask',
+  'mcp.slack.read_thread',
+  'mcp.slack.read_channel',
+  'mcp.slack.lookup_user',
+  'mcp.slack.open_dm',
+  'mcp.gitlab.get_merge_request',
+  'mcp.gitlab.get_issue',
+  'mcp.linear.get_issue',
+]
+
+/** The version of the router toolset's shape: router contexts with an older one get it again at start. */
+export const ROUTER_TOOLSET_VERSION = 2

@@ -58,9 +58,10 @@ function builtinPrompt(employee: Employee): string {
  */
 export function routerToolset(s: Services, lists: Parameters<Services['tools']['allowed']>[0]): string[] {
   const excluded = s.stdlib?.ROUTER_EXCLUDED_TOOLS ?? []
+  const kept = new Set(s.stdlib?.ROUTER_MCP_TOOLS ?? [])
   return s.tools
     .allowed(lists)
-    .filter((t) => !excluded.some((pattern) => globMatch(pattern, t.name)))
+    .filter((t) => kept.has(t.name) || !excluded.some((pattern) => globMatch(pattern, t.name)))
     .map((t) => t.name)
 }
 
@@ -68,12 +69,13 @@ export function routerToolset(s: Services, lists: Parameters<Services['tools']['
 export async function ensureRouterInstructions(s: Services, routerSessionId: string, actor: Actor) {
   if (!s.stdlib) return
   let session = await s.sessions.require(routerSessionId)
-  // The routing-only toolset, for router contexts created with the full one.
-  if (!session.data.meta?.routerToolset) {
+  // The routing-only toolset, for router contexts created with the full one or an older shape of it.
+  const version = s.stdlib.ROUTER_TOOLSET_VERSION
+  if (((session.data.meta?.routerToolset as number | undefined) ?? 0) < version) {
     const toolset = routerToolset(s, await s.toolListsFor(session.data.employeeId))
     session = await s.records.update<typeof session.data>('session', session.id, {
       toolset,
-      meta: { ...(session.data.meta ?? {}), routerToolset: 1 },
+      meta: { ...(session.data.meta ?? {}), routerToolset: version },
     })
   }
   if (((session.data.meta?.routerInstructions as number | undefined) ?? 0) >= s.stdlib.ROUTER_INSTRUCTIONS_VERSION) return
@@ -140,7 +142,9 @@ async function ensureRouterSession(s: Services, employee: Employee, actor: Actor
       ],
       meta: {
         role: 'router',
-        ...(s.stdlib ? { routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION, routerToolset: 1 } : {}),
+        ...(s.stdlib
+          ? { routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION, routerToolset: s.stdlib.ROUTER_TOOLSET_VERSION }
+          : {}),
       },
       actor,
     })

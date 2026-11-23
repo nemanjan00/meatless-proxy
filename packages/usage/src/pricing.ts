@@ -45,6 +45,15 @@ export const BUILTIN_PRICING: Pricing = {
   'gpt-4o': { inputPerM: 2.5, cachedInputPerM: 1.25, outputPerM: 10 },
   // Source: https://platform.openai.com/docs/pricing (checked 2026-09-29).
   'gpt-4o-mini': { inputPerM: 0.15, cachedInputPerM: 0.075, outputPerM: 0.6 },
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-23).
+  'claude-fable-5-1': { inputPerM: 10, cachedInputPerM: 0.25, outputPerM: 50 },
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-23).
+  'claude-opus-5-5': { inputPerM: 4, cachedInputPerM: 0.2, outputPerM: 20 },
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-23).
+  'claude-sonnet-5-5': { inputPerM: 2, cachedInputPerM: 0.1, outputPerM: 10 },
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-23).
+  'claude-haiku-4-5': { inputPerM: 1, cachedInputPerM: 0.1, outputPerM: 5 },
+  'claude-haiku-4-5-20251001': { inputPerM: 1, cachedInputPerM: 0.1, outputPerM: 5 },
 }
 
 /** A model name compared loosely: lower case, no `vendor/` prefix, `.` as `-` (`kimi-k2-7-code` is `kimi-k2.7-code`). */

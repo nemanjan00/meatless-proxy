@@ -393,6 +393,30 @@ describe('router decisions', () => {
     // Asked directly, staying out still needs its line.
     expect(needsCommit(await asRouter('fallback', 'NO_REPLY'))).toBe(true)
   })
+
+  it('an event that is not a message, with nothing to do, records nothing unless the router acted', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    const session = await t.sessions.require(t.session.id)
+    const router = { ...session, data: { ...session.data, meta: { role: 'router' } } }
+    const ingest = async (source: string, type: string) =>
+      (await t.events.ingest({ source, type, dedupeKey: `${type}:${Math.random()}`, payload: {} })).event.id
+    const finish = async (eventId: string, output: string) => {
+      const run = await t.sessions.requireRun(t.run.id)
+      return t.hooks.decide(beforeFinish, {
+        run: { ...run, data: { ...run.data, mode: 'ephemeral', cause: { type: 'event', eventId, note: 'fallback' } } },
+        session: router,
+        status: 'completed',
+        output,
+      })
+    }
+    const needsCommit = (d: { block?: string } | undefined) => !!d?.block?.includes('record your decision')
+    const mr = await ingest('integration:gitlab', 'merge_request.updated')
+    expect(needsCommit(await finish(mr, 'NO_REPLY: not about me'))).toBe(false)
+    expect(needsCommit(await finish(mr, 'Started a session for the review'))).toBe(true)
+    const dm = await ingest('integration:slack', 'message.direct')
+    expect(needsCommit(await finish(dm, 'NO_REPLY'))).toBe(true)
+  })
 })
 
 describe('router decision logs', async () => {

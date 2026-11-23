@@ -129,7 +129,7 @@ export function refreshRouterPrompt(s: Services, employeeId: string): Promise<bo
       meta: {
         role: 'router',
         routerInstructions: s.stdlib.ROUTER_INSTRUCTIONS_VERSION,
-        routerToolset: 1,
+        routerToolset: s.stdlib.ROUTER_TOOLSET_VERSION,
         previousRouter: old.id,
       },
       actor,

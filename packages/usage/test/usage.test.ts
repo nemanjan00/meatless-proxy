@@ -394,6 +394,8 @@ describe('pricing', () => {
     expect(u.priceOf('kimi-k2.7-code')).toEqual({ inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4 })
     expect(u.priceOf('kimi-k2-7-code')).toEqual(u.priceOf('kimi-k2.7-code'))
     expect(u.priceOf('openai/GPT-4o-mini')).toEqual(BUILTIN_PRICING['gpt-4o-mini'])
+    // Claude, by the id the API takes (cache hits at 0.05x input on Opus 5.5).
+    expect(u.priceOf('claude-opus-5-5')).toEqual({ inputPerM: 4, cachedInputPerM: 0.2, outputPerM: 20 })
     expect(u.priceOf('made-up-model')).toBeNull()
     // 1M uncached input + 1M output at 0.95 + 4.
     expect(u.cost('kimi-k2.7-code', { promptTokens: 1_000_000, completionTokens: 1_000_000 })).toBeCloseTo(4.95)

@@ -8,7 +8,6 @@ import {
   createEventBus,
   createHooks,
   errorMessage,
-  globMatch,
   jsonLogger,
   systemClock,
   type Clock,
@@ -56,6 +55,7 @@ import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { envSecretValues } from './env-secrets.ts'
+import { routerToolset } from './provision.ts'
 import { gitlabWantsRouter } from './integrations/fallback.ts'
 import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
@@ -496,6 +496,11 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       const username = contact?.data.handles?.find((h) => h.system === 'gitlab')?.id
       return gitlabWantsRouter(event.data, username)
     },
+    // A fork of a router context does the work: it gets the employee's full toolset, not the routing-only one.
+    forkToolset: async (context) =>
+      context.data.meta?.role === 'router'
+        ? tools.allowed(await toolListsFor(context.data.employeeId)).map((t) => t.name)
+        : undefined,
     participantsOf: async (event) => {
       const p = event.data.payload as { threadId?: unknown; messageId?: unknown } | undefined
       if (event.data.source !== 'chat' || event.data.type !== 'message.replied' || typeof p?.threadId !== 'string') return []
@@ -556,10 +561,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       const tpl = x?.data.template ? await sessions.getTemplate(x.data.template.id) : null
       if (tpl?.data.toolset?.length) return undefined
     }
-    const allowed = tools.allowed(await toolListsFor(session.data.employeeId)).map((t) => t.name)
-    const excluded = services.stdlib.ROUTER_EXCLUDED_TOOLS
-    const want =
-      session.data.meta?.role === 'router' ? allowed.filter((n) => !excluded.some((pattern) => globMatch(pattern, n))) : allowed
+    const lists = await toolListsFor(session.data.employeeId)
+    const want = session.data.meta?.role === 'router' ? routerToolset(services, lists) : tools.allowed(lists).map((t) => t.name)
     const have = new Set(session.data.toolset)
     return want.filter((n) => have.has(n)).length * 2 >= want.length ? want : undefined
   }

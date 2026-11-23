@@ -68,6 +68,10 @@ function lastAssistantText(entries: Entry[]): string | undefined {
   return undefined
 }
 
+/** Tools a router only looks things up with: calling them doesn't make a decision worth recording. */
+const ROUTER_LOOKUPS =
+  /^(sessions\.(list|get|search|tree|look_up)|chat\.(read|search)|memory\.recall|directory\.(find_\w+|get_\w+|projects_of)|docs\.(read|search|list|backlinks)|subscriptions\.list|schedule\.list|skills\.list|time\.now|mcp\.[\w-]+\.(read_thread|read_channel|lookup_user|get_\w+|list_\w+|search_\w+))$/
+
 const results = (entries: Entry[]) =>
   entries.filter((e) => e.kind === 'tool_result').map((e) => e.content as unknown as ToolResultContent)
 
@@ -224,6 +228,14 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
         if (run.data.commitSummary) return undefined
         // A watched channel's message the router stays out of leaves nothing to record.
         if (run.data.cause.note === 'watch' && output && /\bNO_REPLY\b/.test(output)) return undefined
+        // Nor does an event that isn't a message (a merge request, an issue update) it found nothing to do for,
+        // having only looked things up. Live, a router committed a line for every ignored event: a second model
+        // call each, and a history that grew all day. Asked in a message, staying out is still recorded.
+        if (output && NO_REPLY_RE.test(output) && run.data.cause.eventId) {
+          const event = await deps.events.get(run.data.cause.eventId)
+          const acted = results(await runEntries(deps, run)).some((r) => !r.isError && !ROUTER_LOOKUPS.test(r.name))
+          if (event && !event.data.type.startsWith('message.') && !acted) return undefined
+        }
         return {
           block:
             'you are a router context: record your decision before finishing. Call sessions.commit with a one-line summary: the subject, who asked, what it is about, and what you decided (answered directly / forwarded to @employee#slug / started @employee#slug (ses_…) / ran procedure X). That line is all you keep of this run.',

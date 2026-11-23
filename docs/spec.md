@@ -534,7 +534,14 @@ tools** from the start and loads the rest when it needs them
   for the employee, can be found, loaded or called. A session without
   `tools.load` in its toolset (a router context, a reviewer, a narrowed
   template) is offered its whole toolset; router contexts never get the
-  loaders.
+  loaders. So a router's toolset is small on purpose: no git, environments,
+  files or writing tools, and no MCP or integration tools but the few it
+  answers and looks with (Slack reply, post, react, ask, read a thread or
+  channel, look up a user, open a DM; a GitLab merge request or issue; a
+  Linear issue). Live, a router carried every tool of every connected
+  server, two thirds of each call, to decide where work goes. The sessions
+  it starts, and forks of it made by a trigger, get the employee's full
+  toolset.
 - Situational guidance lives in the descriptions of the tools it concerns
   (Slack forms, environment profiles and networks, local projects, merging
   the base branch), so it costs context only where the tool is offered. The
@@ -2859,7 +2866,7 @@ dropped.
 **Pricing.** Cost comes from a price per model (USD per million input,
 cached input and output tokens): a small built-in table of prices checked on
 the providers' official pricing pages (with the source and date next to each
-one), overridden by the `PRICING` variable, overridden by **Settings →
+one: Kimi, OpenAI and Claude models), overridden by the `PRICING` variable, overridden by **Settings →
 Pricing**. A model without a price counts as $0, and the UI says "no pricing
 configured" and links to the editor.
 
@@ -2929,7 +2936,10 @@ For every event, a router run:
    @meatless#pay-123-refund (ses_…)`. The next run starts with it in context.
 
 A [policy hook](#policy-hooks) makes sure no router run ends without
-recording its decision. When the log of decisions grows long, the router
+recording its decision, except when there was nothing to decide: a watched
+channel's message it stays out of, or an event that isn't a message (a merge
+request update, an issue change) it ends with `NO_REPLY` having only looked
+things up. Asked in a message, staying out is still recorded. When the log of decisions grows long, the router
 [rewinds](#context-management-rewind-not-compaction) old decisions for
 finished work into one summary.
 
