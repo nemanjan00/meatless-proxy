@@ -150,6 +150,30 @@ describe('follow-ups in a thread that tagged an employee', () => {
 })
 
 describe('work the router starts', () => {
+  it('gets the request itself and answers in the thread it came from, even when it only posted elsewhere', async () => {
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        if (router)
+          return callTools([
+            // Told to answer somewhere else, as a misread preference did live.
+            { name: 'sessions.create', args: { title: 'Weekly numbers', instruction: 'Reply in Slack DM, not in chat.' } },
+          ])
+        // The work: it sees the request, and ends with its answer without a chat reply.
+        const sawRequest = req.messages.some((m) => (m.content ?? '').includes('what are the weekly numbers?'))
+        return reply(sawRequest ? 'The weekly numbers: 42 signups.' : 'I do not know what was asked.')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script })
+    const s = t.a.services
+    const general = (await s.chat.channelByName('general'))!.id
+    const root = await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless what are the weekly numbers?' })
+    await settle(t)
+    const replies = (await t.req('GET', `/api/chat/threads/${root.body.id}`)).body.replies.map((m: any) => m.data.text)
+    expect(replies).toEqual(['The weekly numbers: 42 signups.'])
+  })
+
   it("gets the employee's full toolset and keeps its work", async () => {
     const script = Object.assign(
       (req: ModelRequest): ScriptResult => {

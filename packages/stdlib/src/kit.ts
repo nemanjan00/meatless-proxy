@@ -71,6 +71,12 @@ export interface RefWorktreeMeta {
   sha: string
 }
 
+/** The request a router handed over: its event, and the entry the router saw for it. */
+interface Origin {
+  eventId: string
+  entry: Record<string, Json>
+}
+
 export interface EnvMeta {
   id: string
   name: string
@@ -264,15 +270,22 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
    * was asked about (the thread, issue or MR), so follow-ups skip the router. It becomes the primary
    * subscriber (the owner, which acts on untagged messages) unless another session already owns it.
    */
-  const handOverSubject = async (newSessionId: string, ctx: ToolContext) => {
+  const handOverSubject = async (newSessionId: string, ctx: ToolContext): Promise<Origin | undefined> => {
     const caller = await sessions.get(ctx.sessionId)
-    if (caller?.data.meta?.role !== 'router') return
+    if (caller?.data.meta?.role !== 'router') return undefined
     const run = await sessions.getRun(ctx.runId)
     const eventId = run?.data.cause.eventId
-    if (!eventId) return
+    if (!eventId) return undefined
     const event = await deps.events.get(eventId)
+    // The request itself, as the router got it: the new session answers it where it was asked.
+    const seen = (await sessions.runHistory(ctx.runId)).find(
+      (e) => e.kind === 'event' && (e.content as { eventId?: unknown } | null)?.eventId === eventId,
+    )
+    const origin: Origin | undefined = seen
+      ? { eventId, entry: { ...(seen.content as Record<string, Json>), expectedToAct: true } }
+      : undefined
     const subject = event?.data.subject
-    if (!subject) return
+    if (!subject) return origin
     // One owner per subject: a thread another session already owns (e.g. another employee's) keeps its
     // owner, and this session follows it; tags still reach it.
     const owned = (await deps.events.subscriptions.forSubject(subject)).some(
@@ -283,6 +296,7 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
       ...subscriptionScope(subject.system),
       actor: { type: 'session', id: ctx.sessionId },
     })
+    return origin
   }
 
   const assignedProjects = (employee: Employee) => assignedProjectsOf(deps, employee)
@@ -398,8 +412,10 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
     },
 
     async startRun(sessionId, ctx, o) {
-      // A router hands the subject over: the new session owns it now, so follow-ups reach it directly.
-      if (o.type !== 'loop') await handOverSubject(sessionId, ctx)
+      // A router hands the subject over: the new session owns it now, so follow-ups reach it directly. It gets
+      // the request as an event too, so its answer goes where it was asked (the chat or Slack thread): live, a
+      // session told to answer elsewhere never answered in the thread.
+      const origin = o.type !== 'loop' ? await handOverSubject(sessionId, ctx) : undefined
       // The employee's current projects, after the history (so the cached prefix stays), unless unchanged.
       // Loop children skip it: they branch from the looping session's context, and their item stays last.
       const target = await sessions.require(sessionId)
@@ -409,12 +425,18 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
       const input = [
         ...(projects ? [projects] : []),
         ...(requester ? [requester] : []),
+        ...(origin ? [{ kind: 'event' as const, content: origin.entry, meta: { origin: true } }] : []),
         ...(o.instruction ? [{ kind: 'user' as const, content: { text: o.instruction } }] : []),
       ]
       const run = await sessions.createRun({
         sessionId,
         ...(o.mode ? { mode: o.mode } : {}),
-        cause: { type: o.type, parentRunId: ctx.runId, ...(o.note ? { note: o.note } : {}) },
+        cause: {
+          type: o.type,
+          parentRunId: ctx.runId,
+          ...(origin ? { eventId: origin.eventId } : {}),
+          ...(o.note ? { note: o.note } : {}),
+        },
         ...(ctx.requesterId ? { requesterId: ctx.requesterId } : {}),
         ...(input.length ? { input } : {}),
         actor: kit.actor(ctx),

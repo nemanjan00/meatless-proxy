@@ -2605,7 +2605,15 @@ Built-in policies, each configurable per deployment, employee or project:
 - **Answer where asked.** A run started by a chat message that ends with a
   final answer, and didn't reply or hand the work off, has its answer posted
   in the thread it was asked in. The session is then subscribed to the
-  thread.
+  thread. A session a router starts for a request gets the request itself
+  (the event the router got) along with the router's instruction, so this
+  holds for it too: a message it posted somewhere else (Slack, another
+  channel) doesn't count as the answer. The prompt says so as a rule that
+  memories, preferences and instructions can't change; a message elsewhere
+  is only added when the request itself asks for one ("ping me on Slack when
+  done"), never instead of the answer in the thread. Live, a memory that a
+  person "wants answers only in Slack" had a session answer a harness chat
+  question in a Slack DM and never in the thread.
 - **The agent decides whether to answer.** Not every message needs a reply:
   a thanks, another employee's update, or people talking to each other. Each
   message says whether it came from a person, another AI session, or a local
