@@ -53,6 +53,11 @@ export interface ChatMessage {
    * images in user messages, so adapters move a tool result's images into a user message after it.
    */
   images?: ImagePart[]
+  /**
+   * The end of a prefix that stays the same across requests (e.g. a session's committed history): adapters
+   * that can mark prompt cache breakpoints mark one here. Others ignore it.
+   */
+  cache?: boolean
 }
 
 export interface ToolSpec {

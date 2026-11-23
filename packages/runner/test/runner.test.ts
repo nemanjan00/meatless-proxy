@@ -385,6 +385,22 @@ describe('renderMessages', () => {
     expect(msgs[5]!.content).toContain('doc_1')
   })
 
+  it('marks the end of the history a run started from for the prompt cache, on its last system or user message', () => {
+    const base = e('assistant', { text: null, toolCalls: [{ id: 't1', name: 'x', arguments: '{}' }] })
+    const entries = [
+      e('system', { text: 'sys' }),
+      e('summary', { text: 'decision 1' }),
+      e('summary', { text: 'decision 2' }),
+      e('event', { eventId: 'e', source: 'chat', type: 'message.posted', text: 'hi', trusted: true, expectedToAct: true }),
+    ] as any
+    // The base is the last summary: the event after it is the run's own.
+    expect(renderMessages(entries, { cacheAfter: entries[2].id }).map((m) => !!m.cache)).toEqual([false, false, true, false])
+    expect(renderMessages(entries).some((m) => m.cache)).toBe(false)
+    // A base that renders as an assistant turn: the marker goes on the last text message before it.
+    const withCall = [entries[0], entries[1], base, e('tool_result', { toolCallId: 't1', name: 'x', output: 'ok' })] as any
+    expect(renderMessages(withCall, { cacheAfter: base.id }).map((m) => !!m.cache)).toEqual([false, true, false, false])
+  })
+
   it('is deterministic', () => {
     const entries = [e('system', { text: 'a' }), e('user', { text: 'b' })] as any
     expect(JSON.stringify(renderMessages(entries))).toBe(JSON.stringify(renderMessages(entries)))

@@ -612,3 +612,25 @@ describe('capabilities', () => {
     expect(seen).toHaveLength(3)
   })
 })
+
+describe('prompt cache markers', () => {
+  const messages = [
+    { role: 'system' as const, content: 'rules' },
+    { role: 'user' as const, content: 'decision log', cache: true },
+    { role: 'user' as const, content: 'the new request' },
+  ]
+
+  it('sends a marked message as a text part with cache_control when on, and plain otherwise', async () => {
+    handlers.push(json(completion({ content: 'ok' })), json(completion({ content: 'ok' })))
+    await make({ cacheMarkers: true }).complete({ messages })
+    await make().complete({ messages })
+    const on = seen[0]!.body.messages
+    expect(on[1].content).toEqual([{ type: 'text', text: 'decision log', cache_control: { type: 'ephemeral' } }])
+    expect(on[0].content).toBe('rules')
+    expect(on[2].content).toBe('the new request')
+    const off = seen[1]!.body.messages
+    expect(off[1].content).toBe('decision log')
+    expect(JSON.stringify([on, off])).not.toContain('__from')
+    expect(JSON.stringify(off)).not.toContain('cache')
+  })
+})

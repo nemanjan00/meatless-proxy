@@ -975,8 +975,9 @@ export function createRunner(opts: RunnerOptions): Runner {
         const { specs } = await toolSpecsFor(session, history)
         const modelName = session.data.model ?? model.defaultModel
         const window = windowOf(modelName)
+        const base = run.data.base
         const render = (h: Entry[]) => {
-          const m = renderMessages(h)
+          const m = renderMessages(h, base ? { cacheAfter: base } : {})
           if (prompt !== undefined && h[0]?.kind === 'system' && m[0]?.role === 'system') m[0] = { ...m[0], content: prompt }
           return m
         }

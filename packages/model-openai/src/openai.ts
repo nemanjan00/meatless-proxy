@@ -39,6 +39,12 @@ export interface OpenAiModelOptions {
   clock?: Clock
   /** For tests: source of jitter in [0, 1). */
   random?: () => number
+  /**
+   * Send prompt cache breakpoints (`cache_control: { type: "ephemeral" }` on a text part) where a message is
+   * marked `cache`, for providers that take them (Anthropic models, directly or through a proxy). Default off:
+   * other providers may refuse the field.
+   */
+  cacheMarkers?: boolean
 }
 
 const RETRYABLE = (status: number) => status === 408 || status === 429 || status >= 500
@@ -63,7 +69,7 @@ export function openAiModel(opts: OpenAiModelOptions): ModelClient {
   async function complete(req: ModelRequest): Promise<ModelResponse> {
     const model = req.model ?? opts.model
     const stream = opts.stream === 'auto' || opts.stream === undefined ? !!req.onDelta : opts.stream
-    const body = JSON.stringify(buildBody(req, model, stream))
+    const body = JSON.stringify(buildBody(req, model, stream, opts.cacheMarkers === true))
     const started = clock.now()
 
     for (let attempt = 0; ; attempt++) {
@@ -226,7 +232,7 @@ const imageUrlPart = (img: ImagePart) => ({ type: 'image_url', image_url: { url:
  * must be text on most providers, so a tool result's images are noted in its text and sent in one
  * user message after the last tool message of that turn.
  */
-export function serializeMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+export function serializeMessages(messages: ChatMessage[], cacheMarkers = false): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = []
   let pending: ImagePart[] = []
   const flush = () => {
@@ -243,17 +249,20 @@ export function serializeMessages(messages: ChatMessage[]): Record<string, unkno
     })
     pending = []
   }
-  for (const m of messages) {
+  for (const [i, m] of messages.entries()) {
     if (m.role !== 'tool') flush()
     const images = m.images ?? []
+    const from = out.length
     if (!images.length || (m.role !== 'tool' && m.role !== 'user')) {
       out.push(serializeMessage(m))
+      out[from]!.__from = i
       continue
     }
     const loaded = images.filter((i) => i.data)
     if (m.role === 'tool') {
       const notes = images.map((i) => imageNote(i, 'attached below')).join('\n')
       out.push(serializeMessage({ ...m, content: `${m.content ?? ''}${m.content ? '\n' : ''}${notes}` }))
+      out[from]!.__from = i
       pending.push(...loaded)
       continue
     }
@@ -263,13 +272,35 @@ export function serializeMessages(messages: ChatMessage[]): Record<string, unkno
       ...serializeMessage(m),
       content: loaded.length ? [...(text ? [{ type: 'text', text }] : []), ...loaded.map(imageUrlPart)] : text,
     })
+    out[from]!.__from = i
   }
   flush()
+  if (cacheMarkers)
+    messages.forEach((m, i) => {
+      if (!m.cache) return
+      // The serialised message for this one: images can add a user message after a tool message, never before.
+      const at = out.findIndex((x) => x.__from === i)
+      if (at >= 0) out[at] = withCacheMarker(out[at]!)
+    })
+  for (const x of out) delete x.__from
   return out
 }
 
-function buildBody(req: ModelRequest, model: string, stream: boolean): Record<string, unknown> {
-  const body: Record<string, unknown> = { model, messages: serializeMessages(req.messages) }
+const CACHE_CONTROL = { type: 'ephemeral' }
+
+/** A message whose (last) text part carries a cache breakpoint. */
+function withCacheMarker(m: Record<string, unknown>): Record<string, unknown> {
+  const c = m.content
+  if (typeof c === 'string' && c) return { ...m, content: [{ type: 'text', text: c, cache_control: CACHE_CONTROL }] }
+  if (Array.isArray(c)) {
+    const i = c.map((p: any) => p?.type).lastIndexOf('text')
+    if (i >= 0) return { ...m, content: c.map((p: any, j: number) => (j === i ? { ...p, cache_control: CACHE_CONTROL } : p)) }
+  }
+  return m
+}
+
+function buildBody(req: ModelRequest, model: string, stream: boolean, cacheMarkers = false): Record<string, unknown> {
+  const body: Record<string, unknown> = { model, messages: serializeMessages(req.messages, cacheMarkers) }
   if (req.tools?.length) body.tools = req.tools
   if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature

@@ -296,6 +296,21 @@ export const configSchema = z.object({
    * Whether the model can see images (image.view): `auto` (default: what the provider's model list says,
    * else known vision model names), `true` or `false`.
    */
+  /**
+   * Prompt cache breakpoints on requests (`cache_control` at the end of a session's committed history):
+   * `auto` (default: on for Claude models), `on` or `off`. Providers that don't take the field may refuse it.
+   */
+  MODEL_CACHE_MARKERS: z
+    .string()
+    .optional()
+    .transform((v) => {
+      const s = (v ?? '').trim().toLowerCase()
+      if (s === '' || s === 'auto') return 'auto' as const
+      if (['1', 'true', 'yes', 'on'].includes(s)) return 'on' as const
+      if (['0', 'false', 'no', 'off'].includes(s)) return 'off' as const
+      return s
+    })
+    .pipe(z.enum(['auto', 'on', 'off'])),
   MODEL_VISION: z
     .string()
     .optional()
@@ -496,6 +511,7 @@ export function describeConfig(c: Config): Record<string, unknown> {
     directNetwork: c.DOCKER_DIRECT_NETWORK,
     files: { dir: c.FILES_DIR, volume: c.FILES_VOLUME ?? null },
     vision: c.MODEL_VISION,
+    cacheMarkers: cacheMarkersOn(c),
     context: {
       window: c.MODEL_CONTEXT_TOKENS ?? (c.MODEL ? contextWindowOf(c.MODEL) : null),
       compactAt: c.CONTEXT_COMPACT_AT || 'off',
@@ -549,4 +565,9 @@ export function loadDotEnv(path = '.env', env: Record<string, string | undefined
     set.push(key)
   }
   return set
+}
+
+/** Whether model requests carry prompt cache breakpoints (MODEL_CACHE_MARKERS; `auto`: for Claude models). */
+export function cacheMarkersOn(c: Pick<Config, 'MODEL_CACHE_MARKERS' | 'MODEL'>): boolean {
+  return c.MODEL_CACHE_MARKERS === 'auto' ? /claude/i.test(c.MODEL ?? '') : c.MODEL_CACHE_MARKERS === 'on'
 }

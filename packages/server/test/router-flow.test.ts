@@ -149,6 +149,38 @@ describe('follow-ups in a thread that tagged an employee', () => {
   })
 })
 
+describe('the router prompt cache', () => {
+  it("marks the end of the router's decision log, so the next run reads it from the cache", async () => {
+    const requests: ModelRequest[] = []
+    const script = Object.assign(
+      (req: ModelRequest): ScriptResult => {
+        requests.push(req)
+        const router = req.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context'))
+        if (router)
+          return callTools([{ name: 'sessions.create', args: { title: `Work ${requests.length}`, instruction: 'Do it.' } }])
+        return reply('NO_REPLY')
+      },
+      { raw: true },
+    )
+    t = await testApp({ script })
+    const s = t.a.services
+    const general = (await s.chat.channelByName('general'))!.id
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless first thing' })
+    await settle(t)
+    await t.req('POST', `/api/chat/channels/${general}/messages`, { text: '@meatless second thing' })
+    await settle(t)
+    const routerCalls = requests.filter((r) =>
+      r.messages.some((m) => m.role === 'system' && (m.content ?? '').includes('router context')),
+    )
+    const second = routerCalls.at(-1)!
+    const marked = second.messages.findIndex((m) => m.cache)
+    // On the first run's decision line: everything before it is the same as in the first run's request plus that line.
+    expect(second.messages[marked]!.content).toContain('first thing')
+    expect(second.messages.slice(marked + 1).some((m) => (m.content ?? '').includes('second thing'))).toBe(true)
+    expect(second.messages.filter((m) => m.cache)).toHaveLength(1)
+  })
+})
+
 describe('work the router starts', () => {
   it('gets the request itself and answers in the thread it came from, even when it only posted elsewhere', async () => {
     const script = Object.assign(

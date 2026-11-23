@@ -22,8 +22,17 @@ export const UNTRUSTED_NOTE =
  * middle of a step) get a synthetic "no result" tool message, because the API
  * requires every tool call to be answered.
  */
-export function renderMessages(entries: Entry[]): ChatMessage[] {
+export function renderMessages(entries: Entry[], o: { cacheAfter?: string } = {}): ChatMessage[] {
   const out: ChatMessage[] = []
+  // The last system or user message rendered so far: where a cache breakpoint can go (a text part).
+  let markable = -1
+  const mark = () => {
+    for (let i = out.length - 1; i > markable; i--)
+      if (out[i]!.role === 'system' || out[i]!.role === 'user') {
+        markable = i
+        break
+      }
+  }
   const answered = new Set(entries.map(answeredCall).filter((id): id is string => !!id))
   for (const e of entries) {
     const c = e.content as any
@@ -103,6 +112,10 @@ export function renderMessages(entries: Entry[]): ChatMessage[] {
       default:
         out.push({ role: 'user', content: `[${e.kind}] ${JSON.stringify(c)}` })
     }
+    mark()
+    // The end of the history the run started from: the same prefix for every request of this run and the
+    // next one's, so a cache breakpoint there is written once and read after (the rest changes each run).
+    if (o.cacheAfter && e.id === o.cacheAfter && markable >= 0) out[markable] = { ...out[markable]!, cache: true }
   }
   return out
 }

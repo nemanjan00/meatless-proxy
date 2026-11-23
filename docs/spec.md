@@ -164,6 +164,14 @@ with a base URL, an API key and a model name.
   [described](#image-descriptions). Kimi's coding endpoint accepts
   images on `kimi-k2-7-code` (tested: it names the colour of a red square
   returned by a tool).
+- **Prompt cache markers** (`MODEL_CACHE_MARKERS`): `auto` (the default) is
+  on for Claude models, `on` or `off` override it. A request marks the end of
+  the history its run started from (the last system or user message up to
+  it) with `cache_control: { type: "ephemeral" }` on a text part, so the next
+  run reads that prefix from the cache. Without it, a proxy in front of
+  Claude caches only the very start and the end of each prompt, and a
+  router, whose decision log grows by a line before every new request, read
+  about half of each first call from the cache.
 - **Web search** comes from an MCP server (Brave Search, Tavily, SearXNG, …)
   added in Settings → MCP servers, globally or per employee: its tools are
   offered like any other. The model itself must support tool calling, so a

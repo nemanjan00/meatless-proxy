@@ -42,7 +42,7 @@ import { postgresStore, runMigrations } from '@mp/store-postgres'
 import { createToolRegistry, registerMcpTools, type ToolLists, type ToolRegistry } from '@mp/tools'
 import { createUsage, type UsageService } from '@mp/usage'
 import pg from 'pg'
-import { contextWindowFor, type Config } from './config.ts'
+import { cacheMarkersOn, contextWindowFor, type Config } from './config.ts'
 import { imageLoader, resolveVision, type VisionSettings } from './attachments.ts'
 import { buildDescriber, describedEvent, enqueueDescriptions } from './image-descriptions.ts'
 import { createControl, type Control } from './control.ts'
@@ -216,7 +216,14 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const model =
     o.model ??
     (config.OPENAI_BASE_URL && config.MODEL
-      ? openAiModel({ baseUrl: config.OPENAI_BASE_URL, apiKey: config.OPENAI_API_KEY ?? '', model: config.MODEL, logger, clock })
+      ? openAiModel({
+          baseUrl: config.OPENAI_BASE_URL,
+          apiKey: config.OPENAI_API_KEY ?? '',
+          model: config.MODEL,
+          logger,
+          clock,
+          cacheMarkers: cacheMarkersOn(config),
+        })
       : missingModel())
 
   // ── Secrets ──────────────────────────────────────────────────────────────
