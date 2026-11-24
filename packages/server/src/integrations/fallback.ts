@@ -1,4 +1,7 @@
+import type { Directory } from '@mp/directory'
 import type { MpEvent } from '@mp/events'
+import type { Records } from '@mp/records'
+import type { Sessions } from '@mp/sessions'
 
 /** GitLab events about builds and branches: the session that pushed follows them by subscription, nobody else acts on them. */
 const GITLAB_BUILD_NOISE = /^(push|pipeline\.|job\.)/
@@ -65,4 +68,57 @@ export function linearWantsRouter(
   if (event.type === 'comment.created')
     return me.names.some((n) => mentionsUser(p.body, n)) || seen.assignedToMe || seen.iCommented
   return false
+}
+
+/** What a source's rule knows of the employee whose router would get the event. */
+export interface FallbackContext {
+  /** Its handle in a system (`gitlab`, `linear`, `mp`…), from its contact. */
+  handle(system: string): string | undefined
+  /** The names a message may `@`-mention it by: its chat handle, its key, its name. */
+  names: string[]
+  records: Records
+}
+
+/**
+ * Per event source: whether an event nobody claimed is worth a router run of the employee. A source
+ * without a rule always is. A new integration with noisy events adds its rule here.
+ */
+export const FALLBACK_RULES: Record<string, (event: MpEvent, ctx: FallbackContext) => Promise<boolean> | boolean> = {
+  'integration:gitlab': (event, ctx) => gitlabWantsRouter(event.data, ctx.handle('gitlab')),
+  'integration:linear': async (event, ctx) => {
+    const me = { id: ctx.handle('linear'), names: ctx.names }
+    return linearWantsRouter(event.data, me, await linearIssueSeen(ctx.records, event, me.id))
+  },
+}
+
+/** What the stored Linear events of the issue say: its latest assignee, whether the employee commented on it. */
+async function linearIssueSeen(records: Records, event: MpEvent, myId: string | undefined): Promise<LinearIssueSeen> {
+  const seen = { assignedToMe: false, iCommented: false }
+  const issue = event.data.subject?.id
+  if (!myId || !issue || event.data.type !== 'comment.created') return seen
+  const past = await records.query<MpEvent['data']>('event', {
+    where: { source: event.data.source, 'subject.id': issue },
+    orderBy: { field: 'receivedAt', dir: 'desc' },
+    limit: 200,
+  })
+  const idOf = (v: unknown) => (v && typeof v === 'object' ? (v as { id?: unknown }).id : undefined)
+  const payload = (e: { data: MpEvent['data'] } | undefined) => (e?.data.payload ?? {}) as Record<string, unknown>
+  const latestIssue = past.items.find((e) => e.data.type.startsWith('issue.') && e.id !== event.id)
+  seen.assignedToMe = idOf(payload(latestIssue).assignee) === myId
+  seen.iCommented = past.items.some((e) => e.data.type === 'comment.created' && idOf(payload(e).author) === myId)
+  return seen
+}
+
+/** The router's `wantsFallback`: the event source's rule (FALLBACK_RULES), with the router's employee as context. */
+export function createWantsFallback(d: { sessions: Sessions; directory: Directory; records: Records }) {
+  return async (event: MpEvent, routerSessionId: string): Promise<boolean> => {
+    const rule = FALLBACK_RULES[event.data.source]
+    if (!rule) return true
+    const employeeId = (await d.sessions.get(routerSessionId))?.data.employeeId
+    const employee = employeeId ? await d.directory.employees.get(employeeId) : null
+    const contact = employee ? await d.directory.contacts.get(employee.data.contactId) : null
+    const handle = (system: string) => contact?.data.handles?.find((h) => h.system === system)?.id
+    const names = [handle('mp'), employee?.key, contact?.data.name].filter((n): n is string => !!n)
+    return rule(event, { handle, names, records: d.records })
+  }
 }
