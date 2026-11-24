@@ -48,12 +48,16 @@ afterAll(async () => {
 async function connect(tok: string) {
   const client = new Client({ name: 'test-client', version: '0.0.0' })
   const notes: any[] = []
+  const channel: any[] = []
   client.setNotificationHandler(LoggingMessageNotificationSchema, (n) => void notes.push(n.params.data))
+  client.fallbackNotificationHandler = async (n) => {
+    if (n.method === 'notifications/claude/channel') channel.push(n.params)
+  }
   const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${t.port}/mcp`), {
     requestInit: { headers: { authorization: `Bearer ${tok}` } },
   })
   await client.connect(transport)
-  return { client, notes }
+  return { client, notes, channel }
 }
 
 describe('MCP server /mcp', () => {
@@ -72,7 +76,7 @@ describe('MCP server /mcp', () => {
   })
 
   it('offers the tools, acts as the contact, and notifies about replies and finished work', async () => {
-    const { client, notes } = await connect(token)
+    const { client, notes, channel } = await connect(token)
     const tools = (await client.listTools()).tools.map((x) => x.name).sort()
     expect(tools).toEqual([
       'ask',
@@ -97,10 +101,14 @@ describe('MCP server /mcp', () => {
       await client.callTool({ name: 'chat_post', arguments: { channel: 'general', text: 'Hello from my own agent' } }),
     )
     expect(posted.messageId).toMatch(/^msg_/)
+    // The first post joins chat as the connection's own agent, sponsored by the token's person, and says so once.
     const msg = await t.a.services.chat.getMessage(posted.messageId)
-    expect(msg!.data.author).toEqual({ kind: 'contact', id: anaId })
+    const agent = await t.a.services.directory.contacts.get(msg!.data.author.id)
+    expect(agent!.data).toMatchObject({ kind: 'agent', sponsor: anaId })
+    expect(posted.joined).toContain(`@${agent!.data.name}`)
     const read = json(await client.callTool({ name: 'chat_read', arguments: { channel: 'general' } }))
-    expect(read.at(-1)).toMatchObject({ author: 'Ana Example', text: 'Hello from my own agent' })
+    expect(read.at(-1)).toMatchObject({ text: 'Hello from my own agent' })
+    expect(read.at(-1).author).toContain(agent!.data.name)
     expect((await client.callTool({ name: 'chat_read', arguments: { channel: 'nope' } })).isError).toBe(true)
 
     const asked = json(await client.callTool({ name: 'ask', arguments: { employee: 'meatless', question: 'What is 2+2?' } }))
@@ -108,10 +116,24 @@ describe('MCP server /mcp', () => {
     const dm = await t.a.services.chat.getChannel(asked.channelId)
     expect(dm!.data).toMatchObject({ dm: true })
 
-    const replyNote = await until(() => notes.find((n) => n.type === 'chat.reply'), 'a reply notification', 10_000)
-    expect(replyNote).toMatchObject({ threadId: asked.threadId, text: 'It is 4.', author: 'Meatless' })
+    // The question is the agent's, so the reply is delivered to it.
+    const replyNote = await until(
+      () => notes.find((n) => n.type === 'chat.message' && n.threadId === asked.threadId && n.text === 'It is 4.'),
+      'a reply notification',
+      10_000,
+    )
+    expect(replyNote.author).toContain('Meatless')
     const finished = await until(() => notes.find((n) => n.type === 'work.finished'), 'a finished notification', 10_000)
     expect(finished).toMatchObject({ state: 'completed' })
+    // Also as Claude Code channel notifications, which reach the model (notifications/message doesn't), without joining chat.
+    const replyChannel = await until(
+      () => channel.find((n) => n.meta.thread_id === asked.threadId && n.content === 'It is 4.'),
+      'a reply channel note',
+      10_000,
+    )
+    expect(replyChannel.meta).toMatchObject({ channel_id: asked.channelId })
+    expect(Object.values(replyChannel.meta).every((v) => typeof v === 'string')).toBe(true)
+    await until(() => channel.find((n) => n.meta.type === 'work.finished'), 'a finished channel note', 10_000)
 
     const work = json(await client.callTool({ name: 'my_work', arguments: {} }))
     expect(work.runs.length).toBeGreaterThanOrEqual(1)

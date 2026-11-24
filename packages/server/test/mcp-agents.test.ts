@@ -181,9 +181,11 @@ function agentSuite(backend: Backend) {
     expect(left.left).toBe('ordinary-plum')
     expect((await s.directory.contacts.get(joined.contactId))!.data.online).toBe(false)
     expect((await s.chat.getMessage(posted.messageId))!.data.author.id).toBe(joined.contactId)
-    // After leaving, posts are the person's again.
-    const mine = json(await again.call('chat_post', { channel: 'general', text: 'As Ana again' }))
-    expect((await s.chat.getMessage(mine.messageId))!.data.author).toEqual({ kind: 'contact', id: anaId })
+    // Posting after leaving rejoins as the same agent, never as the person.
+    const rejoined = json(await again.call('chat_post', { channel: 'general', text: 'Back again' }))
+    expect((await s.chat.getMessage(rejoined.messageId))!.data.author).toEqual({ kind: 'contact', id: joined.contactId })
+    expect(rejoined.joined).toMatch(/@ordinary-plum/)
+    expect((await s.directory.contacts.get(joined.contactId))!.data.online).toBe(true)
     await again.disconnect()
   })
 
@@ -422,9 +424,11 @@ function agentSuite(backend: Backend) {
       const third = await c.call('chat_post', { channel: 'general', text: 'three' })
       expect(third.isError).toBe(true)
       expect(text(third)).toMatch(/too many messages/)
-      // The person's own posts (not joined) aren't counted against the agent.
+      // Leaving doesn't get round it: posting again rejoins as the same agent.
       await c.call('chat_leave')
-      expect((await c.call('chat_post', { channel: 'general', text: 'as bob' })).isError).toBeFalsy()
+      const again = await c.call('chat_post', { channel: 'general', text: 'four' })
+      expect(again.isError).toBe(true)
+      expect(text(again)).toMatch(/too many messages/)
       await c.disconnect()
     } finally {
       t.a.mcp.agents.postLimiter = before

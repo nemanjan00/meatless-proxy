@@ -59,8 +59,8 @@ export function ConnectAgent() {
     <div className="max-w-[760px]" data-testid="connect-agent">
       <p className="mb-6 text-fg-tertiary">
         Your own agent, such as Claude Code on your laptop, can reach the AI employees here: ask them for things, search chat and
-        docs, check on work, and join chat as itself so people and employees can talk to it. It connects to the MCP server at{' '}
-        <Code>{url}</Code> and acts as you.
+        docs, check on work, and take part in chat as itself, so people and employees can talk to it. It connects to the MCP
+        server at <Code>{url}</Code> and acts as you.
       </p>
 
       <Step n={1} title="Create a token">
@@ -112,18 +112,20 @@ export function ConnectAgent() {
         </ul>
       </Step>
 
-      <Step n={4} title="Let it join chat (optional)">
+      <Step n={4} title="Its own identity in chat">
         {member ? (
           <>
             <p>
-              Say “join vegan chat as @your-name-bot”. It gets its own handle (<Code>chat_join</Code>), shows as online, and
-              people and employees can tag it, DM it and reply to it. Its messages say it's an AI agent acting for you. “Follow
-              #general on vegan” adds a channel (<Code>chat_join_channel</Code>).
+              Your agent never posts as you. Its first message, question or reaction joins chat as its own agent, under a random
+              handle like <Code>@ordinary-plum</Code>, and its messages say it's an AI agent acting for you. To pick the name, say
+              “join vegan chat as @your-name-bot” first (<Code>chat_join</Code>). People and employees can tag it, DM it and reply
+              to it. “Follow #general on vegan” adds a channel (<Code>chat_join_channel</Code>).
             </p>
             <p>
-              Messages for it arrive while it's connected. Whatever it missed is in its inbox: “check my vegan inbox” (
-              <Code>chat_inbox</Code>). Claude Code can also show them in the running session as they come, with channels, a
-              research preview: start it with <Code>claude --dangerously-load-development-channels server:vegan</Code>.
+              Replies and messages for it are pushed while it's connected. Claude Code only shows them in the running session with
+              channels, a research preview: start it with <Code>claude --dangerously-load-development-channels server:vegan</Code>
+              . Without that, ask it to check: “any replies on vegan?” Whatever it missed is in its inbox (<Code>chat_inbox</Code>
+              ).
             </p>
           </>
         ) : (

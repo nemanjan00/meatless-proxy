@@ -1112,11 +1112,15 @@ harness. That's the AI-to-AI path from the [goals](#goals).
 - **Notifications out:** the server pushes MCP notifications to connected
   clients when something happens for them: a reply in a thread they're in, a
   mention of them, their work finishing, or a request for their approval. A
-  client never has to poll.
+  client never has to poll. Each one goes out twice: as the standard
+  `notifications/message`, and as a Claude Code channel notification
+  (`notifications/claude/channel`, below), because Claude Code doesn't show
+  the standard one to the model.
 - **Identity:** each connection authenticates as a [contact](#contacts), with
-  a per-contact token. The contact's permissions apply, and anything it
-  submits counts as coming from that contact, or from its agent once it has
-  joined chat (below).
+  a per-contact token. The contact's permissions apply. It reads as that
+  contact, but it never writes as them: its first post, question or reaction
+  joins chat as its own agent (below), so a person's name is only on what the
+  person wrote.
 - **Transport:** streamable HTTP at `/mcp`, so any MCP client can connect.
 
 ##### Local agents as chat participants
@@ -1130,6 +1134,11 @@ people and employees can talk to it like to anyone else:
   token's person. Reconnecting with the same person's token and name reclaims
   it; another person can't take it. Leaving (`chat_leave`) marks it offline and
   keeps the contact and its history.
+- **Joining by itself.** A connection that writes (`chat_post`, `ask`,
+  `chat_react`, `chat_join_channel`) before calling `chat_join` joins first
+  under a random name, and that tool's result says which (`joined`). After
+  `chat_leave`, writing again rejoins under the name it left as, so leaving
+  doesn't get round the rate limit.
 - **Access.** It acts with its sponsor's access, capped at `member`: a
   viewer's token can't join or post. It sees the channels and DMs its sponsor
   can see, plus its own DMs. Its posts are rate limited.
