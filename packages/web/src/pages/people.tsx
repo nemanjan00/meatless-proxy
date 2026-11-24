@@ -47,6 +47,9 @@ import { useApi, useLiveReload, useLoad } from '@/lib/api.tsx'
 import { Can, useAuth } from '@/lib/auth.tsx'
 import { agoPhrase, formatDateTime, pluralize, timeAgo } from '@/lib/format.ts'
 import { ACCESS_INFO, ACCESS_ORDER, PERSON_TYPES, systemLabel } from '@/lib/knowledge.ts'
+
+/** The kinds the People list shows: local agents (one per MCP connection) aren't listed; their messages link to them. */
+const LIST_TYPES = PERSON_TYPES.filter((t) => t.value !== 'agent')
 import { sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -197,7 +200,7 @@ export function PeoplePage() {
     return true
   })
   const counts = Object.fromEntries(
-    PERSON_TYPES.map((t) => [t.value, all.filter((p) => p.type === t.value && !p.deactivated).length]),
+    LIST_TYPES.map((t) => [t.value, all.filter((p) => p.type === t.value && !p.deactivated).length]),
   )
   const deactivatedCount = all.filter((p) => p.deactivated).length
   const filtersSet = FILTER_PARAMS.some((k) => params.has(k)) || !!text
@@ -220,7 +223,7 @@ export function PeoplePage() {
       filters={
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2" data-testid="people-filters">
           <div className="flex items-center gap-0.5" role="tablist" aria-label="Show">
-            {[{ value: ANY, plural: 'Everyone' }, ...PERSON_TYPES].map((t) => (
+            {[{ value: ANY, plural: 'Everyone' }, ...LIST_TYPES].map((t) => (
               <button
                 key={t.value}
                 type="button"

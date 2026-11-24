@@ -222,6 +222,8 @@ export function filterPeople(items: Api.PersonItem[], q: Record<string, string |
   const withDeactivated = q.deactivated === undefined || q.deactivated === '' ? true : boolParam(q.deactivated)
   return items.filter((i) => {
     const d = i.contact.data
+    // Local agents (a person's Claude Code over MCP, one per connection) aren't people: only when asked for.
+    if (i.type === 'agent' && q.type !== 'agent') return false
     if (q.type && i.type !== q.type) return false
     if (q.access && i.access !== q.access) return false
     if (q.team && (d.team ?? '').toLowerCase() !== q.team.toLowerCase()) return false

@@ -3688,12 +3688,14 @@ All of these update live over the WebSocket.
 
 #### People
 
-- **People** (`/contacts`, "People" in the sidebar) lists people, AI employees
-  and local agents, in tabs, with filters for access and team, "deactivated"
-  and a search over name, email, team and handles. Rows show the avatar, name,
+- **People** (`/contacts`, "People" in the sidebar) lists people and AI
+  employees, in tabs, with filters for access and team, "deactivated" and a
+  search over name, email, team and handles. Rows show the avatar, name,
   title and team, email and handles, projects, access (or "AI employee",
-  "agent", "deactivated") and, for admins, the last sign-in. AI employees link
-  to their employee page.
+  "deactivated") and, for admins, the last sign-in. AI employees link to
+  their employee page. Local agents (one per MCP connection, so many and
+  short-lived) aren't listed: their messages say whose they are and link to
+  them, and `GET /api/people?type=agent` lists them.
 - **Add person** (admins): name, email, access (with what each level may do),
   title, team, manager, handles (Slack, GitLab, Linear or any system), and
   **Send a sign-in link** (on by default): the one-time link is shown to copy

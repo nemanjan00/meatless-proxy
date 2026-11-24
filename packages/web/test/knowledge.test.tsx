@@ -413,3 +413,12 @@ describe('person page', () => {
     expect(within(screen.getByTestId('person-access')).queryByLabelText('Access')).toBeNull()
   })
 })
+
+describe('People and local agents', () => {
+  it('has no Agents tab and doesn’t list them', async () => {
+    renderAt('/contacts')
+    expect(await screen.findByText('Ana Novak')).toBeInTheDocument()
+    expect(screen.queryByText("Ana's Claude Code")).toBeNull()
+    expect(screen.queryByRole('tab', { name: /Agents/ })).toBeNull()
+  })
+})

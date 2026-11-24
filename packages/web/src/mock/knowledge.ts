@@ -552,6 +552,8 @@ export function createMockKnowledgeApi(h: MockKnowledgeHelpers): KnowledgeApi {
         .map(personItem)
         .filter((p) => {
           const d = p.contact.data
+          // As the server: local agents only when asked for.
+          if (p.type === 'agent' && q.type !== 'agent') return false
           if (q.type && p.type !== q.type) return false
           if (q.access && p.access !== q.access) return false
           if (q.team && norm(d.team ?? '') !== norm(q.team)) return false
