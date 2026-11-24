@@ -299,14 +299,28 @@ function ToolList({ id }: { id: string }) {
   if (!tools.data.length)
     return <div className="px-3 pb-2 pl-[3.25rem] text-micro text-fg-quaternary">No tools while it isn't connected.</div>
   return (
-    <ul className="px-3 pb-2 pl-[3.25rem]" aria-label="Tools">
-      {tools.data.map((t: McpServerTool) => (
-        <li key={t.toolName} className="flex h-6 items-center gap-3 text-micro">
-          <span className="font-mono text-fg-secondary">{t.toolName}</span>
-          <span className="min-w-0 truncate text-fg-quaternary">{t.description}</span>
-          <span className="ml-auto text-fg-quaternary">{t.effect.replace('_', '-')}</span>
-        </li>
-      ))}
+    <ul className="px-3 pb-2 sm:pl-[3.25rem]" aria-label="Tools">
+      {tools.data.map((t: McpServerTool) => {
+        // Descriptions can be long and span lines: one line here, all of it on hover.
+        const summary = (t.description ?? '').split('\n').find((l) => l.trim()) ?? ''
+        return (
+          <li
+            key={t.toolName}
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 py-0.5 text-micro sm:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_auto]"
+          >
+            <span className="col-start-1 row-start-1 truncate font-mono text-fg-secondary" title={t.toolName}>
+              {t.toolName}
+            </span>
+            <span
+              className="col-span-2 col-start-1 row-start-2 truncate text-fg-quaternary sm:col-span-1 sm:col-start-2 sm:row-start-1"
+              title={t.description}
+            >
+              {summary}
+            </span>
+            <span className="col-start-2 row-start-1 text-fg-quaternary sm:col-start-3">{t.effect.replace('_', '-')}</span>
+          </li>
+        )
+      })}
     </ul>
   )
 }

@@ -29,6 +29,12 @@ const TOOLS: Record<string, McpServerTool[]> = {
     { name: 'search', description: 'Search the wiki', effect: 'read' },
     { name: 'get_page', description: 'Read a page', effect: 'read' },
     { name: 'create_page', description: 'Create a page', effect: 'non_idempotent' },
+    {
+      name: 'search_pages_by_space_and_label_with_attachments',
+      description:
+        'Search pages in a space by label.\n\nReturns up to 50 pages, newest first, with their attachments.\nArgs:\n  space: the space key\n  label: a label',
+      effect: 'read',
+    },
   ].map((t) => ({ ...t, toolName: `mcp.docs.${t.name}`, inputSchema: { type: 'object', properties: {} } }) as McpServerTool),
   tasks: [
     { name: 'list_tasks', description: 'List tasks', effect: 'read' },
