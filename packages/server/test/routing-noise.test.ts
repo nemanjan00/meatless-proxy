@@ -59,7 +59,7 @@ const dm = (text: string, extra: Record<string, unknown> = {}, payload: Record<s
 }
 
 describe('a Slack DM after a session posted in it', () => {
-  it('goes to that session for an hour, not to the router, and to whichever session posted last', async () => {
+  it('goes to that session for a few minutes or while it works, not to the router, and to whichever session posted last', async () => {
     const { s, clock, plan, posted, router, employee } = await make()
     expect(await plan(dm('hi'))).toEqual([[router, 'fallback', true]])
     const work = await s.sessions.create({ employeeId: employee.id, title: 'Fix the build' })
@@ -74,6 +74,9 @@ describe('a Slack DM after a session posted in it', () => {
 
     clock.advance(DM_FOLLOW_MS + 60_000)
     expect(await plan(dm('new thing'))).toEqual([[router, 'fallback', true]])
+    // Past that, only while the session is working: a new question then waits for it, not a new session.
+    await s.sessions.createRun({ sessionId: other.id, cause: { type: 'manual' } })
+    expect(await plan(dm('one more detail for that'))).toEqual([[other.id, 'subscription', true]])
   })
 
   it("not a channel post, not a finished session, not another employee's DM", async () => {

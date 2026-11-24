@@ -433,17 +433,22 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       .map((m) => ({ sessionId: m.id, reason: 'member' as const, expectedToAct: false, trusted: true, fork: false }))
   }
 
-  // A person's new message in a Slack DM goes to the session that last posted there, for a while
-  // (src/integrations/policies.ts followSlackDm), instead of the router starting another session.
+  // A person's new message in a Slack DM goes to the session that last posted there while that session is
+  // working, or for a few minutes after it posted (src/integrations/policies.ts followSlackDm); otherwise
+  // the router, which can forward it to that session when it's about the same thing.
   const slackDmFollower: RecipientResolver = async (event) => {
     if (event.data.source !== SLACK_SOURCE || event.data.type !== 'message.direct') return []
     const p = event.data.payload as { channel?: unknown; is_reply?: unknown } | undefined
     if (!isSlackDm(p?.channel) || p.is_reply === true) return []
     const subs = await rawEvents.subscriptions.forSubject(slackDmSubject(p.channel))
     const latest = subs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
-    if (!latest || clock.now() - Date.parse(latest.updatedAt) > DM_FOLLOW_MS) return []
+    if (!latest) return []
     const session = await sessions.get(latest.data.sessionId)
     if (!session || session.data.status === 'done' || session.data.status === 'abandoned') return []
+    // Only while it's working (a run queued, running or waiting) or just posted: live, an hour that every reply
+    // started again sent all of a person's new questions to one session, past the router.
+    const recent = clock.now() - Date.parse(latest.updatedAt) <= DM_FOLLOW_MS
+    if (!recent && !(await sessions.activeContinuingRun(session.id))) return []
     // Each employee's app has its own DMs: only its own sessions follow them.
     if (event.data.employeeId && session.data.employeeId !== event.data.employeeId) return []
     return [

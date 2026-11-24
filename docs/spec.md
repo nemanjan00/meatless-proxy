@@ -961,9 +961,13 @@ Each integration has three parts:
 - **Slack is company chat alongside harness chat:** a session working on a
   Slack thread subscribes to it, and replies go back to Slack. A session that
   posts in Slack (`post_message` or `reply`) subscribes to that thread, and in
-  a DM it also follows the DM (`slack:<D…>`): for an hour after it last
-  posted there, the person's new top-level messages in the DM go straight to
-  it instead of the router, until another session posts there. In a DM the
+  a DM it also follows the DM (`slack:<D…>`): while it's working (a run
+  queued, running or waiting) and for 10 minutes after it last posted there,
+  the person's new top-level messages in the DM go straight to it instead of
+  the router, until another session posts there. After that they go to the
+  router, which forwards one to that session when it's about the same thing
+  (an hour that every reply started again sent all of a person's new
+  questions to one session). In a DM the
   answer to a top-level message is posted at the top level, not in a thread
   under it, which hides it. Files people
   share appear in events as `[file: name, slack file F…]`; `get_file` saves

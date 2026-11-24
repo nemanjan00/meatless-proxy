@@ -137,8 +137,8 @@ export async function subscribeOnce(events: Events, session: Session, subject: S
   return true
 }
 
-/** How long a Slack DM's new messages go to the session that last posted there, instead of the router. */
-export const DM_FOLLOW_MS = 60 * 60_000
+/** How long after it posted a Slack DM's new messages go to the session that last posted there (any time while it works). */
+export const DM_FOLLOW_MS = 10 * 60_000
 
 /** A Slack DM channel (`D…`), as opposed to a channel or a group DM. */
 export const isSlackDm = (channel: unknown): channel is string => typeof channel === 'string' && /^D[A-Z0-9]+$/.test(channel)
