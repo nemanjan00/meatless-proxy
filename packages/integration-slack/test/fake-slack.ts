@@ -19,6 +19,7 @@ export interface FakeMessage {
   text: string
   thread_ts?: string
   reply_count?: number
+  latest_reply?: string
   reactions?: { name: string; users: string[]; count: number }[]
   edited?: { user: string; ts: string }
   blocks?: unknown[]

@@ -118,6 +118,8 @@ const userId = z.string().regex(/^[UW][A-Z0-9]+$/, 'a Slack user id, e.g. U0123A
 const SEARCH_HOURS = 24
 const SEARCH_MAX_HOURS = 24 * 7
 const SEARCH_CALLS = 200
+/** search: how much further back it looks for threads that started earlier but got replies within since_hours. */
+const SEARCH_THREAD_LOOKBACK_HOURS = 24 * 7
 const emoji = z.string().min(1).describe('Emoji name without colons, e.g. eyes or white_check_mark')
 
 const READ = { readOnlyHint: true, openWorldHint: true } as const
@@ -311,7 +313,7 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger, clock:
   )
   tool(
     'search',
-    `Search recent messages in the channels the app is in (not DMs), thread replies included: by words, author and who is mentioned. Reads the last since_hours (default ${SEARCH_HOURS}, max ${SEARCH_MAX_HOURS}) of each channel, so it finds threads started in that time. Give at least one of query, from, mentions. Returns matches newest first, each with channel, channel_name, ts and thread_ts (read_thread for the conversation); truncated: true means it stopped early (narrow it with channels or since_hours).`,
+    `Search recent messages in the channels the app is in (not DMs), thread replies included: by words, author and who is mentioned. Reads the last since_hours (default ${SEARCH_HOURS}, max ${SEARCH_MAX_HOURS}) of each channel, and the replies posted in that time to threads started up to a week before it. Give at least one of query, from, mentions. Returns matches newest first, each with channel, channel_name, ts and thread_ts (read_thread for the conversation); truncated: true means it stopped early (narrow it with channels or since_hours).`,
     {
       query: z.string().optional().describe('Words that must all appear, any case; "quoted phrase" for an exact phrase'),
       from: userId.optional().describe('Only messages by this Slack user id (U…)'),
@@ -325,7 +327,10 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger, clock:
       const words = queryWords(a.query ?? '')
       if (!words.length && !a.from && !a.mentions) throw new MpError('validation', 'give query, from or mentions')
       const want = a.limit ?? 50
-      const oldest = ((clock.now() - (a.since_hours ?? SEARCH_HOURS) * 3600_000) / 1000).toFixed(6)
+      const since = clock.now() - (a.since_hours ?? SEARCH_HOURS) * 3600_000
+      const oldest = (since / 1000).toFixed(6)
+      // Roots are read further back: a thread started earlier can have replies within the window.
+      const rootsOldest = ((since - SEARCH_THREAD_LOOKBACK_HOURS * 3600_000) / 1000).toFixed(6)
       let calls = 0
       let truncated = false
       const slack = async (method: string, params: Obj) => {
@@ -369,7 +374,12 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger, clock:
         try {
           let next: string | null | undefined
           do {
-            const r = await slack('conversations.history', { channel: ch.id, oldest, limit: 200, cursor: next ?? undefined })
+            const r = await slack('conversations.history', {
+              channel: ch.id,
+              oldest: rootsOldest,
+              limit: 200,
+              cursor: next ?? undefined,
+            })
             if (!r) break
             roots.push(...((r.messages as Obj[]) ?? []))
             next = nextCursor(r)
@@ -377,6 +387,9 @@ export function createSlackMcpServer(client: SlackClient, logger: Logger, clock:
           const all = [...roots]
           for (const root of roots) {
             if (!num(root.reply_count) || !str(root.ts)) continue
+            // A thread with no reply in the window has nothing to find (without latest_reply, read it anyway).
+            const latest = str(root.latest_reply)
+            if (latest ? latest < oldest : str(root.ts)! < oldest) continue
             const r = await slack('conversations.replies', { channel: ch.id, ts: root.ts, oldest, limit: 1000 })
             if (!r) break
             // The root comes back too: it's already in.

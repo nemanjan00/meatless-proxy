@@ -115,4 +115,23 @@ describe('search', () => {
     expect(r.value.truncated).toBe(true)
     expect(slack.calls.length).toBeLessThanOrEqual(200 + 5)
   })
+
+  it('finds replies in the window to a thread started before it, and skips threads quiet since then', async () => {
+    const at = (hoursAgo: number) => `${(NOW / 1000 - hoursAgo * 3600).toFixed(0)}.000100`
+    const c3 = slack.channels.get('C3')!
+    c3.messages.push(
+      // Started three days ago, answered half an hour ago.
+      { ts: at(72), user: 'U1', text: 'weekly sync notes', reply_count: 1, latest_reply: at(0.5) },
+      { ts: at(0.5), user: 'U2', text: 'the sync moved to Thursday', thread_ts: at(72) },
+      // Started and last answered four days ago.
+      { ts: at(96), user: 'U1', text: 'old sync thread', reply_count: 1, latest_reply: at(95) },
+      { ts: at(95), user: 'U2', text: 'sync done', thread_ts: at(96) },
+    )
+    const r = await search({ query: 'sync', channels: ['C3'] })
+    expect(r.value.messages).toEqual([
+      { channel: 'C3', ts: at(0.5), user: 'U2', text: 'the sync moved to Thursday', thread_ts: at(72) },
+    ])
+    // Only the thread with a reply in the window was opened.
+    expect(slack.callsTo('conversations.replies').map((c) => c.params.ts)).toEqual([at(72)])
+  })
 })
