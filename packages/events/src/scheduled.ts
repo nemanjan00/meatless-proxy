@@ -23,8 +23,11 @@ export const SCHEDULED_TASK_FIRED = 'scheduled_task.fired'
 export const TASK_GRACE_SECONDS = DEFAULT_GRACE_SECONDS
 /** How late a missed one-off (a reminder, a follow-up) may still fire: longer, since it never comes again. */
 export const ONCE_GRACE_SECONDS = 3600
-/** The most characters an instruction or note may have. */
-export const MAX_INSTRUCTION = 4000
+/**
+ * The most characters an instruction or note may have. Live, a daily brief handed over from a person had
+ * instructions of over 4,000 characters (sources, sections, who gets what), and was refused at 4,000.
+ */
+export const MAX_INSTRUCTION = 16_000
 
 export type ScheduledTaskKind = 'task' | 'follow_up'
 /** When: once at a time (ISO), or on a cron schedule read in the task's time zone. */

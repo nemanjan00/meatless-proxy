@@ -162,7 +162,7 @@ describe('scheduled tasks', () => {
     })
     const bad: [unknown, RegExp][] = [
       [{ ...base, instruction: '  ' }, /instruction is required/],
-      [{ ...base, instruction: 'x'.repeat(4001) }, /at most 4000/],
+      [{ ...base, instruction: 'x'.repeat(16_001) }, /at most 16000/],
       [{ ...base, when: { type: 'cron', cron: 'nope' } }, /schedule.cron/],
       [{ ...base, when: { type: 'once', at: 'friday' } }, /ISO time/],
       [{ ...base, when: { type: 'once', at: '2026-09-29T08:00:00Z' } }, /already passed/],

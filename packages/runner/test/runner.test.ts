@@ -2,7 +2,7 @@ import { UnavailableError, type Json } from '@mp/core'
 import { callTools, reply } from '@mp/model'
 import type { AssistantContent, ToolResultContent } from '@mp/sessions'
 import { describe, expect, it } from 'vitest'
-import { afterModelCall, beforeFinish, beforeModelCall, beforeToolCall, renderMessages } from '../src/index.ts'
+import { afterModelCall, beforeFinish, beforeModelCall, beforeToolCall, renderMessages, similarTools } from '../src/index.ts'
 import { harness } from './harness.ts'
 
 const kinds = (entries: { kind: string }[]) => entries.map((e) => e.kind)
@@ -141,6 +141,13 @@ describe('runner', () => {
     await h.runner.execute(run.id)
     expect(JSON.stringify(h.model.calls[0]!.messages)).not.toContain('old line')
     expect(JSON.stringify(await h.sessions.history(s.id))).toContain('old line')
+  })
+
+  it('suggests the session’s tools that look like an unknown tool name', () => {
+    const toolset = ['mcp.gitlab.list_commits', 'mcp.gitlab.get_file', 'mcp.linear.search_issues', 'chat.reply']
+    expect(similarTools('mcp__gitlab__list_commits', toolset)).toEqual(['mcp.gitlab.list_commits', 'mcp.gitlab.get_file'])
+    expect(similarTools('mcp__mail_food__mcp__linear__search_issues', toolset)[0]).toBe('mcp.linear.search_issues')
+    expect(similarTools('weather.today', toolset)).toEqual([])
   })
 
   it('records usage through afterModelCall', async () => {

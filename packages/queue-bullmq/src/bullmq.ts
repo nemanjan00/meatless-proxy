@@ -79,7 +79,7 @@ export function bullmqQueue(opts: BullmqQueueOptions): Queue {
     typeof opts.connection === 'string'
       ? new Redis(opts.connection, redisOptions)
       : new Redis({ ...opts.connection, ...redisOptions })
-  redis.on('error', (err) => logger.error('redis connection error', { err }))
+  redis.on('error', (err) => logQueueError(logger, 'redis connection error', {}, err))
 
   const queues = new Map<string, BullQueue>()
   const workers = new Set<BullWorker>()
@@ -92,7 +92,7 @@ export function bullmqQueue(opts: BullmqQueueOptions): Queue {
     let q = queues.get(name)
     if (!q) {
       q = new BullQueue(encodeName(name), { connection: redis, prefix })
-      q.on('error', (err) => logger.error('queue error', { queue: name, err }))
+      q.on('error', (err) => logQueueError(logger, 'queue error', { queue: name }, err))
       queues.set(name, q)
     }
     return q
@@ -173,7 +173,7 @@ export function bullmqQueue(opts: BullmqQueueOptions): Queue {
         },
       )
       workers.add(worker)
-      worker.on('error', (err) => logger.error('worker error', { queue, err }))
+      worker.on('error', (err) => logQueueError(logger, 'worker error', { queue }, err))
       worker.on('completed', (bj) => {
         const job = jobs.get(bj) ?? toJob(bj)
         void redis.hincrby(countsKey(queue), 'completed', 1).catch((err) => logger.error('queue count failed', { queue, err }))
@@ -243,4 +243,17 @@ export function bullmqQueue(opts: BullmqQueueOptions): Queue {
       return closing
     },
   }
+}
+
+/** Errors of losing the connection to Redis for a while (e.g. its container restarting in a deploy): retried by itself. */
+const TRANSIENT = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE)\b|Connection is closed/
+
+/**
+ * Logs a Redis, queue or worker error: a lost connection, which the client retries by itself, as a warning
+ * (live, every rolling deploy logged a hundred of them as errors), anything else as an error.
+ */
+export function logQueueError(logger: Logger, msg: string, fields: Record<string, unknown>, err: unknown) {
+  const text = err instanceof Error ? `${(err as { code?: unknown }).code ?? ''} ${err.message}` : String(err)
+  if (TRANSIENT.test(text)) logger.warn(`${msg} (retrying)`, { ...fields, err })
+  else logger.error(msg, { ...fields, err })
 }

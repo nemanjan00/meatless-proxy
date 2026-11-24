@@ -726,7 +726,13 @@ export function createRunner(opts: RunnerOptions): Runner {
     const name = tools.resolveProviderName(call.name) ?? call.name
     const registered = tools.get(name)
     const base = { toolCallId: call.id, name }
-    if (!registered) return { content: { ...base, output: { error: `unknown tool ${call.name}` }, isError: true }, control: [] }
+    if (!registered) {
+      // Live, models wrote names the way other harnesses spell them (`mcp__gitlab__list_commits`): say which
+      // of the session's tools look like what was meant.
+      const like = similarTools(call.name, session.data.toolset)
+      const error = `unknown tool ${call.name}${like.length ? `. Did you mean: ${like.join(', ')}?` : ''}`
+      return { content: { ...base, output: { error }, isError: true }, control: [] }
+    }
     const def = registered.def
     if (blind(def)) return { content: { ...base, output: { error: "this model can't see images" }, isError: true }, control: [] }
     const lists = await opts.toolListsFor(session.data.employeeId)
@@ -1291,4 +1297,29 @@ export function createRunner(opts: RunnerOptions): Runner {
   }
 
   return { execute, wake, enqueue }
+}
+
+/**
+ * Up to `max` tools of a toolset whose names look like `asked`: the same last part (`list_commits`), or
+ * many words in common, best first.
+ */
+export function similarTools(asked: string, toolset: readonly string[], max = 3): string[] {
+  const parts = (n: string) =>
+    n
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+  const want = parts(asked)
+  const tail = asked.toLowerCase().split(/\.|__/).filter(Boolean).at(-1) ?? ''
+  return toolset
+    .map((name) => {
+      const have = new Set(parts(name))
+      const shared = want.filter((w) => have.has(w)).length
+      const sameTail = name.toLowerCase().split('.').at(-1) === tail ? 3 : 0
+      return { name, score: shared + sameTail }
+    })
+    .filter((x) => x.score >= 2)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, max)
+    .map((x) => x.name)
 }
