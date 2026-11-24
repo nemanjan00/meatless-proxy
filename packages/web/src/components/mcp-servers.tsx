@@ -545,21 +545,22 @@ function ServerDialog({
                 />
               </Row>
               <Row id="mcp-token-header" label="Header">
-                <div className="flex gap-1.5">
-                  <Input
-                    id="mcp-token-header"
-                    value={header}
-                    onChange={(e) => setHeader(e.target.value)}
-                    className="w-40 font-mono text-micro"
-                  />
-                  <Input
-                    aria-label="Prefix"
-                    value={prefix}
-                    onChange={(e) => setPrefix(e.target.value)}
-                    placeholder="no prefix"
-                    className="w-28 font-mono text-micro"
-                  />
-                </div>
+                <Input
+                  id="mcp-token-header"
+                  value={header}
+                  onChange={(e) => setHeader(e.target.value)}
+                  className="w-40 font-mono text-micro"
+                />
+              </Row>
+              <Row id="mcp-token-prefix" label="Prefix" hint="Goes before the token, e.g. Bearer">
+                <Input
+                  id="mcp-token-prefix"
+                  value={prefix}
+                  onChange={(e) => setPrefix(e.target.value)}
+                  placeholder="no prefix"
+                  maxLength={40}
+                  className="w-40 font-mono text-micro"
+                />
               </Row>
               <Row id="mcp-token-secret" label="Secret name" hint="Optional: an existing secret instead">
                 <Input
