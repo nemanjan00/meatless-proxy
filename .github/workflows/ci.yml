@@ -16,7 +16,7 @@ jobs:
     name: Lint, types, architecture, secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -61,7 +61,7 @@ jobs:
       DATABASE_URL: postgres://postgres@127.0.0.1:5432/meatless_proxy
       REDIS_URL: redis://127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version-file: .tool-versions
@@ -73,7 +73,7 @@ jobs:
     name: Docker image builds
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the app image
         run: |
           if [ -f Dockerfile ]; then docker build -t meatless-proxy:ci .; else echo "no Dockerfile yet"; fi
