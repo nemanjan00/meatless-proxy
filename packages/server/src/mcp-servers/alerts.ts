@@ -9,12 +9,13 @@ const WINDOW_MS = 6 * 3600_000
 /**
  * Posts an alert in #alerts when a runtime MCP server needs a new sign-in
  * (its OAuth refresh failed, or its token was refused): its tools are gone
- * until an admin connects it again.
+ * until an admin connects it again. Not for one that was never signed in.
  */
 export function wireMcpAlerts(s: Services, alerts: Pick<Alerts, 'post'>): () => void {
   return s.bus.subscribe<McpServerStatusEvent>(MCP_SERVER_STATUS_TOPIC, async (m) => {
     const e = m.payload
-    if (e.state !== 'needs_auth') return
+    // A server waiting for its first sign-in (just added, or disconnected on purpose) isn't news: the admin is on it.
+    if (e.state !== 'needs_auth' || e.firstSignIn) return
     const where = e.employeeId ? `employee [[employee:${e.employeeId}]]'s` : 'the global'
     const settings = e.employeeId ? 'its MCP servers on the employee page' : 'Settings → MCP servers'
     try {

@@ -909,7 +909,9 @@ Authentication, one of:
      with the outcome.
   3. Access tokens are refreshed by themselves. When a refresh fails, the
      server becomes `needs_auth`, its tools are removed, and an alert is
-     posted in `#alerts`: an admin connects it again.
+     posted in `#alerts`: an admin connects it again. A server waiting for
+     its first sign-in (just added, or disconnected by an admin) is
+     `needs_auth` too, but gets no alert.
   - The client registration, the tokens and the PKCE verifier are
     [secrets](#secrets) scoped like the server, never plain records.
     Disconnecting deletes them; deleting the server deletes every secret the

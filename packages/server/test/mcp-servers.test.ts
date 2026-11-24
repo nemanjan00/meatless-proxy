@@ -241,10 +241,20 @@ function mcpSuite(backend: Backend) {
       return new URL(res.headers.get('location')!, 'http://harness.test')
     }
 
-    it('starts as needs_auth, with no tools', async () => {
+    it('starts as needs_auth, with no tools, and no alert: it was never signed in', async () => {
+      const events: any[] = []
+      const off = s.bus.subscribe(MCP_SERVER_STATUS_TOPIC, (m) => void events.push(m.payload))
+      const post = vi.fn(async () => 'msg_x')
+      const offAlerts = wireMcpAlerts(s, { post })
       const r = await t.req('POST', '/api/mcp-servers', { name: 'wiki', url: fake.url, employeeId: ana, auth: { type: 'oauth' } })
       expect(r.status).toBe(201)
       id = r.body.id
+      await until(() => events.some((e) => e.id === id && e.state === 'needs_auth'))
+      expect(events.find((e) => e.id === id && e.state === 'needs_auth')).toMatchObject({ firstSignIn: true })
+      await s.bus.idle()
+      expect(post).not.toHaveBeenCalled()
+      off()
+      offAlerts()
       expect(r.body).toMatchObject({
         employeeId: ana,
         auth: { type: 'oauth', hasTokens: false },

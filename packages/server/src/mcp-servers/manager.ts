@@ -48,6 +48,8 @@ export interface McpServerStatusEvent {
   employeeId: string | null
   state: Api.McpServerState
   error?: string
+  /** With `needs_auth`: an OAuth server that hasn't been signed in yet (just added, or disconnected by an admin). */
+  firstSignIn?: boolean
 }
 
 export interface McpServersDeps {
@@ -277,6 +279,10 @@ export class McpServers {
     }
     if (hub.servers().includes(id)) await hub.removeServer(id)
     this.providers.delete(id)
+    // Signed in before: it has tokens now, or doesn't use OAuth. A refresh that fails later may delete the
+    // tokens, so this is decided before connecting.
+    if (rec.data.auth.type !== 'oauth' || (await this.hasSecret(oauthSecretName(rec.data.name, 'tokens'), rec.data.employeeId)))
+      this.signedIn.add(id)
     this.live.set(id, { record: rec, applied, tools: current?.tools ?? [] })
     hub.addServer(config)
     const status = await hub.reconnect(id)
@@ -467,17 +473,21 @@ export class McpServers {
   }
 
   private lastPublished = new Map<string, string>()
+  /** Servers that were signed in (connected, or had OAuth tokens when they were applied) since this process started. */
+  private signedIn = new Set<string>()
 
   private publish(id: string, status: McpServerStatus) {
     const rec = this.live.get(id)?.record
     if (!rec) return
     const state = this.stateOf(rec, status)
+    if (state === 'connected') this.signedIn.add(id)
     const payload: McpServerStatusEvent = {
       id,
       name: rec.data.name,
       employeeId: rec.data.employeeId ?? null,
       state,
       ...(status.error ? { error: named(status.error, rec) } : {}),
+      ...(state === 'needs_auth' && !this.signedIn.has(id) ? { firstSignIn: true } : {}),
     }
     const key = `${state}:${status.error ?? ''}`
     if (this.lastPublished.get(id) === key) return
@@ -901,6 +911,7 @@ export class McpServers {
     const rec = await this.get(id)
     if (rec.data.auth.type !== 'oauth') throw new ValidationError(`MCP server ${rec.data.name} doesn't use OAuth`)
     await this.deleteOAuthSecrets(rec)
+    this.signedIn.delete(id)
     await this.sync(id, { reconnect: true })
     this.log.info('MCP OAuth disconnected', { serverId: id })
     return this.view(await this.get(id))
