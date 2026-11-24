@@ -99,6 +99,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
   const [ack, setAck] = useState(d.ackReaction !== false)
+  const [outsiders, setOutsiders] = useState(d.outsiderDms !== false)
   const [envSecrets, setEnvSecrets] = useState((d.envSecrets ?? []).join(', '))
   const [model, setModel] = useState(d.model ?? '')
   const [allow, setAllow] = useState(lists.allow.join('\n'))
@@ -110,6 +111,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     setInstructions(d.instructions ?? '')
     setWatch(d.watch ?? [])
     setAck(d.ackReaction !== false)
+    setOutsiders(d.outsiderDms !== false)
     setEnvSecrets((d.envSecrets ?? []).join(', '))
     setModel(d.model ?? '')
     const l = toolLists(d)
@@ -132,6 +134,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
           instructions,
           watch: cleanWatch(watch),
           ackReaction: ack,
+          outsiderDms: outsiders,
           envSecrets: secretNames(envSecrets),
           model,
           ...(lists.flat
@@ -185,6 +188,13 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       </Field>
       <Field id="emp-ack" label="👀 on pickup" hint="Reacts in Slack as soon as a message sets it to work">
         <Switch id="emp-ack" checked={ack} onCheckedChange={setAck} />
+      </Field>
+      <Field
+        id="emp-outsiders"
+        label="DMs from outsiders"
+        hint="Slack guests and people from other organisations may message it directly"
+      >
+        <Switch id="emp-outsiders" checked={outsiders} onCheckedChange={setOutsiders} />
       </Field>
       <Field id="emp-model" label="Model">
         <Input

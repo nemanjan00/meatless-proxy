@@ -85,6 +85,20 @@ function AccessTag({ p }: { p: PersonItem }) {
   )
 }
 
+/** A guest or someone from another organisation (found in Slack): not a member of the company. */
+function OutsideTag({ p }: { p: PersonItem }) {
+  const o = p.contact.data.outside
+  if (!o) return null
+  return (
+    <Tag
+      className="text-[var(--orange)]"
+      title="Not a member of the company, as Slack says. Employees can be set not to take their DMs."
+    >
+      {o === 'guest' ? 'guest' : 'other org'}
+    </Tag>
+  )
+}
+
 const handlesText = (p: PersonItem) =>
   (p.contact.data.handles ?? [])
     .filter((h) => h.system !== 'mp')
@@ -129,6 +143,7 @@ function PersonRow({ p, showSignIn }: { p: PersonItem; showSignIn: boolean }) {
       </span>
       <span className="justify-self-end lg:justify-self-start">
         <AccessTag p={p} />
+        <OutsideTag p={p} />
       </span>
       <span className="hidden text-right text-micro text-fg-quaternary tabular-nums lg:block">
         {p.type !== 'person' ? (
@@ -881,6 +896,7 @@ export function PersonPage() {
                 <p className="flex flex-wrap items-center gap-x-2 text-regular text-fg-tertiary">
                   {[c.role, c.team].filter(Boolean).join(' · ') || (p.type === 'ai' ? 'AI employee' : 'No title yet')}
                   <AccessTag p={p} />
+                  <OutsideTag p={p} />
                 </p>
               </div>
             </div>

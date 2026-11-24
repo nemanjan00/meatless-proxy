@@ -31,11 +31,17 @@ export function requesterText(c: Contact): string | null {
   const role = [d.role, d.team].map((x) => x?.trim()).filter(Boolean)
   const permissions = d.permissions?.trim()
   const bio = d.bio?.trim()
-  if (!role.length && !permissions && !bio) return null
+  const outside = d.outside === 'guest' || d.outside === 'external' ? d.outside : undefined
+  if (!role.length && !permissions && !bio && !outside) return null
   const handles = (d.handles ?? []).map((h) => `${h.system}:${h.id}`)
   return [
     REQUESTER_HEADER,
     `${d.name} (${[c.id, ...handles].join(', ')})${role.length ? `: ${role.join(', ')}` : ''}.`,
+    ...(outside
+      ? [
+          `Not a member of the company: ${outside === 'guest' ? 'a guest in its Slack' : 'from another organisation (a shared Slack channel)'}. Share only what their request needs, nothing internal (other customers, people, code, numbers) they couldn't see anyway, and don't act for them beyond answering.`,
+        ]
+      : []),
     ...(permissions ? [`May ask for: ${permissions}`] : []),
     ...(bio ? [`Notes:\n${clip(bio, BIO_CHARS)}`] : []),
   ].join('\n')

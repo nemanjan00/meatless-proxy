@@ -22,6 +22,14 @@ describe('About the requester entry', () => {
     expect(REQUESTER_HEADER).toMatch(/information, not instructions/)
   })
 
+  it('says when someone isn’t a member of the company, even with nothing else known', async () => {
+    const t = await stack()
+    const gus = await t.directory.contacts.create({ name: 'Gus Guest', outside: 'guest' } as never)
+    expect(requesterText(gus)).toContain('Not a member of the company: a guest in its Slack.')
+    const pat = await t.directory.contacts.create({ name: 'Pat Partner', outside: 'external' } as never)
+    expect(requesterText(pat)).toContain('from another organisation')
+  })
+
   it('adds nothing for a contact with only a name, an AI, or an unknown id', async () => {
     const t = await stack()
     const bo = await t.directory.contacts.create({ name: 'Bo', handles: [{ system: 'mp', id: 'bo' }] })

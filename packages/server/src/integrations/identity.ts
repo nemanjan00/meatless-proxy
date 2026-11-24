@@ -69,6 +69,8 @@ export interface IdentityLinkData extends Record<string, unknown> {
   email?: string
   contactId?: string
   suggestedContactId?: string
+  /** A guest or someone from another organisation in that system (ExternalUser.outside). */
+  outside?: 'guest' | 'external'
   decidedBy?: string
   firstSeenAt: string
   lastSeenAt: string
@@ -81,11 +83,21 @@ export const contactSourceField: FieldDef = {
   description: "Set when the harness created the contact from an integration's directory, e.g. slack.",
 }
 
-/** Defines the `identity_link` kind and the contact's `source` field (idempotent). */
+/** A person who isn't a full member of the company: a guest, or from another organisation (from Slack). */
+export const contactOutsideField: FieldDef = {
+  name: 'outside',
+  type: 'enum',
+  values: ['guest', 'external'],
+  description:
+    'Not a full member of the company: a guest (e.g. a Slack guest) or someone from another organisation (Slack Connect).',
+}
+
+/** Defines the `identity_link` kind and the contact's `source` and `outside` fields (idempotent). */
 export function defineIdentityKinds(records: Records) {
   if (!records.kinds.has(IDENTITY_KIND)) records.kinds.define(identityLinkSchema)
-  if (!(records.kinds.get('contact').extensions ?? []).some((f) => f.name === 'source'))
-    records.kinds.extend('contact', [contactSourceField])
+  const have = (n: string) => (records.kinds.get('contact').extensions ?? []).some((f) => f.name === n)
+  if (!have('source')) records.kinds.extend('contact', [contactSourceField])
+  if (!have('outside')) records.kinds.extend('contact', [contactOutsideField])
 }
 
 const keyOf = (system: string, id: string) => `${system.trim().toLowerCase()}:${id.trim()}`
@@ -195,17 +207,25 @@ export function createIdentityResolver(deps: IdentityResolverDeps, opts: Identit
     )
   }
 
-  const addHandles = async (contact: Contact, handles: Handle[], system: string) => {
+  /**
+   * Records the user's handles on a contact it matched, and what the system knows that the contact doesn't:
+   * that they're a guest or from another organisation, and an email (for a contact that had none).
+   */
+  const addHandles = async (contact: Contact, handles: Handle[], system: string, user?: ExternalUser, email?: string) => {
     const have = contact.data.handles ?? []
     const add = handles.filter(
       (h, i) =>
         !have.some((x) => x.system === h.system && x.id === h.id) &&
         handles.findIndex((y) => y.system === h.system && y.id === h.id) === i,
     )
-    if (!add.length) return
+    const patch: Record<string, unknown> = {}
+    if (add.length) patch.handles = [...have, ...add]
+    if (user?.outside && contact.data.outside !== user.outside) patch.outside = user.outside
+    if (email && !contact.data.email) patch.email = email
+    if (!Object.keys(patch).length) return
     try {
-      await directory.contacts.update(contact.id, { handles: [...have, ...add] }, { actor: SYSTEM_ACTOR(system) })
-      logger.info('contact matched by email: handle recorded', { contactId: contact.id, system })
+      await directory.contacts.update(contact.id, patch, { actor: SYSTEM_ACTOR(system) })
+      logger.info('contact matched: handle recorded', { contactId: contact.id, system })
     } catch (err) {
       // Someone else changed the contact at the same time: the match still holds.
       logger.warn('could not record the handle on the contact', { contactId: contact.id, err: errorMessage(err) })
@@ -253,23 +273,37 @@ export function createIdentityResolver(deps: IdentityResolverDeps, opts: Identit
         { system, id: handle.id },
         ...(user.handle?.id ? [{ system: user.handle.system || system, id: user.handle.id }] : []),
       ]
-      const info = { ...(name ? { name } : {}), ...(user.email ? { email: user.email.trim().toLowerCase() } : {}) }
+      const info = {
+        ...(name ? { name } : {}),
+        ...(user.email ? { email: user.email.trim().toLowerCase() } : {}),
+        ...(user.outside ? { outside: user.outside } : {}),
+      }
 
       // 1. The same email: the same person.
       const byEmail = user.email ? await directory.contacts.byEmail(user.email) : null
       if (byEmail) {
-        await addHandles(byEmail, handles, system)
+        await addHandles(byEmail, handles, system, user)
         await note(handle, { status: 'linked', contactId: byEmail.id, ...info })
         return { contactId: byEmail.id, name: cleanName(byEmail.data.name) ?? name }
       }
-      // 2. Only the same name: maybe the same person. An admin decides.
       const same = await sameName(user, system)
+      // 2. The same name as the one contact the harness made from another system's directory, which had no email
+      // to match (a GitLab user without a public one): the same person showing up in a second system. Live, every
+      // colleague who first appeared in GitLab stayed anonymous in Slack until an admin linked them.
+      const made = same.length === 1 ? same[0]! : null
+      if (made?.data.source && made.data.source !== system && !made.data.email && user.email) {
+        await addHandles(made, handles, system, user, user.email.trim().toLowerCase())
+        await note(handle, { status: 'linked', contactId: made.id, ...info })
+        logger.info('contact made from another system matched by name: linked', { contactId: made.id, system })
+        return { contactId: made.id, name: cleanName(made.data.name) ?? name }
+      }
+      // 3. Only the same name: maybe the same person. An admin decides.
       if (same.length) {
         await note(handle, { status: 'suggested', ...(same.length === 1 ? { suggestedContactId: same[0]!.id } : {}), ...info })
         logger.info('integration user has the name of a contact: suggested, not linked', { system, candidates: same.length })
         return remember(key, name ? { name } : undefined)
       }
-      // 3. Nobody: a new contact that can't sign in until an admin lets them.
+      // 4. Nobody: a new contact that can't sign in until an admin lets them.
       try {
         const contact = await directory.contacts.create(
           {
@@ -280,6 +314,7 @@ export function createIdentityResolver(deps: IdentityResolverDeps, opts: Identit
             status: 'active',
             access: NO_ACCESS,
             source: system,
+            ...(user.outside ? { outside: user.outside } : {}),
           },
           { actor: SYSTEM_ACTOR(system) },
         )

@@ -207,6 +207,8 @@ export interface EmployeeData extends Record<string, unknown> {
   watch?: WatchedChannel[]
   /** React 👀 to a Slack message as soon as it sets it to work. Unset: on. */
   ackReaction?: boolean
+  /** People outside the company (Slack guests, other organisations) may message it directly. Unset: yes. */
+  outsiderDms?: boolean
   /** Secrets (names) it may put into its environments with env.up. */
   envSecrets?: string[]
   /** The employee's router session, for input nothing else claims. */
@@ -223,6 +225,8 @@ export interface ContactData extends Record<string, unknown> {
   online?: boolean
   /** A local agent: the person it acts for. */
   sponsor?: string
+  /** Not a full member of the company: a guest (e.g. in Slack), or someone from another organisation. */
+  outside?: 'guest' | 'external'
   handles?: { system: string; id: string }[]
   role?: string
   team?: string

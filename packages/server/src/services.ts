@@ -58,6 +58,7 @@ import { envSecretValues } from './env-secrets.ts'
 import { routerKeeps, routerToolset } from './provision.ts'
 import { createWantsFallback } from './integrations/fallback.ts'
 import { Webhooks } from './webhooks/service.ts'
+import { wireOutsiderDms } from './integrations/outsiders.ts'
 import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
@@ -302,6 +303,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = privateSessions(createSessions({ records, clock, bus }), privacy)
   const scheduledTasks = createScheduledTasks({ records, clock })
+  // Employees that don't take DMs from people outside the company (src/integrations/outsiders.ts).
+  wireOutsiderDms({ hooks, directory, sessions, logger })
   const webhooks = new Webhooks({
     records,
     secrets,

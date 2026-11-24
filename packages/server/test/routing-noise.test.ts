@@ -1,4 +1,5 @@
 import { type Json, ManualClock } from '@mp/core'
+import { beforeDeliver } from '@mp/router'
 import { afterToolCall } from '@mp/runner'
 import { afterEach, describe, expect, it } from 'vitest'
 import { gitlabWantsRouter, mentionsUser } from '../src/integrations/fallback.ts'
@@ -185,5 +186,37 @@ describe('Linear events nobody claimed', () => {
     expect(await plan(linear('issue.assigned', 'ENG-5', { actor: BOT, assignee: BOT }))).toEqual([])
     // Other sources are unaffected.
     expect(await plan(dm('hi'))).toEqual(fallback)
+  })
+})
+
+describe('direct messages from outsiders', () => {
+  it('reach an employee unless it turned them off; channel messages and colleagues always do', async () => {
+    const { t, s, employee } = await make()
+    const guest = await s.directory.contacts.create({ name: 'Gus Guest', kind: 'person', outside: 'guest' } as never)
+    const colleague = await s.directory.contacts.create({ name: 'Ana Example', kind: 'person' })
+    const decide = async (actorContactId: string, channel?: string) => {
+      const base = dm('hello')
+      const input = channel
+        ? { ...base, type: 'message.posted', payload: { ...(base.payload as object), channel, channel_type: 'channel' } as Json }
+        : base
+      const { event } = await s.events.ingest({ ...input, actorContactId })
+      return t.a.services.hooks.decide(beforeDeliver, {
+        event,
+        delivery: {
+          sessionId: employee.data.routerSessionId!,
+          reason: 'fallback',
+          expectedToAct: true,
+          trusted: false,
+          fork: false,
+          priority: 0,
+        },
+      })
+    }
+    expect(await decide(guest.id)).toBeUndefined()
+    await s.directory.employees.update(employee.id, { outsiderDms: false })
+    expect(await decide(guest.id)).toMatchObject({ skip: expect.stringContaining("doesn't take direct messages") })
+    expect(await decide(colleague.id)).toBeUndefined()
+    // In a channel, not a DM: as anyone's.
+    expect(await decide(guest.id, 'C0TEST0001')).toBeUndefined()
   })
 })

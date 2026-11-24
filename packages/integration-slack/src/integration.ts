@@ -273,6 +273,9 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
         name?: string
         real_name?: string
         is_bot?: boolean
+        is_restricted?: boolean
+        is_ultra_restricted?: boolean
+        is_stranger?: boolean
         profile?: { email?: string; real_name?: string; display_name?: string }
       }
       const id = u.id ?? externalId
@@ -281,12 +284,15 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
       const email = u.profile?.email
       // Slackbot isn't flagged `is_bot`, but it's no person either.
       const bot = u.is_bot === true || id === 'USLACKBOT'
+      // Guests (restricted, ultra-restricted) and people from another organisation (Slack Connect) aren't the company.
+      const outside = u.is_stranger === true ? 'external' : u.is_restricted || u.is_ultra_restricted ? 'guest' : undefined
       return {
         handle: { system: SLACK_SYSTEM, id },
         ...(email ? { email } : {}),
         ...(name ? { name } : {}),
         ...(display && display !== name ? { displayName: display } : {}),
         ...(bot ? { bot: true } : {}),
+        ...(outside ? { outside } : {}),
       }
     } catch (err) {
       if (slackErrorCode(err) === 'user_not_found') return null

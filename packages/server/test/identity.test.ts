@@ -153,6 +153,46 @@ describe('identity resolver', () => {
     expect((await w.link('slack', 'U4'))?.data).toMatchObject({ status: 'suggested', suggestedContactId: ivo.id })
   })
 
+  it('links someone the harness made from another system by name, when that contact had no email, and fills it in', async () => {
+    const dana = await w.directory.contacts.create({
+      name: 'Dana Example',
+      handles: [{ system: 'gitlab', id: 'dana' }],
+      source: 'gitlab',
+      access: 'none',
+    } as never)
+    f.users.set('U40', { handle: { system: 'slack', id: 'U40' }, email: 'Dana@Example.com', name: 'Dana Example' })
+    const r = await w.resolver.resolve(integration, f.lookup, { system: 'slack', id: 'U40' })
+    expect(r).toEqual({ contactId: dana.id, name: 'Dana Example' })
+    const d = (await w.directory.contacts.require(dana.id)).data
+    expect(d.handles).toEqual([
+      { system: 'gitlab', id: 'dana' },
+      { system: 'slack', id: 'U40' },
+    ])
+    expect(d.email).toBe('dana@example.com')
+    expect((await w.link('slack', 'U40'))?.data).toMatchObject({ status: 'linked', contactId: dana.id })
+  })
+
+  it('records a Slack guest or someone from another organisation as outside the company', async () => {
+    f.users.set('U41', {
+      handle: { system: 'slack', id: 'U41' },
+      email: 'gus@partner.example',
+      name: 'Gus Guest',
+      outside: 'guest',
+    })
+    const r = await w.resolver.resolve(integration, f.lookup, { system: 'slack', id: 'U41' })
+    expect((await w.directory.contacts.require(r!.contactId!)).data).toMatchObject({ outside: 'guest', access: 'none' })
+    // A contact matched by email learns it too.
+    const eve = await w.directory.contacts.create({ name: 'Eve Example', email: 'eve@other.example' })
+    f.users.set('U42', {
+      handle: { system: 'slack', id: 'U42' },
+      email: 'eve@other.example',
+      name: 'Eve Example',
+      outside: 'external',
+    })
+    await w.resolver.resolve(integration, f.lookup, { system: 'slack', id: 'U42' })
+    expect((await w.directory.contacts.require(eve.id)).data.outside).toBe('external')
+  })
+
   it('the display name counts for a suggestion too; two people with that name give no suggested contact', async () => {
     await w.directory.contacts.create({ name: 'mira' })
     await w.directory.contacts.create({ name: 'mira' })

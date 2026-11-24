@@ -1275,16 +1275,32 @@ When an event's actor handle (`slack:<id>`, `gitlab:<username>`,
    GitLab `/users/:id` (name, username, public email, bot), Linear `user(id)`
    (name, display name, email).
 2. **Same email** (case-insensitive): the handle is added to that contact.
-3. Else, **same name only**: a person with exactly that name (or display name)
-   and no handle in that system yet may be the same person, or not. The harness
-   doesn't guess: it records a **suggestion** for an admin, and the event stays
-   anonymous.
+3. Else, **same name as a contact the harness made from another system**:
+   when the only person with that name (or display name) and no handle in this
+   system was created from another integration's directory (`source`, e.g.
+   GitLab) and has no email, while this system gives one, it's the same person
+   showing up in a second system: the handle and the email are added to it.
+   (Live, every colleague who first appeared in GitLab, which often has no
+   public email, stayed anonymous in Slack until an admin linked them.)
+   Otherwise, **same name only**: a person with exactly that name (or display
+   name) and no handle in that system yet may be the same person, or not. The
+   harness doesn't guess: it records a **suggestion** for an admin, and the
+   event stays anonymous.
 4. Else a **new contact** is created: a person with the name, the email and the
    handle, `source` set to the system, and `access: none`, so they **can't
    sign in** until an admin gives them an access. (`none` isn't
    [deactivation](#sign-in-and-roles): nobody left.)
 5. **Bots** (Slack bots and Slackbot, GitLab bot users) never become people.
    They stay anonymous, with their name shown.
+6. **Outsiders.** Slack says who isn't a full member of the company: guests
+   (single- and multi-channel) and people from another organisation (Slack
+   Connect). Their contact gets `outside: guest | external`, when it's created
+   or matched; People shows "guest" or "other org" next to them. The "About the
+   requester" entry says so and asks the employee to share only what the
+   request needs, nothing internal. An employee can be set not to take their
+   **direct messages** (`outsiderDms: false`, "DMs from outsiders" in
+   Settings › Employees): their DMs and group DMs aren't delivered to it (the
+   router skips them with the reason); messages in channels still are.
 
 - **Before routing.** The contact is on the event (`actorContactId`, and
   `payload.author` `{ kind: 'contact', id }`) before triggers and the router

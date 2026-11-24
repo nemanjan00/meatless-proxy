@@ -199,6 +199,12 @@ export const employeeSchema: KindSchema = {
       description: 'React 👀 to a Slack message as soon as it sets this employee to work (default on).',
     },
     {
+      name: 'outsiderDms',
+      type: 'boolean',
+      description:
+        "Whether people outside the company (Slack guests, people from other organisations) may message it directly (default on). Off, their DMs don't reach it.",
+    },
+    {
       name: 'envSecrets',
       type: 'list',
       of: { type: 'string' },
@@ -267,6 +273,8 @@ export interface EmployeeData extends Record<string, unknown> {
   watch?: WatchedChannel[]
   /** React 👀 to a Slack message that sets it to work. Unset: on. */
   ackReaction?: boolean
+  /** Outsiders (Slack guests, other organisations) may DM it. Unset: yes. */
+  outsiderDms?: boolean
   envSecrets?: string[]
   routerSessionId?: string
   limits?: unknown

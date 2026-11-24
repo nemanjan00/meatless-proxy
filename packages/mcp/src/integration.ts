@@ -74,4 +74,9 @@ export interface ExternalUser {
   displayName?: string
   /** A bot or app account, not a person: never turned into a person contact. */
   bot?: boolean
+  /**
+   * Not a full member of the company in that system: a `guest` (Slack's single- and multi-channel guests)
+   * or `external`, someone from another organisation (Slack Connect).
+   */
+  outside?: 'guest' | 'external'
 }
