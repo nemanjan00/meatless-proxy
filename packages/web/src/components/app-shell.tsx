@@ -61,6 +61,7 @@ import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { NotificationsProvider, useNotifications } from '@/lib/notifications.tsx'
 import { NAV_SHORTCUTS } from '@/lib/shortcuts.ts'
+import { PageErrorBoundary } from '@/components/page-error.tsx'
 import { THEME_TOGGLE_ATTR, useTheme } from '@/lib/theme.tsx'
 import { cn } from '@/lib/utils.ts'
 
@@ -332,6 +333,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
 export function AppShell() {
   const [open, setOpen] = useState(false)
   const { toggle } = useTheme()
+  const { pathname } = useLocation()
   const { employees, setCurrentId } = useEmployees()
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -352,9 +354,11 @@ export function AppShell() {
       <SidebarProvider>
         <AppSidebar onSearch={() => setOpen(true)} />
         <SidebarInset className="min-w-0">
-          <Suspense fallback={<div className="h-11 border-b" aria-busy="true" />}>
-            <Outlet />
-          </Suspense>
+          <PageErrorBoundary key={pathname}>
+            <Suspense fallback={<div className="h-11 border-b" aria-busy="true" />}>
+              <Outlet />
+            </Suspense>
+          </PageErrorBoundary>
         </SidebarInset>
         <CommandMenu open={open} onOpenChange={setOpen} onToggleTheme={toggle} />
       </SidebarProvider>

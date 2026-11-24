@@ -5,6 +5,9 @@
 # Built once on the build machine's own platform: under QEMU (the arm64 image on an amd64 runner) Vite's
 # build could take many times longer or stall.
 FROM --platform=$BUILDPLATFORM node:26-slim AS web
+# The commit, baked into the UI and its version.json, so open tabs can tell a new deployment.
+ARG GIT_SHA=dev
+ENV GIT_SHA=$GIT_SHA
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
 COPY packages ./packages

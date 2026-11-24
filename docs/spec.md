@@ -3328,6 +3328,16 @@ done, and what it costs, and where they can explore and edit what it knows.
 It is built with shadcn/ui and styled after Linear. See the
 [stylebook](stylebook.md).
 
+**New versions.** Each build carries its version (the commit) and serves
+`/version.json` with it, uncached. An open tab checks it every 5 minutes, when
+it comes back into view or focus (at most every 30 s), and at once when a
+chunk fails to load; a new version shows one toast, "A new version of vegan is
+available", with **Refresh**, until it's dismissed. Pages load in chunks: a
+chunk a new deployment replaced is a 404 (never the page in its place), and
+a page whose chunk is gone reloads once onto the new build (once per version,
+page and minute, so it can't loop); after that, or for any other error, the
+page says what happened with a **Reload** button instead of going blank.
+
 #### Activity
 
 - **Now.** Live monitoring of running sessions: what each one is working on,

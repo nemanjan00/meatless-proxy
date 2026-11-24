@@ -1,13 +1,42 @@
+import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 
 const api = 'http://localhost:3000'
 
+/**
+ * The build's version: GIT_SHA (the image build passes the commit), else the checkout's commit, else
+ * `dev`. Baked into the bundle as __APP_VERSION__ and written to dist/version.json, which the running
+ * app checks to offer a refresh after a deployment (src/lib/app-version.ts).
+ */
+function buildVersion(): string {
+  if (process.env.GIT_SHA?.trim()) return process.env.GIT_SHA.trim()
+  try {
+    return (
+      execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim() || 'dev'
+    )
+  } catch {
+    return 'dev'
+  }
+}
+
+function appVersion(version: string): Plugin {
+  return {
+    name: 'vegan:app-version',
+    config: () => ({ define: { __APP_VERSION__: JSON.stringify(version) } }),
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version })}\n` })
+    },
+  }
+}
+
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), appVersion(buildVersion())],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

@@ -43,11 +43,22 @@ export function serveWeb(app: Hono, dir: string): boolean {
     }
     const file = resolve(root, rel)
     const inside = file === root || file.startsWith(root + sep)
-    const target = inside && rel && existsSync(file) && statSync(file).isFile() ? file : index
+    const exists = inside && rel && existsSync(file) && statSync(file).isFile()
+    // A missing build file (an old tab asking for a chunk a new deployment replaced) is a 404, not the
+    // page: as HTML it failed with "not a valid JavaScript MIME type", which the app can't tell apart.
+    if (!exists && (rel.startsWith('assets/') || rel === 'version.json'))
+      return c.text('not found', 404, { 'cache-control': 'no-store' })
+    const target = exists ? file : index
     const body = readFileSync(target)
     const type = TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream'
     const cache =
-      target === index ? 'no-cache' : rel.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=300'
+      target === index
+        ? 'no-cache'
+        : rel === 'version.json'
+          ? 'no-store'
+          : rel.startsWith('assets/')
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=300'
     return c.body(body, 200, { 'content-type': type, 'cache-control': cache })
   })
   return true

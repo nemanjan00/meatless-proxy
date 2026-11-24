@@ -1,6 +1,8 @@
 import { type ComponentType, lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { AppShell } from '@/components/app-shell.tsx'
+import { AppUpdates } from '@/components/app-updates.tsx'
+import { PageErrorBoundary } from '@/components/page-error.tsx'
 import { Toaster } from '@/components/ui/sonner.tsx'
 import { TooltipProvider } from '@/components/ui/tooltip.tsx'
 import { type DataLayer, DataProvider } from '@/lib/api.tsx'
@@ -46,9 +48,11 @@ export function AppRoutes() {
       <Route
         path="login"
         element={
-          <Suspense fallback={null}>
-            <LoginPage />
-          </Suspense>
+          <PageErrorBoundary>
+            <Suspense fallback={null}>
+              <LoginPage />
+            </Suspense>
+          </PageErrorBoundary>
         }
       />
       <Route
@@ -111,6 +115,7 @@ export function App({ data }: { data: DataLayer }) {
           <TooltipProvider delayDuration={400}>
             <AppRoutes />
             <Toaster position="bottom-right" />
+            <AppUpdates />
           </TooltipProvider>
         </AuthProvider>
       </DataProvider>
