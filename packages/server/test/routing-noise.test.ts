@@ -190,7 +190,7 @@ describe('Linear events nobody claimed', () => {
 })
 
 describe('direct messages from outsiders', () => {
-  it('reach an employee unless it turned them off; channel messages and colleagues always do', async () => {
+  it('don’t reach an employee unless it takes them; channel messages and colleagues always do', async () => {
     const { t, s, employee } = await make()
     const guest = await s.directory.contacts.create({ name: 'Gus Guest', kind: 'person', outside: 'guest' } as never)
     const colleague = await s.directory.contacts.create({ name: 'Ana Example', kind: 'person' })
@@ -212,11 +212,13 @@ describe('direct messages from outsiders', () => {
         },
       })
     }
-    expect(await decide(guest.id)).toBeUndefined()
-    await s.directory.employees.update(employee.id, { outsiderDms: false })
+    // Blocked by default.
     expect(await decide(guest.id)).toMatchObject({ skip: expect.stringContaining("doesn't take direct messages") })
     expect(await decide(colleague.id)).toBeUndefined()
     // In a channel, not a DM: as anyone's.
     expect(await decide(guest.id, 'C0TEST0001')).toBeUndefined()
+    // An employee set to take them.
+    await s.directory.employees.update(employee.id, { outsiderDms: true })
+    expect(await decide(guest.id)).toBeUndefined()
   })
 })

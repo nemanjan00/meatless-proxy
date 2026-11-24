@@ -1297,10 +1297,11 @@ When an event's actor handle (`slack:<id>`, `gitlab:<username>`,
    Connect). Their contact gets `outside: guest | external`, when it's created
    or matched; People shows "guest" or "other org" next to them. The "About the
    requester" entry says so and asks the employee to share only what the
-   request needs, nothing internal. An employee can be set not to take their
-   **direct messages** (`outsiderDms: false`, "DMs from outsiders" in
-   Settings › Employees): their DMs and group DMs aren't delivered to it (the
-   router skips them with the reason); messages in channels still are.
+   request needs, nothing internal. Their **direct messages** (DMs and group
+   DMs) aren't delivered to an employee unless it's set to take them
+   (`outsiderDms: true`, "DMs from outsiders" in Settings › Employees; off by
+   default): the router skips them with the reason. Messages in channels still
+   reach it, like anyone's.
 
 - **Before routing.** The contact is on the event (`actorContactId`, and
   `payload.author` `{ kind: 'contact', id }`) before triggers and the router

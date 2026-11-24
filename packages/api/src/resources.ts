@@ -207,7 +207,7 @@ export interface EmployeeData extends Record<string, unknown> {
   watch?: WatchedChannel[]
   /** React 👀 to a Slack message as soon as it sets it to work. Unset: on. */
   ackReaction?: boolean
-  /** People outside the company (Slack guests, other organisations) may message it directly. Unset: yes. */
+  /** People outside the company (Slack guests, other organisations) may message it directly. Unset: no. */
   outsiderDms?: boolean
   /** Secrets (names) it may put into its environments with env.up. */
   envSecrets?: string[]

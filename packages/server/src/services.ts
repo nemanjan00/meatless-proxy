@@ -303,7 +303,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = privateSessions(createSessions({ records, clock, bus }), privacy)
   const scheduledTasks = createScheduledTasks({ records, clock })
-  // Employees that don't take DMs from people outside the company (src/integrations/outsiders.ts).
+  // Employees don't take DMs from people outside the company unless set to (src/integrations/outsiders.ts).
   wireOutsiderDms({ hooks, directory, sessions, logger })
   const webhooks = new Webhooks({
     records,
