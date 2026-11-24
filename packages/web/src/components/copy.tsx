@@ -50,12 +50,15 @@ export function CopyField({
   value,
   label,
   multiline = false,
+  full = false,
   className,
 }: {
   value: string
   /** What the copy button says, e.g. "Copy request URL". */
   label?: string
   multiline?: boolean
+  /** With `multiline`: show all of it, without the scroll box (a short config). */
+  full?: boolean
   className?: string
 }) {
   return (
@@ -63,7 +66,7 @@ export function CopyField({
       <code
         className={cn(
           'min-w-0 flex-1 py-0.5 font-mono text-micro text-fg-secondary',
-          multiline ? 'max-h-32 overflow-auto break-all whitespace-pre-wrap' : 'truncate',
+          multiline ? cn('break-all whitespace-pre-wrap', !full && 'max-h-32 overflow-auto') : 'truncate',
         )}
         title={multiline ? undefined : value}
       >

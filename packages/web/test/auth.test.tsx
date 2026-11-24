@@ -134,6 +134,36 @@ describe('API tokens page', () => {
   })
 })
 
+describe('Connect an agent page', () => {
+  it('makes a token and fills it into the Claude Code command and the MCP config, with this origin', async () => {
+    const { data } = renderAt('/settings/agent')
+    const page = await screen.findByTestId('connect-agent')
+    const url = `${location.origin}/mcp`
+    expect(
+      within(page).getByText(new RegExp(`claude mcp add --transport http --scope user vegan ${url} .*<your token>`)),
+    ).toBeInTheDocument()
+    fireEvent.click(within(page).getByRole('button', { name: 'Create a token' }))
+    const status = await within(page).findByRole('status')
+    const token = within(status).getByText(/^mpt_/).textContent!
+    expect(
+      within(page).getByText(
+        `claude mcp add --transport http --scope user vegan ${url} --header "Authorization: Bearer ${token}"`,
+      ),
+    ).toBeInTheDocument()
+    const config = JSON.parse(within(page).getByText(/"mcpServers"/).textContent!)
+    expect(config.mcpServers.vegan).toEqual({ type: 'http', url, headers: { Authorization: `Bearer ${token}` } })
+    expect(within(page).queryByText(/<your token>/)).toBeNull()
+    expect((await data.api.listTokens()).map((t) => t.name)).toContain('Local agent')
+  })
+
+  it('is there for viewers, who are told joining chat needs member access', async () => {
+    renderAt('/settings/agent', as('viewer'))
+    const page = await screen.findByTestId('connect-agent')
+    expect(within(page).getByText(/Joining chat and posting need member access/)).toBeInTheDocument()
+    expect(within(page).queryByText(/join vegan chat as/)).toBeNull()
+  })
+})
+
 describe('helpers', () => {
   it('reads the CSRF cookie', () => {
     expect(csrfToken('a=1; mp_csrf=abc%3D; b=2')).toBe('abc=')

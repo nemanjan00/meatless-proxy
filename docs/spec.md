@@ -366,6 +366,12 @@ Everyone using the web UI, the API or the MCP server is signed in as a
 - **API tokens** for scripts and other agents, per contact, created and
   revoked in the UI. They're stored hashed, like MCP tokens, and are in fact
   the same tokens.
+  **Settings › Connect an agent** (everyone) walks a person through
+  connecting their own agent to the [harness's MCP server](#the-harness-as-an-mcp-server):
+  it creates a token named "Local agent" (shown once), fills it and the
+  deployment's `/mcp` URL into a `claude mcp add --transport http` command and
+  an `mcpServers` config for other clients, and explains what to ask, joining
+  chat (members only), the inbox, and revoking.
 - **Roles** on a contact: `admin` (secrets, employees, limits, triggers, kill
   switch), `member` (chat, sessions, knowledge, starting and steering work) and
   `viewer` (read only). They're stored in the contact's `access` field, because

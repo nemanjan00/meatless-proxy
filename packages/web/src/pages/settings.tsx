@@ -1,6 +1,7 @@
 import type { Access, ApiRecord, ContactData, CreatedApiToken, EmployeeData, SecretScope, TriggerData } from '@mp/api'
 import {
   Bell,
+  Bot,
   CircleDollarSign,
   CirclePause,
   CirclePlay,
@@ -39,6 +40,7 @@ import { useEmployees } from '@/lib/employees.tsx'
 import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 import { McpServers } from '@/components/mcp-servers.tsx'
+import { ConnectAgent } from '@/components/connect-agent.tsx'
 import { NotificationSettings } from '@/components/notification-settings.tsx'
 import { LimitsSettings } from '@/components/limits-settings.tsx'
 import { PricingSettings } from '@/components/pricing-settings.tsx'
@@ -55,6 +57,7 @@ const SECTIONS = [
   { key: 'control', label: 'Kill switch', icon: Power, admin: true },
   { key: 'people', label: 'People and access', icon: UserCog, admin: true },
   { key: 'tokens', label: 'API tokens', icon: Ticket, admin: false },
+  { key: 'agent', label: 'Connect an agent', icon: Bot, admin: false },
   { key: 'notifications', label: 'Notifications', icon: Bell, admin: false },
 ] as const
 
@@ -599,7 +602,11 @@ function Tokens() {
       <p className="mb-4 text-fg-tertiary">
         A token acts as you, with your access, for scripts and other agents: send it as{' '}
         <code className="font-mono text-micro">Authorization: Bearer …</code>. The same token works for the API, the live socket
-        and the MCP server at <code className="font-mono text-micro">/mcp</code>.
+        and the MCP server at <code className="font-mono text-micro">/mcp</code>. To set up Claude Code or another agent, see{' '}
+        <NavLink to="/settings/agent" className="text-brand hover:underline">
+          Connect an agent
+        </NavLink>
+        .
       </p>
       {created && (
         <div className="mb-4 rounded-xl border border-brand/50 bg-brand/10 p-3" role="status">
@@ -790,6 +797,7 @@ export function SettingsPage() {
         {allowed && section === 'pricing' && <PricingSettings />}
         {allowed && section === 'control' && <Control />}
         {allowed && section === 'people' && <People />}
+        {allowed && section === 'agent' && <ConnectAgent />}
         {allowed && section === 'tokens' && <Tokens />}
         {allowed && section === 'notifications' && <NotificationSettings />}
       </div>
