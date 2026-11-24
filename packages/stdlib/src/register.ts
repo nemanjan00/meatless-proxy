@@ -5,6 +5,7 @@ import { registerChecklistTools } from './tools/checklist.ts'
 import { registerCodeTools } from './tools/code.ts'
 import { registerDirectoryTools } from './tools/directory.ts'
 import { registerEnvTools } from './tools/env.ts'
+import { registerWebhookTools } from './tools/webhooks.ts'
 import { registerEventTools } from './tools/events.ts'
 import { registerGitTools } from './tools/git.ts'
 import { registerImageTools } from './tools/images.ts'
@@ -28,6 +29,7 @@ export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string
   registerSessionTools(kit)
   registerChatTools(kit)
   registerEventTools(kit)
+  registerWebhookTools(kit)
   registerDirectoryTools(kit)
   registerKnowledgeTools(kit)
   registerChecklistTools(kit)

@@ -115,6 +115,9 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'triggers.disable',
   'triggers.list',
   'triggers.update',
+  'webhooks.create',
+  'webhooks.list',
+  'webhooks.update',
 ]
 
 /** A fresh-context reviewer: read-only tools plus recording its verdict. */
@@ -153,6 +156,7 @@ export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
   'sessions.restore',
   'sessions.save_template',
   'triggers.**',
+  'webhooks.**',
   // A router's toolset is small already and offered whole: it loads nothing on demand.
   'tools.**',
   // Scheduling is work for the session the router starts: it tells the person what it scheduled (a router's

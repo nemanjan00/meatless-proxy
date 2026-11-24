@@ -55,6 +55,7 @@ import type {
   UsageSeries,
 } from './resources.ts'
 import type { McpOAuthStart, McpServerCreate, McpServerInfo, McpServerPatch, McpServerTool } from './mcp-servers.ts'
+import type { WebhookCreate, WebhookInfo, WebhookPatch, WebhookWithSecret } from './webhooks.ts'
 import { ATTACHMENT_ROUTES, type AttachmentsApi, attachmentsMethods } from './attachments.ts'
 import { NOTIFICATION_ROUTES, type NotificationsApi, notificationsMethods } from './notifications.ts'
 import { LIMIT_ROUTES, type LimitsApi, limitsMethods } from './limits.ts'
@@ -148,6 +149,11 @@ export const ROUTES = {
   rawFile: ['GET', '/api/files/:employeeId/raw'],
   writeFile: ['PUT', '/api/files/:employeeId/content'],
 
+  listWebhooks: ['GET', '/api/webhooks'],
+  createWebhook: ['POST', '/api/webhooks'],
+  updateWebhook: ['PATCH', '/api/webhooks/:id'],
+  deleteWebhook: ['DELETE', '/api/webhooks/:id'],
+  rotateWebhook: ['POST', '/api/webhooks/:id/rotate'],
   listMcpServers: ['GET', '/api/mcp-servers'],
   createMcpServer: ['POST', '/api/mcp-servers'],
   updateMcpServer: ['PATCH', '/api/mcp-servers/:id'],
@@ -505,6 +511,19 @@ export interface ApiClient
    */
   writeFile(employeeId: string, path: string, content: string, version?: number, opts?: WriteFileOptions): Promise<FileContent>
 
+  // ── Employees' own webhooks (admins) ─────────────────────────────────────
+
+  /** `GET /api/webhooks?employeeId=` → that employee's webhooks (no secrets). */
+  webhooks(q?: { employeeId?: string }): Promise<WebhookInfo[]>
+  /** `POST /api/webhooks` → the webhook and its secret, shown this once. */
+  createWebhook(body: WebhookCreate): Promise<WebhookWithSecret>
+  /** `PATCH /api/webhooks/:id` → the updated webhook (its name stays). */
+  updateWebhook(id: string, patch: WebhookPatch): Promise<WebhookInfo>
+  /** `DELETE /api/webhooks/:id` → 204, with its secret. */
+  deleteWebhook(id: string): Promise<void>
+  /** `POST /api/webhooks/:id/rotate` → a new secret, this once; the old one stops working. */
+  rotateWebhook(id: string): Promise<WebhookWithSecret>
+
   // ── MCP servers (admins) ─────────────────────────────────────────────────
 
   /**
@@ -699,6 +718,11 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     writeFile: (employeeId, path, content, version, opts = {}) =>
       call('writeFile', { employeeId }, { path }, { content, version, ...(opts.encoding ? { encoding: opts.encoding } : {}) }),
 
+    webhooks: (q = {}) => call('listWebhooks', undefined, { ...q }),
+    createWebhook: (body) => call('createWebhook', undefined, undefined, body),
+    updateWebhook: (id, patch) => call('updateWebhook', { id }, undefined, patch),
+    deleteWebhook: (id) => call('deleteWebhook', { id }),
+    rotateWebhook: (id) => call('rotateWebhook', { id }, undefined, {}),
     mcpServers: (q = {}) => call('listMcpServers', undefined, { ...q }),
     createMcpServer: (body) => call('createMcpServer', undefined, undefined, body),
     updateMcpServer: (id, patch) => call('updateMcpServer', { id }, undefined, patch),

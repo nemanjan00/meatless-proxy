@@ -14,6 +14,7 @@ import { chatAttachmentRoutes } from './http/chat-attachments.ts'
 import { Metrics, metricsRoutes } from './http/metrics.ts'
 import { defaultWebDist, serveWeb } from './http/static.ts'
 import { webhookRoutes } from './http/webhooks.ts'
+import { customWebhookRoutes } from './http/custom-webhooks.ts'
 import { mcpServerRoutes } from './http/mcp-servers.ts'
 import { limitRoutes } from './http/limits.ts'
 import { sendError } from './http/util.ts'
@@ -153,6 +154,8 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     return (await pendingMigrations({ pool: services.pool, schema: config.DATABASE_SCHEMA ?? 'public' })).length === 0
   }
   app.route('/', setupRoutes(services, setup)) // before the webhooks: it records their activity
+  // Before the integrations' /webhooks/:integration/:employee, which would take /webhooks/custom/<id>.
+  app.route('/', customWebhookRoutes(services))
   app.route('/', webhookRoutes(services))
   app.route('/', auth.routes)
   app.route('/', metricsRoutes(services, metrics))

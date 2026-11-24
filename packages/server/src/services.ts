@@ -37,7 +37,7 @@ import { directNetworkName, networkFor, type ProcedureContexts, type ScheduleSer
 import { createSessions, type Session, type Sessions } from '@mp/sessions'
 import type * as Api from '@mp/api'
 import { createSkills, type SkillsService } from '@mp/skills'
-import { memoryStore, type Store } from '@mp/store'
+import { type Actor, memoryStore, type Store } from '@mp/store'
 import { postgresStore, runMigrations } from '@mp/store-postgres'
 import { createToolRegistry, registerMcpTools, type ToolLists, type ToolRegistry } from '@mp/tools'
 import { createUsage, type UsageService } from '@mp/usage'
@@ -57,6 +57,7 @@ import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { envSecretValues } from './env-secrets.ts'
 import { routerKeeps, routerToolset } from './provision.ts'
 import { createWantsFallback } from './integrations/fallback.ts'
+import { Webhooks } from './webhooks/service.ts'
 import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
@@ -178,6 +179,8 @@ export interface Services {
   mcpTools: string[]
   /** MCP servers added at runtime (src/mcp-servers), null when the hub can't add servers. */
   mcpServers: McpServers | null
+  /** Employees' own incoming webhooks (src/webhooks). */
+  webhooks: Webhooks
   /** The first-party integrations (Slack, Linear, GitLab), null when none is enabled. */
   integrations: Integrations | null
   /** Postgres pool, when the store is Postgres. */
@@ -299,6 +302,15 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
   const events = enqueueOnIngest(rawEvents, queue, logger)
   const sessions = privateSessions(createSessions({ records, clock, bus }), privacy)
   const scheduledTasks = createScheduledTasks({ records, clock })
+  const webhooks = new Webhooks({
+    records,
+    secrets,
+    directory,
+    events,
+    clock,
+    logger: logger.child({ component: 'webhooks' }),
+    ...(config.PUBLIC_URL ? { publicUrl: config.PUBLIC_URL } : {}),
+  })
   watchDmLinks(bus, sessions, privacy)
   const checklists = createChecklists({ records, sessions, clock, bus })
   // Chat attachments live on the files volume too, under `attachments/`, apart from employees' files.
@@ -463,6 +475,18 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     ]
   }
 
+  // A webhook event whose rule sends it to a session (src/webhooks): there, as untrusted input. A session
+  // that's gone or done leaves it to the router.
+  const webhookRoute: RecipientResolver = async (event) => {
+    if (!event.data.source.startsWith('webhook:')) return []
+    const route = (event.data.payload as { route?: { type?: unknown; sessionId?: unknown } } | undefined)?.route
+    if (route?.type !== 'session' || typeof route.sessionId !== 'string') return []
+    const session = await sessions.get(route.sessionId)
+    if (!session || session.data.status === 'done' || session.data.status === 'abandoned') return []
+    if (event.data.employeeId && session.data.employeeId !== event.data.employeeId) return []
+    return [{ sessionId: session.id, reason: 'trigger', expectedToAct: true, trusted: false, fork: false }]
+  }
+
   const hasOwnCopies = async (source: string, employeeId: string) => {
     const name = OWN_COPY_SECRETS[source]
     if (!name) return false
@@ -518,6 +542,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
         logger: logger.child({ component: 'schedules' }),
       }),
       slackDmFollower,
+      webhookRoute,
     ],
     // An employee with its own webhook secret for an integration (e.g. its own Slack app) gets its own copy of
     // every event there, so its sessions skip other employees' copies.
@@ -711,6 +736,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     schedules: null,
     mcpTools: [],
     mcpServers: null,
+    webhooks,
     integrations: null,
     pool,
     routerSessionFor,
@@ -751,6 +777,11 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       ...(containers ? { containers } : {}),
       // Work a router context starts gets the employee's full toolset, not the router's routing-only one.
       toolsetFor: async (employeeId: string) => tools.allowed(await toolListsFor(employeeId)).map((t) => t.name),
+      webhooks: {
+        list: (employeeId: string) => webhooks.list(employeeId),
+        create: (body: Record<string, unknown>, actor: Actor) => webhooks.create(body, actor),
+        update: (id: string, body: Record<string, unknown>, actor: Actor) => webhooks.update(id, body, actor),
+      },
       ...(sandbox ? { sandbox } : {}),
       sshKeyFor: async (employeeId: string) => (await sshPrivateKey({ secrets }, employeeId)) ?? undefined,
       // env.up secrets: the ones an admin allowed for the employee, never the harness's own (src/env-secrets).

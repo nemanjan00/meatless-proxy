@@ -106,9 +106,9 @@ export const ON_DEMAND_GROUPS: readonly ToolGroup[] = [
   },
   {
     name: 'triggers',
-    about: 'start work on matching events',
-    tools: ['triggers.*'],
-    list: 'triggers.create/list/update/disable',
+    about: 'start work on matching events, incoming webhooks',
+    tools: ['triggers.*', 'webhooks.*'],
+    list: 'triggers.create/list/update/disable, webhooks.create/list/update',
   },
   {
     name: 'subscriptions',

@@ -86,6 +86,7 @@ describe('nobody is trusted on their word', () => {
         ![
           'listSecrets',
           'listMcpServers',
+          'listWebhooks',
           'mcpServerTools',
           'slackManifest',
           'gitlabProjects',

@@ -56,6 +56,8 @@ for (const k of ['chat_attachment', 'image_description']) HIDDEN_KINDS.add(k)
 HIDDEN_KINDS.add('identity_link')
 // Scheduled tasks have their own API (src/schedules), which hides a private (DM) session's tasks from non-members.
 HIDDEN_KINDS.add('scheduled_task')
+// Webhooks have their own admin API (src/webhooks), which checks their auth and rules.
+HIDDEN_KINDS.add('webhook')
 /** Kinds whose records can belong to a DM (and are then visible to its members only). */
 const CHAT_KINDS = new Set(['channel', 'message', 'event'])
 

@@ -48,6 +48,7 @@ import {
 import { type MockDb, mockId } from './data.ts'
 import { createMockSetupApi } from './setup.ts'
 import { createMockMcpApi } from './mcp.ts'
+import { createMockWebhooksApi } from './webhooks.ts'
 import { createMockAttachmentsApi } from './attachments.ts'
 import { mockFileUrl, mockSniff } from './files.ts'
 import { createMockProjectsApi } from './projects.ts'
@@ -1284,6 +1285,9 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
 
     // MCP servers, global and per employee (./mcp.ts).
     ...createMockMcpApi({ db, iso, delay }),
+
+    // Employees' own webhooks (./webhooks.ts).
+    ...createMockWebhooksApi({ db, iso, delay }),
 
     // Chat image attachments (./attachments.ts).
     ...attachments.api,

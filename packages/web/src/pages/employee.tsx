@@ -9,6 +9,7 @@ import { EmployeeProjects } from '@/components/employee-projects.tsx'
 import { EmployeeIntegrationsSection } from '@/components/integration-setup.tsx'
 import { HandleLink } from '@/components/links.tsx'
 import { McpServers } from '@/components/mcp-servers.tsx'
+import { Webhooks } from '@/components/webhooks.tsx'
 import { NetworkSetting } from '@/components/network-setting.tsx'
 import { NewEmployeeButton } from '@/components/new-employee-dialog.tsx'
 import { Page, SectionTitle } from '@/components/page.tsx'
@@ -277,6 +278,8 @@ export function EmployeePage() {
           <EmployeeIntegrationsSection employeeId={e.id} employeeName={e.data.name} admin={admin} initial={params.get('setup')} />
           {/* Its own MCP servers (admins; the component renders nothing for others). */}
           <McpServers employeeId={e.id} />
+          {/* Its own webhooks (admins; nothing for others). */}
+          <Webhooks employeeId={e.id} />
         </div>
       )}
     </Page>

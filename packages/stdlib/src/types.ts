@@ -18,7 +18,16 @@ import type { SkillsService } from '@mp/skills'
 import type { Actor } from '@mp/store'
 import type { UsageService } from '@mp/usage'
 
+/** The harness's employee webhooks, as the webhooks.* tools use them (src/webhooks in the server). */
+export interface StdlibWebhooks {
+  list(employeeId: string): Promise<{ id: string }[]>
+  create(body: Record<string, unknown>, actor: Actor): Promise<{ webhook: unknown }>
+  update(id: string, body: Record<string, unknown>, actor: Actor): Promise<unknown>
+}
+
 export interface StdlibDeps {
+  /** Employees' own webhooks: without it, the webhooks.* tools aren't registered. */
+  webhooks?: StdlibWebhooks
   /**
    * The employee's full toolset (its allow and deny lists applied to every registered tool). Work a router
    * context starts gets this instead of the router's routing-only toolset. Optional: without it, new

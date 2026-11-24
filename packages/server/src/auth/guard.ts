@@ -154,6 +154,9 @@ export const GUARD_RULES: GuardRule[] = [
   // Integration users and the contacts they are (src/integrations/identity-routes.ts): names and emails, so admins.
   { method: '*', path: '/api/identity/*', need: 'admin' },
   // MCP servers (src/mcp-servers), reading included: their URLs and secret names are for admins.
+  // Employees' own webhooks (src/webhooks): their secrets and rules are for admins.
+  { method: '*', path: '/api/webhooks', need: 'admin' },
+  { method: '*', path: '/api/webhooks/*', need: 'admin' },
   { method: '*', path: '/api/mcp-servers', need: 'admin' },
   { method: '*', path: '/api/mcp-servers/*', need: 'admin' },
   // The MCP OAuth callback checks the sign-in itself: its state is bound to the admin who started it.

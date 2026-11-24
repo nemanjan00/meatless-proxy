@@ -157,7 +157,18 @@ export async function stack(opts: StackOptions = {}) {
       return { projectId: p.id, name: input.name, url: `local:${slug}`, defaultBranch: 'main' }
     },
   }
+  // Employees' webhooks, in memory: enough for the webhooks.* tools (the server's own are tested there).
+  const webhookList: { id: string; employeeId: string; [k: string]: unknown }[] = []
   const deps: StdlibDeps = {
+    webhooks: {
+      list: async (employeeId) => webhookList.filter((w) => w.employeeId === employeeId),
+      create: async (body) => {
+        const webhook = { id: `whk_${webhookList.length + 1}`, employeeId: String(body.employeeId), ...body }
+        webhookList.push(webhook)
+        return { webhook }
+      },
+      update: async (id, body) => Object.assign(webhookList.find((w) => w.id === id) ?? {}, body),
+    },
     records,
     docs,
     sessions,

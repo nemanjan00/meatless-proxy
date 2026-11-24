@@ -2984,6 +2984,39 @@ and commits to itself only what it needs to remember.
 - **Traceability.** Every run records the event that started it, so the web UI
   can show a chain from event to context to child sessions.
 
+#### Webhooks
+
+An employee can have its own **incoming webhooks**: URLs other systems
+(Sentry, Stripe, CI, a script) post JSON to. Admins manage them on the
+employee's page (`/api/webhooks`), and the employee can set them up itself
+with `webhooks.create`, `webhooks.list` and `webhooks.update` (its own only).
+
+- **URL and check.** Each one is `<PUBLIC_URL>/webhooks/custom/<id>` with a
+  secret in the secret store, scoped to the employee: a token in a header
+  (default `X-Webhook-Token`) or the key of an HMAC-SHA256 signature of the
+  raw body (default header `X-Signature`, hex, `sha256=` allowed). An admin
+  sees the secret once, when the webhook is made or given a new one (**New
+  secret**). One the employee made has a secret nobody has seen: an admin
+  makes a new one to give to the sender, so a secret never reaches a model.
+  An unknown, disabled or wrongly signed delivery gets 404. Bodies up to
+  1 MB; `WEBHOOK_RATE_LIMIT` deliveries a minute per webhook.
+- **Mapping.** Paths into the JSON body (`action`, `data.issue.id`) give the
+  event's **type** (default `received`) and **subject** (so a session that
+  handles a thing gets its follow-ups by subscription), and an optional
+  **text** template with `{path}` placeholders; by default the text is the
+  name, type and subject followed by the body (up to 3,000 characters). The
+  event's source is `webhook:<name>`; the body is in `payload.body`. A
+  delivery id header (`X-Request-Id`, `X-GitHub-Delivery`, `Idempotency-Key`…)
+  makes a resent delivery count once.
+- **Rules**, in order, the first that matches deciding: a glob on the type,
+  and/or a body path that `equals` or `contains` a text, then an action:
+  **ignore** (not stored; counted), **router** (the employee's router), or a
+  **session** (delivered there, expecting it to act). A session that's gone
+  or done leaves the event to the router, and so does an event no rule
+  matches. Every event is untrusted input.
+- Each webhook shows its URL, its rules in a line each, and how many
+  deliveries came in and were ignored.
+
 #### The router context
 
 Every employee has one **router context**: the session that new work for the
