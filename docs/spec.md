@@ -397,15 +397,17 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   DM's members, like the DM itself: a session whose work was caused by a DM
   event (a harness chat DM, or an integration DM such as a Slack `im`), one
   subscribed or linked to a DM thread, or a fork or child of a private session.
-  Only the DM's members (for an integration DM, the person who wrote it) can
-  read it: its detail, history, entries, runs, tree, lineage, checklist and
-  document, in search, on the live stream and through the MCP server. Anyone
-  else gets 404. **Admins are refused too**; they see that a private session
-  exists (a row with a redacted title in the sessions list, and a redacted
-  detail), nothing it holds. A router context is shared by many requests, so it
-  isn't hidden as a whole: the entries a DM request added to it (the request and
-  its decision line) are redacted for everyone outside that DM. DM events of
-  any source are hidden from the events list and detail the same way. Usage
+  Only the DM's members (for an integration DM, the person who wrote it), the
+  people whose local agents are members, and **admins** can read it: its
+  detail, history, entries, runs, tree, lineage, checklist and document, in
+  search, on the live stream and through the MCP server. Admins administer the
+  employees, so they read all of their work, private sessions included (in the
+  web UI and API; an admin's token over MCP reads like anyone's). Anyone else
+  gets 404. The DM channels themselves stay for their members. A router
+  context is shared by many requests, so it isn't hidden as a whole: the
+  entries a DM request added to it (the request and its decision line) are
+  redacted for everyone outside that DM who isn't an admin. DM events of any
+  source are hidden from the events list and detail the same way. Usage
   numbers include private sessions; their titles are redacted. The employee's
   own tools are not affected.
 - **Employee files** are private: admins can list, read and change any
@@ -2190,7 +2192,7 @@ record says more, and the session tools and the web UI show it:
 - **Questions about past work are answered from the record**: the commit
   trailers, the run, the thread, or the session that did it, never from memory
   or a summary ([employee.md](employee.md)).
-- **Private sessions** shown redacted to an admin have no outcome either.
+- **Private sessions** shown redacted have no outcome either.
 
 #### Context management: rewind, not compaction
 

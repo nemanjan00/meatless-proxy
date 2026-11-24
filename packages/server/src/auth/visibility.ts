@@ -214,9 +214,13 @@ export class ChatVisibility {
 
   // ── Private sessions: work that came from a DM (docs/spec.md "Sign-in and roles") ──
 
-  /** Whether any of the viewer's contacts may read something with this marker: listed, or in one of its DMs now. */
+  /**
+   * Whether the viewer may read something with this marker: an admin (who administers the employees,
+   * and needs their work), or one of the viewer's contacts listed, or in one of its DMs now.
+   */
   async canReadMark(viewer: Viewer | string, mark: PrivateMark | null): Promise<boolean> {
     if (!mark) return true
+    if (typeof viewer !== 'string' && viewer.admin) return true
     const ids = typeof viewer === 'string' ? [viewer] : [viewer.contactId, ...(viewer.also ?? [])]
     if (ids.some((id) => mark.contacts.includes(id))) return true
     const agents = (await this.selfAndAgents(ids[0]!)).slice(1)
@@ -226,9 +230,9 @@ export class ChatVisibility {
   }
 
   /**
-   * How much of a session the viewer gets. Private sessions are for their DM's members only:
-   * admins learn that one exists (`redacted`), everyone else gets nothing. The employee's own
-   * tools don't come through here.
+   * How much of a session the viewer gets. Private sessions are for their DM's members and admins;
+   * `redacted` (that one exists) is for an admin only when the marker check says no, which it
+   * doesn't for an admin today. The employee's own tools don't come through here.
    */
   async sessionAccess(viewer: Viewer, session: Session | null | undefined): Promise<SessionAccess> {
     if (!session) return 'none'

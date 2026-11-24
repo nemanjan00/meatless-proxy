@@ -116,6 +116,16 @@ export async function visibleEventsPage(
       orderBy: { field: 'receivedAt', dir: 'desc' },
       limit: offset + limit,
     })
+  // An admin reads every event, DM ones included.
+  if (viewer.admin) {
+    const all = await s.records.query<MpEvent['data']>('event', {
+      where,
+      orderBy: { field: 'receivedAt', dir: 'desc' },
+      limit,
+      offset,
+    })
+    return { items: all.items as MpEvent[], total: all.total }
+  }
   // The viewer's own local agents' DMs are theirs too.
   const agents = await s.records.query('contact', { where: { kind: 'agent', sponsor: viewer.contactId }, limit: 1000 })
   const ids = [...new Set([viewer.contactId, ...(viewer.also ?? []), ...agents.items.map((a) => a.id)])]

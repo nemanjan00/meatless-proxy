@@ -113,8 +113,8 @@ afterAll(async () => {
 const ids = (r: { body: { items: { envId: string }[] } }) => r.body.items.map((e) => e.envId).sort()
 
 describe('GET /api/environments', () => {
-  it('shows each person the environments of the sessions they may read; admins also the ones left behind', async () => {
-    expect(ids(await t.req('GET', '/api/environments'))).toEqual([deskEnv, orphanEnv].sort())
+  it('shows each person the environments of the sessions they may read; admins all, the ones left behind too', async () => {
+    expect(ids(await t.req('GET', '/api/environments'))).toEqual([deskEnv, orphanEnv, privEnv].sort())
     expect(ids(await t.req('GET', '/api/environments', undefined, ana.headers))).toEqual([deskEnv])
     expect(ids(await t.req('GET', '/api/environments', undefined, bob.headers))).toEqual([deskEnv, privEnv].sort())
     expect(ids(await t.req('GET', '/api/environments', undefined, vic.headers))).toEqual([deskEnv])
@@ -183,7 +183,7 @@ describe('GET /api/environments', () => {
     const logs = await t.req('GET', `/api/environments/${privEnv}/logs?tail=10`, undefined, bob.headers)
     expect(logs.body).toEqual({ envId: privEnv, logs: 'server listening on 8000\n' })
     expect((await t.req('GET', `/api/environments/${privEnv}/logs`, undefined, ana.headers)).status).toBe(404)
-    expect((await t.req('GET', `/api/environments/${privEnv}/logs`)).status).toBe(404)
+    expect((await t.req('GET', `/api/environments/${privEnv}/logs`)).status).toBe(200) // an admin
     const procs = await t.req('GET', `/api/environments/${deskEnv}/processes`, undefined, vic.headers)
     expect(procs.body.containers[0]).toMatchObject({ name: 'main', role: 'main' })
     expect((await t.req('GET', `/api/environments/${privEnv}/processes`, undefined, ana.headers)).status).toBe(404)
@@ -422,8 +422,8 @@ describe('POST /api/environments/:id/stop', () => {
     const s = t.a.services
     const run = await s.sessions.createRun({ sessionId: privSession, cause: { type: 'manual' } })
     await s.sessions.transition(run.id, 'queued', 'running')
-    const r = await t.req('POST', `/api/environments/${privEnv}/stop`, {})
-    expect(r.status).toBe(404) // the admin may not read the private session
+    const r = await t.req('POST', `/api/environments/${privEnv}/stop`, {}, ana.headers)
+    expect(r.status).toBe(404) // Ana may not read the private session
     await s.records.link({ kind: 'session', id: privSession }, { kind: 'contact', id: bob.id }, 'requested_by')
     expect((await t.req('POST', `/api/environments/${privEnv}/stop`, {}, bob.headers)).status).toBe(200)
     const inbox = await s.sessions.inbox(privSession)

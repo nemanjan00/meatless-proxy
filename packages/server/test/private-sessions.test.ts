@@ -9,7 +9,7 @@ import { testApp, until, type TestApp } from './helpers.ts'
 
 /**
  * Work that came from a DM is private: its sessions, runs, entries and events are for the DM's
- * members. Admins learn that a private session exists (a redacted row), nothing more. Runs with
+ * members and for admins, who administer the employees. Runs with
  * DATABASE_URL set against Postgres too.
  */
 
@@ -178,8 +178,8 @@ describe('session routes', () => {
     `/api/subjects/permalink?subject=${encodeURIComponent('slack:C0TEST0001/1700000000.000100')}&sessionId=${work.id}`,
   ]
 
-  it('refuses every session route to people outside the DM, admins included', async () => {
-    for (const h of [bob, carol, admin])
+  it('refuses every session route to people outside the DM who are not admins', async () => {
+    for (const h of [bob, carol])
       for (const r of routes()) {
         const res = await t.req('GET', r, undefined, h)
         expect([403, 404], `${r}: ${res.status}`).toContain(res.status)
@@ -204,28 +204,24 @@ describe('session routes', () => {
       expect((await t.req('GET', r, undefined, ana)).status, r).toBe(200)
   })
 
-  it('shows an admin that a private session exists, redacted', async () => {
+  it('lets an admin read it all, to administer the employee', async () => {
     const detail = await t.req('GET', `/api/sessions/${work.id}`, undefined, admin)
     expect(detail.status).toBe(200)
-    expect(detail.body.session.data.title).toBe(PRIVATE_TITLE)
-    expect(detail.body.session.data.document).toBe('')
-    expect(detail.body.activeRun).toBeNull()
-    expect(JSON.stringify(detail.body)).not.toContain(SECRET)
-    expect(JSON.stringify(detail.body)).not.toContain('Ana pay raise')
+    expect(detail.body.session.data.title).toBe('Ana pay raise')
+    const runHistory = await t.req('GET', `/api/runs/${workRun.id}/history`, undefined, admin)
+    expect(JSON.stringify(runHistory.body)).toContain(`Looking into: ${SECRET}`)
+    for (const r of routes().filter((x) => !x.endsWith('/preview')))
+      expect((await t.req('GET', r, undefined, admin)).status, r).toBe(200)
   })
 
-  it('lists private sessions for members, redacted for admins, and not at all for others', async () => {
+  it('lists private sessions for members and admins, and not at all for others', async () => {
     const list = async (h: Record<string, string>, q = '') =>
       (await t.req('GET', `/api/sessions?limit=500&excludeRoles=none${q}`, undefined, h)).body.items as any[]
     const find = (items: any[]) => items.find((i) => i.session.id === work.id)
     expect(find(await list(ana)).session.data.title).toBe('Ana pay raise')
     expect(find(await list(bob))).toBeUndefined()
     expect(find(await list(carol))).toBeUndefined()
-    const row = find(await list(admin))
-    expect(row.session.data.title).toBe(PRIVATE_TITLE)
-    expect(JSON.stringify(row)).not.toContain(SECRET)
-    // Nothing it did either: no outcome on a redacted row.
-    expect(row.outcome).toBeUndefined()
+    expect(find(await list(admin)).session.data.title).toBe('Ana pay raise')
     expect(find(await list(bob))).toBeUndefined()
     expect((await list(bob)).some((i) => i.session.id === publicSession.id)).toBe(true)
     // Search (the ⌘K menu uses the list's text filter).
@@ -235,7 +231,7 @@ describe('session routes', () => {
     const recs = async (kind: string, h: Record<string, string>) =>
       (await t.req('GET', `/api/records/${kind}?limit=500`, undefined, h)).body.items.map((x: any) => x.id)
     expect(await recs('session', bob)).not.toContain(work.id)
-    expect(await recs('session', admin)).not.toContain(work.id)
+    expect(await recs('session', admin)).toContain(work.id)
     expect(await recs('session', ana)).toContain(work.id)
     expect(await recs('run', bob)).not.toContain(workRun.id)
     expect(await recs('run', bob)).not.toContain(routerRun.id)
@@ -243,14 +239,15 @@ describe('session routes', () => {
     expect(await recs('usage', bob)).toHaveLength(0)
   })
 
-  it('redacts a router context’s DM entries for people outside the DM', async () => {
+  it('redacts a router context’s DM entries for people outside the DM, not for admins', async () => {
     const routerHistory = async (h: Record<string, string>) => {
       const r = await t.req('GET', `/api/sessions/${routerId}/history`, undefined, h)
       expect(r.status).toBe(200)
       return JSON.stringify(r.body)
     }
     expect(await routerHistory(ana)).toContain(SECRET)
-    for (const h of [bob, carol, admin]) expect(await routerHistory(h)).not.toContain(SECRET)
+    for (const h of [bob, carol]) expect(await routerHistory(h)).not.toContain(SECRET)
+    expect(await routerHistory(admin)).toContain(SECRET)
     const tree = await t.req('GET', `/api/sessions/${routerId}/entry-tree`, undefined, bob)
     expect(tree.status).toBe(200)
     expect(JSON.stringify(tree.body)).not.toContain(SECRET)
@@ -281,12 +278,12 @@ describe('session routes', () => {
       (await t.req('GET', '/api/now', undefined, h)).body.items.map((i: any) => i.run.id)
     expect(await now(ana)).toContain(workRun.id)
     expect(await now(bob)).not.toContain(workRun.id)
-    expect(await now(admin)).not.toContain(workRun.id)
+    expect(await now(admin)).toContain(workRun.id)
   })
 })
 
 describe('events', () => {
-  it('hides a Slack-style DM event from everyone but the person who wrote it', async () => {
+  it('hides a Slack-style DM event from everyone but the person who wrote it and admins', async () => {
     const s = t.a.services
     const { event } = await s.events.ingest({
       source: 'slack',
@@ -301,7 +298,10 @@ describe('events', () => {
     const ids = async (h: Record<string, string>, q = '') =>
       (await t.req('GET', `/api/events?limit=500${q}`, undefined, h)).body.items.map((e: any) => e.id)
     expect(await ids(ana)).toContain(event.id)
-    for (const h of [bob, carol, admin]) {
+    expect(await ids(admin)).toContain(event.id)
+    expect(await ids(admin, '&source=slack')).toContain(event.id)
+    expect((await t.req('GET', `/api/events/${event.id}`, undefined, admin)).status).toBe(200)
+    for (const h of [bob, carol]) {
       expect(await ids(h)).not.toContain(event.id)
       expect(await ids(h, '&source=slack')).not.toContain(event.id)
       expect(await ids(h, '&routed=unmatched')).not.toContain(event.id)
@@ -347,7 +347,7 @@ describe('the live stream', () => {
     return { ws, messages, open }
   }
 
-  it('sends private entries, runs and steps to the DM members only', async () => {
+  it('sends private entries, runs and steps to the DM members and admins only', async () => {
     const s = t.a.services
     const clients = [connect(ana), connect(bob), connect(admin)]
     await Promise.all(clients.map((c) => c.open))
@@ -377,9 +377,10 @@ describe('the live stream', () => {
     const saw = (c: typeof a, text: string) =>
       c.messages.some((m) => m.type === 'event' && JSON.stringify(m.payload).includes(text))
     await until(() => saw(a, 'live secret about pay') && saw(a, 'streamed secret') && saw(a, 'router live secret'), 'ana sees it')
+    await until(() => saw(x, 'live secret about pay') && saw(x, 'router live secret'), 'the admin sees it')
     await s.bus.idle()
     await t.a.live.flush()
-    for (const c of [b, x]) {
+    for (const c of [b]) {
       expect(saw(c, 'live secret about pay')).toBe(false)
       expect(saw(c, 'streamed secret')).toBe(false)
       expect(saw(c, 'router live secret')).toBe(false)
