@@ -1,5 +1,6 @@
 import type { CreatedApiToken } from '@mp/api'
 import { useState } from 'react'
+import { NavLink } from 'react-router'
 import { CopyField } from '@/components/copy.tsx'
 import { SectionTitle } from '@/components/page.tsx'
 import { Button } from '@/components/ui/button.tsx'
@@ -20,7 +21,7 @@ export const CHANNELS_COMMAND = 'claude --dangerously-load-development-channels 
 export const mcpJson = (url: string, token: string) =>
   JSON.stringify({ mcpServers: { vegan: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2)
 
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+export function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
     <section className="mb-7">
       <SectionTitle className="mb-2">
@@ -31,7 +32,7 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   )
 }
 
-const Code = ({ children }: { children: React.ReactNode }) => <code className="font-mono text-micro">{children}</code>
+export const Code = ({ children }: { children: React.ReactNode }) => <code className="font-mono text-micro">{children}</code>
 
 /**
  * How to connect your own agent (Claude Code or any MCP client) to the harness's MCP server at `/mcp`:
@@ -152,21 +153,13 @@ export function ConnectAgent() {
       </Step>
 
       {admin && (
-        <Step n={6} title="Run vegan from your agent (admins)">
-          <p>
-            A second MCP server at <Code>{`${location.origin}/mcp/admin`}</Code> does what the admin pages do: employees,
-            integrations, triggers, secrets, schedules, limits, people and the kill switch. It calls the API as you, so it takes
-            admins' tokens only and every change is yours. Add it next to the first one:
-          </p>
-          <CopyField
-            value={claudeCommand(`${location.origin}/mcp/admin`, token, 'vegan-admin')}
-            label="Copy admin command"
-            multiline
-          />
-          <p className="text-fg-tertiary">
-            Then ask, e.g. “On vegan-admin, list the employees and their triggers.” Changes are live at once for every employee.
-          </p>
-        </Step>
+        <p className="text-fg-tertiary">
+          Admins can also run vegan itself from their agent: employees, integrations, secrets and the rest of Settings. See{' '}
+          <NavLink to="/settings/admin-agent" className="text-brand hover:underline">
+            Admin agent
+          </NavLink>
+          .
+        </p>
       )}
     </div>
   )

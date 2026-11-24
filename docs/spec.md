@@ -1233,7 +1233,11 @@ sessions and runs, and the kill switch.
   multipart uploads).
 - **Stateless.** Each request is answered on its own (JSON responses, no
   session id, no notifications); chat and pushes stay on `/mcp`.
-- **Settings › Connect an agent** shows admins this URL too, next to `/mcp`.
+- **Settings › Admin agent** (admins) documents it in the web UI: a token
+  named "Admin agent", the `claude mcp add` command and an `mcpServers`
+  config for `vegan-admin` with this deployment's URL, example asks, the two
+  tools, and what it will and won't do. Connect an agent links to it for
+  admins.
 
 ### Contacts
 

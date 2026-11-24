@@ -2,6 +2,7 @@ import type { Access, ApiRecord, ContactData, CreatedApiToken, EmployeeData, Sec
 import {
   Bell,
   Bot,
+  ShieldCheck,
   CircleDollarSign,
   CirclePause,
   CirclePlay,
@@ -40,6 +41,7 @@ import { useEmployees } from '@/lib/employees.tsx'
 import { timeAgo } from '@/lib/format.ts'
 import { cn } from '@/lib/utils.ts'
 import { McpServers } from '@/components/mcp-servers.tsx'
+import { AdminAgent } from '@/components/admin-agent.tsx'
 import { ConnectAgent } from '@/components/connect-agent.tsx'
 import { NotificationSettings } from '@/components/notification-settings.tsx'
 import { LimitsSettings } from '@/components/limits-settings.tsx'
@@ -56,6 +58,7 @@ const SECTIONS = [
   { key: 'pricing', label: 'Pricing', icon: CircleDollarSign, admin: true },
   { key: 'control', label: 'Kill switch', icon: Power, admin: true },
   { key: 'people', label: 'People and access', icon: UserCog, admin: true },
+  { key: 'admin-agent', label: 'Admin agent', icon: ShieldCheck, admin: true },
   { key: 'tokens', label: 'API tokens', icon: Ticket, admin: false },
   { key: 'agent', label: 'Connect an agent', icon: Bot, admin: false },
   { key: 'notifications', label: 'Notifications', icon: Bell, admin: false },
@@ -808,6 +811,7 @@ export function SettingsPage() {
         {allowed && section === 'control' && <Control />}
         {allowed && section === 'people' && <People />}
         {allowed && section === 'agent' && <ConnectAgent />}
+        {allowed && section === 'admin-agent' && <AdminAgent />}
         {allowed && section === 'tokens' && <Tokens />}
         {allowed && section === 'notifications' && <NotificationSettings />}
       </div>

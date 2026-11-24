@@ -1,5 +1,5 @@
 import { ApiRequestError, type Me } from '@mp/api'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { App } from '../src/app.tsx'
@@ -162,6 +162,38 @@ describe('Connect an agent page', () => {
     const page = await screen.findByTestId('connect-agent')
     expect(within(page).getByText(/Joining chat and posting need member access/)).toBeInTheDocument()
     expect(within(page).queryByText(/join vegan chat as/)).toBeNull()
+  })
+})
+
+describe('Admin agent page', () => {
+  it('fills a new token into the vegan-admin command and config for /mcp/admin', async () => {
+    const { data } = renderAt('/settings/admin-agent')
+    const page = await screen.findByTestId('admin-agent')
+    const url = `${location.origin}/mcp/admin`
+    fireEvent.click(within(page).getByRole('button', { name: 'Create a token' }))
+    const status = await within(page).findByRole('status')
+    const token = within(status).getByText(/^mpt_/).textContent!
+    expect(
+      within(page).getByText(
+        `claude mcp add --transport http --scope user vegan-admin ${url} --header "Authorization: Bearer ${token}"`,
+      ),
+    ).toBeInTheDocument()
+    const config = JSON.parse(within(page).getByText(/"mcpServers"/).textContent!)
+    expect(config.mcpServers['vegan-admin']).toEqual({ type: 'http', url, headers: { Authorization: `Bearer ${token}` } })
+    expect(within(page).getByText('api_routes')).toBeInTheDocument()
+    expect((await data.api.listTokens()).map((t) => t.name)).toContain('Admin agent')
+  })
+
+  it('is for admins only, and Connect an agent links to it only for them', async () => {
+    renderAt('/settings/admin-agent', as('member'))
+    expect(await screen.findByText('Only admins can see this.')).toBeInTheDocument()
+    expect(screen.queryByTestId('admin-agent')).toBeNull()
+    cleanup()
+    renderAt('/settings/agent', as('member'))
+    expect(within(await screen.findByTestId('connect-agent')).queryByRole('link', { name: 'Admin agent' })).toBeNull()
+    cleanup()
+    renderAt('/settings/agent')
+    expect(within(await screen.findByTestId('connect-agent')).getByRole('link', { name: 'Admin agent' })).toBeInTheDocument()
   })
 })
 
