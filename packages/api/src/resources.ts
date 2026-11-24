@@ -692,6 +692,8 @@ export interface ChatMember {
   label: string
   /** Set for a local agent (a contact of kind `agent`): whether it is connected now. */
   online?: boolean
+  /** A local agent: the name of the person it acts for. */
+  agentFor?: string
 }
 
 /** Kind `channel`. DMs are channels with `dm: true`. */

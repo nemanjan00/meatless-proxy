@@ -236,7 +236,7 @@ function agentSuite(backend: Backend) {
     expect(m.author).toBe('Bob Example')
     // The Claude Code channel notification carries the same, as string meta with identifier keys.
     const ch = await until(() => c.channel.find((n) => n.meta.message_id === mention.id), 'a channel notification')
-    expect(ch.content).toBe('Hey @ordinary-plum, can you look?')
+    expect(ch.content).toBe('Bob Example: Hey @ordinary-plum, can you look?')
     expect(ch.meta).toMatchObject({ channel: 'general', channel_id: g.id, thread_id: mention.id, reason: 'mention' })
     for (const k of Object.keys(ch.meta)) expect(k).toMatch(/^[A-Za-z0-9_]+$/)
 

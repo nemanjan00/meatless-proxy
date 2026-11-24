@@ -144,6 +144,12 @@ describe('MCP server /mcp', () => {
     expect(history.body.some((e) => e.meta?.redacted)).toBe(false)
     expect(JSON.stringify(history.body)).toContain('What is 2+2')
     expect((await t.req('GET', `/api/chat/channels/${asked.channelId}/messages`, undefined, asAna)).status).toBe(200)
+    // Its DM's member list says whose agent it is.
+    const list = await t.req<any[]>('GET', '/api/chat/channels', undefined, asAna)
+    const listed = list.body.find((x) => x.channel.id === asked.channelId)
+    expect(listed.channel.data.members).toContainEqual(
+      expect.objectContaining({ id: msg!.data.author.id, agentFor: 'Ana Example' }),
+    )
     const bo = await t.a.services.directory.contacts.create({ name: 'Bo Example', kind: 'person', access: 'member' })
     const asBo = { 'x-mp-contact': bo.id }
     expect(JSON.stringify((await t.req('GET', `/api/runs/${routed.id}/history`, undefined, asBo)).body)).not.toContain(
@@ -152,11 +158,13 @@ describe('MCP server /mcp', () => {
     expect((await t.req('GET', `/api/chat/channels/${asked.channelId}/messages`, undefined, asBo)).status).toBe(404)
     // Also as Claude Code channel notifications, which reach the model (notifications/message doesn't), without joining chat.
     const replyChannel = await until(
-      () => channel.find((n) => n.meta.thread_id === asked.threadId && n.content === 'It is 4.'),
+      () => channel.find((n) => n.meta.thread_id === asked.threadId && n.content.endsWith(': It is 4.')),
       'a reply channel note',
       10_000,
     )
     expect(replyChannel.meta).toMatchObject({ channel_id: asked.channelId })
+    // Claude Code shows it as from the server, so who wrote it leads.
+    expect(replyChannel.content).toMatch(/^Meatless.*: It is 4\.$/)
     expect(Object.values(replyChannel.meta).every((v) => typeof v === 'string')).toBe(true)
 
     // A follow-up continues the same thread (so the same work picks it up); new_topic starts another.

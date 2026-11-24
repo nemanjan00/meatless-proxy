@@ -213,7 +213,8 @@ export class HarnessMcpServer {
     for (const session of this.agentSessions(agentId)) {
       if (streamOpen(session.transport)) open = true
       await this.notify(session, { type: 'chat.message', ...m })
-      await this.channel(session, m.text, {
+      // Claude Code shows a channel message as coming from the server ("vegan"): who wrote it goes first.
+      await this.channel(session, `${m.author}: ${m.text}`, {
         channel: m.channel,
         channel_id: m.channelId,
         thread_id: m.threadId,
@@ -737,7 +738,8 @@ export class HarnessMcpServer {
     const notify = async (data: HarnessNotification) => {
       await this.notify(session, data)
       const { type, text: content, ...rest } = data
-      await this.channel(session, content, {
+      const by = 'author' in data ? `${data.author}: ` : ''
+      await this.channel(session, `${by}${content}`, {
         type,
         ...Object.fromEntries(Object.entries(rest).map(([k, v]) => [k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), v])),
       })

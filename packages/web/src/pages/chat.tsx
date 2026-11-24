@@ -510,7 +510,9 @@ function AddMember({ existing, onAdd }: { existing: string[]; onAdd(m: ChatMembe
 
 /** A member's name, with presence for local agents. */
 const memberLabel = (m: ChatMember) =>
-  m.online === undefined ? m.label : `${m.label} (agent, ${m.online ? 'online' : 'offline'})`
+  m.online === undefined
+    ? m.label
+    : `${m.label} (${m.agentFor ? `agent of ${m.agentFor}` : 'agent'}, ${m.online ? 'online' : 'offline'})`
 
 /** Search results, grouped by channel. A click opens the message in context. */
 function SearchResults({
