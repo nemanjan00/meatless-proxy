@@ -210,4 +210,6 @@ export interface PolicyConfig {
   sessionDocument?: boolean
   /** Messages between employees in a thread without a person, before deliveries pause. Default 20. */
   maxAiStreak?: number
+  /** Remind a run working for a person to post a progress update after this many tool calls without one. Default 12; 0 off. */
+  progressEvery?: number
 }

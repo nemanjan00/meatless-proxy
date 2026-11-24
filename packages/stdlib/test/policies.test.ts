@@ -1,5 +1,5 @@
 import { beforeDeliver, type Delivery } from '@mp/router'
-import { afterModelCall, afterRun, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
+import { afterModelCall, afterRun, afterToolCall, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
 import { describe, expect, it } from 'vitest'
 import {
   ROUTER_LOG_CHUNK,
@@ -7,6 +7,7 @@ import {
   routerLogView,
   AI_STREAK_TOPIC,
   AUTO_COMMIT_MESSAGE,
+  PROGRESS_EVERY,
   registerPolicies,
   registerRouterPolicies,
   registerUsagePolicies,
@@ -472,5 +473,44 @@ describe('a router context’s view of its decision lines', () => {
     expect(v.filter((x) => x.startsWith('l'))).toHaveLength(
       100 - Math.floor((100 - ROUTER_LOG_KEEP) / ROUTER_LOG_CHUNK) * ROUTER_LOG_CHUNK,
     )
+  })
+})
+
+describe('progress reminders', () => {
+  const call = (t: Stack, run: Record<string, unknown>, name: string, output: unknown = { ok: true }, meta = {}) =>
+    t.hooks.transform(afterToolCall, {
+      run: { id: 'run_p1', data: { mode: 'continuing', requesterId: 'con_ana', ...run } },
+      session: { id: 'ses_p1', data: { meta } },
+      tool: { name },
+      result: { output },
+    } as never)
+
+  it('asks for a one-line update after a dozen tool calls without one, and again a dozen later', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    for (let i = 1; i < PROGRESS_EVERY; i++) expect((await call(t, {}, 'mcp.crm.query')).result.output).toEqual({ ok: true })
+    const nth = await call(t, {}, 'mcp.crm.query')
+    expect(nth.result.output).toMatchObject({ ok: true, harnessNote: expect.stringContaining('progress update') })
+    // A text output gets the note appended.
+    for (let i = 1; i < PROGRESS_EVERY; i++) await call(t, {}, 'fs.read', 'file text')
+    expect((await call(t, {}, 'fs.read', 'file text')).result.output).toMatch(/^file text\n\n\[harness note\]/)
+  })
+
+  it('starts counting again after a reply, and leaves routers and runs nobody asked for alone', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    for (let i = 1; i < PROGRESS_EVERY; i++) await call(t, {}, 'mcp.crm.query')
+    await call(t, {}, 'mcp.slack.reply')
+    expect((await call(t, {}, 'mcp.crm.query')).result.output).toEqual({ ok: true })
+    for (let i = 0; i < PROGRESS_EVERY * 2; i++) {
+      expect((await call(t, { id: 'x' }, 'mcp.crm.query', { ok: 1 }, { role: 'router' })).result.output).toEqual({ ok: 1 })
+      expect((await call(t, { requesterId: undefined }, 'mcp.crm.query', { ok: 2 })).result.output).toEqual({ ok: 2 })
+    }
+  })
+
+  it('can be turned off', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps, { progressEvery: 0 })
+    for (let i = 0; i < PROGRESS_EVERY * 2; i++) expect((await call(t, {}, 'mcp.crm.query')).result.output).toEqual({ ok: true })
   })
 })

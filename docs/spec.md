@@ -2666,6 +2666,16 @@ Built-in policies, each configurable per deployment, employee or project:
   done"), never instead of the answer in the thread. Live, a memory that a
   person "wants answers only in Slack" had a session answer a harness chat
   question in a Slack DM and never in the thread.
+- **Progress updates.** A run working for a person that has made 12 tool
+  calls without one that reaches people (a reply, a post, a comment, a
+  reaction) gets a note on its next tool result: post a one-line progress
+  update in the thread, and answer anything the person wrote meanwhile.
+  Again every 12 calls; a reply starts the count over. Not for router
+  contexts or runs nobody asked for. The prompt asks for an update at least
+  every dozen tool calls or few minutes, and a one-line answer (or 👀) to a
+  message that arrives during the work. Live, a person wrote three times
+  during seven minutes and 40 tool calls of work and heard nothing until the
+  end.
 - **The agent decides whether to answer.** Not every message needs a reply:
   a thanks, another employee's update, or people talking to each other. Each
   message says whether it came from a person, another AI session, or a local

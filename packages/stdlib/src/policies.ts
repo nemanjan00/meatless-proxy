@@ -1,5 +1,5 @@
 import { subscriptionScope } from './subscription-presets.ts'
-import { errorMessage, globMatch, type Hooks } from '@mp/core'
+import { errorMessage, globMatch, type Hooks, type Json } from '@mp/core'
 import type { ChatEventPayload } from '@mp/chat'
 import { beforeDeliver } from '@mp/router'
 import { afterModelCall, afterRun, afterToolCall, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
@@ -170,6 +170,37 @@ async function postReport(
 export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyConfig = {}): () => void {
   const offs: (() => void)[] = []
   const { sessions } = deps
+
+  // Progress updates: live, a person sent three messages during seven minutes and 40 tool calls of work for
+  // them, and heard nothing until the end. After `progressEvery` tool calls without one that reaches people,
+  // the next tool result carries a note asking for a one-line update in the thread.
+  const every = config.progressEvery ?? PROGRESS_EVERY
+  if (every > 0) {
+    const quiet = new Map<string, number>()
+    offs.push(
+      hooks.onTransform(afterToolCall, async (p) => {
+        const { run, session, tool } = p
+        if (session.data?.meta?.role === 'router' || run.data?.mode === 'ephemeral' || !run.data?.requesterId) return p
+        if (REACHES_PEOPLE.has(tool.name) && !p.result.isError) {
+          quiet.delete(run.id)
+          return p
+        }
+        const n = (quiet.get(run.id) ?? 0) + 1
+        quiet.set(run.id, n)
+        if (quiet.size > 10_000) quiet.delete(quiet.keys().next().value!)
+        if (n % every !== 0) return p
+        const note = `[harness note] ${n} tool calls since you last told the person who asked anything. If the work isn't done, post a one-line progress update in their thread now (chat.reply, or the Slack reply tool): what you found so far and what's next. Answer anything they wrote meanwhile.`
+        const out = p.result.output
+        const output: Json =
+          typeof out === 'string'
+            ? `${out}\n\n${note}`
+            : out && typeof out === 'object' && !Array.isArray(out)
+              ? { ...out, harnessNote: note }
+              : { result: out ?? null, harnessNote: note }
+        return { ...p, result: { ...p.result, output } }
+      }),
+    )
+  }
 
   if (config.checklistGate !== false)
     offs.push(
@@ -510,3 +541,22 @@ export function routerLogView<E extends { kind: string; meta: Record<string, unk
   let dropped = 0
   return history.filter((e) => !(isLine(e) && dropped++ < drop))
 }
+
+/** Tool calls between progress reminders (see registerPolicies). */
+export const PROGRESS_EVERY = 12
+
+/** Tools whose call reaches the people a run works for: a reply, a post, a comment, a reaction. */
+export const REACHES_PEOPLE: ReadonlySet<string> = new Set([
+  'chat.reply',
+  'chat.post',
+  'chat.react',
+  'mcp.slack.reply',
+  'mcp.slack.post_message',
+  'mcp.slack.post_blocks',
+  'mcp.slack.react',
+  'mcp.slack.ask',
+  'mcp.slack.update_message',
+  'mcp.linear.comment',
+  'mcp.gitlab.comment_merge_request',
+  'mcp.gitlab.reply_discussion',
+])
