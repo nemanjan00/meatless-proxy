@@ -388,3 +388,28 @@
 .prose-doc hr {
   border-color: var(--border);
 }
+
+/* Theme switch: the new theme grows as a circle from the theme button, 1s ease-in-out (as in the Kicksta
+   dashboard). lib/theme.tsx sets --theme-x/-y/-r on <html> before the view transition starts, so the new
+   snapshot is clipped from its first frame; the default crossfade is off. */
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0 at var(--theme-x, 100%) var(--theme-y, 0));
+  }
+  to {
+    clip-path: circle(var(--theme-r, 150vmax) at var(--theme-x, 100%) var(--theme-y, 0));
+  }
+}
+::view-transition-old(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  animation: theme-reveal 1s ease-in-out both;
+  mix-blend-mode: normal;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

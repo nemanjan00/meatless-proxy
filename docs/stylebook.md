@@ -118,7 +118,10 @@ states and onboarding only.
 - **Selection:** the brand colour at 20 % for text selection and selected rows.
 - **Motion:** quick 100 ms for hover and press, regular 250 ms for panels and
   dialogs, eased with `cubic-bezier(.25, .46, .45, .94)` (ease-out-quad).
-  Nothing bounces. Respect `prefers-reduced-motion`.
+  Nothing bounces. Respect `prefers-reduced-motion`. Switching between dark
+  and light is the one long animation: the new theme grows as a circle from
+  the theme button over the page, 1 s ease-in-out (a View Transition; a plain
+  switch where that's unsupported or motion is reduced).
 
 ## Density and layout
 

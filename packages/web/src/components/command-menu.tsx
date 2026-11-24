@@ -158,8 +158,9 @@ export function CommandMenu({
           <CommandItem
             value="toggle theme dark light"
             onSelect={() => {
-              onToggleTheme()
+              // Closed first: the theme's reveal snapshots the page, and the menu shouldn't be in it.
               onOpenChange(false)
+              setTimeout(onToggleTheme, 200)
             }}
           >
             <Moon />

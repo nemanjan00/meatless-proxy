@@ -61,7 +61,7 @@ import { useAuth } from '@/lib/auth.tsx'
 import { useEmployees } from '@/lib/employees.tsx'
 import { NotificationsProvider, useNotifications } from '@/lib/notifications.tsx'
 import { NAV_SHORTCUTS } from '@/lib/shortcuts.ts'
-import { useTheme } from '@/lib/theme.tsx'
+import { THEME_TOGGLE_ATTR, useTheme } from '@/lib/theme.tsx'
 import { cn } from '@/lib/utils.ts'
 
 interface NavItem {
@@ -193,7 +193,11 @@ function ThemeToggle() {
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={toggle}
+          {...{ [THEME_TOGGLE_ATTR]: '' }}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            toggle({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+          }}
           className="inline-flex size-7 items-center justify-center rounded-md text-fg-tertiary transition-quick hover:bg-sidebar-accent hover:text-foreground"
           aria-label="Toggle theme"
         >
