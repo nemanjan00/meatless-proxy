@@ -723,8 +723,9 @@ export interface MessageData extends Record<string, unknown> {
   /**
    * Who wrote it. A session of an employee is `session` with `@employee#slug` as its name, except
    * the employee's router context, which is internal: its messages are the employee's, with its `handle`.
+   * A local agent (connected over MCP) is a `person` with `agentFor`: the name of the person it acts for.
    */
-  author: { type: 'employee' | 'session' | 'person'; id: string; name: string; handle?: string }
+  author: { type: 'employee' | 'session' | 'person'; id: string; name: string; handle?: string; agentFor?: string }
   /** Markdown. May contain `[[kind:id]]` links and tags. */
   text: string
   tags: ChatTag[]

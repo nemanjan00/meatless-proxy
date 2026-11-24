@@ -14,7 +14,8 @@ import { cn } from '@/lib/utils.ts'
 
 /**
  * An author's name; a session's `@employee#slug` shows the employee, with the slug quieter and shortened.
- * An employee (its router context included) shows its `@handle` quieter after its name.
+ * An employee (its router context included) shows its `@handle` quieter after its name, and a local agent
+ * whose agent it is.
  */
 function AuthorName({ author }: { author: Message['data']['author'] }) {
   const i = author.type === 'session' ? author.name.indexOf('#') : -1
@@ -23,6 +24,13 @@ function AuthorName({ author }: { author: Message['data']['author'] }) {
       <span className="flex min-w-0 items-baseline gap-1.5" title={`@${author.handle}`}>
         <span className="shrink-0 font-medium text-foreground">{author.name}</span>
         <span className="min-w-0 truncate font-mono text-micro text-fg-tertiary">@{author.handle}</span>
+      </span>
+    )
+  if (author.agentFor)
+    return (
+      <span className="flex min-w-0 items-baseline gap-1.5" title={`A local agent acting for ${author.agentFor}`}>
+        <span className="shrink-0 font-medium text-foreground">{author.name}</span>
+        <span className="min-w-0 truncate text-micro text-fg-tertiary">agent of {author.agentFor}</span>
       </span>
     )
   if (i < 0) return <span className="shrink-0 font-medium text-foreground">{author.name}</span>

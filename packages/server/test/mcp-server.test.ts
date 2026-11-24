@@ -106,6 +106,14 @@ describe('MCP server /mcp', () => {
     const agent = await t.a.services.directory.contacts.get(msg!.data.author.id)
     expect(agent!.data).toMatchObject({ kind: 'agent', sponsor: anaId })
     expect(posted.joined).toContain(`@${agent!.data.name}`)
+    // The web UI shows whose agent it is.
+    const view = await t.req<any>('GET', `/api/chat/channels/${msg!.data.channelId}/messages`)
+    expect(view.body.find((m: any) => m.id === posted.messageId).data.author).toEqual({
+      type: 'person',
+      id: agent!.id,
+      name: agent!.data.name,
+      agentFor: 'Ana Example',
+    })
     const read = json(await client.callTool({ name: 'chat_read', arguments: { channel: 'general' } }))
     expect(read.at(-1)).toMatchObject({ text: 'Hello from my own agent' })
     expect(read.at(-1).author).toContain(agent!.data.name)

@@ -66,13 +66,21 @@ export function tagCandidates(
     if (isRouterSession(s)) continue
     out.push({ type: 'session', id: s.id, insert: `@${h}#${s.data.slug}`, label: s.data.title, detail: 'session' })
   }
+  const names = new Map(contacts.map((c) => [c.id, c.data.name]))
   for (const c of contacts) {
     const h = mpHandle(c)
     if (!h || isAi(c) || c.id === meId) continue
-    // Local agents (connected over MCP) are suggested while they're online.
+    // Local agents (connected over MCP) are suggested while they're online, with whose agent they are.
     if (c.data.kind === 'agent') {
+      const sponsor = typeof c.data.sponsor === 'string' ? names.get(c.data.sponsor) : undefined
       if (c.data.online === true)
-        out.push({ type: 'person', id: c.id, insert: `@${h}`, label: c.data.name, detail: 'local agent' })
+        out.push({
+          type: 'person',
+          id: c.id,
+          insert: `@${h}`,
+          label: c.data.name,
+          detail: sponsor ? `agent of ${sponsor}` : 'local agent',
+        })
       continue
     }
     out.push({ type: 'person', id: c.id, insert: `@${h}`, label: c.data.name, detail: c.data.role })

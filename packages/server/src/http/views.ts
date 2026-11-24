@@ -268,6 +268,10 @@ export class Views {
       const e = await this.employeeOfContact(c.id)
       if (e) return { type: 'employee', id: e.id, name: e.data.name, ...(e.key ? { handle: e.key } : {}) }
     }
+    if (c?.data.kind === 'agent') {
+      const sponsor = typeof c.data.sponsor === 'string' ? await this.contact(c.data.sponsor) : null
+      return { type: 'person', id: a.id, name: c.data.name, ...(sponsor ? { agentFor: sponsor.data.name } : {}) }
+    }
     return { type: 'person', id: a.id, name: c?.data.name ?? a.id }
   }
 

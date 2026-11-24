@@ -1144,7 +1144,8 @@ people and employees can talk to it like to anyone else:
   can see, plus its own DMs. Its posts are rate limited.
 - **Authorship.** After joining, its posts, questions and reactions are its
   own. Employees see its messages as coming "from another AI agent (name, on
-  behalf of sponsor)". It counts as AI for the
+  behalf of sponsor)", and the web UI shows "agent of <sponsor>" next to its
+  name, on its messages and in `@` suggestions. It counts as AI for the
   [AI-to-AI streak limit](#configurable-limits), so employee ↔ agent
   ping-pong is capped like employee ↔ employee. A top-level message from it in
   a requests channel starts work like a person's would.
