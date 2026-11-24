@@ -123,6 +123,7 @@ export const GUARD_RULES: GuardRule[] = [
   { method: 'GET', path: '/api/auth/config', need: 'public' },
   { method: '*', path: '/webhooks/*', need: 'public' },
   { method: '*', path: '/mcp', need: 'public' },
+  { method: '*', path: '/mcp/admin', need: 'public' },
   { method: 'GET', path: '/metrics', need: 'public' },
 
   // Your own sign-in and tokens (tokens for others: admins, checked by the handler).

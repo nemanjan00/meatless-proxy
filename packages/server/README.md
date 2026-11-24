@@ -21,7 +21,7 @@ first by a small built-in loader; variables already set win.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `PORT` | `3000` | HTTP port (API, `/ws`, `/mcp`, web UI) |
+| `PORT` | `3000` | HTTP port (API, `/ws`, `/mcp`, `/mcp/admin`, web UI) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATABASE_URL` | none: in-memory store | Postgres URL. Migrations run at startup under an advisory lock |
 | `DATABASE_SCHEMA` | `public` | Postgres schema of the tables |
@@ -268,7 +268,7 @@ table), `sessions.ts` (links and sessions), `routes.ts`, `oidc.ts`,
   it is a viewer. AI employees and people with `status: left` never sign in.
 - **One place enforces it**: `GUARD_RULES` in `guard.ts`, first match wins.
   Unlisted routes need `viewer` for GET and `admin` for anything else. Webhooks
-  (`/webhooks/*`, their signature is the auth), `/mcp` (its own bearer check),
+  (`/webhooks/*`, their signature is the auth), `/mcp` and `/mcp/admin` (their own bearer checks),
   `/metrics`, `/healthz`, `/readyz`, `/auth/*`, `GET /api/auth/config` and the web
   UI are public. Two checks need the body and live in the handlers: only admins
   set `access`, and members edit only a session's document and title. An
@@ -547,6 +547,25 @@ Connect Claude Code:
 ```sh
 npm run token -- --contact <contactId>        # prints the token once
 claude mcp add --transport http vegan <PUBLIC_URL>/mcp --header "Authorization: Bearer mpt_…"
+```
+
+## Admin MCP server (`/mcp/admin`)
+
+The admin UI over MCP (`src/admin-mcp.ts`): an admin's token only (403
+otherwise, checked on every request), stateless (`enableJsonResponse`, no
+session id). It has two tools, both over the HTTP API, so it never drifts
+from it:
+
+- `api_routes { filter? }`: the app's `/api/` routes from `app.routes`, each
+  method and path once, with the access `GUARD_RULES` gives it.
+- `api_request { method, path, query?, body? }`: `app.fetch` in-process with
+  the caller's own bearer token, so the guard, validation and attribution
+  are the API's. Paths outside `/api/` (after resolving `..`) are refused.
+  JSON comes back parsed, text cut at 200,000 characters, a file as an
+  embedded resource up to 8 MB; a status of 400 or more is a tool error.
+
+```sh
+claude mcp add --transport http vegan-admin <PUBLIC_URL>/mcp/admin --header "Authorization: Bearer mpt_…"
 ```
 
 ## Composition

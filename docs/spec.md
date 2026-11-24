@@ -402,7 +402,7 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   detail, history, entries, runs, tree, lineage, checklist and document, in
   search, on the live stream and through the MCP server. Admins administer the
   employees, so they read all of their work, private sessions included (in the
-  web UI and API; an admin's token over MCP reads like anyone's). Anyone else
+  web UI, the API and the [admin MCP server](#the-admin-mcp-server); an admin's token on `/mcp` reads like anyone's). Anyone else
   gets 404. The DM channels themselves stay for their members. A router
   context is shared by many requests, so it isn't hidden as a whole: the
   entries a DM request added to it (the request and its decision line) are
@@ -1203,6 +1203,37 @@ Open questions:
   `--channels` or `--dangerously-load-development-channels server:<name>`
   (a research preview). Whether it accepts an HTTP server as a channel isn't
   verified; `chat_inbox` and `notifications/message` work either way.
+
+##### The admin MCP server
+
+A second MCP server at **`/mcp/admin`** is the admin UI over MCP, so an admin's
+own agent can run the company: employees, integrations, triggers, secrets,
+MCP servers, projects, procedures, schedules, limits, knowledge, people,
+sessions and runs, and the kill switch.
+
+- **Admins only.** It takes the same per-contact tokens as `/mcp` and the API,
+  and answers 403 to anyone who isn't an admin when they call. The check runs
+  on every request, so a revoked token, a deactivated admin or one made a
+  member is refused from the next call. It gives an admin's token nothing the
+  API doesn't already give it.
+- **It is the HTTP API, not a second one.** `api_routes { filter? }` lists the
+  API's routes (`/api/…`, each method and path once) with the access each
+  needs, read from the running app, so a new route is there with no change
+  to the server. `api_request { method, path, query?, body? }` calls one
+  in-process as the token's admin. The sign-in guard, validation, private
+  sessions and attribution are the API's: every write is the admin's, as in
+  the web UI.
+- **Answers.** It returns the status and the parsed JSON, or text (cut at
+  200,000 characters), or a file such as an export as an embedded resource
+  (up to 8 MB). A status of 400 or more is a tool error that carries the
+  API's message, so the agent can fix its call. Secret values are
+  write-only, as in the API.
+- **Only `/api/` paths.** The path is resolved first: `..`, another origin,
+  `/mcp` and anything outside `/api/` are refused. Bodies are JSON (no
+  multipart uploads).
+- **Stateless.** Each request is answered on its own (JSON responses, no
+  session id, no notifications); chat and pushes stay on `/mcp`.
+- **Settings › Connect an agent** shows admins this URL too, next to `/mcp`.
 
 ### Contacts
 

@@ -22,6 +22,7 @@ import { LiveHub, NowTracker } from './live.ts'
 import { ChatActivity, chatActivityRoutes } from './chat-activity.ts'
 import { notificationPrefsRoutes } from './notification-prefs.ts'
 import { HarnessMcpServer } from './mcp-server.ts'
+import { AdminMcpServer } from './admin-mcp.ts'
 import { gitlabHookProvisioning, type HookProvisioning, identityRoutes, integrationStatusRoutes } from './integrations/index.ts'
 import { createPreviews, type Previews } from './previews/index.ts'
 import { EnvironmentMonitor, EnvironmentViews, IdleEnvironmentStopper, environmentRoutes } from './environments/index.ts'
@@ -61,6 +62,8 @@ export interface App {
   /** Who is working on each chat thread (src/chat-activity.ts). */
   activity: ChatActivity
   mcp: HarnessMcpServer
+  /** The admin UI over MCP, at `/mcp/admin` (src/admin-mcp.ts). */
+  adminMcp: AdminMcpServer
   /** Live previews: tokens, the preview listener, and the harness's refusal of preview origins. */
   previews: Previews
   /** What runs in each environment, and its metrics while someone watches (src/environments). */
@@ -148,6 +151,13 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     }),
   )
   app.all('/mcp', (c) => mcp.handle(c.req.raw))
+  // The admin UI over MCP: its tools call this app with the caller's token (src/admin-mcp.ts).
+  const adminMcp = new AdminMcpServer(
+    services,
+    (req) => app.fetch(req),
+    () => app.routes,
+  )
+  app.all('/mcp/admin', (c) => adminMcp.handle(c.req.raw))
 
   const migrationsReady = async () => {
     if (!services.pool) return true
@@ -193,6 +203,7 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
     live,
     activity,
     mcp,
+    adminMcp,
     previews,
     environments,
     idleStopper,

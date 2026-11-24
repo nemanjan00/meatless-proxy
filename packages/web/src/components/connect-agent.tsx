@@ -10,8 +10,8 @@ import { useEmployees } from '@/lib/employees.tsx'
 const TOKEN_PLACEHOLDER = '<your token>'
 
 /** The Claude Code command that adds the harness's MCP server, for everyone's projects (`--scope user`). */
-export const claudeCommand = (url: string, token: string) =>
-  `claude mcp add --transport http --scope user vegan ${url} --header "Authorization: Bearer ${token}"`
+export const claudeCommand = (url: string, token: string, name = 'vegan') =>
+  `claude mcp add --transport http --scope user ${name} ${url} --header "Authorization: Bearer ${token}"`
 
 /** Starts Claude Code with vegan as a channel, so its pushes reach the running session. */
 export const CHANNELS_COMMAND = 'claude --dangerously-load-development-channels server:vegan'
@@ -48,6 +48,7 @@ export function ConnectAgent() {
   const first = employees[0]
   const someone = first ? `@${handle({ id: first.id, name: first.data.name })}` : '@employee'
   const member = can('member')
+  const admin = can('admin')
 
   const create = async () => {
     setBusy(true)
@@ -149,6 +150,24 @@ export function ConnectAgent() {
           <li>Lost the token, or done with the agent? Revoke it in API tokens: it stops working right away.</li>
         </ul>
       </Step>
+
+      {admin && (
+        <Step n={6} title="Run vegan from your agent (admins)">
+          <p>
+            A second MCP server at <Code>{`${location.origin}/mcp/admin`}</Code> does what the admin pages do: employees,
+            integrations, triggers, secrets, schedules, limits, people and the kill switch. It calls the API as you, so it takes
+            admins' tokens only and every change is yours. Add it next to the first one:
+          </p>
+          <CopyField
+            value={claudeCommand(`${location.origin}/mcp/admin`, token, 'vegan-admin')}
+            label="Copy admin command"
+            multiline
+          />
+          <p className="text-fg-tertiary">
+            Then ask, e.g. “On vegan-admin, list the employees and their triggers.” Changes are live at once for every employee.
+          </p>
+        </Step>
+      )}
     </div>
   )
 }
