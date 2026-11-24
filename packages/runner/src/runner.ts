@@ -177,6 +177,11 @@ export interface RunnerOptions {
   /** The model a session's runs use when it names none (e.g. a cheaper one for router contexts). Default: the client's. */
   modelFor?: (session: Session) => string | undefined
   /**
+   * What of a session's history the model is shown (default: all of it), e.g. a router context's latest
+   * decision lines only. The history itself is kept as it is.
+   */
+  viewHistory?: (session: Session, history: Entry[]) => Entry[]
+  /**
    * The current text of a session's first entry (the employee prompt it was created with), read when a
    * run starts; undefined keeps it. The model sees the current text in place of the stored one.
    */
@@ -979,7 +984,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         const window = windowOf(modelName)
         const base = run.data.base
         const render = (h: Entry[]) => {
-          const m = renderMessages(h, base ? { cacheAfter: base } : {})
+          const m = renderMessages(opts.viewHistory ? opts.viewHistory(session, h) : h, base ? { cacheAfter: base } : {})
           if (prompt !== undefined && h[0]?.kind === 'system' && m[0]?.role === 'system') m[0] = { ...m[0], content: prompt }
           return m
         }

@@ -2,6 +2,9 @@ import { beforeDeliver, type Delivery } from '@mp/router'
 import { afterModelCall, afterRun, beforeFinish, beforeModelCall, beforeToolCall } from '@mp/runner'
 import { describe, expect, it } from 'vitest'
 import {
+  ROUTER_LOG_CHUNK,
+  ROUTER_LOG_KEEP,
+  routerLogView,
   AI_STREAK_TOPIC,
   AUTO_COMMIT_MESSAGE,
   registerPolicies,
@@ -440,5 +443,34 @@ describe('router decision logs', async () => {
       expect(isRouterLog(router, out), out).toBe(true)
     expect(isRouterLog(router, "I'm Meatless, an AI employee.")).toBe(false)
     expect(isRouterLog({ data: { meta: {} } }, 'Logged.')).toBe(false)
+  })
+})
+
+describe('a router context’s view of its decision lines', () => {
+  const line = (i: number) => ({ id: `l${i}`, kind: 'summary', meta: { op: 'commitSummary' } as Record<string, unknown> })
+  const other = (id: string, kind = 'system') => ({ id, kind, meta: {} as Record<string, unknown> })
+  const history = (n: number) => [other('prompt'), other('instructions'), ...Array.from({ length: n }, (_, i) => line(i))]
+  const ids = (n: number) => routerLogView(history(n)).map((e) => e.id)
+
+  it('shows every line up to KEEP + CHUNK - 1, then drops the oldest a whole chunk at a time', () => {
+    expect(ids(10)).toEqual(history(10).map((e) => e.id))
+    const most = ROUTER_LOG_KEEP + ROUTER_LOG_CHUNK - 1
+    expect(ids(most)).toHaveLength(most + 2)
+    const after = ids(most + 1)
+    expect(after).toHaveLength(ROUTER_LOG_KEEP + 2)
+    expect(after.slice(0, 3)).toEqual(['prompt', 'instructions', `l${ROUTER_LOG_CHUNK}`])
+    // Between drops the start of the view stays the same (the cached prefix).
+    expect(ids(most + 2).slice(0, 3)).toEqual(after.slice(0, 3))
+    expect(ids(most + 1 + ROUTER_LOG_CHUNK)[2]).toBe(`l${2 * ROUTER_LOG_CHUNK}`)
+  })
+
+  it('keeps every other entry, wherever it is', () => {
+    const h = [other('prompt'), ...Array.from({ length: 100 }, (_, i) => line(i)), other('note', 'user')]
+    const v = routerLogView(h).map((e) => e.id)
+    expect(v[0]).toBe('prompt')
+    expect(v.at(-1)).toBe('note')
+    expect(v.filter((x) => x.startsWith('l'))).toHaveLength(
+      100 - Math.floor((100 - ROUTER_LOG_KEEP) / ROUTER_LOG_CHUNK) * ROUTER_LOG_CHUNK,
+    )
   })
 })

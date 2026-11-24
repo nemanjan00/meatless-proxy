@@ -641,6 +641,9 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     // Tools on demand: a session that can load tools (tools.load in its toolset) is offered its core set and what it loaded.
     // Router contexts on ROUTER_MODEL when set (a fork of one does the work: it has no router role).
     modelFor: (session) => (session.data.meta?.role === 'router' ? config.ROUTER_MODEL : undefined),
+    // A router context's model sees its latest decision lines only (the oldest go in chunks, see routerLogView).
+    viewHistory: (session, history) =>
+      session.data.meta?.role === 'router' && services.stdlib ? services.stdlib.routerLogView(history) : history,
     onDemand: (session) => (config.TOOLS_ON_DEMAND ? services.stdlib?.onDemandFor(session.data.toolset) : undefined),
     currentPrompt: async (session, stored) => (sessionPrompt ? sessionPrompt(session, stored) : undefined),
     projectOf,

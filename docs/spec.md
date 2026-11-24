@@ -2971,7 +2971,11 @@ and commits to itself only what it needs to remember.
 Every employee has one **router context**: the session that new work for the
 employee goes to (its triggers, `@employee` tags, and the fallback). It
 behaves like a dispatcher with a notebook. Its committed history is a log of
-routing **decisions**, one line each, and nothing else.
+routing **decisions**, one line each, and nothing else. Its model is shown the
+latest 40 to 79 of them: the oldest are left out 40 at a time, so the start of
+the prompt (and the prompt cache) stays the same between drops. The log
+itself is kept; a follow-up to an older decision reaches its session through
+the thread's subscription anyway.
 
 For every event, a router run:
 

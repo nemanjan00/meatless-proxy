@@ -132,6 +132,17 @@ describe('runner', () => {
     expect(h.model.calls).toHaveLength(0)
   })
 
+  it('shows the model what viewHistory picks of the history, and keeps the history whole', async () => {
+    const h = harness([reply('ok')], {
+      viewHistory: (_s, history) => history.filter((e) => !JSON.stringify(e.content).includes('old line')),
+    })
+    const s = await h.session()
+    const run = await h.start(s.id, 'old line, then the request')
+    await h.runner.execute(run.id)
+    expect(JSON.stringify(h.model.calls[0]!.messages)).not.toContain('old line')
+    expect(JSON.stringify(await h.sessions.history(s.id))).toContain('old line')
+  })
+
   it('records usage through afterModelCall', async () => {
     const h = harness([reply('x', { promptTokens: 10, completionTokens: 2 })])
     const seen: number[] = []

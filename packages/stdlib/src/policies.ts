@@ -489,3 +489,24 @@ export function registerRouterPolicies(hooks: Hooks, deps: StdlibDeps, config: P
     }
   })
 }
+
+/** A router context shows its model at least this many of its latest decision lines. */
+export const ROUTER_LOG_KEEP = 40
+/** Older decision lines are dropped this many at a time, so the prompt's start stays the same (and cached) in between. */
+export const ROUTER_LOG_CHUNK = 40
+
+/**
+ * What a router context's model is shown of its history: every entry, but of the decision lines its runs
+ * committed (`commitSummary`) only the latest ROUTER_LOG_KEEP to ROUTER_LOG_KEEP + ROUTER_LOG_CHUNK - 1. Live,
+ * a day of requests added some 250 lines, a third more prompt on every routing call, while routing needs the
+ * recent ones (a follow-up to something routed a while ago comes through its thread's subscription). The
+ * oldest go in whole chunks, so the cached prefix breaks once per chunk, not on every request.
+ */
+export function routerLogView<E extends { kind: string; meta: Record<string, unknown> }>(history: E[]): E[] {
+  const isLine = (e: E) => e.kind === 'summary' && e.meta.op === 'commitSummary'
+  const lines = history.filter(isLine).length
+  const drop = Math.max(0, Math.floor((lines - ROUTER_LOG_KEEP) / ROUTER_LOG_CHUNK) * ROUTER_LOG_CHUNK)
+  if (!drop) return history
+  let dropped = 0
+  return history.filter((e) => !(isLine(e) && dropped++ < drop))
+}
