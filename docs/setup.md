@@ -1,0 +1,262 @@
+# Setting up and running vegan
+
+How to run a deployment once it's installed: signing in, employees,
+projects, integrations, MCP servers, sandboxes, and the settings that tune
+them. The [README](../README.md) has the five-minute install, and
+[spec.md](spec.md) the reasoning behind each feature.
+
+## First start
+
+On first start the harness creates a default AI employee, **Meatless**, with
+its router session, and the channels `#general` and `#requests`. Post in
+`#requests` and it answers in the thread.
+
+To sign in the first time, get a one-time link (valid 15 minutes):
+
+```sh
+docker compose exec app npm run login-link -- --contact you@example.com --create --access admin
+# or, as the admin the first start created:
+docker compose exec app npm run login-link -- --admin
+```
+
+Setting `ADMIN_EMAIL` in `.env` makes that person an admin on the next start
+(the first-start admin gets the email, if nobody has it yet), and the log
+shows a one-time link for them until they've signed in. Signing in gives a
+session that lasts 14 days and renews with use. Admins invite everyone else
+from Settings → People and access.
+
+## Model provider
+
+Any OpenAI-compatible Chat Completions API works: set `OPENAI_BASE_URL`,
+`OPENAI_API_KEY` and `MODEL` in `.env`. The model must support tool calling,
+because employees work through tools. It has run on Kimi and on Claude
+through an OpenAI-compatible proxy. For web search, add a search MCP server
+(Brave Search, Tavily, SearXNG, …) in Settings → MCP servers; its tools show
+up for employees like any other. Search-only models such as OpenAI's
+search-preview ones don't take tools in Chat Completions, so they can't run
+an employee.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `ROUTER_MODEL` | `MODEL` | the model of router contexts (same provider), e.g. a cheaper one: they only decide where work goes; the work they start uses `MODEL` |
+| `MODEL_CACHE_MARKERS` | `auto` | prompt cache breakpoints at the end of each run's starting history: `auto` is on for Claude models; `on` or `off` to say so |
+| `MODEL_VISION` | `auto` | whether the model can see images: `auto` asks the provider's model list, then goes by the model's name; `true` or `false` to say so |
+| `MODEL_IMAGE_MAX_SIDE` | 1568 | images for the model are downscaled to this many pixels on the longest side (PNG; other types pass through) |
+| `MODEL_IMAGE_MAX_BYTES` | 5 MB | larger images aren't sent to the model |
+
+## Live previews and desktops
+
+Live previews of what employees are building are served on their own origin:
+port 3001 by default (`PREVIEW_HOST_PORT`), or `<env>-<port>.<PREVIEW_DOMAIN>`
+with a wildcard DNS name and certificate for production. See
+[packages/server/README.md](../packages/server/README.md#live-previews). An
+environment can also have a **desktop** (`env.up { desktop: true }`): a
+virtual screen for headed browsers and GUI apps that people watch live in the
+browser (noVNC, on the preview origin) and the employee sees through
+`env.screenshot`. The **Environments** page lists everything that runs, with
+live CPU, memory and network per container, what command runs in it, logs,
+and a Stop button.
+
+The app container manages project environments as sibling containers through
+the host's Docker socket, so run it on a host dedicated to it.
+
+## Adding an employee
+
+Admins press **New employee** in Settings → Employees, or on any employee's
+page. Give it a name (its `@handle` follows from it, and can be changed), a
+role and what it does; personality, instructions, model, projects and
+channels are optional. It gets what Meatless got: a router session, its own
+`#requests-<handle>` channel with a trigger to the router, a place in
+`#general`, and an SSH keypair. `POST /api/employees` does the same.
+
+## Assigning projects
+
+An employee only knows what it works on once it's assigned: on its page,
+**Projects** adds an existing project with a role (owner or member), and
+**New project** creates one it owns, with its repository URLs and docs links.
+A project's page adds employees and people the same way, and GitLab's setup
+step adds the repositories the employee's account can reach with **Add as
+project**. The employee sees its current projects at the start of every piece
+of work, and the harness registers GitLab webhooks on their repositories.
+
+## Connecting Slack, GitLab and Linear
+
+Each employee's page (`/employees/<id>`) has a guided setup per integration.
+Every step says what to do, gives the exact values to copy, and is ticked
+only when the harness has checked it for real:
+
+- **Slack:** "Create Slack app" opens Slack with the employee's own manifest
+  (name, scopes, events, request URL). Paste its bot token and signing
+  secret, and the page shows the bot, the channels it's in, whether events
+  arrive, and offers the recommended trigger.
+- **GitLab:** paste the service account's token (checked for the `api` scope
+  and its expiry). "Add it for me" puts the employee's SSH key on the
+  account. The page warns about Maintainer access and unprotected default
+  branches, adds the account's GitLab projects as harness projects ("Add as
+  project"), and shows the webhooks the harness registered.
+- **Linear:** paste the API key, then create the webhook from the page (or
+  by hand) and add the trigger.
+
+Tokens are stored as secrets scoped to the employee and never shown again.
+Webhook URLs use `PUBLIC_URL`, so set it to the address the systems can
+reach. The manual steps are in each integration's README
+([Slack](../packages/integration-slack/README.md#setup),
+[GitLab](../packages/integration-gitlab/README.md#setup-on-gitlab),
+[Linear](../packages/integration-linear/README.md#setup-on-the-linear-side)).
+
+## Talk to it from your own AI
+
+The harness is also an MCP server. Your own Claude Code can talk to the
+company's AI employees directly, and gets notified when they reply:
+
+```sh
+npm run token -- --contact <your contact id>     # prints a token once (or Settings → API tokens)
+claude mcp add --transport http vegan <PUBLIC_URL>/mcp \
+  --header "Authorization: Bearer mpt_…"
+```
+
+Then ask it to **join chat**. It calls `chat_join` and becomes a participant
+of its own, like `@ordinary-plum` (a random name, or one you give it; the same
+token and name reclaim it later), acting for you with at most `member` access
+and seeing only what you can see. Employees and people can tag it, and it is
+told about messages that mention it, DMs to it, replies in its threads and new
+messages in channels it follows (`chat_join_channel`). What it misses while
+disconnected waits in `chat_inbox`. `chat_search` searches the chat you can
+see.
+
+Messages arrive as MCP `notifications/message`, and also as Claude Code
+[channel](https://code.claude.com/docs/en/channels-reference) notifications,
+which put them straight into a running session. Channels are a research
+preview: Claude Code only listens for them from servers you opt in at start,
+e.g. `claude --dangerously-load-development-channels server:vegan`
+(see its docs; they describe stdio servers, and whether an HTTP server is
+accepted is not verified here). Without it, ask Claude to check `chat_inbox`.
+
+## Connecting MCP servers
+
+Employees reach outside systems through MCP servers. Admins add them in
+**Settings → MCP servers** (for every employee) or on an employee's page (for
+that employee only), with no restart:
+
+- a streamable HTTP URL, and a name: the tools become `mcp.<name>.<tool>`;
+- no auth, a **token** (stored as a secret, sent as `Authorization: Bearer …`
+  or a header you choose, never shown again), or **OAuth**: press **Connect**
+  and sign in; the harness registers itself, keeps the tokens as secrets and
+  refreshes them. OAuth needs `PUBLIC_URL`, the address the sign-in comes
+  back to (`<PUBLIC_URL>/oauth/mcp/callback`).
+
+stdio servers, which run a command on the host, can only be set in the
+`MCP_SERVERS` config. See [spec.md](spec.md#connecting-mcp-servers).
+
+## Code execution
+
+Employees run Python and Node for math, data and charts with `code.run`, like
+a notebook: variables and imports stay between runs in a session, and the last
+expression's value comes back. Code runs in a sandbox container per employee
+(`mp-<employee>-sandbox`: no network unless its setting gives one, non-root,
+read-only root, CPU, memory and process limits, no secrets), never in the app. The employee's files are
+its working directory, so a chart it saves is a file it can share.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `SANDBOX_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-sandbox:latest` | the image (`docker/sandbox/Dockerfile`: Python with numpy, pandas, sympy and matplotlib, and Node) |
+| `DESKTOP_IMAGE` | `ghcr.io/nemanjan00/meatless-proxy-desktop:latest` | the desktop sidecar of `env.up { desktop: true }` (`docker/desktop/Dockerfile`: Xvfb, x11vnc and websockify; build your own with `docker build -t mp-desktop docker/desktop`) |
+| `DEFAULT_NETWORK` | `direct` | the network of an employee with no network setting of its own: `direct` (a real network, no proxy; unrestricted and not logged), `project` (the project's allowlist through the egress proxy, else `DEFAULT_EGRESS`) or `none` |
+| `DEFAULT_EGRESS` | none | hosts environments and sandboxes may reach when neither the employee's network setting nor the project names any, e.g. `pypi.org,files.pythonhosted.org` |
+| `ENV_PROFILES` | [nemanjan00/dev](https://github.com/nemanjan00/dev-environment) profiles | the toolkits `env.up` offers by name, as JSON `[{ "name", "image", "description" }]`; a project can pick one as its default (`envProfile`) |
+| `ENV_DEFAULT_PROFILE` | `default` | the profile `env.up` uses when the call, the project and the checkout (no Dockerfile) don't decide |
+| `DOCKER_DIRECT_NETWORK` | `true` | `false` turns every employee's "Direct network (no proxy)" setting into no network |
+| `DOCKER_NAME_PREFIX` | `mp-` | prefix of every container and network (and their `mp.deployment` label); give each deployment on one Docker host its own, e.g. `mp-e2e-` |
+| `SANDBOX_ENABLED` | `true` | turn code execution off (it also needs `DOCKER_ENABLED`) |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY_MB`, `SANDBOX_PIDS` | 1, 1024, 256 | limits per employee's container |
+| `SANDBOX_IDLE_MINUTES` | 15 | idle kernels, then containers, are stopped |
+| `FILES_DIR` | `<DATA_DIR>/files` | where employee files live, one directory per employee |
+| `FILES_VOLUME` | none | the named volume mounted at `FILES_DIR` (`mp-files`); with it, sandboxes mount the employee's files instead of copying them |
+
+Network access follows each employee's **network** setting, on its page:
+
+| Setting | Code sandbox and environments get |
+|---------|-----------------------------------|
+| Only the project's allowlist (default) | the project's hosts through the logging egress proxy; the sandbox has no project, so `DEFAULT_EGRESS` or nothing |
+| Package registries, Any public host, These hosts… | those hosts through the proxy, narrowed to what the project allows too |
+| Direct network (no proxy) | a real network of the employee's own, for SSH, database clients, raw TCP, UDP and DNS. Unrestricted and not logged: it can reach your LAN, cloud metadata and any host, but not the harness's own containers. Admins only, for employees you trust |
+| No network | nothing |
+
+Build the image yourself with `docker build -t mp-sandbox docker/sandbox` and
+set `SANDBOX_IMAGE=mp-sandbox`. Employees also know the time: every message
+carries when it arrived, and `time.now` answers in the company timezone
+(the `timezone` setting, UTC by default). See
+[spec.md](spec.md#code-execution).
+
+## Files and images in chat
+
+People attach any file to chat messages (the attach button, paste, or drag
+and drop), and employees attach any file from their filesystem, such as a
+chart or a script `code.run` saved (`/work/files/a.sh` in code is `/a.sh` for
+the file tools and attachments; both spellings work everywhere). Messages name
+attachments to employees (`[image: chart.png 800x600, attachment att_…]`,
+`[file: ipwatch.sh 1.2 KB text/x-shellscript, attachment att_…]`), and an
+employee looks at an image with `image.view` or reads a text file with
+`chat.attachment_text` only when it needs to. Types are sniffed from the
+content: only PNG, JPEG, GIF and WebP are images, shown inline; everything
+else is always a download (HTML, SVG, XML, JavaScript and PDF as
+`application/octet-stream`), and small text files get a plain-text preview.
+Attachments live on the files volume, and only people who can see the channel
+can open them. An employee that posts the same text in the same thread twice
+within two minutes is told so instead of posting it again.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `IMAGE_DESCRIBE` | `view` | saved image descriptions, one model call per image, reused everywhere: `view` describes an image on its first look, `upload` in the background when it's posted, `off` never (needs vision) |
+| `IMAGE_DESCRIBE_MODEL` | `MODEL` | the model that describes images, on the same provider |
+| `CHAT_ATTACHMENT_MAX_BYTES` | 10 MB | per attached file or image |
+| `CHAT_ATTACHMENTS_PER_MESSAGE` | 10 | attachments per message |
+
+## Context size
+
+Each run knows how full its model's context window is (shown on the session
+page). The model is told at 50 % and 75 %, so it can rewind or offload, and
+the harness compacts automatically near the limit: a summary of the earlier
+work plus the latest messages verbatim, with the full history kept. Tool
+results that are too big are kept as a preview that the model can read in
+pieces. A run whose context can't be made to fit pauses with the reason.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `MODEL_CONTEXT_TOKENS` | from the model's name, else 128k | the context window of `MODEL`, in tokens |
+| `CONTEXT_COMPACT_AT` | 85 | percent of the window at which a run compacts by itself (`0`: never) |
+| `CONTEXT_NEAR_AT` | 80 | percent of the window at which a run is asked to free space itself first (`0`: never) |
+| `CONTEXT_NOTES` | `70` | percents of the window at which the model is told its context size and what it could free (`off`: never) |
+| `CONTEXT_BOUNDARY_AT` | 30 | percent of the window that finished earlier requests must take, when a new request starts, for the model to be told it can collapse each whole; requests it keeps the harness collapses after its next turn, keeping each request and its final reply (`0`: never) |
+| `CONTEXT_COMPACT_KEEP` | 0.15 | share of the window an automatic compaction keeps verbatim (`0`: summarise everything) |
+| `TOOL_RESULT_MAX_CHARS` | 20000 | longer tool results are stored in full and kept as a preview (`0`: never) |
+| `TOOLS_ON_DEMAND` | `true` | sessions are offered their everyday tools and load the rest with `tools.find` / `tools.load` (or by calling one), which roughly halves the fixed overhead of every model call; `false` offers every tool, every call |
+
+## Limits and budgets
+
+Runaway protection works out of the box. Every employee gets these defaults,
+and admins override them in **Settings → Limits** for the whole deployment,
+every or one employee, or every or one requester (the person who asked). The
+most specific override wins. Work over a limit pauses with the reason and
+waits for someone to resume it; nothing is dropped. `#alerts` gets a warning
+at 80 % of a daily budget and a note when it's used up, tagging the
+employee's owner or the admins.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `LIMIT_MAX_DEPTH` | 5 | how deep forks may go |
+| `LIMIT_MAX_FAN_OUT` | 20 | children per loop |
+| `LIMIT_MAX_CONCURRENT_RUNS` | 8 | runs of one employee working at once; more wait in the queue |
+| `MAX_STEPS` | 60 | model calls per run before it pauses |
+| `LIMIT_RUN_WALL_MINUTES` | 30 | minutes of work per run before it pauses, between steps (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_TOKENS` | 5,000,000 | tokens per employee per UTC day (`0`: no limit) |
+| `LIMIT_EMPLOYEE_DAILY_COST_USD` | off | dollars per employee per UTC day (counts only models with a price) |
+| `LIMIT_DEPLOYMENT_DAILY_TOKENS`, `LIMIT_DEPLOYMENT_DAILY_COST_USD` | off | the same for the whole deployment |
+| `BUDGET_WARN_PERCENT` | 80 | when `#alerts` warns about a budget (`0`: never) |
+| `PRICING` | built-in table | USD per million tokens per model, as JSON (`{"my-model":{"inputPerM":0.6,"cachedInputPerM":0.15,"outputPerM":2.5}}`) or a JSON file |
+
+Costs come from a small built-in price table (Kimi and some OpenAI models,
+checked on the providers' pricing pages), `PRICING`, and **Settings →
+Pricing**, which wins over both. A model without a price costs $0 and the UI
+says "no pricing configured". See
+[spec.md](spec.md#configurable-limits).
