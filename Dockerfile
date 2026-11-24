@@ -1,18 +1,28 @@
 # syntax=docker/dockerfile:1
 # vegan: one image with the API, web UI, WebSocket, MCP server and workers.
 
-# ── Build: install dependencies and build the web UI ─────────────────────────
-FROM node:26-slim AS build
+# ── Web UI: static files, the same on every platform ─────────────────────────
+# Built once on the build machine's own platform: under QEMU (the arm64 image on an amd64 runner) Vite's
+# build could take many times longer or stall.
+FROM --platform=$BUILDPLATFORM node:26-slim AS web
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
 RUN npm ci --no-audit --no-fund
 # Build the web UI when it has a build script; the server serves packages/web/dist.
-RUN if node -e "process.exit(require('./packages/web/package.json').scripts?.build ? 0 : 1)"; then \
+RUN mkdir -p packages/web/dist \
+  && if node -e "process.exit(require('./packages/web/package.json').scripts?.build ? 0 : 1)"; then \
       npm run build -w @mp/web; \
     else \
       echo "no web build script, skipping the UI"; \
     fi
+
+# ── Build: install dependencies for the target platform ──────────────────────
+FROM node:26-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
+COPY packages ./packages
+RUN npm ci --no-audit --no-fund
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM node:26-slim AS runtime
@@ -30,6 +40,7 @@ WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
+COPY --from=web /app/packages/web/dist ./packages/web/dist
 COPY docker/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh
 RUN mkdir -p /data /var/lib/meatless-proxy/files && chown 1000:1000 /data /var/lib/meatless-proxy/files
 # The container starts as root only long enough for the entrypoint to give the
