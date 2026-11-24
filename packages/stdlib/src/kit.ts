@@ -226,7 +226,8 @@ export async function assignedProjectsOf(deps: Pick<StdlibDeps, 'directory'>, em
 
 /** The employee prompt as it would be written now, with the skills of its projects and `projectIds`. */
 export async function promptForEmployee(
-  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock'> & { config?: Pick<StdlibDeps['config'], 'toolsOnDemand'> },
+  deps: Pick<StdlibDeps, 'directory' | 'skills' | 'clock'> &
+    Partial<Pick<StdlibDeps, 'toolsetFor'>> & { config?: Pick<StdlibDeps['config'], 'toolsOnDemand'> },
   employeeId: string,
   projectIds: string[] = [],
 ): Promise<string> {
@@ -246,6 +247,7 @@ export async function promptForEmployee(
     skills,
     now: deps.clock.iso(),
     toolsOnDemand: deps.config?.toolsOnDemand !== false,
+    ...(deps.toolsetFor ? { tools: await deps.toolsetFor(employeeId) } : {}),
   })
 }
 

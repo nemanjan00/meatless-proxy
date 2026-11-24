@@ -16,6 +16,7 @@ export {
   LOADER_TOOLS,
   ON_DEMAND_GROUPS,
   groupOf,
+  groupsFor,
   isOnDemandTool,
   offeredTools,
   onDemandFor,

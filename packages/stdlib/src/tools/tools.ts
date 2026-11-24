@@ -3,7 +3,7 @@ import { VISION_TAG } from '@mp/runner'
 import type { Session } from '@mp/sessions'
 import { LOADED_TOOLS_META, loadedToolsOf, type ToolContext, type ToolDefinition } from '@mp/tools'
 import { fail, ok, type Kit } from '../kit.ts'
-import { groupOf, isOnDemandTool, ON_DEMAND_GROUPS, onDemandFor } from '../on-demand.ts'
+import { groupOf, groupsFor, isOnDemandTool, onDemandFor } from '../on-demand.ts'
 
 /** Results tools.find returns by default, and at most. */
 const FIND_LIMIT = 12
@@ -112,7 +112,7 @@ export function registerToolTools(kit: Kit) {
         about: oneLineAbout(d.description),
         loaded: isOffered(session, d.name, loaded),
       }))
-      const groups = ON_DEMAND_GROUPS.map((g) => ({ name: g.name, about: g.about, tools: g.list }))
+      const groups = groupsFor(defs.map((d) => d.name)).map((g) => ({ name: g.name, about: g.about, tools: g.list }))
       if (!tools.length)
         return ok({
           tools: [],

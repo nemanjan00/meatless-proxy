@@ -4,10 +4,13 @@ import {
   CORE_TOOLS,
   DEFAULT_TOOLSET,
   employeePrompt,
+  groupOf,
+  groupsFor,
   isOnDemandTool,
   offeredTools,
   ON_DEMAND_GROUPS,
   onDemandFor,
+  onDemandPromptSection,
   ROUTER_EXCLUDED_TOOLS,
 } from '../src/index.ts'
 import { globMatch } from '@mp/core'
@@ -36,8 +39,20 @@ describe('the core set and the on-demand groups', () => {
       expect(isOnDemandTool(n)).toBe(false)
     for (const n of ['mcp.slack.ask', 'mcp.slack.upload_file', 'mcp.gitlab.job_log', 'mcp.linear.create_issue'])
       expect(isOnDemandTool(n)).toBe(true)
-    // A configured MCP server's tools aren't classified: they are offered from the start.
-    expect(isOnDemandTool('mcp.wiki.search')).toBe(false)
+    // Any other MCP server's tools load on demand too, one group per server.
+    expect(isOnDemandTool('mcp.wiki.search')).toBe(true)
+    expect(groupOf('mcp.wiki.search')).toMatchObject({ name: 'wiki', tools: ['mcp.wiki.*'] })
+  })
+
+  it('list only the groups an employee has tools in, and one per other MCP server', () => {
+    const tools = ['chat.reply', 'schedule.create', 'mcp.slack.ask', 'mcp.wiki.search', 'mcp.wiki.get_page', 'mcp.crm.find']
+    expect(groupsFor(tools).map((g) => g.name)).toEqual(['scheduling', 'slack', 'crm', 'wiki'])
+    const section = onDemandPromptSection(tools)
+    expect(section).toContain('- Wiki (the wiki MCP server): mcp.wiki.search/get_page')
+    expect(section).not.toContain('Linear')
+    expect(section).not.toContain('Gitlab')
+    // Without the employee's tools, every fixed group (as before).
+    expect(onDemandPromptSection()).toContain('Linear')
   })
 
   it('offer the core set and what was loaded, or everything without the loader', () => {

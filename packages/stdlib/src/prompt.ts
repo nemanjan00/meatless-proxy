@@ -15,6 +15,8 @@ export interface EmployeePromptInput {
   now: string
   /** Tools on demand: list what can be loaded (`onDemandPromptSection`). Default false. */
   toolsOnDemand?: boolean
+  /** The tools the employee may use: only their groups are listed as loadable. Default: every fixed group. */
+  tools?: readonly string[]
 }
 
 /** A multi-line note under a list item: its lines kept, indented, at most `max` characters. */
@@ -138,7 +140,7 @@ export function employeePrompt(input: EmployeePromptInput): string {
 
   out.push(RULES)
   out.push(STDLIB)
-  if (input.toolsOnDemand) out.push(onDemandPromptSection())
+  if (input.toolsOnDemand) out.push(onDemandPromptSection(input.tools))
 
   const procedures = input.procedures ?? []
   if (procedures.length)

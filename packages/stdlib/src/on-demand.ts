@@ -14,8 +14,7 @@ export const LOADER_TOOLS: readonly string[] = ['tools.find', 'tools.load']
 /**
  * The everyday tools, offered from the start: replies, reading and writing code, environments, the
  * session tools that script and manage work and context, memory, time, and the most used tools of each
- * first-party integration. Tools that match no on-demand group (e.g. a configured MCP server's) are
- * offered from the start too.
+ * first-party integration. Every other MCP server's tools load on demand, one group per server.
  */
 export const CORE_TOOLS: readonly string[] = [
   'chat.attachment_text',
@@ -181,16 +180,53 @@ export const ON_DEMAND_GROUPS: readonly ToolGroup[] = [
 
 const core = new Set(CORE_TOOLS)
 
-/** Whether a tool waits to be loaded: it belongs to an on-demand group and isn't a core tool. */
+/** The MCP server of an `mcp.<server>.<tool>` name. */
+const serverOf = (name: string) => /^mcp\.([^.]+)\./.exec(name)?.[1]
+
+/**
+ * The group of any other MCP server's tools. Live, an employee with a few servers (analytics, billing,
+ * support) carried 160 tool definitions in every model call, most of a 110k-token prompt.
+ */
+function serverGroup(server: string, names: readonly string[] = []): ToolGroup {
+  const short = names.filter((n) => serverOf(n) === server && !core.has(n)).map((n) => n.slice(`mcp.${server}.`.length))
+  const shown = short.slice(0, 8)
+  return {
+    name: server,
+    about: `the ${server} MCP server`,
+    tools: [`mcp.${server}.*`],
+    list: short.length ? `mcp.${server}.${shown.join('/')}${short.length > shown.length ? '…' : ''}` : `mcp.${server}.*`,
+  }
+}
+
+/** Whether a tool waits to be loaded: it belongs to an on-demand group (or any MCP server) and isn't a core tool. */
 export function isOnDemandTool(name: string): boolean {
   if (core.has(name)) return false
-  return ON_DEMAND_GROUPS.some((g) => g.tools.some((p) => globMatch(p, name)))
+  return ON_DEMAND_GROUPS.some((g) => g.tools.some((p) => globMatch(p, name))) || !!serverOf(name)
 }
 
 /** The group of an on-demand tool. */
 export function groupOf(name: string): ToolGroup | undefined {
   if (core.has(name)) return undefined
-  return ON_DEMAND_GROUPS.find((g) => g.tools.some((p) => globMatch(p, name)))
+  const fixed = ON_DEMAND_GROUPS.find((g) => g.tools.some((p) => globMatch(p, name)))
+  if (fixed) return fixed
+  const server = serverOf(name)
+  return server ? serverGroup(server) : undefined
+}
+
+/**
+ * The on-demand groups that have tools among `names` (the tools the employee may use): the fixed ones
+ * with at least one, then one per other MCP server. Without `names`, every fixed group.
+ */
+export function groupsFor(names?: readonly string[]): ToolGroup[] {
+  if (!names) return [...ON_DEMAND_GROUPS]
+  const waiting = names.filter(isOnDemandTool)
+  const fixed = ON_DEMAND_GROUPS.filter((g) => waiting.some((n) => g.tools.some((p) => globMatch(p, n))))
+  const servers = [
+    ...new Set(
+      waiting.filter((n) => !ON_DEMAND_GROUPS.some((g) => g.tools.some((p) => globMatch(p, n)))).map((n) => serverOf(n)!),
+    ),
+  ].sort()
+  return [...fixed, ...servers.map((sv) => serverGroup(sv, names))]
 }
 
 /**
@@ -209,9 +245,15 @@ export function offeredTools(toolset: readonly string[], loaded: readonly string
   return toolset.filter((n) => !on(n) || have.has(n))
 }
 
-/** The prompt section naming what can be loaded, one line per group. */
-export function onDemandPromptSection(): string {
+/**
+ * The prompt section naming what can be loaded, one line per group, of the groups that have tools among
+ * `names` (the employee's tools): a group it can't use isn't offered (live, briefs kept trying Linear tools
+ * an employee without Linear was told about).
+ */
+export function onDemandPromptSection(names?: readonly string[]): string {
   return `## Tools on demand
 Your everyday tools are loaded; these load when you need them: tools.find { query } searches them, tools.load { names } adds them from your next step for the rest of this session (calling one by name loads it too). Look before saying you can't do something.
-${ON_DEMAND_GROUPS.map((g) => `- ${g.name[0]!.toUpperCase()}${g.name.slice(1)} (${g.about}): ${g.list}`).join('\n')}`
+${groupsFor(names)
+  .map((g) => `- ${g.name[0]!.toUpperCase()}${g.name.slice(1)} (${g.about}): ${g.list}`)
+  .join('\n')}`
 }

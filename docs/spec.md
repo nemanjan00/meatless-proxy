@@ -541,10 +541,14 @@ tools** from the start and loads the rest when it needs them
   `create_merge_request`; Linear `get_issue`, `comment`). Everything else of
   the standard library and the first-party integrations is **on demand**,
   grouped by what it's for (scheduling, triggers, subscriptions, chat
-  channels, Slack forms and files, GitLab reviews and pipelines…). Tools of
-  other MCP servers are offered from the start, as before.
+  channels, Slack forms and files, GitLab reviews and pipelines…). Every
+  other MCP server's tools are on demand too, one group per server (live,
+  a few connected servers put some 160 tool definitions, most of a
+  110k-token prompt, into every call).
 - **The employee prompt** lists the on-demand groups in one short line each,
-  with their tool names, so the model knows what exists.
+  with their tool names, so the model knows what exists: only the groups the
+  employee has tools in (an employee without Linear isn't told about Linear),
+  and a line per other MCP server with up to 8 of its tool names.
 - **`tools.find { query }`** returns matching tools, a line each, and whether
   each is loaded. **`tools.load { names }`** (names or patterns such as
   `mcp.slack.*`) adds them from the next model call, for the rest of the
