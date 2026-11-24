@@ -73,6 +73,8 @@ export interface McpServersDeps {
   reservedNames?: () => string[]
   /** The employee's tool lists before MCP scoping (for router toolsets). */
   baseToolLists: (employeeId: string) => Promise<ToolLists>
+  /** Whether a router context keeps this tool (its routing-only toolset); default: every tool. */
+  routerKeeps?: (toolName: string) => boolean
   /** `PUBLIC_URL`, for the OAuth redirect URI. */
   publicUrl?: string
 }
@@ -436,7 +438,12 @@ export class McpServers {
         if (!session) continue
         const lists = await this.d.baseToolLists(e.id)
         const hidden = new Set(this.hiddenFor(e.id))
-        const add = names.filter((n) => !session.data.toolset.includes(n) && !hidden.has(n) && this.d.tools.isAllowed(n, lists))
+        // Only what the routing-only toolset keeps: the rest would be taken away again at the router's next run,
+        // with a "tools changed" note in its history each time (a broken prompt cache, a longer context).
+        const keeps = this.d.routerKeeps ?? (() => true)
+        const add = names.filter(
+          (n) => !session.data.toolset.includes(n) && !hidden.has(n) && keeps(n) && this.d.tools.isAllowed(n, lists),
+        )
         if (!add.length) continue
         await this.d.records.update('session', routerId, { toolset: [...session.data.toolset, ...add] })
         this.log.info('router context got new MCP tools', { employeeId: e.id, tools: add })

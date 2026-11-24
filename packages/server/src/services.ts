@@ -55,7 +55,7 @@ import { employeeGit, type EmployeeGit } from './git-store.ts'
 import { createIntegrations, type Integrations, type IntegrationsOptions } from './integrations/index.ts'
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { envSecretValues } from './env-secrets.ts'
-import { routerToolset } from './provision.ts'
+import { routerKeeps, routerToolset } from './provision.ts'
 import { gitlabWantsRouter, linearWantsRouter } from './integrations/fallback.ts'
 import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
@@ -901,6 +901,7 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       configTools: () => services.mcpTools,
       reservedNames: () => Object.keys(services.integrations?.specs ?? {}),
       baseToolLists,
+      routerKeeps: (name) => routerKeeps(services.stdlib, name),
       ...(config.PUBLIC_URL ? { publicUrl: config.PUBLIC_URL } : {}),
     })
     services.mcpServers = mcpServers

@@ -168,9 +168,11 @@ function mcpSuite(backend: Backend) {
       const tools = (await t.req('GET', `/api/mcp-servers/${id}/tools`)).body
       expect(tools.map((x: any) => x.toolName).sort()).toEqual(['mcp.notes.echo', 'mcp.notes.whoami'])
 
-      // New sessions get the tools through the router contexts.
+      // A router context keeps only its routing tools: the work sessions it starts get the employee's full
+      // toolset, these tools included (adding them to the router would only have them taken away at its next run).
       const router = await s.sessions.get((await s.directory.employees.get(ben))!.data.routerSessionId!)
-      expect(router!.data.toolset).toContain('mcp.notes.echo')
+      expect(router!.data.toolset).not.toContain('mcp.notes.echo')
+      expect(s.tools.allowed(await s.toolListsFor(ben)).map((x) => x.name)).toContain('mcp.notes.echo')
     })
 
     it('keeps the token on an edit without one, and uses a new one', async () => {
@@ -296,7 +298,7 @@ function mcpSuite(backend: Backend) {
       expect(await visible(ben, 'mcp.wiki.echo')).toBe(false)
       const anaRouter = await s.sessions.get((await s.directory.employees.get(ana))!.data.routerSessionId!)
       const benRouter = await s.sessions.get((await s.directory.employees.get(ben))!.data.routerSessionId!)
-      expect(anaRouter!.data.toolset).toContain('mcp.wiki.echo')
+      expect(anaRouter!.data.toolset).not.toContain('mcp.wiki.echo')
       expect(benRouter!.data.toolset).not.toContain('mcp.wiki.echo')
 
       expect(await s.tools.execute('mcp.wiki.echo', { text: 'hi' }, ctxFor(ana))).toEqual({ output: 'hi' })

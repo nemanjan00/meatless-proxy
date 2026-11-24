@@ -3,6 +3,7 @@ import type { Employee, EmployeeInput } from '@mp/directory'
 import type { Actor } from '@mp/store'
 import type { Services } from './services.ts'
 import { ensureSshKey } from './ssh.ts'
+import type { StdlibModule } from './stdlib.ts'
 
 /** The channel everyone is in. */
 export const GENERAL_CHANNEL = 'general'
@@ -57,12 +58,19 @@ function builtinPrompt(employee: Employee): string {
  * files, writing docs, chat administration): fewer tool definitions keep every router call small.
  */
 export function routerToolset(s: Services, lists: Parameters<Services['tools']['allowed']>[0]): string[] {
-  const excluded = s.stdlib?.ROUTER_EXCLUDED_TOOLS ?? []
-  const kept = new Set(s.stdlib?.ROUTER_MCP_TOOLS ?? [])
   return s.tools
     .allowed(lists)
-    .filter((t) => kept.has(t.name) || !excluded.some((pattern) => globMatch(pattern, t.name)))
+    .filter((t) => routerKeeps(s.stdlib, t.name))
     .map((t) => t.name)
+}
+
+/** Whether a router context keeps a tool: one of ROUTER_MCP_TOOLS, or not matched by ROUTER_EXCLUDED_TOOLS. */
+export function routerKeeps(
+  stdlib: Pick<StdlibModule, 'ROUTER_EXCLUDED_TOOLS' | 'ROUTER_MCP_TOOLS'> | null,
+  name: string,
+): boolean {
+  if (!stdlib) return true
+  return stdlib.ROUTER_MCP_TOOLS.includes(name) || !stdlib.ROUTER_EXCLUDED_TOOLS.some((pattern) => globMatch(pattern, name))
 }
 
 /** Router contexts created before the router instructions existed get them as a committed system entry. */
