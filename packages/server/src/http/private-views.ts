@@ -116,7 +116,9 @@ export async function visibleEventsPage(
       orderBy: { field: 'receivedAt', dir: 'desc' },
       limit: offset + limit,
     })
-  const ids = [viewer.contactId, ...(viewer.also ?? [])]
+  // The viewer's own local agents' DMs are theirs too.
+  const agents = await s.records.query('contact', { where: { kind: 'agent', sponsor: viewer.contactId }, limit: 1000 })
+  const ids = [...new Set([viewer.contactId, ...(viewer.also ?? []), ...agents.items.map((a) => a.id)])]
   const [open, ...mine] = await Promise.all([
     q([{ field: 'private', op: 'exists', value: false }]),
     ...ids.map((id) => q([{ field: 'private.contacts', op: 'contains', value: id }])),

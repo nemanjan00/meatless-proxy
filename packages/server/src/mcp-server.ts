@@ -6,6 +6,7 @@ import type { Run, RunData } from '@mp/sessions'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
+import { NO_REPLY_RE } from '@mp/stdlib'
 import type { Services } from './services.ts'
 import { contactForToken } from './tokens.ts'
 import { accessOf, atLeast } from './auth/access.ts'
@@ -34,6 +35,8 @@ interface McpSession {
   joinedNote?: string
   /** The handle it left chat as: writing again rejoins as it. */
   leftAs?: string
+  /** By employee id: the thread of this connection's last `ask`, where a follow-up goes. */
+  askThreads: Map<string, string>
   /** Last request from the client (ms). */
   seenAt: number
   offs: (() => void)[]
@@ -138,6 +141,7 @@ export class HarnessMcpServer {
     const session: McpSession = {
       contactId,
       agentId: null,
+      askThreads: new Map(),
       seenAt: this.s.clock.now(),
       offs: [],
       server: undefined as never,
@@ -543,24 +547,43 @@ export class HarnessMcpServer {
       'ask',
       {
         description:
-          'Ask an AI employee a question. It is posted in your direct thread with the employee, tagging it; the answer arrives as a notification (or read it with chat_read).',
-        inputSchema: { employee: z.string().describe('Employee name or @handle'), question: z.string().min(1) },
+          'Ask an AI employee a question, in your direct messages with it, tagging it; the answer arrives as a notification (or read it with chat_read). A follow-up goes in the same thread as your last question to that employee, so the same piece of work picks it up; set new_topic for an unrelated question, or thread_id to continue an older thread.',
+        inputSchema: {
+          employee: z.string().describe('Employee name or @handle'),
+          question: z.string().min(1),
+          new_topic: z.boolean().optional().describe('Start a new thread instead of continuing the last one'),
+          thread_id: z.string().optional().describe('Continue this thread (from an earlier ask) instead'),
+        },
       },
-      safe(async ({ employee, question }) => {
+      safe(async ({ employee, question, new_topic, thread_id }) => {
         const a = await writer()
         const emp = await s.directory.employees.byHandle(employee.replace(/^@/, ''))
         if (!emp) throw new Error(`no employee ${employee}`)
         const ch = await this.dmChannel(a.contact.id, emp)
+        let threadId = thread_id ?? (new_topic ? undefined : session.askThreads.get(emp.id))
+        if (threadId) {
+          const root = await s.chat.getMessage(threadId)
+          if (!root || root.data.channelId !== ch.id) {
+            if (thread_id) throw new Error(`thread ${thread_id} is not in your direct messages with ${emp.data.name}`)
+            threadId = undefined
+          } else threadId = root.data.threadId ?? root.id
+        }
         const msg = await s.chat.post({
           channelId: ch.id,
+          ...(threadId ? { threadId } : {}),
           author: a.author,
           text: `@${emp.key ?? slug(emp.data.name)} ${question}`,
           ...(a.info ? { authorInfo: a.info } : {}),
         })
+        const root = threadId ?? msg.id
+        session.askThreads.set(emp.id, root)
         return text({
-          threadId: msg.id,
+          threadId: root,
+          messageId: msg.id,
           channelId: ch.id,
-          note: `Asked ${emp.data.name}. You'll be notified when it replies in the thread.`,
+          note: threadId
+            ? `Asked ${emp.data.name} in the same thread as before. You'll be notified when it replies.`
+            : `Asked ${emp.data.name}. You'll be notified when it replies in the thread.`,
         })
       }),
     )
@@ -765,6 +788,9 @@ export class HarnessMcpServer {
       if (!['completed', 'failed', 'cancelled', 'paused'].includes(to)) return
       const run = await s.sessions.getRun(m.payload.runId)
       if (!run) return
+      // Routing is internal, and a run that chose not to answer has nothing to tell: "Foxy: router completed:
+      // NO_REPLY" read like the employee declining, while the work it handed over was still going.
+      if (to !== 'paused' && (run.data.mode === 'ephemeral' || NO_REPLY_RE.test(run.data.result?.output ?? ''))) return
       const me = new Set([contactId, ...(session.agentId ? [session.agentId] : [])])
       let mine = me.has(run.data.requesterId ?? '')
       if (!mine && to !== 'paused') {

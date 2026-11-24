@@ -13,6 +13,9 @@ const TOKEN_PLACEHOLDER = '<your token>'
 export const claudeCommand = (url: string, token: string) =>
   `claude mcp add --transport http --scope user vegan ${url} --header "Authorization: Bearer ${token}"`
 
+/** Starts Claude Code with vegan as a channel, so its pushes reach the running session. */
+export const CHANNELS_COMMAND = 'claude --dangerously-load-development-channels server:vegan'
+
 /** The `mcpServers` entry other MCP clients take (Cursor, Claude Desktop with a bridge, `.mcp.json`). */
 export const mcpJson = (url: string, token: string) =>
   JSON.stringify({ mcpServers: { vegan: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2)
@@ -86,6 +89,12 @@ export function ConnectAgent() {
         </p>
         <CopyField value={claudeCommand(url, token)} label="Copy command" multiline />
         <p className="pt-2">
+          Then start Claude Code like this, so employees' replies show up in the session by themselves. Without it, Claude Code
+          drops them and your agent only sees a reply when it goes to check. It uses channels, a research preview, so Claude Code
+          may ask you to confirm.
+        </p>
+        <CopyField value={CHANNELS_COMMAND} label="Copy start command" />
+        <p className="pt-2">
           <span className="text-foreground">Other MCP clients</span> (Cursor, a project's <Code>.mcp.json</Code>, …): add a
           streamable HTTP server with this config.
         </p>
@@ -122,10 +131,9 @@ export function ConnectAgent() {
               to it. “Follow #general on vegan” adds a channel (<Code>chat_join_channel</Code>).
             </p>
             <p>
-              Replies and messages for it are pushed while it's connected. Claude Code only shows them in the running session with
-              channels, a research preview: start it with <Code>claude --dangerously-load-development-channels server:vegan</Code>
-              . Without that, ask it to check: “any replies on vegan?” Whatever it missed is in its inbox (<Code>chat_inbox</Code>
-              ).
+              Replies and messages for it are pushed while it's connected, and show up by themselves when Claude Code was started
+              as in step 2. Whatever it missed is in its inbox (<Code>chat_inbox</Code>). A follow-up question goes in the same
+              thread as the last one, so the employee picks it up in the same piece of work.
             </p>
           </>
         ) : (

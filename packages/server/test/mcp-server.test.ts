@@ -131,8 +131,25 @@ describe('MCP server /mcp', () => {
       10_000,
     )
     expect(replyNote.author).toContain('Meatless')
-    const finished = await until(() => notes.find((n) => n.type === 'work.finished'), 'a finished notification', 10_000)
-    expect(finished).toMatchObject({ state: 'completed' })
+    await t.settle()
+    // Here the routing run answered by itself: that's internal, and the reply already came, so there's no
+    // "work finished" (in particular no "router completed: NO_REPLY" to read as the employee declining).
+    const runs = await t.a.services.records.query<any>('run', { where: { requesterId: msg!.data.author.id } })
+    expect(runs.items.some((r) => r.data.mode === 'ephemeral' && r.data.state === 'completed')).toBe(true)
+    expect(notes.filter((x) => x.type === 'work.finished')).toEqual([])
+    // The work came from the agent's DM, so it's private: Ana reads it as her own agent's, Bo doesn't.
+    const routed = runs.items.find((r) => r.data.mode === 'ephemeral')!
+    const asAna = { 'x-mp-contact': anaId }
+    const history = await t.req<any[]>('GET', `/api/runs/${routed.id}/history`, undefined, asAna)
+    expect(history.body.some((e) => e.meta?.redacted)).toBe(false)
+    expect(JSON.stringify(history.body)).toContain('What is 2+2')
+    expect((await t.req('GET', `/api/chat/channels/${asked.channelId}/messages`, undefined, asAna)).status).toBe(200)
+    const bo = await t.a.services.directory.contacts.create({ name: 'Bo Example', kind: 'person', access: 'member' })
+    const asBo = { 'x-mp-contact': bo.id }
+    expect(JSON.stringify((await t.req('GET', `/api/runs/${routed.id}/history`, undefined, asBo)).body)).not.toContain(
+      'What is 2+2',
+    )
+    expect((await t.req('GET', `/api/chat/channels/${asked.channelId}/messages`, undefined, asBo)).status).toBe(404)
     // Also as Claude Code channel notifications, which reach the model (notifications/message doesn't), without joining chat.
     const replyChannel = await until(
       () => channel.find((n) => n.meta.thread_id === asked.threadId && n.content === 'It is 4.'),
@@ -141,7 +158,29 @@ describe('MCP server /mcp', () => {
     )
     expect(replyChannel.meta).toMatchObject({ channel_id: asked.channelId })
     expect(Object.values(replyChannel.meta).every((v) => typeof v === 'string')).toBe(true)
-    await until(() => channel.find((n) => n.meta.type === 'work.finished'), 'a finished channel note', 10_000)
+
+    // A follow-up continues the same thread (so the same work picks it up); new_topic starts another.
+    const followUp = json(await client.callTool({ name: 'ask', arguments: { employee: 'meatless', question: 'And 3+3?' } }))
+    expect(followUp).toMatchObject({ threadId: asked.threadId, channelId: asked.channelId })
+    expect((await t.a.services.chat.getMessage(followUp.messageId))!.data.threadId).toBe(asked.threadId)
+    const fresh = json(
+      await client.callTool({ name: 'ask', arguments: { employee: 'meatless', question: 'Unrelated: lunch?', new_topic: true } }),
+    )
+    expect(fresh.threadId).not.toBe(asked.threadId)
+    expect((await t.a.services.chat.getMessage(fresh.messageId))!.data.threadId).toBeNull()
+    const older = json(
+      await client.callTool({
+        name: 'ask',
+        arguments: { employee: 'meatless', question: 'Also 4+4?', thread_id: asked.threadId },
+      }),
+    )
+    expect(older.threadId).toBe(asked.threadId)
+    const elsewhere = await client.callTool({
+      name: 'ask',
+      arguments: { employee: 'meatless', question: 'x', thread_id: posted.messageId },
+    })
+    expect(elsewhere.isError).toBe(true)
+    await t.settle()
 
     const work = json(await client.callTool({ name: 'my_work', arguments: {} }))
     expect(work.runs.length).toBeGreaterThanOrEqual(1)

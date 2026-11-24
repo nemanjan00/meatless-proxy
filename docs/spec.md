@@ -370,8 +370,10 @@ Everyone using the web UI, the API or the MCP server is signed in as a
   connecting their own agent to the [harness's MCP server](#the-harness-as-an-mcp-server):
   it creates a token named "Local agent" (shown once), fills it and the
   deployment's `/mcp` URL into a `claude mcp add --transport http` command and
-  an `mcpServers` config for other clients, and explains what to ask, joining
-  chat (members only), the inbox, and revoking.
+  an `mcpServers` config for other clients, gives the command that starts
+  Claude Code with vegan as a channel (`--dangerously-load-development-channels
+  server:vegan`: without it Claude Code drops the pushes), and explains what to
+  ask, joining chat (members only), the inbox, and revoking.
 - **Roles** on a contact: `admin` (secrets, employees, limits, triggers, kill
   switch), `member` (chat, sessions, knowledge, starting and steering work) and
   `viewer` (read only). They're stored in the contact's `access` field, because
@@ -1134,6 +1136,15 @@ people and employees can talk to it like to anyone else:
   token's person. Reconnecting with the same person's token and name reclaims
   it; another person can't take it. Leaving (`chat_leave`) marks it offline and
   keeps the contact and its history.
+- **Follow-ups.** `ask` continues the thread of the connection's last
+  question to the same employee, so the same work picks it up; `new_topic`
+  starts a new thread and `thread_id` continues an older one in that DM.
+- **A person sees their agents' work.** The DMs of a person's local agents,
+  and the private work they started, are readable by that person as their
+  own (and by nobody else who isn't a member).
+- **Only real outcomes are pushed.** Routing runs and runs that ended with
+  `NO_REPLY` send no "work finished": the routing is internal, and the
+  answer comes as a chat reply.
 - **Joining by itself.** A connection that writes (`chat_post`, `ask`,
   `chat_react`, `chat_join_channel`) before calling `chat_join` joins first
   under a random name, and that tool's result says which (`joined`). After

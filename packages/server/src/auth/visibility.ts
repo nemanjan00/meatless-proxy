@@ -138,8 +138,8 @@ export function redactEntry<E extends Entry>(e: E): E {
 
 /**
  * Who may see which chat: direct messages are visible only to their members,
- * admins included (an admin can't read other people's DMs). Named channels
- * are visible to everyone signed in.
+ * admins included (an admin can't read other people's DMs), and to the people
+ * whose local agents are members. Named channels are visible to everyone signed in.
  */
 export class ChatVisibility {
   constructor(private s: Pick<Services, 'records' | 'chat' | 'store' | 'sessions'>) {}
@@ -149,12 +149,24 @@ export class ChatVisibility {
     return (await this.dmChannels(contactId)).hidden
   }
 
-  /** The ids of DMs, split into the ones this contact is a member of and the ones hidden from them. */
+  /**
+   * The contact and the local agents acting for them (sponsored, over MCP): a person reads their
+   * agents' DMs and the private work those started, as their own.
+   */
+  async selfAndAgents(contactId: string): Promise<string[]> {
+    const agents = await this.s.records.query('contact', { where: { kind: 'agent', sponsor: contactId }, limit: 1000 })
+    return [contactId, ...agents.items.map((a) => a.id)]
+  }
+
+  /** The ids of DMs, split into the ones this contact (or an agent of theirs) is a member of and the ones hidden from them. */
   async dmChannels(contactId: string): Promise<{ member: Set<string>; hidden: Set<string> }> {
     const dms = await this.s.records.query<ChannelData>('channel', { where: { dm: true }, limit: 100_000 })
     if (!dms.items.length) return { member: new Set(), hidden: new Set() }
-    const mine = await this.s.store.links.query({ to: { kind: 'contact', id: contactId }, role: 'member' })
-    const linked = new Set(mine.filter((l) => l.from.kind === 'channel').map((l) => l.from.id))
+    const linked = new Set<string>()
+    for (const id of await this.selfAndAgents(contactId)) {
+      const links = await this.s.store.links.query({ to: { kind: 'contact', id }, role: 'member' })
+      for (const l of links) if (l.from.kind === 'channel') linked.add(l.from.id)
+    }
     const member = new Set<string>()
     const hidden = new Set<string>()
     for (const c of dms.items) (linked.has(c.id) ? member : hidden).add(c.id)
@@ -165,7 +177,10 @@ export class ChatVisibility {
   async canSeeChannel(contactId: string, channelId: string): Promise<boolean> {
     const ch = await this.s.records.get<ChannelData>('channel', channelId)
     if (ch?.data.dm !== true) return true
-    return (await this.s.chat.members(channelId)).some((m) => m.kind === 'contact' && m.id === contactId)
+    const members = (await this.s.chat.members(channelId)).filter((m) => m.kind === 'contact').map((m) => m.id)
+    if (members.includes(contactId)) return true
+    const mine = await this.selfAndAgents(contactId)
+    return members.some((id) => mine.includes(id))
   }
 
   /** Throws 404 (not 403: a DM's existence is private too) unless the contact may see the channel. */
@@ -204,6 +219,8 @@ export class ChatVisibility {
     if (!mark) return true
     const ids = typeof viewer === 'string' ? [viewer] : [viewer.contactId, ...(viewer.also ?? [])]
     if (ids.some((id) => mark.contacts.includes(id))) return true
+    const agents = (await this.selfAndAgents(ids[0]!)).slice(1)
+    if (agents.some((id) => mark.contacts.includes(id))) return true
     for (const ch of mark.channels) for (const id of ids) if (await this.canSeeChannel(id, ch)) return true
     return false
   }

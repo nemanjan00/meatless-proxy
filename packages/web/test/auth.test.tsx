@@ -153,6 +153,7 @@ describe('Connect an agent page', () => {
     const config = JSON.parse(within(page).getByText(/"mcpServers"/).textContent!)
     expect(config.mcpServers.vegan).toEqual({ type: 'http', url, headers: { Authorization: `Bearer ${token}` } })
     expect(within(page).queryByText(/<your token>/)).toBeNull()
+    expect(within(page).getByText('claude --dangerously-load-development-channels server:vegan')).toBeInTheDocument()
     expect((await data.api.listTokens()).map((t) => t.name)).toContain('Local agent')
   })
 
