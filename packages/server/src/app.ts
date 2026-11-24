@@ -207,7 +207,9 @@ export async function createApp(config: Config, overrides: AppOverrides = {}): P
       if (opts.http === false) return { port: null }
       const port = opts.port ?? config.PORT
       const started = await new Promise<ServerType>((resolve, reject) => {
-        const srv = serve({ fetch: app.fetch, port, hostname: config.HOST }, () => resolve(srv))
+        // Hono would otherwise swap the global Request and Response for its own classes: a native fetch's response then
+        // fails `instanceof Response`, and the MCP SDK reads an OAuth server's error as "[object Response]".
+        const srv = serve({ fetch: app.fetch, port, hostname: config.HOST, overrideGlobalObjects: false }, () => resolve(srv))
         srv.once('error', reject)
       })
       server = started
