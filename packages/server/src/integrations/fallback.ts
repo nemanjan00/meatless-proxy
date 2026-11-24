@@ -32,3 +32,37 @@ export function gitlabWantsRouter(event: Pick<MpEvent['data'], 'type' | 'payload
     return listed(p.assignees, name) || listed(p.reviewers, name) || mentionsUser(p.description, name)
   return true
 }
+
+/** Who the employee is in Linear: its user id, and the names a comment may `@`-mention it by. */
+export interface LinearSelf {
+  id: string | undefined
+  names: string[]
+}
+
+/** What the harness has seen of a Linear issue: whether it's assigned to the employee, whether it commented on it. */
+export interface LinearIssueSeen {
+  assignedToMe: boolean
+  iCommented: boolean
+}
+
+/**
+ * Whether a Linear event nobody claimed is worth a router run of the employee. Live, every unclaimed
+ * update, state change and comment edit went to the router and ended in "just a status change", one
+ * model call or more each, ten at once for a bulk edit. Worth it: the issue assigned to the employee,
+ * a new comment that mentions it, or a new comment on an issue assigned to it or that it commented on.
+ * Never its own actions. A session that follows an issue still gets everything by subscription, and a
+ * trigger still gets any of them to a session: both run before the fallback.
+ */
+export function linearWantsRouter(
+  event: Pick<MpEvent['data'], 'type' | 'payload'>,
+  me: LinearSelf,
+  seen: LinearIssueSeen,
+): boolean {
+  const p = (event.payload ?? {}) as Record<string, unknown>
+  const idOf = (v: unknown) => (v && typeof v === 'object' ? (v as { id?: unknown }).id : undefined)
+  if (me.id && (idOf(p.actor) === me.id || (event.type.startsWith('comment.') && idOf(p.author) === me.id))) return false
+  if (event.type === 'issue.assigned') return !!me.id && idOf(p.assignee) === me.id
+  if (event.type === 'comment.created')
+    return me.names.some((n) => mentionsUser(p.body, n)) || seen.assignedToMe || seen.iCommented
+  return false
+}

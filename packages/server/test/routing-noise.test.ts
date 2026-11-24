@@ -136,3 +136,51 @@ describe('GitLab events nobody claimed', () => {
     expect(mentionsUser('mail me at x@bot.example', 'bot')).toBe(false)
   })
 })
+
+let linearN = 0
+const linear = (type: string, issue: string, payload: Record<string, unknown>) => ({
+  source: 'integration:linear',
+  type,
+  dedupeKey: `linear:${++linearN}`,
+  subject: { system: 'linear', id: issue },
+  payload: { identifier: issue, ...payload } as Json,
+})
+const ANA = { id: 'lin-ana', name: 'Ana' }
+const BOT = { id: 'lin-bot', name: 'Billing Bot' }
+
+describe('Linear events nobody claimed', () => {
+  it('reach the router only when they are about the employee', async () => {
+    const { s, plan, router, employee } = await make()
+    await s.directory.contacts.update(employee.data.contactId, {
+      handles: [
+        { system: 'mp', id: 'meatless' },
+        { system: 'linear', id: BOT.id },
+      ],
+    })
+    const fallback = [[router, 'fallback', true]]
+    // Status moves, edits, labels and comment edits on other people's issues: nothing.
+    expect(await plan(linear('issue.updated', 'ENG-1', { actor: ANA, assignee: ANA, changed: ['stateId'] }))).toEqual([])
+    expect(await plan(linear('issue.state_changed', 'ENG-1', { actor: ANA, assignee: ANA }))).toEqual([])
+    expect(await plan(linear('issue.labeled', 'ENG-1', { actor: ANA }))).toEqual([])
+    expect(await plan(linear('comment.updated', 'ENG-1', { author: ANA, body: '@meatless edited' }))).toEqual([])
+    expect(await plan(linear('comment.created', 'ENG-1', { author: ANA, body: 'looks fine' }))).toEqual([])
+    // Assigned to it, or a comment that mentions it: yes.
+    expect(await plan(linear('issue.assigned', 'ENG-2', { actor: ANA, assignee: BOT }))).toEqual(fallback)
+    expect(await plan(linear('issue.assigned', 'ENG-3', { actor: ANA, assignee: ANA }))).toEqual([])
+    expect(await plan(linear('comment.created', 'ENG-1', { author: ANA, body: '@meatless can you look?' }))).toEqual(fallback)
+    // A new comment on an issue assigned to it, or one it commented on, even without a mention.
+    expect(await plan(linear('comment.created', 'ENG-2', { author: ANA, body: 'any news?' }))).toEqual(fallback)
+    await s.events.ingest(linear('comment.created', 'ENG-4', { author: BOT, actor: BOT, body: 'On it.' }))
+    expect(await plan(linear('comment.created', 'ENG-4', { author: ANA, body: 'thanks' }))).toEqual(fallback)
+    // Reassigned away: its comments still count, but the assignment no longer does.
+    await s.events.ingest(linear('issue.assigned', 'ENG-2', { actor: ANA, assignee: ANA }))
+    expect(await plan(linear('comment.created', 'ENG-2', { author: ANA, body: 'never mind' }))).toEqual([])
+    // Its own actions never come back to it.
+    expect(await plan(linear('comment.created', 'ENG-4', { author: BOT, actor: BOT, body: '@meatless note to self' }))).toEqual(
+      [],
+    )
+    expect(await plan(linear('issue.assigned', 'ENG-5', { actor: BOT, assignee: BOT }))).toEqual([])
+    // Other sources are unaffected.
+    expect(await plan(dm('hi'))).toEqual(fallback)
+  })
+})

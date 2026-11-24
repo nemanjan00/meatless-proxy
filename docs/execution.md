@@ -160,7 +160,13 @@ and tags combine as described below:
    when assigned to it or asking its review, comments only when they mention
    its GitLab username, and never its own actions. Live, nearly every
    unclaimed GitLab event ended in "nothing to route", each a full router
-   call. A trigger still routes any of them: triggers come first. A router's final text is its decision, never posted as a
+   call. Nor for Linear events that aren't about it: only an issue assigned
+   to it, a new comment that mentions it, or a new comment on an issue
+   assigned to it or that it commented on (from the Linear events seen so
+   far), and never its own actions; status moves, edits, labels and comment
+   edits don't (live, each one cost a router run that said "just a status
+   change", ten at once for a bulk edit). A session following an issue still
+   gets all of them by subscription. A trigger still routes any of them: triggers come first. A router's final text is its decision, never posted as a
    reply: the session it starts answers.
 
 After an event is routed (bus `event.routed`), an event that closes its

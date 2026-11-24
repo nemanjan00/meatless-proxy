@@ -56,7 +56,7 @@ import { createIntegrations, type Integrations, type IntegrationsOptions } from 
 import { defineSshFields, ensureSshKey, sshPrivateKey } from './ssh.ts'
 import { envSecretValues } from './env-secrets.ts'
 import { routerToolset } from './provision.ts'
-import { gitlabWantsRouter } from './integrations/fallback.ts'
+import { gitlabWantsRouter, linearWantsRouter } from './integrations/fallback.ts'
 import { DM_FOLLOW_MS, isSlackDm, slackDmSubject } from './integrations/policies.ts'
 import { defineAuthKinds } from './auth/access.ts'
 import type { AuthOptions } from './auth/index.ts'
@@ -69,6 +69,7 @@ import { createLocalProjectForEmployee } from './local-projects/index.ts'
 /** Integrations whose webhooks are per employee (an app each), by event source: the secret that sets one up. */
 const SLACK_SOURCE = 'integration:slack'
 const GITLAB_SOURCE = 'integration:gitlab'
+const LINEAR_SOURCE = 'integration:linear'
 
 /** A message that says nothing to act on: emoji, mentions and punctuation only, or a short thanks or ok. */
 export function isAcknowledgement(text: unknown): boolean {
@@ -525,12 +526,33 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
     // Unclaimed GitLab builds and pushes, and merge requests and comments not about the employee, cost a router
     // run each for nothing (src/integrations/fallback.ts).
     wantsFallback: async (event, routerSessionId) => {
-      if (event.data.source !== GITLAB_SOURCE) return true
+      if (event.data.source !== GITLAB_SOURCE && event.data.source !== LINEAR_SOURCE) return true
       const employeeId = (await sessions.get(routerSessionId))?.data.employeeId
       const employee = employeeId ? await directory.employees.get(employeeId) : null
       const contact = employee ? await directory.contacts.get(employee.data.contactId) : null
-      const username = contact?.data.handles?.find((h) => h.system === 'gitlab')?.id
-      return gitlabWantsRouter(event.data, username)
+      const handle = (system: string) => contact?.data.handles?.find((h) => h.system === system)?.id
+      if (event.data.source === GITLAB_SOURCE) return gitlabWantsRouter(event.data, handle('gitlab'))
+      // Linear: the same, and what the harness has seen of the issue (its latest assignee, the employee's comments).
+      const me = {
+        id: handle('linear'),
+        names: [handle('mp'), employee?.key, contact?.data.name].filter((n): n is string => !!n),
+      }
+      const seen = { assignedToMe: false, iCommented: false }
+      const issue = event.data.subject?.id
+      if (me.id && issue && event.data.type === 'comment.created') {
+        const past = await records.query<MpEvent['data']>('event', {
+          where: { source: LINEAR_SOURCE, 'subject.id': issue },
+          orderBy: { field: 'receivedAt', dir: 'desc' },
+          limit: 200,
+        })
+        const latestIssue = past.items.find((e) => e.data.type.startsWith('issue.') && e.id !== event.id)
+        const idOf = (v: unknown) => (v && typeof v === 'object' ? (v as { id?: unknown }).id : undefined)
+        seen.assignedToMe = idOf((latestIssue?.data.payload as Record<string, unknown> | undefined)?.assignee) === me.id
+        seen.iCommented = past.items.some(
+          (e) => e.data.type === 'comment.created' && idOf((e.data.payload as Record<string, unknown>)?.author) === me.id,
+        )
+      }
+      return linearWantsRouter(event.data, me, seen)
     },
     // A fork of a router context does the work: it gets the employee's full toolset, not the routing-only one.
     forkToolset: async (context) =>
