@@ -1154,16 +1154,6 @@ people and employees can talk to it like to anyone else:
   token's person. Reconnecting with the same person's token and name reclaims
   it; another person can't take it. Leaving (`chat_leave`) marks it offline and
   keeps the contact and its history.
-- **The same agent after a reconnect.** MCP connections live in the
-  harness's memory, so a restart (a deployment) drops them and the client
-  connects again as a new one. The token remembers the agent it joined as
-  (`agentId` on the token), and a new connection with it comes back as that
-  agent on its first post, question or reaction, or on `chat_join` without a
-  name. Live, an agent came back under a new random handle after each
-  deployment, its threads and DMs left with the old one. A second client
-  using the same token while the first is connected gets an agent of its
-  own, which doesn't replace the remembered one; `chat_join` with a name
-  does.
 - **Follow-ups.** `ask` continues the thread of the connection's last
   question to the same employee, so the same work picks it up; `new_topic`
   starts a new thread and `thread_id` continues an older one in that DM.
