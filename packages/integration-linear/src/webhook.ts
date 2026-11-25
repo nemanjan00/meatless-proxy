@@ -172,6 +172,7 @@ export async function mapWebhook(
           author,
           parentCommentId: d.parentId ?? null,
           url: p.url ?? d.url ?? looked?.url ?? null,
+          ...syncedWith(d),
         },
       },
     ]
@@ -254,6 +255,20 @@ async function withEmail(p: Person, lookups: WebhookLookups): Promise<Person> {
   if (!p || p.email || !lookups.user) return p
   const u = await safe(() => lookups.user!(p.id))
   return u ? { id: p.id, name: p.name ?? u.name, email: u.email ?? null } : p
+}
+
+/**
+ * The other systems a comment is synced with (`syncedWith`, e.g. a Slack thread an issue was made from),
+ * and the external user who wrote it there, when it has them: such a comment mirrors a message there.
+ */
+function syncedWith(d: Record<string, any>): { syncedWith?: string[]; externalUserId?: string } {
+  const raw = d.syncedWith
+  const list: unknown[] = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : []
+  const services = [...new Set(list.map((x: any) => x?.service).filter((x): x is string => typeof x === 'string'))]
+  return {
+    ...(services.length ? { syncedWith: services.map((x) => x.toLowerCase()) } : {}),
+    ...(typeof d.externalUserId === 'string' ? { externalUserId: d.externalUserId } : {}),
+  }
 }
 
 async function safe<T>(f: () => Promise<T> | undefined): Promise<T | null> {

@@ -165,7 +165,11 @@ and tags combine as described below:
    assigned to it or that it commented on (from the Linear events seen so
    far), and never its own actions; status moves, edits, labels and comment
    edits don't (live, each one cost a router run that said "just a status
-   change", ten at once for a bulk edit). A session following an issue still
+   change", ten at once for a bulk edit). Nor a comment mirrored from a Slack
+   thread (`syncedWith` slack: an issue made from a thread syncs its replies
+   both ways) when the employee has Slack, which brought it the message
+   itself (live, every reply reached the work session twice, its own too).
+   A session following an issue still
    gets all of them by subscription. A trigger still routes any of them: triggers come first. A router's final text is its decision, never posted as a
    reply: the session it starts answers.
 

@@ -60,10 +60,14 @@ export function linearWantsRouter(
   event: Pick<MpEvent['data'], 'type' | 'payload'>,
   me: LinearSelf,
   seen: LinearIssueSeen,
+  hasSlack = false,
 ): boolean {
   const p = (event.payload ?? {}) as Record<string, unknown>
   const idOf = (v: unknown) => (v && typeof v === 'object' ? (v as { id?: unknown }).id : undefined)
   if (me.id && (idOf(p.actor) === me.id || (event.type.startsWith('comment.') && idOf(p.author) === me.id))) return false
+  // A comment mirrored from a Slack thread (an issue made from one syncs its replies both ways): the employee
+  // got the Slack message itself. Live, each reply reached the work session twice, its own replies too.
+  if (hasSlack && event.type.startsWith('comment.') && listed(p.syncedWith, 'slack')) return false
   if (event.type === 'issue.assigned') return !!me.id && idOf(p.assignee) === me.id
   if (event.type === 'comment.created')
     return me.names.some((n) => mentionsUser(p.body, n)) || seen.assignedToMe || seen.iCommented
@@ -87,7 +91,7 @@ export const FALLBACK_RULES: Record<string, (event: MpEvent, ctx: FallbackContex
   'integration:gitlab': (event, ctx) => gitlabWantsRouter(event.data, ctx.handle('gitlab')),
   'integration:linear': async (event, ctx) => {
     const me = { id: ctx.handle('linear'), names: ctx.names }
-    return linearWantsRouter(event.data, me, await linearIssueSeen(ctx.records, event, me.id))
+    return linearWantsRouter(event.data, me, await linearIssueSeen(ctx.records, event, me.id), !!ctx.handle('slack'))
   },
 }
 

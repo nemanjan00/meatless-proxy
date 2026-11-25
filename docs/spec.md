@@ -2196,7 +2196,7 @@ The model has tools for working with sessions:
 | commit         | keep the current run: add it to the session's history          |
 | rewind         | collapse a stretch of history (`from` and `to`, tool call ids or entry ids, in this run or earlier ones) into a summary, keeping everything after it word for word; or, with only `from`, jump back to an earlier point and continue from a summary of what happened since |
 | offload        | replace a message in history with a pointer, optionally to a docs chapter written first |
-| restore        | put an offloaded message back into the active history; or, with `offset` and `length`, read a piece of any entry of the session (or its fork tree) by id without changing anything: an offloaded original, a big result in parts, one entry of a collapsed or compacted stretch. A collapsed or compacted stretch can't be put back whole, and nothing else of the history can be reopened: for that the tool points to `contents` and `search` (live, a model thought restore could reopen any part of its history) |
+| restore        | put an offloaded message back into the active history; or, with `offset` and `length`, read a piece of any entry of the employee's sessions by id without changing anything: an offloaded original, a big result in parts, one entry of a collapsed or compacted stretch, a `search` hit in another session (live, models read search hits this way and were refused). A collapsed or compacted stretch can't be put back whole, and nothing else of the history can be reopened: for that the tool points to `contents` and `search` (live, a model thought restore could reopen any part of its history) |
 | finish         | end the run with an output and, optionally, a structured `result` (a JSON object) stored on the run, which `wait` returns to a parent as is |
 | compact        | replace the whole history after the first entry with a summary of everything |
 
@@ -3086,6 +3086,9 @@ For every event, a router run:
    (the issue, MR or thread), e.g. "PAY-123 → @meatless#pay-123-refund"?
 2. **Existing decision:** it forwards the event to that session with
    `sessions.message`. If the session is gone or done, it decides again.
+   A message from the router reads as forwarded work, not a conversation:
+   the session acts on it and answers people where they wrote, and doesn't
+   report back to the router (that would only wake it to answer `NO_REPLY`).
 3. **No decision yet:** it looks around only as much as it needs to route
    (directory, procedures, memory), then starts a **new session** that owns
    the subject, with the context the work needs: a session carrying an

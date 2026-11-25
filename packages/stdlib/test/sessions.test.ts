@@ -532,10 +532,14 @@ describe('run control', () => {
     expect(all.next).toMatch(/offset 20000/)
     expect(((await t.call('sessions.restore', { entryId: big.entryId, offset: 45_000 })).output as any).done).toBe(true)
     expect(await t.sessions.runHistory(t.run.id)).toEqual(before)
-    // Only entries of this session.
-    const other = await t.newSession('Other')
+    // Another of this employee's sessions (a sessions.search hit) reads too; another employee's doesn't.
+    const mine = await t.newSession('Mine')
+    const read = await t.call('sessions.restore', { entryId: (await t.sessions.history(mine.id))[0]!.id, offset: 0 })
+    expect((read.output as any).text).toBe('You are Mine.')
+    const bot = await t.directory.employees.create({ name: 'Other Bot' })
+    const theirs = await t.newSession('Theirs', bot.id)
     expect(
-      (await t.call('sessions.restore', { entryId: (await t.sessions.history(other.id))[0]?.id ?? 'ent_nope', offset: 0 }))
+      (await t.call('sessions.restore', { entryId: (await t.sessions.history(theirs.id))[0]?.id ?? 'ent_nope', offset: 0 }))
         .isError,
     ).toBe(true)
   })
@@ -866,6 +870,22 @@ describe('sessions.message', () => {
     await t.out('sessions.message', { to: fourth.id, text: 'x'.repeat(30_000) })
     const paste = await t.call('sessions.message', { to: fourth.id, text: 'y'.repeat(15_000) })
     expect(JSON.stringify(paste.output)).toContain('fs.share')
+  })
+
+  it("tells the receiver to reply, unless it's the router handing work on", async () => {
+    const t = await stack()
+    const other = await t.newSession('Intake')
+    const o = await t.out('sessions.message', { to: other.id, text: 'Can you take PAY-7?' })
+    expect((await t.events.require(o.eventId)).data.text).toContain('reply with sessions.message')
+    const router = await t.sessions.create({ employeeId: t.employee.id, title: 'router', meta: { role: 'router' } })
+    const f = await t.out(
+      'sessions.message',
+      { to: other.id, text: 'Ana replied in the thread' },
+      t.ctx({ sessionId: router.id }),
+    )
+    const text = (await t.events.require(f.eventId)).data.text
+    expect(text).toContain('your router')
+    expect(text).not.toContain('reply with sessions.message')
   })
 
   it('refuses unknown targets and itself', async () => {

@@ -297,6 +297,12 @@ describe('event mapping', () => {
         url: 'https://linear.app/acme/issue/PAY-123#comment-1',
       },
     })
+    // One mirrored from a Slack thread says so, and who wrote it there.
+    const synced = { ...data, syncedWith: [{ service: 'Slack', id: '1795000000.000100' }], externalUserId: uid(900) }
+    expect((await handle(envelope('Comment', 'create', synced)))[0]!.payload).toMatchObject({
+      syncedWith: ['slack'],
+      externalUserId: uid(900),
+    })
     expect((await handle(envelope('Comment', 'update', data)))[0]!.type).toBe('comment.updated')
     const removed = (await handle(envelope('Comment', 'remove', data)))[0]!
     expect(removed.type).toBe('comment.removed')

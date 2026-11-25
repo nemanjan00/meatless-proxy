@@ -698,7 +698,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.search',
       description:
-        'Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order, newest first; when no entry has them all, the entries with the most of them come back instead, ranked, so describing what you look for in your own words works too. Words match as written, not by meaning: when the words of a question may not be the material\'s, search a few short queries, one idea each, with the words the material would use and their synonyms (e.g. "cost", "invoice", "spend" for a bill that went up), rather than one long phrase. this session\'s own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions; read one with sessions.get. A hit in this session\'s own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.',
+        'Full-text search across the histories and documents of your other sessions, to find how similar work was done before: what was said, tool call arguments (e.g. the files you wrote with git.write_file) and tool results. Every word must appear, in any order, newest first; when no entry has them all, the entries with the most of them come back instead, ranked, so describing what you look for in your own words works too. Words match as written, not by meaning: when the words of a question may not be the material\'s, search a few short queries, one idea each, with the words the material would use and their synonyms (e.g. "cost", "invoice", "spend" for a bill that went up), rather than one long phrase. this session\'s own entries are left out (you have them) unless includeThisSession. Returns matching entries with snippets and matching sessions: sessions.restore { entryId, offset: 0 } reads one entry\'s text, sessions.get one session. A hit in this session\'s own history (collapsed or compacted parts included) comes with a ready read: sessions.restore with its entryId, offset and length reads the text around the match.',
       effect: 'read',
       params: {
         properties: {
@@ -1210,7 +1210,7 @@ export function registerSessionTools(kit: Kit): void {
     {
       name: 'sessions.restore',
       description:
-        "Two things, and only these. Without offset and length: puts an offloaded entry (offloaded by you with sessions.offload, or by the harness when a tool result was too big) back into the history in place of its pointer (it costs context). With offset and length: reads a piece of the text of one entry of this session (or its fork tree) by its id and changes nothing: an offloaded original, a big result in parts, or one entry of a collapsed or compacted stretch (sessions.contents { item } lists them with their ids). A collapsed or compacted stretch was summarised on purpose: rely on its summary, and read an entry of it only for a detail the summary lacks and the work needs now. It can't be put back whole, and nothing else of your history can be reopened: to find where something happened, use sessions.contents (every collapse, compaction and offload) or sessions.search { text, includeThisSession: true }.",
+        "Two things, and only these. Without offset and length: puts an offloaded entry (offloaded by you with sessions.offload, or by the harness when a tool result was too big) back into the history in place of its pointer (it costs context). With offset and length: reads a piece of the text of one entry by its id and changes nothing: an offloaded original, a big result in parts, one entry of a collapsed or compacted stretch (sessions.contents { item } lists them with their ids), or a sessions.search hit in another of your sessions. A collapsed or compacted stretch was summarised on purpose: rely on its summary, and read an entry of it only for a detail the summary lacks and the work needs now. It can't be put back whole, and nothing else of your history can be reopened: to find where something happened, use sessions.contents (every collapse, compaction and offload) or sessions.search { text, includeThisSession: true }.",
       effect: 'idempotent',
       params: {
         properties: {
@@ -1236,11 +1236,10 @@ export function registerSessionTools(kit: Kit): void {
       if (piece) {
         const originalId = pointer ? (pointer.content as unknown as PointerContent).original : id
         const original = await records.store.entries.get(originalId)
-        // An entry of this session, or of another session of its fork tree (a parent whose history it inherited).
+        // An entry of any of this employee's sessions: sessions.search hits in other sessions are read the same way.
         const owner = original && typeof original.meta.sessionId === 'string' ? await sessions.get(original.meta.sessionId) : null
-        const me = owner ? await sessions.get(ctx.sessionId) : null
-        if (!original || !owner || owner.data.employeeId !== ctx.employeeId || owner.data.rootId !== me?.data.rootId)
-          return fail(`${id} is not an entry of this session or its fork tree`)
+        if (!original || !owner || owner.data.employeeId !== ctx.employeeId)
+          return fail(`${id} is not an entry of any of your sessions`)
         const text = entryText(original)
         const offset = Math.max(0, Math.floor(Number(a.offset ?? 0)) || 0)
         const length = Math.min(PIECE_MAX, Math.max(1, Math.floor(Number(a.length ?? PIECE_MAX)) || PIECE_MAX))
@@ -1352,7 +1351,11 @@ export function registerSessionTools(kit: Kit): void {
           author: { kind: 'session', id: ctx.sessionId },
           tags: [{ raw, type: 'session', employeeId: target.data.employeeId, sessionId: target.id }],
         },
-        text: `Message from ${from} (reply with sessions.message to ${from}):\n${text}`,
+        // The router hands work on: a reply to it would only wake it to answer NO_REPLY.
+        text:
+          me.data.meta?.role === 'router'
+            ? `Forwarded by ${from}, your router. Act on it here and answer people where they wrote; don't report back to the router, it needs no reply:\n${text}`
+            : `Message from ${from} (reply with sessions.message to ${from}):\n${text}`,
       })
       return ok({ eventId: event.id, to: { sessionId: target.id, tag: raw } })
     },

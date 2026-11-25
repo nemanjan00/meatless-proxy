@@ -184,6 +184,18 @@ describe('Linear events nobody claimed', () => {
       [],
     )
     expect(await plan(linear('issue.assigned', 'ENG-5', { actor: BOT, assignee: BOT }))).toEqual([])
+    // A comment mirrored from a Slack thread: only once the employee has Slack (it got the message there).
+    const mirrored = { author: ANA, body: 'any news?', syncedWith: ['slack'] }
+    expect(await plan(linear('comment.created', 'ENG-4', mirrored))).toEqual(fallback)
+    await s.directory.contacts.update(employee.data.contactId, {
+      handles: [
+        { system: 'mp', id: 'meatless' },
+        { system: 'linear', id: BOT.id },
+        { system: 'slack', id: 'U0TEST0001' },
+      ],
+    })
+    expect(await plan(linear('comment.created', 'ENG-4', mirrored))).toEqual([])
+    expect(await plan(linear('comment.created', 'ENG-4', { author: ANA, body: 'any news?' }))).toEqual(fallback)
     // Other sources are unaffected.
     expect(await plan(dm('hi'))).toEqual(fallback)
   })
