@@ -900,6 +900,38 @@ describe('sessions.message', () => {
   })
 })
 
+describe('a router starting work on a thread another session owns', () => {
+  it('is told to forward to the owner, unless the owner is done or another employee', async () => {
+    const t = await stack()
+    const subject = { system: 'slack', id: 'C0TEST0001/1712000000.000100' }
+    const { event } = await t.events.ingest({
+      source: 'integration:slack',
+      type: 'message.replied',
+      dedupeKey: 'reply-2',
+      subject,
+      employeeId: t.employee.id,
+      text: 'the second reply',
+    })
+    const router = await t.sessions.create({ employeeId: t.employee.id, title: 'router', meta: { role: 'router' } })
+    const run = await t.sessions.createRun({
+      sessionId: router.id,
+      mode: 'ephemeral',
+      cause: { type: 'event', eventId: event.id },
+    })
+    const asRouter = () => t.ctx({ sessionId: router.id, runId: run.id, callId: `call_${Math.random()}` })
+    const owner = await t.newSession('Bug in the about section')
+    await t.events.subscriptions.subscribe(owner.id, subject, { primary: true })
+    const r = await t.call('sessions.create', { title: 'Same bug', instruction: 'Look at it.' }, asRouter())
+    expect(r.isError).toBe(true)
+    expect(JSON.stringify(r.output)).toContain(`#${owner.data.slug}`)
+    expect(JSON.stringify(r.output)).toContain('sessions.message')
+    expect((await t.call('sessions.fork', { instruction: 'Look at it.' }, asRouter())).isError).toBe(true)
+    // An owner that's done doesn't stop it.
+    await t.sessions.update(owner.id, { status: 'done' })
+    expect((await t.call('sessions.create', { title: 'Same bug', instruction: 'Look at it.' }, asRouter())).isError).toBeFalsy()
+  })
+})
+
 describe('registration', () => {
   it('gives every tool a description, an object schema and an effect class', async () => {
     const t = await stack()

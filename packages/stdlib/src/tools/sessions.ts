@@ -339,6 +339,7 @@ export function registerSessionTools(kit: Kit): void {
       const links = parseLinks(a.links)
       const output = await kit.once('sessions.create', ctx, async () => {
         const caller = await kit.ownSession(undefined, ctx)
+        await kit.refuseOwnedSubject(ctx)
         await kit.checkLimits(ctx.employeeId, null, 1)
         const projectIds = links.filter((l) => l.ref.kind === 'project').map((l) => l.ref.id)
         const prompt = await kit.promptFor(ctx.employeeId, projectIds)
@@ -419,6 +420,7 @@ export function registerSessionTools(kit: Kit): void {
       const mode = checkMode(a.mode)
       const output = await kit.once('sessions.fork', ctx, async () => {
         const parent = await kit.ownSession(a.sessionId, ctx)
+        await kit.refuseOwnedSubject(ctx)
         await kit.checkLimits(ctx.employeeId, parent, 1)
         const at =
           a.atEntry ??

@@ -3107,7 +3107,11 @@ For every event, a router run:
    answers, and keeps the conversation, so follow-ups have its full context.
    The new session subscribes to the subject, so follow-ups reach it directly
    without the router. The router only ends without a session when nothing
-   is needed (`NO_REPLY`).
+   is needed (`NO_REPLY`). If another active session of the employee already
+   owns the subject (two messages can reach the router before the first
+   session takes the thread), starting one is refused with the owner's tag,
+   and the router forwards the event there (live, two sessions answered every
+   message of one thread).
 4. **Rolls back with a summary and commits it, for next time.** The run is
    ephemeral, so its exploration is dropped. It commits only a one-line
    decision summary on top of the router's head (`sessions.commit` with a

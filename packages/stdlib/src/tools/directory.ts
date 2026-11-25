@@ -324,6 +324,7 @@ export function registerDirectoryTools(kit: Kit): void {
       if (!work) return fail('work is required')
       const output = await kit.once('procedures.run', ctx, async () => {
         const caller = await kit.ownSession(undefined, ctx)
+        await kit.refuseOwnedSubject(ctx)
         const p = await directory.procedures.require(a.procedureId)
         if (isArchived(p)) throw new ConflictError(`procedure "${p.data.name}" is archived: it no longer runs`)
         const context = await contextOf(p, ctx.employeeId, caller.data.toolset)

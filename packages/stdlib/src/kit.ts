@@ -143,6 +143,11 @@ export interface Kit {
   contactsOf(session: Session): Promise<string[]>
   /** Where to fork "at the current point": the run's tip, minus the assistant message that made this call. */
   currentPoint(ctx: ToolContext): Promise<string | null>
+  /**
+   * From a router: throws `ValidationError` when another active session of the employee already owns the subject
+   * of the event it's routing, so the router forwards it there instead of starting a second session on it.
+   */
+  refuseOwnedSubject(ctx: ToolContext): Promise<void>
   /** Throws `ValidationError` when forking would break the fork limits. */
   checkLimits(employeeId: string, parent: Session | null, newChildren: number): Promise<void>
   /** Creates a run with a user instruction and queues it. */
@@ -389,6 +394,26 @@ export function createKit(registry: ToolRegistry, deps: StdlibDeps): Kit {
         break
       }
       return path.at(-1)?.id ?? run.data.base
+    },
+
+    async refuseOwnedSubject(ctx) {
+      const caller = await sessions.get(ctx.sessionId)
+      if (caller?.data.meta?.role !== 'router') return
+      const eventId = (await sessions.getRun(ctx.runId))?.data.cause.eventId
+      const subject = eventId ? (await deps.events.get(eventId))?.data.subject : undefined
+      if (!subject) return
+      // Live, two replies 16 s apart both reached the router before the first session took the thread, and
+      // the second started another session: two answers to every message after that.
+      for (const sub of await deps.events.subscriptions.forSubject(subject)) {
+        if (!sub.data.primary) continue
+        const owner = await sessions.get(sub.data.sessionId)
+        if (!owner || owner.data.employeeId !== ctx.employeeId || owner.data.status !== 'active') continue
+        const emp = await directory.employees.get(ctx.employeeId)
+        const tag = `@${emp?.key ?? ctx.employeeId}#${owner.data.slug}`
+        throw new ValidationError(
+          `${tag} (${owner.id}) already owns this ${subject.system} thread (it may have started moments ago): forward the event to it with sessions.message { to: "${tag}" } instead of starting another session on it`,
+        )
+      }
     },
 
     async checkLimits(employeeId, parent, newChildren) {
