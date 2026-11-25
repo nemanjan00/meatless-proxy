@@ -9,7 +9,9 @@ export const SERVER_VERSION = '0.0.0'
 
 /** Default and maximum sizes, so results stay small enough for a model's context. */
 export const LIMITS = {
-  fileBytes: 100_000,
+  /** Below the harness's 20,000-character limit for a tool result: live, every bigger read came back offloaded. */
+  fileBytes: 15_000,
+  grepLines: 200,
   changesBytes: 60_000,
   diffFileBytes: 20_000,
   jobLogKb: 32,
@@ -118,11 +120,18 @@ export function createGitlabMcpServer(api: GitlabClient): McpServer {
 
   tool(
     'get_file',
-    'Read one file from the repository at a branch, tag or commit (default: the default branch). Large files are truncated.',
+    `Read one file from the repository at a branch, tag or commit (default: the default branch). Up to ${LIMITS.fileBytes.toLocaleString('en-US')} characters by default, cut at a line, with the line to go on from; read a long file by lines (start_line, end_line), or find what you need first with grep (matching lines with their numbers).`,
     {
       project: projectArg,
       path: z.string().min(1).describe('File path in the repository, e.g. "src/app.ts"'),
       ref: z.string().optional().describe('Branch, tag or commit sha (default: the default branch)'),
+      start_line: z.number().int().min(1).optional().describe('First line to read (1-based)'),
+      end_line: z.number().int().min(1).optional().describe('Last line to read (inclusive)'),
+      grep: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(`Return only the lines containing this text (case-insensitive), numbered, at most ${LIMITS.grepLines}`),
       max_bytes: z
         .number()
         .int()
@@ -131,13 +140,44 @@ export function createGitlabMcpServer(api: GitlabClient): McpServer {
         .optional()
         .describe(`Truncate after this many characters (default ${LIMITS.fileBytes})`),
     },
-    async ({ project, path, ref, max_bytes }) => {
+    async ({ project, path, ref, start_line, end_line, grep, max_bytes }) => {
       const at = ref ?? (await defaultBranch(project))
       const clean = String(path).replace(/^\/+/, '')
       const text = await api.getText(`${p(project)}/repository/files/${encodeURIComponent(clean)}/raw`, { ref: at })
       if (text.includes('\u0000')) return { path: clean, ref: at, binary: true, size: text.length }
+      const lines = text.split('\n')
+      if (grep) {
+        const needle = grep.toLowerCase()
+        const hits = lines.flatMap((l, i) => (l.toLowerCase().includes(needle) ? [`${i + 1}: ${l}`] : []))
+        return {
+          path: clean,
+          ref: at,
+          lines: lines.length,
+          matches: hits.length,
+          ...(hits.length > LIMITS.grepLines ? { truncated: true } : {}),
+          content: hits.slice(0, LIMITS.grepLines).join('\n'),
+        }
+      }
       const max = max_bytes ?? LIMITS.fileBytes
-      return { path: clean, ref: at, size: text.length, truncated: text.length > max || undefined, content: text.slice(0, max) }
+      if (!start_line && !end_line && text.length <= max) return { path: clean, ref: at, size: text.length, content: text }
+      const from = Math.min(start_line ?? 1, lines.length)
+      const to = Math.min(end_line ?? lines.length, lines.length)
+      // Whole lines up to the limit, so the next read starts where this one stopped.
+      let last = from - 1
+      let used = 0
+      while (last < to && used + lines[last]!.length + 1 <= max) used += lines[last++]!.length + 1
+      if (last === from - 1)
+        return { path: clean, ref: at, size: text.length, truncated: true, content: lines[from - 1]!.slice(0, max) }
+      return {
+        path: clean,
+        ref: at,
+        size: text.length,
+        lines: lines.length,
+        from_line: from,
+        to_line: last,
+        ...(last < to ? { truncated: true, next: `start_line ${last + 1} reads on` } : {}),
+        content: lines.slice(from - 1, last).join('\n'),
+      }
     },
   )
 

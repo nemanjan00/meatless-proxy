@@ -68,7 +68,7 @@ back as `isError` results with `{ error, code, status? }`.
 |------|--------------|
 | `get_project` | path, default branch, SSH and HTTP clone URLs, visibility |
 | `list_branches` | branches with their last commit, `protected` and `default`; `search`, `limit` |
-| `get_file` | a file's raw content at `ref` (default: the default branch), truncated at `max_bytes` (100 KB); binary files are reported, not returned |
+| `get_file` | a file's raw content at `ref` (default: the default branch): up to `max_bytes` (15,000 characters, below the harness's limit for a tool result) cut at a line with `next: "start_line N reads on"`, a range (`start_line`, `end_line`), or only the lines matching `grep`, numbered; binary files are reported, not returned |
 | `list_tree` | files and directories at `path` and `ref`, optionally `recursive` |
 | `create_merge_request` | `source_branch`, `target_branch` (default: the default branch), `title`, `description`, `draft` (prefixes `Draft:`), `labels`, `reviewers` and `assignees` by username |
 | `update_merge_request` | `title`, `description`, `labels` / `add_labels` / `remove_labels`, `draft` |
