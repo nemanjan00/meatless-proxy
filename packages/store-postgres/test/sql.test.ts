@@ -18,7 +18,29 @@ describe('sql builder', () => {
     const p = new Params()
     const sql = whereSql('person', { name: "O'Brien; drop table x" }, p, 'txt')
     expect(sql).not.toContain('Brien')
-    expect(p.values).toEqual(['person', ['name'], JSON.stringify("O'Brien; drop table x"), '%txt%'])
+    expect(p.values).toEqual([
+      'person',
+      ['name'],
+      JSON.stringify("O'Brien; drop table x"),
+      JSON.stringify({ name: "O'Brien; drop table x" }),
+      '%txt%',
+    ])
+  })
+
+  it('adds a containment test the GIN index can use to equality on plain values, and only there', () => {
+    const p = new Params()
+    expect(conditionSql({ field: 'parent.sessionId', op: 'eq', value: 'ses_1' }, p)).toBe(
+      '(r.data @> $3::jsonb and coalesce(r.data #> $1::text[] = $2::jsonb, false))',
+    )
+    expect(p.values[2]).toBe(JSON.stringify({ parent: { sessionId: 'ses_1' } }))
+    for (const c of [
+      { field: 'tags', op: 'eq', value: ['a'] },
+      { field: 'meta', op: 'eq', value: { a: 1 } },
+      { field: 'note', op: 'eq', value: null },
+      { field: 'items.0', op: 'eq', value: 'x' },
+      { field: 'createdAt', op: 'eq', value: '2026-01-01T00:00:00.000Z' },
+    ] as const)
+      expect(conditionSql(c as any, new Params())).not.toContain('@>')
   })
 
   it('uses plain columns for text equality on top-level fields', () => {

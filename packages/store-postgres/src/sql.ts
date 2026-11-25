@@ -49,6 +49,18 @@ export function fieldExpr(field: string, p: Params): string {
 
 const CMP = { gt: '>', gte: '>=', lt: '<', lte: '<=' } as const
 
+/**
+ * `{ a: { b: value } }` for `a.b = value` when `data @> it` is implied by the equality: a field of `data` (not a
+ * top-level column), no array index in the path, and a string, number or boolean value.
+ */
+function containment(field: string, value: unknown): Record<string, unknown> | undefined {
+  if (Object.hasOwn(TOP, field)) return undefined
+  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return undefined
+  const path = field.split('.')
+  if (path.some((k) => !k || /^\d+$/.test(k))) return undefined
+  return path.reduceRight<unknown>((inner, k) => ({ [k]: inner }), value) as Record<string, unknown>
+}
+
 /** Translates one condition to an SQL boolean expression that is never NULL. */
 export function conditionSql(c: Condition, p: Params): string {
   if (c.op === 'eq' && Object.hasOwn(TEXT_COLS, c.field)) {
@@ -57,8 +69,13 @@ export function conditionSql(c: Condition, p: Params): string {
   }
   const e = fieldExpr(c.field, p)
   switch (c.op) {
-    case 'eq':
-      return `coalesce(${e} = ${p.json(c.value)}, false)`
+    case 'eq': {
+      const exact = `coalesce(${e} = ${p.json(c.value)}, false)`
+      const indexed = containment(c.field, c.value)
+      // The containment test uses the GIN index on `data`; the exact one keeps the meaning (an object or array value
+      // would also contain larger ones). Without it every lookup by a field read the whole kind (live, 60 ms a call).
+      return indexed === undefined ? exact : `(r.data @> ${p.json(indexed)} and ${exact})`
+    }
     case 'ne':
       return `(${e} = ${p.json(c.value)}) is not true`
     case 'in':
