@@ -801,6 +801,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
           stdout: stdout.text,
           stderr: stderr.text,
           ...(longest ? { note: cutNote(longest) } : {}),
+          ...(r.exitCode !== 0 && gitHint(r.stderr) ? { hint: gitHint(r.stderr) } : {}),
           ...(started ? { started: redact(started) } : {}),
           // Started before environments mounted the employee's files: say so, or /files looks missing.
           ...(kit.deps.config.filesDir && !env.files
@@ -922,4 +923,18 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       return ok({ down: true, envId: env.id } as Json)
     },
   )
+}
+
+/**
+ * What to do instead when git fails in an environment the way it always does there. Live, models cloned over
+ * https (no credentials, so "could not read Username") and fetched in a read-only copy, then gave up or read stale code.
+ */
+export function gitHint(stderr: string): string | undefined {
+  if (
+    /could not read (Username|Password) for 'https?:|terminal prompts disabled|Authentication failed for 'https?:/i.test(stderr)
+  )
+    return "Environments have no git credentials. Bring a repository in with env.up { repos: [...] } (or git.checkout it), or read it with the git host's tools (mcp.gitlab.get_file, list_tree)."
+  if (/(FETCH_HEAD|\.git\/[^:]*): Read-only file system/i.test(stderr))
+    return "This repository copy is read-only and pinned to the commit env.up mounted: it can't fetch. For newer code, env.down then env.up to mount it again, or read the branch with the git host's tools (mcp.gitlab.get_file, list_commits)."
+  return undefined
 }

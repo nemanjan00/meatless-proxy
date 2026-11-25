@@ -983,7 +983,9 @@ Each integration has three parts:
   one shared with it for reading, as for chat attachments) into a channel or
   thread: the server reads it and uploads it with Slack's external upload
   flow (at most 25 MB, to Slack's own hosts only, bot scope `files:write`),
-  so again the bytes never pass through the model. It's how an employee
+  so again the bytes never pass through the model. The path is the one any
+  file tool takes, `/work/files/…` from `code.run`, or `/files/…` from an
+  environment when no such literal path exists. It's how an employee
   shares a screenshot or a generated chart or report in Slack, and it counts
   as an answer there, so the run's final text isn't also posted.
 - **Linear is the task system:** a new issue assigned to an employee starts

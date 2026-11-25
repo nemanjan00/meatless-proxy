@@ -77,6 +77,9 @@ export function slackGetFileHandler(deps: {
 
 const optStr = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined)
 
+/** Where an environment mounts the employee's files (`env.up`). */
+const ENV_FILES_MOUNT = '/files'
+
 /**
  * `mcp.slack.upload_file`, done by the server: the file is read from the calling employee's files
  * (its own, or shared with it for reading: the same paths and grants as chat attachments, through
@@ -100,9 +103,14 @@ export function slackUploadFileHandler(deps: {
       return { output: { error: "Slack isn't set up for this employee: set the SLACK_BOT_TOKEN secret" }, isError: true }
     const slack = instance.integration as SlackIntegration
     try {
-      const path = employeePath(rawPath)
+      const listed = async (p: string) => (await deps.files.list(ctx.employeeId, p).catch(() => [])).find((e) => e.path === p)
+      let path = employeePath(rawPath)
+      // An environment mounts the employee's files at /files: live, a model wrote /files/x there and asked for
+      // /files/x here, where it's /x. The literal path wins when it exists.
+      if (path.startsWith(`${ENV_FILES_MOUNT}/`) && !(await listed(path)) && (await listed(path.slice(ENV_FILES_MOUNT.length))))
+        path = path.slice(ENV_FILES_MOUNT.length)
       // The size first, so a huge file isn't read only to be refused (listing checks the read grant too).
-      const entry = (await deps.files.list(ctx.employeeId, path)).find((e) => e.path === path)
+      const entry = await listed(path)
       if (entry?.size !== undefined && entry.size > SLACK_UPLOAD_MAX_BYTES)
         throw new LimitError(`${path} is ${entry.size} bytes; the limit is ${SLACK_UPLOAD_MAX_BYTES}`)
       // Missing files and directories fail here (NotFoundError, ValidationError), as for attachments.

@@ -746,6 +746,13 @@ function integrationSuite(backend: Backend) {
     expect(new TextDecoder().decode(txtUp.bytes)).toBe('total: 42\n')
     expect(txtUp.complete).toMatchObject({ files: [{ title: 'notes.txt' }], thread_ts: root })
 
+    // And by the path an environment sees (/files/notes.txt is /notes.txt), unless /files/notes.txt itself exists.
+    const inEnv = await s.tools.execute('mcp.slack.upload_file', { path: '/files/notes.txt', channel: 'C1' }, toolCtx(meatless))
+    expect(new TextDecoder().decode(api.slackUploads[(inEnv.output as any).fileId]!.bytes)).toBe('total: 42\n')
+    await s.files.write(meatless, '/files/notes.txt', 'literal\n')
+    const literal = await s.tools.execute('mcp.slack.upload_file', { path: '/files/notes.txt', channel: 'C1' }, toolCtx(meatless))
+    expect(new TextDecoder().decode(api.slackUploads[(literal.output as any).fileId]!.bytes)).toBe('literal\n')
+
     const missing = await s.tools.execute('mcp.slack.upload_file', { path: '/nope.png', channel: 'C1' }, toolCtx(meatless))
     expect(missing).toMatchObject({ isError: true, output: { error: 'not_found' } })
     const noChannel = await s.tools.execute('mcp.slack.upload_file', { path: '/notes.txt' }, toolCtx(meatless))
