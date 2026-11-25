@@ -86,7 +86,11 @@ describe('sessions.fork', () => {
     expect(hist.map((e) => e.kind)).toEqual(['system', 'user', 'system', 'system', 'user'])
     expect((hist[2]!.content as any).text).toContain('Your projects')
     expect((hist[3]!.content as any).text).toContain('About the requester')
-    expect((hist[4]!.content as any).text).toBe('check the invoice')
+    // It's told it's a fork, by whom, and not to redo what its parent already did (a fork cascade, live).
+    const told = (hist[4]!.content as any).text as string
+    expect(told).toMatch(new RegExp(`^\\[You are a fork, started by session ${t.session.id} `))
+    expect(told).toContain("don't fork again to repeat the same split")
+    expect(told.endsWith('\n\ncheck the invoice')).toBe(true)
     expect(t.enqueued).toEqual([o.runId])
     const run = await t.sessions.requireRun(o.runId)
     expect(run.data.cause).toMatchObject({ type: 'fork', parentRunId: t.run.id })

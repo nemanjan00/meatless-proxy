@@ -105,6 +105,20 @@ const STOP_WORDS = new Set(
  * The terms of a search for ranking: lowercased words, without stop words and very short ones, cut to a stem that
  * still matches as a substring ("entries" → "entr" finds "entry", "keys" → "key").
  */
+/**
+ * What a fork or loop child is told first. It branches from before the step that made it, so it doesn't
+ * see that its parent already acted on the request (replied, split the work): without this it took the
+ * request as its own and did the same again, replies and forks included (live, a fork cascade 12 deep).
+ */
+export function forkNote(parentSessionId: string): string {
+  return [
+    `[You are a fork, started by session ${parentSessionId} to do one part of its work. Everything before this point`,
+    "has been handled by that session, including the step that started you, which you can't see: it answered whoever",
+    'asked and split the work itself. Do only the task below and return what you found as your output. Unless the task',
+    "says so, don't post or reply in chat, don't redo the earlier plan, and don't fork again to repeat the same split.]",
+  ].join(' ')
+}
+
 export function searchTerms(text: string): string[] {
   const stem = (w: string) => {
     for (const [end, keep] of [
@@ -437,7 +451,11 @@ export function registerSessionTools(kit: Kit): void {
         await inheritLoadedTools(parent, fork)
         await linkRequester(fork, ctx)
         const forkMode = workMode(parent, mode)
-        const run = await kit.startRun(fork.id, ctx, { instruction, type: 'fork', ...(forkMode ? { mode: forkMode } : {}) })
+        const run = await kit.startRun(fork.id, ctx, {
+          instruction: `${forkNote(ctx.sessionId)}\n\n${instruction}`,
+          type: 'fork',
+          ...(forkMode ? { mode: forkMode } : {}),
+        })
         return { sessionId: fork.id, slug: fork.data.slug, runId: run.id }
       })
       return ok(output)
@@ -517,7 +535,7 @@ export function registerSessionTools(kit: Kit): void {
       const children = await sessions.loop(parent.id, items, {
         atEntry: at,
         titlePrefix: str(a.titlePrefix) ?? parent.data.title,
-        render: (item, i) => `${instruction}\n\nYour item (${i + 1} of ${n}):\n${itemText(item)}`,
+        render: (item, i) => `${forkNote(ctx.sessionId)}\n\n${instruction}\n\nYour item (${i + 1} of ${n}):\n${itemText(item)}`,
         actor: kit.actor(ctx),
       })
       const toolset = await workToolset(parent)

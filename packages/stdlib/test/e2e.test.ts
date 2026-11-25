@@ -32,7 +32,9 @@ function routed(routes: Record<string, Step[]>) {
     for (let i = req.messages.length - 1; i >= 0; i--) {
       const m = req.messages[i]!
       if (m.role !== 'user') continue
-      const key = Object.keys(routes).find((k) => text(m).startsWith(k))
+      // A fork's or loop child's instruction starts with the fork note (sessions.ts forkNote).
+      const body = text(m).replace(/^\[You are a fork[^\]]*\]\s*/, '')
+      const key = Object.keys(routes).find((k) => body.startsWith(k))
       if (!key) continue
       const n = req.messages.slice(i + 1).filter((x) => x.role === 'assistant').length
       const step = routes[key]![n]

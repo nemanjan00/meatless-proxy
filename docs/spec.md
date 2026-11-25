@@ -2417,6 +2417,19 @@ was. The session page shows it ("context 112k / 200k").
   offloaded again (live, 20,000-character pieces came back as pointers).
   Results with images are left as they are.
 
+#### What a fork is told
+
+A fork or loop child made from the current point branches from before the
+step that made it, so it can't see that its parent already acted on the
+request: replied to it, split the work, started its siblings. Its
+instruction therefore starts with a note: it is a fork, started by that
+session to do one part of its work; everything before is handled; it does
+only its task and returns what it found, and unless the task says so it
+doesn't post in chat, redo the earlier plan or fork again to repeat the same
+split. Live, forks without it took the request as their own, each posting
+"On it" and forking into the same parts again, 12 levels deep, where depth
+wasn't limited.
+
 #### Waiting
 
 After a fork or a loop, **the parent decides whether to wait**:
