@@ -189,6 +189,37 @@ function agentSuite(backend: Backend) {
     await again.disconnect()
   })
 
+  it('a new connection with the same token is the same agent (after a restart too), a second live one gets its own', async () => {
+    const cleo = await s.directory.contacts.create({ name: 'Cleo Example', kind: 'person', access: 'member' })
+    const tok = (await createMcpToken(s, cleo.id, 'laptop')).token
+    const first = await connect(tok)
+    const posted = json(await first.call('chat_post', { channel: 'general', text: 'first post' }))
+    const agentId = (await s.chat.getMessage(posted.messageId))!.data.author.id
+    await first.disconnect()
+    await settle()
+
+    // A reconnect (the harness restarted, or the client did) knows nothing of the old MCP session.
+    const again = await connect(tok)
+    const back = json(await again.call('chat_post', { channel: 'general', text: 'after the restart' }))
+    expect((await s.chat.getMessage(back.messageId))!.data.author.id).toBe(agentId)
+    expect(back.joined).toMatch(/back in chat as @/)
+    // chat_join without a name keeps it too.
+    expect(json(await again.call('chat_join')).contactId).toBe(agentId)
+
+    // While that connection is live, a second client with the same token is another agent.
+    const second = await connect(tok)
+    const other = json(await second.call('chat_post', { channel: 'general', text: 'second client' }))
+    expect((await s.chat.getMessage(other.messageId))!.data.author.id).not.toBe(agentId)
+    await second.disconnect()
+    await again.disconnect()
+    await settle()
+    // And the token still comes back as its first agent.
+    const third = await connect(tok)
+    const last = json(await third.call('chat_post', { channel: 'general', text: 'third time' }))
+    expect((await s.chat.getMessage(last.messageId))!.data.author.id).toBe(agentId)
+    await third.disconnect()
+  })
+
   it('picks a random name, retrying when one is taken', async () => {
     await s.directory.contacts.create({ name: 'Amber', kind: 'person', handles: [{ system: 'mp', id: 'amber-acorn' }] })
     const seq = [0, 0, 0.9999, 0.9999]

@@ -270,6 +270,19 @@ describe('people page', () => {
     await waitFor(() => expect(screen.getAllByTestId('person-row')).toHaveLength(1))
   })
 
+  it('lists the local agents connected right now in their own tab, with whose they are', async () => {
+    const user = userEvent.setup()
+    renderAt('/contacts')
+    await screen.findAllByTestId('person-row')
+    expect(screen.queryAllByTestId('person-row').some((r) => r.textContent?.includes("Ana's Claude Code"))).toBe(false)
+    const tab = screen.getByRole('tab', { name: /Agents online/ })
+    expect(tab).toHaveTextContent('1')
+    await user.click(tab)
+    const row = await rowWith('person-row', "Ana's Claude Code")
+    expect(row).toHaveTextContent(/for Ana Novak/)
+    expect(screen.getAllByTestId('person-row')).toHaveLength(1)
+  })
+
   it('adds a person (admins) and shows the sign-in link, sent on Slack when they have a handle', async () => {
     const user = userEvent.setup()
     const data = renderAt('/contacts')
@@ -415,10 +428,12 @@ describe('person page', () => {
 })
 
 describe('People and local agents', () => {
-  it('has no Agents tab and doesn’t list them', async () => {
+  it('leaves agents out of Everyone, and has a tab only for those online', async () => {
     renderAt('/contacts')
     expect(await screen.findByText('Ana Novak')).toBeInTheDocument()
     expect(screen.queryByText("Ana's Claude Code")).toBeNull()
-    expect(screen.queryByRole('tab', { name: /Agents/ })).toBeNull()
+    expect(screen.getAllByRole('tab', { name: /Agents/ }).map((t) => t.textContent)).toEqual([
+      expect.stringMatching(/^Agents online/),
+    ])
   })
 })

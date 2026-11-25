@@ -186,7 +186,7 @@ export function seedKnowledge(db: MockDb, at: (minutesAgo: number) => string) {
     },
   ])
   put<PersonRecordData>('contact', CON.anaAgent, [
-    { data: { name: "Ana's Claude Code", kind: 'agent', sponsor: CON.ana, role: 'Local agent' }, ago: 2 * DAY },
+    { data: { name: "Ana's Claude Code", kind: 'agent', sponsor: CON.ana, role: 'Local agent', online: true }, ago: 2 * DAY },
   ])
   // What an employee learned about Gus, and a change it suggested (docs/spec.md "What employees learn about people").
   const gusNote = 'Maintains the staging cluster Terraform.'

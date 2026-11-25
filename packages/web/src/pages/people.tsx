@@ -50,6 +50,8 @@ import { ACCESS_INFO, ACCESS_ORDER, PERSON_TYPES, systemLabel } from '@/lib/know
 
 /** The kinds the People list shows: local agents (one per MCP connection) aren't listed; their messages link to them. */
 const LIST_TYPES = PERSON_TYPES.filter((t) => t.value !== 'agent')
+/** Local agents connected right now, so people can find and message them: their own tab, not part of Everyone. */
+const ONLINE_AGENTS = { value: 'agent' as const, plural: 'Agents online' }
 import { sessionStatusKey } from '@/lib/status.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -194,8 +196,13 @@ export function PeoplePage() {
     }, 200)
     return () => clearTimeout(t)
   })
-  const list = useLoad((a) => a.people(), [])
-  useLiveReload([...LIVE], list.reload)
+  const people = useLoad((a) => a.people(), [])
+  const agents = useLoad((a) => a.people({ type: 'agent', online: true }), [])
+  useLiveReload([...LIVE], () => {
+    people.reload()
+    agents.reload()
+  })
+  const list = type === 'agent' ? agents : people
   const all = list.data ?? []
   const teams = useMemo(
     () => [...new Set(all.map((p) => p.contact.data.team).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b)),
@@ -215,7 +222,7 @@ export function PeoplePage() {
     return true
   })
   const counts = Object.fromEntries(
-    LIST_TYPES.map((t) => [t.value, all.filter((p) => p.type === t.value && !p.deactivated).length]),
+    LIST_TYPES.map((t) => [t.value, (people.data ?? []).filter((p) => p.type === t.value && !p.deactivated).length]),
   )
   const deactivatedCount = all.filter((p) => p.deactivated).length
   const filtersSet = FILTER_PARAMS.some((k) => params.has(k)) || !!text
@@ -238,7 +245,7 @@ export function PeoplePage() {
       filters={
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2" data-testid="people-filters">
           <div className="flex items-center gap-0.5" role="tablist" aria-label="Show">
-            {[{ value: ANY, plural: 'Everyone' }, ...LIST_TYPES].map((t) => (
+            {[{ value: ANY, plural: 'Everyone' }, ...LIST_TYPES, ONLINE_AGENTS].map((t) => (
               <button
                 key={t.value}
                 type="button"
@@ -251,7 +258,10 @@ export function PeoplePage() {
                 )}
               >
                 {t.plural}
-                {t.value !== ANY && list.data && <span className="ml-1 text-fg-quaternary tabular-nums">{counts[t.value]}</span>}
+                {t.value === 'agent'
+                  ? agents.data && <span className="ml-1 text-fg-quaternary tabular-nums">{agents.data.length}</span>
+                  : t.value !== ANY &&
+                    people.data && <span className="ml-1 text-fg-quaternary tabular-nums">{counts[t.value]}</span>}
               </button>
             ))}
           </div>
@@ -312,7 +322,13 @@ export function PeoplePage() {
         <LoadingRows />
       ) : shown.length === 0 ? (
         <EmptyState
-          text={filtersSet ? 'Nobody matches these filters.' : 'Nobody here yet.'}
+          text={
+            type === 'agent' && !words.length
+              ? 'No local agents are connected right now.'
+              : filtersSet
+                ? 'Nobody matches these filters.'
+                : 'Nobody here yet.'
+          }
           action={
             filtersSet ? (
               <button type="button" onClick={clear} className="text-[#828fff] hover:underline">

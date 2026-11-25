@@ -15,6 +15,7 @@ export const mcpTokenSchema: KindSchema = {
     { name: 'name', type: 'string' },
     { name: 'createdAt', type: 'timestamp', required: true },
     { name: 'revoked', type: 'boolean' },
+    { name: 'agentId', type: 'ref', ref: 'contact', description: 'The local agent this token last joined chat as.' },
   ],
 }
 
@@ -23,6 +24,8 @@ export interface McpTokenData extends Record<string, unknown> {
   name?: string
   createdAt: string
   revoked?: boolean
+  /** The local agent this token last joined chat as: a new connection with it rejoins as that agent. */
+  agentId?: string
 }
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
@@ -55,4 +58,29 @@ export async function contactForToken(records: Records, token: string): Promise<
   const rec = (await records.getByKey<McpTokenData>('mcp_token', hashToken(token))) as StoredRecord<McpTokenData> | null
   if (!rec || rec.data.revoked) return null
   return rec.data.contactId
+}
+
+/** A live token's record: its id, contact and the agent it last joined chat as. Null when unknown or revoked. */
+export async function mcpTokenFor(
+  records: Records,
+  token: string,
+): Promise<{ id: string; contactId: string; agentId?: string } | null> {
+  ensureKind(records)
+  if (!token) return null
+  const rec = (await records.getByKey<McpTokenData>('mcp_token', hashToken(token))) as StoredRecord<McpTokenData> | null
+  if (!rec || rec.data.revoked) return null
+  return { id: rec.id, contactId: rec.data.contactId, ...(rec.data.agentId ? { agentId: rec.data.agentId } : {}) }
+}
+
+/** Remembers the agent a token joined chat as. */
+export async function rememberTokenAgent(records: Records, tokenId: string, agentId: string): Promise<void> {
+  ensureKind(records)
+  const rec = await records.get<McpTokenData>('mcp_token', tokenId)
+  if (rec && rec.data.agentId !== agentId) await records.update<McpTokenData>('mcp_token', tokenId, { agentId })
+}
+
+/** The agent a token (by record id) last joined chat as. */
+export async function tokenAgent(records: Records, tokenId: string): Promise<string | undefined> {
+  ensureKind(records)
+  return (await records.get<McpTokenData>('mcp_token', tokenId))?.data.agentId
 }

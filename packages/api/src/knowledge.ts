@@ -368,6 +368,8 @@ export interface PersonRecordData extends Record<string, unknown> {
   deactivatedBy?: string
   /** A local agent: the person it acts for. */
   sponsor?: string
+  /** A local agent: connected to the harness's MCP server right now. */
+  online?: boolean
   /** Where learned fields and bio notes came from (read `PersonDetail.learned`, which leaves out stale ones). */
   learned?: unknown[]
 }
@@ -455,6 +457,8 @@ export interface PeopleQuery {
   team?: string
   /** Include deactivated people. Default true. */
   deactivated?: boolean
+  /** Only those connected right now (local agents: `type: 'agent'`). */
+  online?: boolean
 }
 
 /** A handle in another system: Slack user id, GitLab username, Linear id. */

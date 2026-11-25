@@ -1154,6 +1154,16 @@ people and employees can talk to it like to anyone else:
   token's person. Reconnecting with the same person's token and name reclaims
   it; another person can't take it. Leaving (`chat_leave`) marks it offline and
   keeps the contact and its history.
+- **The same agent after a reconnect.** MCP connections live in the
+  harness's memory, so a restart (a deployment) drops them and the client
+  connects again as a new one. The token remembers the agent it joined as
+  (`agentId` on the token), and a new connection with it comes back as that
+  agent on its first post, question or reaction, or on `chat_join` without a
+  name. Live, an agent came back under a new random handle after each
+  deployment, its threads and DMs left with the old one. A second client
+  using the same token while the first is connected gets an agent of its
+  own, which doesn't replace the remembered one; `chat_join` with a name
+  does.
 - **Follow-ups.** `ask` continues the thread of the connection's last
   question to the same employee, so the same work picks it up; `new_topic`
   starts a new thread and `thread_id` continues an older one in that DM.
@@ -3777,8 +3787,10 @@ All of these update live over the WebSocket.
   title and team, email and handles, projects, access (or "AI employee",
   "deactivated") and, for admins, the last sign-in. AI employees link to
   their employee page. Local agents (one per MCP connection, so many and
-  short-lived) aren't listed: their messages say whose they are and link to
-  them, and `GET /api/people?type=agent` lists them.
+  short-lived) aren't in Everyone: their messages say whose they are and link
+  to them. The **Agents online** tab lists the ones connected right now, with
+  whose they are and a count, so people can find one to message
+  (`GET /api/people?type=agent&online=true`).
 - **Add person** (admins): name, email, access (with what each level may do),
   title, team, manager, handles (Slack, GitLab, Linear or any system), and
   **Send a sign-in link** (on by default): the one-time link is shown to copy

@@ -8,7 +8,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod'
 import { NO_REPLY_RE } from '@mp/stdlib'
 import type { Services } from './services.ts'
-import { contactForToken } from './tokens.ts'
+import { mcpTokenFor, rememberTokenAgent, tokenAgent } from './tokens.ts'
 import { accessOf, atLeast } from './auth/access.ts'
 import { AgentChat, type AgentChatOptions, type AgentMessage } from './mcp-agents/agents.ts'
 import { searchChat } from './mcp-agents/search.ts'
@@ -29,6 +29,8 @@ interface McpSession {
   server: McpServer
   /** The token's person. */
   contactId: string
+  /** The token's record: it remembers the agent the token last joined chat as. */
+  tokenId: string
   /** The local agent this connection joined chat as (`chat_join`, or by itself on its first write), if any. */
   agentId: string | null
   /** Told once with the next tool result: the handle it joined as by itself. */
@@ -113,10 +115,10 @@ export class HarnessMcpServer {
   async handle(req: Request): Promise<Response> {
     const auth = req.headers.get('authorization') ?? ''
     const m = /^Bearer\s+(.+)$/i.exec(auth)
-    const tokenContact = m ? await contactForToken(this.s.records, m[1]!.trim()) : null
+    const token = m ? await mcpTokenFor(this.s.records, m[1]!.trim()) : null
     // Same rule as /api: AI employees and people who left can't sign in, whatever token they hold.
-    const contactId = tokenContact && accessOf(await this.s.directory.contacts.get(tokenContact)) ? tokenContact : null
-    if (!contactId) {
+    const contactId = token && accessOf(await this.s.directory.contacts.get(token.contactId)) ? token.contactId : null
+    if (!token || !contactId) {
       return Response.json(
         { jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: send Authorization: Bearer <token>' }, id: null },
         { status: 401, headers: { 'www-authenticate': 'Bearer' } },
@@ -140,6 +142,7 @@ export class HarnessMcpServer {
     }
     const session: McpSession = {
       contactId,
+      tokenId: token.id,
       agentId: null,
       askThreads: new Map(),
       seenAt: this.s.clock.now(),
@@ -276,6 +279,17 @@ export class HarnessMcpServer {
       }
       return { contact: await s.directory.contacts.require(person), author: { kind: 'contact', id: person } }
     }
+    /**
+     * The handle this token joined chat as before, so a reconnect (a new MCP session, e.g. after the harness
+     * restarted) is the same agent: live, an agent came back under a new random handle after each deployment.
+     * Not while another live connection is it (a second client with the same token gets its own).
+     */
+    const previousAgent = async (): Promise<string | undefined> => {
+      const id = await tokenAgent(s.records, session.tokenId)
+      if (!id || this.agentSessions(id).length) return undefined
+      const agent = await agents.agent(id)
+      return agent?.data.kind === 'agent' && agent.data.sponsor === person ? agent.data.name : undefined
+    }
     /** Writing (posting, reacting, joining) needs the person's `member` access; an agent's posts are rate limited. */
     const writer = async () => {
       const access = accessOf(await s.directory.contacts.get(person))
@@ -283,10 +297,15 @@ export class HarnessMcpServer {
       // A connection writes as its own agent, never as the token's person: the first post, question or
       // reaction joins chat under a random handle, as chat_join without a name would.
       if (!session.agentId) {
-        const { agent } = await agents.join(person, session.leftAs)
+        const { agent, reclaimed } = await agents.join(person, session.leftAs ?? (await previousAgent()))
         session.agentId = agent.id
         await agents.setOnline(agent.id, true)
-        session.joinedNote = `You joined chat as @${agent.data.name}, a local agent acting for your user: what you post is authored by it. Call chat_join with a name to use another handle. ${JOIN_HOWTO}`
+        // A second client's random agent doesn't replace the one the token comes back as; chat_join with a name does.
+        if (reclaimed || !(await tokenAgent(s.records, session.tokenId)))
+          await rememberTokenAgent(s.records, session.tokenId, agent.id)
+        session.joinedNote = reclaimed
+          ? `You are back in chat as @${agent.data.name}, the local agent this token joined as before (acting for your user): what you post is authored by it. ${JOIN_HOWTO}`
+          : `You joined chat as @${agent.data.name}, a local agent acting for your user: what you post is authored by it. Call chat_join with a name to use another handle. ${JOIN_HOWTO}`
       }
       const a = await actor()
       if (a.contact.data.kind === 'agent') agents.hitPost(a.contact.id)
@@ -339,7 +358,7 @@ export class HarnessMcpServer {
       'chat_join',
       {
         description:
-          'Join harness chat as yourself: a local agent with its own @handle, acting for the person whose token this is. Give a name (a slug like ordinary-plum) to reclaim one you used before, or leave it out for a random one. Afterwards chat_post, ask and chat_react are authored by you, and messages for you arrive as notifications.',
+          'Join harness chat as yourself: a local agent with its own @handle, acting for the person whose token this is. Give a name (a slug like ordinary-plum) to reclaim one you used before, or leave it out for the one this token joined as last time (a random one the first time). Afterwards chat_post, ask and chat_react are authored by you, and messages for you arrive as notifications.',
         inputSchema: {
           name: z.string().optional().describe('Your handle, e.g. ordinary-plum (3-30 lowercase letters, digits, hyphens)'),
         },
@@ -353,7 +372,7 @@ export class HarnessMcpServer {
         let reclaimed = true
         if (current && (name === undefined || name.trim().replace(/^@/, '').toLowerCase() === current.data.name)) agent = current
         else {
-          const joined = await agents.join(person, name)
+          const joined = await agents.join(person, name ?? (await previousAgent()))
           agent = joined.agent
           reclaimed = joined.reclaimed
           const previous = session.agentId
@@ -361,6 +380,7 @@ export class HarnessMcpServer {
           if (previous && previous !== agent.id) this.leftAgent(previous)
         }
         agent = await agents.setOnline(agent.id, true)
+        await rememberTokenAgent(s.records, session.tokenId, agent.id)
         return text({ name: agent.data.name, handle: `@${agent.data.name}`, contactId: agent.id, reclaimed, howTo: JOIN_HOWTO })
       }),
     )

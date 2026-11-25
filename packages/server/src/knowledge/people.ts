@@ -228,6 +228,7 @@ export function filterPeople(items: Api.PersonItem[], q: Record<string, string |
     if (q.access && i.access !== q.access) return false
     if (q.team && (d.team ?? '').toLowerCase() !== q.team.toLowerCase()) return false
     if (!withDeactivated && i.deactivated) return false
+    if (q.online !== undefined && q.online !== '' && boolParam(q.online) !== (d.online === true)) return false
     if (words.length) {
       const hay = [d.name, d.email, d.role, d.team, ...(d.handles ?? []).map((h) => `${h.system} ${h.id}`)]
         .filter(Boolean)

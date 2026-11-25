@@ -558,6 +558,7 @@ export function createMockKnowledgeApi(h: MockKnowledgeHelpers): KnowledgeApi {
           if (q.access && p.access !== q.access) return false
           if (q.team && norm(d.team ?? '') !== norm(q.team)) return false
           if (q.deactivated === false && p.deactivated) return false
+          if (q.online !== undefined && q.online !== (p.contact.data.online === true)) return false
           const hay = [d.name, d.email, d.role, d.team, ...(d.handles ?? []).map((x) => x.id)].join(' ').toLowerCase()
           return words.every((w) => hay.includes(w))
         })
