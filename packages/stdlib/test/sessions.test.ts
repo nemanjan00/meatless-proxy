@@ -528,10 +528,15 @@ describe('run control', () => {
     expect(r.output).toMatchObject({ entryId: big.entryId, offset: 10, end: 35, total: 50_000, text: text.slice(10, 35) })
     // The default piece is capped; the last piece says it's done.
     const all = (await t.call('sessions.restore', { entryId: big.callId, offset: 0 })).output as any
-    expect(all.text.length).toBe(20_000)
-    expect(all.next).toMatch(/offset 20000/)
+    expect(all.text.length).toBe(15_000)
+    expect(all.next).toMatch(/offset 15000/)
     expect(((await t.call('sessions.restore', { entryId: big.entryId, offset: 45_000 })).output as any).done).toBe(true)
     expect(await t.sessions.runHistory(t.run.id)).toEqual(before)
+    // Text that grows as JSON (quotes, newlines) is cut shorter, so the piece is never offloaded again.
+    const quoted = await t.recordCall(t.run.id, 'docs.read', '"\n'.repeat(20_000))
+    const piece = (await t.call('sessions.restore', { entryId: quoted.entryId, offset: 0 })).output as any
+    expect(JSON.stringify(piece).length).toBeLessThan(20_000)
+    expect(piece.next).toMatch(/offset \d+/)
     // Another of this employee's sessions (a sessions.search hit) reads too; another employee's doesn't.
     const mine = await t.newSession('Mine')
     const read = await t.call('sessions.restore', { entryId: (await t.sessions.history(mine.id))[0]!.id, offset: 0 })

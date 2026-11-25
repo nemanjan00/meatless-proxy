@@ -21,8 +21,13 @@ import type { TaskSystemConfig } from '../types.ts'
 import { outcomeCache, runView, sessionOutcome } from '../session-outcomes.ts'
 import { registerSessionContents } from './session-contents.ts'
 
-/** The most characters sessions.restore returns in one piece. */
-const PIECE_MAX = 20_000
+/**
+ * The most characters sessions.restore returns in one piece. Below the runner's 20,000 for a tool result,
+ * with room for the wrapper: live, a 20,000 piece came back offloaded again, as another pointer.
+ */
+const PIECE_MAX = 15_000
+/** The most a piece may take as JSON (escaped quotes, newlines, …), so it's never offloaded. */
+const PIECE_JSON_MAX = 17_500
 /** The most characters of a structured result (sessions.finish { result }). */
 const RESULT_MAX = 20_000
 /** Runs sessions.get lists by default, and at most. */
@@ -1243,7 +1248,9 @@ export function registerSessionTools(kit: Kit): void {
         const text = entryText(original)
         const offset = Math.max(0, Math.floor(Number(a.offset ?? 0)) || 0)
         const length = Math.min(PIECE_MAX, Math.max(1, Math.floor(Number(a.length ?? PIECE_MAX)) || PIECE_MAX))
-        const end = Math.min(text.length, offset + length)
+        let end = Math.min(text.length, offset + length)
+        while (end - offset > 1000 && JSON.stringify(text.slice(offset, end)).length > PIECE_JSON_MAX)
+          end = offset + Math.floor((end - offset) * 0.9)
         const perChar = await perCharOf(ctx)
         return ok({
           entryId: original.id,

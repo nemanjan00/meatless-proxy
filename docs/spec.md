@@ -2410,8 +2410,10 @@ was. The session page shows it ("context 112k / 200k").
 - **Oversized tool results.** A tool result longer than 20,000 characters
   (`TOOL_RESULT_MAX_CHARS`) is stored in full and kept in the history only as
   a preview (its head and tail) with a pointer. The model reads the rest in
-  pieces, or puts the whole result back, with `restore`. Results with images
-  are left as they are.
+  pieces, or puts the whole result back, with `restore`. A piece is at most
+  15,000 characters, and shorter for text that grows as JSON, so it is never
+  offloaded again (live, 20,000-character pieces came back as pointers).
+  Results with images are left as they are.
 
 #### Waiting
 
@@ -2730,8 +2732,11 @@ Built-in policies, each configurable per deployment, employee or project:
   calls without one that reaches people (a reply, a post, a comment, a
   reaction) gets a note on its next tool result: post a one-line progress
   update in the thread, and answer anything the person wrote meanwhile.
-  Again every 12 calls; a reply starts the count over. Not for router
-  contexts or runs nobody asked for. The prompt asks for an update at least
+  Again every 12 calls; a reply starts the count over. Never sooner than 2
+  minutes after the person last heard anything (live, a note came 30 seconds
+  after "looking"). Not for router contexts, runs nobody asked for, or a
+  scheduled run nobody has written into since it fired (live, a daily brief
+  was told to update a person who wasn't waiting). The prompt asks for an update at least
   every dozen tool calls or few minutes, and a one-line answer (or 👀) to a
   message that arrives during the work. Live, a person wrote three times
   during seven minutes and 40 tool calls of work and heard nothing until the

@@ -8,6 +8,7 @@ import {
   AI_STREAK_TOPIC,
   AUTO_COMMIT_MESSAGE,
   PROGRESS_EVERY,
+  PROGRESS_MIN_MS,
   registerPolicies,
   registerRouterPolicies,
   registerUsagePolicies,
@@ -479,7 +480,7 @@ describe('a router context’s view of its decision lines', () => {
 describe('progress reminders', () => {
   const call = (t: Stack, run: Record<string, unknown>, name: string, output: unknown = { ok: true }, meta = {}) =>
     t.hooks.transform(afterToolCall, {
-      run: { id: 'run_p1', data: { mode: 'continuing', requesterId: 'con_ana', ...run } },
+      run: { id: 'run_p1', createdAt: '2026-09-29T08:00:00.000Z', data: { mode: 'continuing', requesterId: 'con_ana', ...run } },
       session: { id: 'ses_p1', data: { meta } },
       tool: { name },
       result: { output },
@@ -506,6 +507,33 @@ describe('progress reminders', () => {
       expect((await call(t, { id: 'x' }, 'mcp.crm.query', { ok: 1 }, { role: 'router' })).result.output).toEqual({ ok: 1 })
       expect((await call(t, { requesterId: undefined }, 'mcp.crm.query', { ok: 2 })).result.output).toEqual({ ok: 2 })
     }
+  })
+
+  it('waits two minutes after the person last heard anything', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    await call(t, {}, 'mcp.slack.reply')
+    for (let i = 0; i < PROGRESS_EVERY * 2; i++) expect((await call(t, {}, 'mcp.crm.query')).result.output).toEqual({ ok: true })
+    t.clock.advance(PROGRESS_MIN_MS)
+    expect((await call(t, {}, 'mcp.crm.query')).result.output).toHaveProperty('harnessNote')
+  })
+
+  it('leaves a scheduled run alone until someone writes into it', async () => {
+    const t = await stack()
+    registerPolicies(t.hooks, t.deps)
+    const { event } = await t.events.ingest({
+      source: 'schedule',
+      type: 'scheduled_task.fired',
+      dedupeKey: 'tick-1',
+      text: 'brief',
+    })
+    const fired = { cause: { type: 'event', eventId: event.id } }
+    for (let i = 0; i < PROGRESS_EVERY * 2; i++)
+      expect((await call(t, fired, 'mcp.crm.query')).result.output).toEqual({ ok: true })
+    const asked = { ...fired, requests: [{ eventId: 'evt_x', requesterId: 'con_ana', at: '2026-09-29T09:00:00.000Z' }] }
+    const out = []
+    for (let i = 0; i < PROGRESS_EVERY; i++) out.push((await call(t, asked, 'mcp.crm.query')).result.output)
+    expect(out.some((o) => o && typeof o === 'object' && 'harnessNote' in o)).toBe(true)
   })
 
   it('can be turned off', async () => {

@@ -174,21 +174,41 @@ export function registerPolicies(hooks: Hooks, deps: StdlibDeps, config: PolicyC
   // Progress updates: live, a person sent three messages during seven minutes and 40 tool calls of work for
   // them, and heard nothing until the end. After `progressEvery` tool calls without one that reaches people,
   // the next tool result carries a note asking for a one-line update in the thread.
+  // Not in a scheduled run nobody has written into since it fired (live, a daily brief was told to post progress
+  // to a person who wasn't waiting), and not more often than every PROGRESS_MIN_MS (live, a note came 30 s after
+  // the person was told "looking").
   const every = config.progressEvery ?? PROGRESS_EVERY
+  const minMs = config.progressMinMs ?? PROGRESS_MIN_MS
   if (every > 0) {
-    const quiet = new Map<string, number>()
+    const quiet = new Map<string, { n: number; since: number; noted: number }>()
+    const scheduled = new Map<string, boolean>()
+    const unattended = async (run: { id: string; data: { cause?: { eventId?: string }; requests?: unknown[] } }) => {
+      if (run.data.requests?.length) return false
+      const eventId = run.data.cause?.eventId
+      if (!eventId) return false
+      if (!scheduled.has(run.id)) {
+        if (scheduled.size > 10_000) scheduled.delete(scheduled.keys().next().value!)
+        scheduled.set(run.id, (await deps.events.get(eventId))?.data.source === 'schedule')
+      }
+      return scheduled.get(run.id)!
+    }
     offs.push(
       hooks.onTransform(afterToolCall, async (p) => {
         const { run, session, tool } = p
         if (session.data?.meta?.role === 'router' || run.data?.mode === 'ephemeral' || !run.data?.requesterId) return p
+        const now = deps.clock.now()
         if (REACHES_PEOPLE.has(tool.name) && !p.result.isError) {
-          quiet.delete(run.id)
+          quiet.set(run.id, { n: 0, since: now, noted: 0 })
           return p
         }
-        const n = (quiet.get(run.id) ?? 0) + 1
-        quiet.set(run.id, n)
+        const q = quiet.get(run.id) ?? { n: 0, since: Date.parse(run.createdAt) || now, noted: 0 }
+        q.n++
+        quiet.set(run.id, q)
         if (quiet.size > 10_000) quiet.delete(quiet.keys().next().value!)
-        if (n % every !== 0) return p
+        if (q.n - q.noted < every || now - q.since < minMs) return p
+        if (await unattended(run)) return p
+        q.noted = q.n
+        const n = q.n
         const note = `[harness note] ${n} tool calls since you last told the person who asked anything. If the work isn't done, post a one-line progress update in their thread now (chat.reply, or the Slack reply tool): what you found so far and what's next. Answer anything they wrote meanwhile.`
         const out = p.result.output
         const output: Json =
@@ -544,6 +564,8 @@ export function routerLogView<E extends { kind: string; meta: Record<string, unk
 
 /** Tool calls between progress reminders (see registerPolicies). */
 export const PROGRESS_EVERY = 12
+/** The least time since the person last heard anything before a progress note. */
+export const PROGRESS_MIN_MS = 2 * 60_000
 
 /** Tools whose call reaches the people a run works for: a reply, a post, a comment, a reaction. */
 export const REACHES_PEOPLE: ReadonlySet<string> = new Set([

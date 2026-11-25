@@ -221,4 +221,6 @@ export interface PolicyConfig {
   maxAiStreak?: number
   /** Remind a run working for a person to post a progress update after this many tool calls without one. Default 12; 0 off. */
   progressEvery?: number
+  /** And at least this long since the person last heard anything. Default 2 minutes. */
+  progressMinMs?: number
 }
