@@ -969,7 +969,11 @@ Each integration has three parts:
   (an hour that every reply started again sent all of a person's new
   questions to one session). In a DM the
   answer to a top-level message is posted at the top level, not in a thread
-  under it, which hides it. Files people
+  under it, which hides it. A forwarded or shared message (Slack keeps it in
+  `attachments`, not the text) appears in events as `[shared message from
+  <@U…> (link): "…"]` and in read messages as `shared`, and a message with
+  blocks only reads its blocks (live, a forwarded list arrived as an empty
+  message and was answered about the wrong list). Files people
   share appear in events as `[file: name, slack file F…]`; `get_file` saves
   one into the employee's own files (`/slack/<file id>-<name>`, at most 25 MB,
   downloaded by the server from Slack's own hosts only), so the bytes never

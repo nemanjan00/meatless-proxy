@@ -451,6 +451,42 @@ describe('event mapping', () => {
     expect(threaded.events[0]).toMatchObject({ type: 'message.direct', subject: { id: 'D1/1.0' }, payload: { is_reply: true } })
   })
 
+  it('a forwarded message is in the text, with who wrote it and where; a blocks-only message reads its blocks', async () => {
+    slack.channels.set('D1', { id: 'D1', is_member: true, is_im: true, messages: [] })
+    const shared = {
+      is_share: true,
+      author_id: 'U2',
+      from_url: 'https://example.slack.com/archives/C9/p1712000000000100',
+      text: '1. Export to CSV\n2. Dark mode',
+    }
+    const r = await deliver(
+      msg({ channel: 'D1', channel_type: 'im', text: 'what is solved out of this?', attachments: [shared] }),
+    )
+    expect(r.events[0]?.text).toBe(
+      'Slack DM U1: what is solved out of this? [shared message from <@U2> (https://example.slack.com/archives/C9/p1712000000000100): "1. Export to CSV 2. Dark mode"]',
+    )
+    expect(r.events[0]?.payload).toMatchObject({
+      shared: [{ author: '<@U2>', text: '1. Export to CSV\n2. Dark mode', link: shared.from_url }],
+    })
+    const blocks = [
+      {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'text', text: 'Fixed, thanks ' },
+              { type: 'user', user_id: 'U2' },
+            ],
+          },
+        ],
+      },
+    ]
+    const b = await deliver(msg({ ts: '1712345002.000100', text: '', blocks }))
+    expect(b.events[0]?.text).toBe('Slack #general U1: Fixed, thanks <@U2>')
+    expect(b.events[0]?.payload).toMatchObject({ text: 'Fixed, thanks <@U2>' })
+  })
+
   it('group DMs (mpim) are channel messages', async () => {
     const r = await deliver(msg({ channel: 'GMP1', channel_type: 'mpim' }))
     expect(r.events[0]?.type).toBe('message.posted')

@@ -28,6 +28,21 @@ export interface SlackMessage {
   ts?: string
   thread_ts?: string
   files?: { id?: string; name?: string }[]
+  attachments?: SlackAttachment[]
+  blocks?: Json[]
+}
+
+/** A forwarded or shared message (`is_share`, `is_msg_unfurl`), or an app's attachment. */
+export interface SlackAttachment {
+  is_share?: boolean
+  is_msg_unfurl?: boolean
+  text?: string
+  fallback?: string
+  pretext?: string
+  title?: string
+  author_id?: string
+  author_name?: string
+  from_url?: string
 }
 
 export interface SlackInnerEvent extends SlackMessage {
@@ -81,6 +96,62 @@ export const filesText = (files: SlackMessage['files']) =>
     .map((f) => ` [file: ${(f.name ?? f.id)!.replace(/[\]\n]/g, ' ')}, slack file ${f.id}]`)
     .join('')
 
+/** Longest text of one shared message or attachment in an event's text. */
+export const SLACK_MAX_SHARED_TEXT = 3000
+
+const clipShared = (s: string) =>
+  s.length > SLACK_MAX_SHARED_TEXT
+    ? `${s.slice(0, SLACK_MAX_SHARED_TEXT)}… [${s.length - SLACK_MAX_SHARED_TEXT} more characters: read_thread for the rest]`
+    : s
+
+/** The words of Slack blocks (sections, rich text, context), for a message whose `text` is empty. */
+export function blocksText(blocks: unknown): string {
+  const out: string[] = []
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) return v.forEach(walk)
+    if (!v || typeof v !== 'object') return
+    const o = v as Record<string, unknown>
+    if (o.type === 'user' && typeof o.user_id === 'string') out.push(`<@${o.user_id}>`)
+    else if (o.type === 'link' && typeof o.url === 'string') out.push(typeof o.text === 'string' ? `${o.text} (${o.url})` : o.url)
+    else if (typeof o.text === 'string') out.push(o.text)
+    else for (const k of ['text', 'elements', 'fields', 'blocks']) if (k in o) walk(o[k])
+  }
+  walk(blocks)
+  return out
+    .join(' ')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
+
+/** A message's text: its `text`, else the words of its blocks (some apps post blocks only). */
+export const messageText = (m: Pick<SlackMessage, 'text' | 'blocks'>) => m.text || blocksText(m.blocks)
+
+/** The messages and attachments a message carries, as the model reads them (who, where from, what). */
+export function sharedOf(m: Pick<SlackMessage, 'attachments'>): { author?: string; text: string; link?: string }[] {
+  return (m.attachments ?? [])
+    .map((a) => {
+      const text = [a.pretext, a.title, a.text || a.fallback].filter((x) => x?.trim()).join('\n')
+      const author = a.author_id ? `<@${a.author_id}>` : a.author_name
+      return {
+        ...(author ? { author } : {}),
+        text,
+        ...(a.from_url ? { link: a.from_url } : {}),
+        share: !!(a.is_share || a.is_msg_unfurl),
+      }
+    })
+    .filter((a) => a.text)
+    .map(({ share, ...a }) => a)
+}
+
+/** Shared messages and attachments in an event's text: a forwarded message is otherwise invisible to the model. */
+export const sharedText = (m: Pick<SlackMessage, 'attachments'>) =>
+  sharedOf(m)
+    .map(
+      (a) =>
+        ` [shared message${a.author ? ` from ${a.author}` : ''}${a.link ? ` (${a.link})` : ''}: "${clipShared(a.text.replace(/\s+/g, ' ').trim())}"]`,
+    )
+    .join('')
+
 /**
  * Where a reply sits, for the event text: the thread's root ts, labelled so it isn't taken for the reply's own,
  * and, when known, who started the thread and what it says (a bare mention in a thread is about its root).
@@ -88,7 +159,7 @@ export const filesText = (files: SlackMessage['files']) =>
 const threadLabel = (threadTs: string, root: SlackMessage | undefined, self: SelfIdentity) => {
   if (!root) return ` (reply in thread ${threadTs})`
   const who = isSelf(root, self) ? 'you' : root.user ? `<@${root.user}>` : (root.bot_id ?? 'someone')
-  const text = (root.text ?? '').replace(/\s+/g, ' ').trim()
+  const text = messageText(root).replace(/\s+/g, ' ').trim()
   const quoted = text.length > SLACK_MAX_ROOT_TEXT ? `${text.slice(0, SLACK_MAX_ROOT_TEXT)}… [read_thread for the rest]` : text
   return ` (reply in thread ${threadTs}, started by ${who}: "${quoted}"${filesText(root.files)})`
 }
@@ -201,13 +272,13 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
         type,
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${who}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
+        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${who}: ${clip(messageText(ev))}${filesText(ev.files)}${sharedText(ev)}`,
         pick({
           ...(await common()),
           user: ev.user,
           bot_id: ev.bot_id,
           subtype: ev.subtype,
-          text: ev.text ?? '',
+          text: messageText(ev),
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
@@ -217,6 +288,7 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
           // A channel message that doesn't mention this app is people talking (the app's threads reach it by subscription).
           plainConversation: !isDm && !mentioned ? true : undefined,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
+          shared: sharedOf(ev).length ? (sharedOf(ev) as Json) : undefined,
         }),
         messageKey(channel, ev.ts),
       )
@@ -229,17 +301,18 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
         'message.mentioned',
         ev.thread_ts ?? ev.ts,
         ev.user,
-        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${ev.user ?? 'someone'}: ${clip(ev.text ?? '')}${filesText(ev.files)}`,
+        `Slack ${await where()}${reply ? threadLabel(ev.thread_ts!, root, self) : ''} ${ev.user ?? 'someone'}: ${clip(messageText(ev))}${filesText(ev.files)}${sharedText(ev)}`,
         pick({
           ...(await common()),
           user: ev.user,
-          text: ev.text ?? '',
+          text: messageText(ev),
           ts: ev.ts,
           thread_ts: ev.thread_ts,
           is_reply: reply,
           thread_root: rootPayload(root),
           mentions_app: true,
           files: ev.files?.length ? ev.files.map((f) => pick({ id: f.id, name: f.name })) : undefined,
+          shared: sharedOf(ev).length ? (sharedOf(ev) as Json) : undefined,
         }),
         messageKey(channel, ev.ts),
       )

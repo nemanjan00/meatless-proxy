@@ -14,6 +14,7 @@ import {
 } from './blocks.ts'
 import { type SlackClient, type SlackResponse, slackErrorCode, slackErrorMessages } from './client.ts'
 import { fileInfo } from './files.ts'
+import { messageText, type SlackMessage, sharedOf } from './events.ts'
 import { toSlackMrkdwn } from './mrkdwn.ts'
 
 type Obj = Record<string, unknown>
@@ -30,12 +31,15 @@ export function compactMessage(m: Obj) {
   const files = Array.isArray(m.files)
     ? (m.files as Obj[]).filter((f) => str(f.id)).map((f) => compact({ id: str(f.id), name: str(f.name) }))
     : undefined
+  // A forwarded or shared message lives in `attachments`: without it the model sees an empty message.
+  const shared = sharedOf(m as SlackMessage)
   return compact({
     ts: str(m.ts),
     user: str(m.user),
     bot_id: str(m.bot_id),
     subtype: str(m.subtype),
-    text: typeof m.text === 'string' ? m.text : '',
+    text: messageText(m as SlackMessage),
+    shared: shared.length ? shared : undefined,
     thread_ts: str(m.thread_ts),
     reply_count: num(m.reply_count) || undefined,
     reactions: reactions?.length ? reactions : undefined,

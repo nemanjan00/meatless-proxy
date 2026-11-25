@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSlackIntegration } from '../src/index.ts'
+import { compactMessage } from '../src/tools.ts'
 import { BOT_USER, type FakeSlack, startFakeSlack, TOKEN } from './fake-slack.ts'
 
 let slack: FakeSlack
@@ -146,6 +147,23 @@ describe('slack MCP tools', () => {
       messages: [{ ts: '1712000001.000100', user: BOT_USER, bot_id: 'BBOT', text: 'hello from the bot' }],
       next_cursor: null,
     })
+  })
+
+  it('a read message carries what it forwards or shares, and a blocks-only message its blocks', () => {
+    const forwarded = compactMessage({
+      ts: '1.0',
+      user: 'U1',
+      text: '',
+      attachments: [{ is_share: true, author_id: 'U2', text: 'Export to CSV', from_url: 'https://example.slack.com/x' }],
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'fwd' } }],
+    })
+    expect(forwarded).toEqual({
+      ts: '1.0',
+      user: 'U1',
+      text: 'fwd',
+      shared: [{ author: '<@U2>', text: 'Export to CSV', link: 'https://example.slack.com/x' }],
+    })
+    expect(compactMessage({ ts: '2.0', text: '' })).toEqual({ ts: '2.0', text: '' })
   })
 
   it('read_channel filters by oldest and latest', async () => {

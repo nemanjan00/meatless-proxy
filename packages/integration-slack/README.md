@@ -222,6 +222,11 @@ act. The harness implements `SlackInteractionStore` over `interaction` records (
 Slack events list a message's files in the payload (`files: [{ id, name }]`) and in the text, as
 `[file: name, slack file F…]`, so the model knows to call `get_file`.
 
+A forwarded or shared message lives in `attachments`, not in `text`: events add it to the text as
+`[shared message from <@U2> (link): "…"]` (3,000 characters each) and to the payload as `shared`, and `read_channel`
+and `read_thread` return it as `shared: [{ author, text, link }]`. A message with blocks only (some apps post no
+`text`) reads as the words of its blocks.
+
 `downloadFile` (and so `get_file` in the harness) reads `files.info` and downloads `url_private_download` with the bot
 token (bot scope `files:read`):
 
