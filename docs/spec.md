@@ -3577,7 +3577,9 @@ in a new tab, without the opener. Unknown subjects stay plain text.
   `eventId` (the event's subject) it belongs to, and that session's or event's
   visibility. The server asks Slack's `chat.getPermalink` with the employee's
   bot token (never sent to the UI) and keeps the answer for the integration
-  instance's life; without a token, or when Slack can't say, it answers
+  instance's life. When Slack's answer has `?thread_ts=<the message itself>&cid=…`,
+  as it does for a thread's first message, that part is dropped: in that form
+  the link doesn't open the message; without a token, or when Slack can't say, it answers
   `https://slack.com/app_redirect?channel=<C>`, which opens the channel. The UI
   asks only when a link is about to be used (hover, focus, press), once per
   subject; until then the link opens the channel. A thread in a DM or a group

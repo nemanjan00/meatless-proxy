@@ -1,6 +1,7 @@
 import { ManualClock } from '@mp/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSlackIntegration, type SlackIntegration } from '../src/index.ts'
+import { plainPermalink } from '../src/integration.ts'
 import { type FakeSlack, startFakeSlack, TOKEN } from './fake-slack.ts'
 
 let slack: FakeSlack
@@ -42,6 +43,18 @@ describe('permalink', () => {
     slack.failWith('chat.getPermalink', 'ratelimited', 1)
     await expect(integration.permalink('C1', '1712000001.000100')).rejects.toThrow()
     expect(await integration.permalink('C1', '1712000001.000100')).toMatch(/^https:\/\/example\.slack\.com\/archives\/C1\//)
+  })
+
+  it("drops thread_ts and cid when they name the message itself (a thread's first message), and keeps a reply's", async () => {
+    const root = 'https://example.slack.com/archives/C1/p1712000002000100'
+    slack.script('chat.getPermalink', {
+      status: 200,
+      body: JSON.stringify({ ok: true, permalink: `${root}?thread_ts=1712000002.000100&cid=C1` }),
+    })
+    expect(await integration.permalink('C1', '1712000002.000100')).toBe(root)
+    expect(plainPermalink(`${root}?thread_ts=1712000001.000100&cid=C1`, '1712000002.000100')).toBe(
+      `${root}?thread_ts=1712000001.000100&cid=C1`,
+    )
   })
 
   it('refuses an answer that is not an https link', async () => {

@@ -57,6 +57,18 @@ const json = (status: number, body: unknown, events: IntegrationEvent[] = []): W
   events,
 })
 
+/**
+ * A permalink without `?thread_ts=…&cid=…` when the thread it names is the message itself: Slack adds it
+ * to a thread's first message, and that form doesn't open it. A reply's link keeps it.
+ */
+export function plainPermalink(url: string, ts: string): string {
+  const u = new URL(url)
+  if (u.searchParams.get('thread_ts') !== ts) return url
+  u.searchParams.delete('thread_ts')
+  u.searchParams.delete('cid')
+  return u.toString()
+}
+
 /** Whether a request is an interactivity payload (form-encoded `payload=`) rather than an Events API envelope. */
 const isInteractive = (req: WebhookRequest) =>
   (req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded') || req.body.startsWith('payload=')
@@ -317,7 +329,7 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     const p = quick.call('chat.getPermalink', { channel, message_ts: ts }, {}).then((r) => {
       if (typeof r.permalink !== 'string' || !/^https:\/\//.test(r.permalink))
         throw new Error(`slack chat.getPermalink: no permalink for ${key}`)
-      return r.permalink
+      return plainPermalink(r.permalink, ts)
     })
     permalinks.set(key, p)
     if (permalinks.size > PERMALINK_CACHE_MAX) permalinks.delete(permalinks.keys().next().value as string)
