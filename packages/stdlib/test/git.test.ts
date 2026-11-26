@@ -330,13 +330,6 @@ describe('env tools', () => {
     expect(t.containers.created).toHaveLength(2)
   })
 
-  it('exec with nothing to start from fails with what env.up said', async () => {
-    const t = await stack()
-    const r = await t.call('env.exec', { cmd: ['ls'] })
-    expect(r.isError).toBe(true)
-    expect(t.containers.created).toHaveLength(0)
-  })
-
   it('uses a profile even when the checkout has a Dockerfile, and builds it only when asked', async () => {
     const t = await stack()
     await t.out('git.checkout', { projectId: t.project.id })

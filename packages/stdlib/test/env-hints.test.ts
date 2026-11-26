@@ -10,3 +10,14 @@ describe('env.exec hints for git', () => {
     expect(gitHint('error: pathspec did not match')).toBeUndefined()
   })
 })
+
+describe('env.exec with no environment', () => {
+  it('starts the default profile when there is no checkout, and runs a string through sh -c', async () => {
+    const { stack } = await import('./helpers.ts')
+    const t = await stack()
+    const r = await t.call('env.exec', { cmd: 'curl -s https://example.com | wc -c' })
+    expect(r.isError).toBeFalsy()
+    expect(t.containers.created).toHaveLength(1)
+    expect(t.containers.calls.at(-1)!.cmd).toEqual(['sh', '-c', 'curl -s https://example.com | wc -c'])
+  })
+})

@@ -265,7 +265,9 @@ Notes on behaviour:
   `GIT_CONFIG_*` sets `safe.directory=*`: read-only git works inside, commits
   fail there. A running environment asked for repositories it lacks returns
   `missing` and the exact `env.up { …, restart: true }` call.
-  `env.exec` keeps the head and tail of long output (`headAndTail`, 3000
+  `env.exec` with no running environment starts the default one (the checkout,
+  or with none the default profile and no repository), and runs a string `cmd`
+  with `sh -c`. It keeps the head and tail of long output (`headAndTail`, 3000
   characters each for stdout) and then says to redirect it to a file (`cutNote`).
   File paths are resolved inside the worktree (no `..`, no `.git`, no symlink
   escapes with `nodeWorktreeFs`).

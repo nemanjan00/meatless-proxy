@@ -745,11 +745,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
     {
       name: 'env.exec',
       description:
-        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile or the default profile): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"]. Returns the exit code and the end of stdout/stderr. Default timeout 300 s. Install tools the work needs (a browser, a linter) outside the checkout, e.g. in /tmp: only the project\'s own dependencies belong in it.',
+        'Run a command in this session\'s environment, in /workspace (/files in it is your filesystem root: /files/a.zip is /a.zip for fs.* and chat attachments). Without one it starts the default environment first (your checkout, in the project\'s profile or the default profile; with no checkout, the default profile and no repository): use env.up yourself to pick a profile, image or ports. An argv list, e.g. ["npm", "test"]; for pipes and globs use ["sh", "-c", "grep -rn router src | wc -l"] (a string is run that way too). Returns the exit code and the end of stdout/stderr. Default timeout 300 s. Install tools the work needs (a browser, a linter) outside the checkout, e.g. in /tmp: only the project\'s own dependencies belong in it.',
       effect: 'non_idempotent',
       params: {
         properties: {
-          cmd: { type: 'array', items: { type: 'string' } },
+          cmd: { type: ['array', 'string'], items: { type: 'string' } },
           timeoutSeconds: { type: 'number' },
           workdir: { type: 'string' },
         },
@@ -764,7 +764,11 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       const running = env ? (await runtime.getEnv(env.id))?.status === 'running' : false
       let started: Json | undefined
       if (!running) {
-        const up = await upEnv({}, ctx)
+        // With no checkout there's no project to pick a profile: the default one, without a repository.
+        const up = await upEnv(
+          worktreesOf(session).length ? {} : { profile: kit.deps.config.envDefaultProfile ?? 'default' },
+          ctx,
+        )
         if (up.isError) return up
         started = up.output as Json
         session = await kit.ownSession(undefined, ctx)
@@ -773,7 +777,7 @@ export function registerEnvTools(kit: Kit, runtime: ContainerRuntime): void {
       }
       if (!env) return fail('the environment could not be started')
       const envId = env.id
-      const cmd = (a.cmd as unknown[]).map(String)
+      const cmd = typeof a.cmd === 'string' ? ['sh', '-c', a.cmd] : (a.cmd as unknown[]).map(String)
       if (!cmd.length) return fail('cmd is empty')
       const timeoutMs = Math.min(Math.max(1, a.timeoutSeconds ?? 300), 3600) * 1000
       // What runs where, for the Environments page: started, and finished whatever the outcome.
