@@ -19,7 +19,7 @@ describe('an employee’s webhooks', () => {
   it('adds one with a rule, shows its secret once, its URL and the rule in a line', async () => {
     const data = renderAt(`/employees/${EMP.billing}`)
     const section = await screen.findByTestId('webhooks')
-    expect(within(section).getByText('No webhooks yet.')).toBeInTheDocument()
+    expect(await within(section).findByText('No webhooks yet.')).toBeInTheDocument()
     fireEvent.click(within(section).getByRole('button', { name: 'Add webhook' }))
     fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: 'stripe' } })
     fireEvent.change(screen.getByLabelText(/^Event type/), { target: { value: 'type' } })
