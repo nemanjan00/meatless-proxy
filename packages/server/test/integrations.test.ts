@@ -865,7 +865,7 @@ function integrationSuite(backend: Backend) {
     expect(events.map((e) => e.data.employeeId).sort()).toEqual([meatless, vee].sort())
   })
 
-  it('slack links: the conversation in Slack's web client, in the bot's workspace; the channel without a bot', async () => {
+  it('slack links: the conversation in Slack’s web client, in the bot’s workspace; the channel without a bot', async () => {
     const s = t.a.services
     api.reset()
     const session = await s.sessions.create({ employeeId: meatless, title: 'Permalinks', entries: [] })
