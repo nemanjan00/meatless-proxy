@@ -115,6 +115,7 @@ export const DEFAULT_TOOLSET: readonly string[] = [
   'triggers.disable',
   'triggers.list',
   'triggers.update',
+  'web.fetch',
   'webhooks.create',
   'webhooks.list',
   'webhooks.update',
@@ -137,6 +138,7 @@ export const REVIEWER_TOOLSET: readonly string[] = [
  * router call small (about a third fewer tool definitions).
  */
 export const ROUTER_EXCLUDED_TOOLS: readonly string[] = [
+  'web.**',
   'git.**',
   'env.**',
   'fs.**',

@@ -59,6 +59,18 @@ export interface StdlibDeps {
    * descriptions.
    */
   describer?: ImageDescriber
+  /** Fetches pages for web.fetch. Default: `fetchPublic` (public hosts only); tests pass a fake. */
+  webFetch?: import('./web-fetch.ts').WebFetcher
+  /**
+   * Summarizes a fetched page, or answers `question` from it, with one model call billed to the session
+   * (web.fetch `summarize`). Optional: without it web.fetch returns text only.
+   */
+  summarize?: (input: {
+    text: string
+    question?: string
+    source: string
+    ctx: import('@mp/tools').ToolContext
+  }) => Promise<string>
   /** Optional: without them the git and env tools aren't registered. */
   git?: GitCache
   containers?: ContainerRuntime

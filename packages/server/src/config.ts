@@ -350,6 +350,11 @@ export const configSchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.trim() || undefined),
+  /** The model for web.fetch summaries, on the same provider. Default: MODEL. */
+  WEB_SUMMARY_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
   /** Chat attachments: bytes per image (PNG, JPEG, GIF, WebP). */
   CHAT_ATTACHMENT_MAX_BYTES: z.coerce
     .number()

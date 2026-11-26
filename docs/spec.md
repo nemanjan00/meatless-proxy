@@ -2604,6 +2604,43 @@ touching the cached prompt prefix:
 - Router contexts get `time.now` too. Router contexts created before a
   standard library tool existed get it added at the next start.
 
+### Reading the web
+
+`web.fetch { url, summarize?, max_chars?, offset? }` reads a page, so an employee
+reads a link someone sends instead of guessing what it says.
+
+- **What comes back.** A GET from the harness. HTML is turned into readable text:
+  the title; headings as `#` and list items as `-`; links as `text (url)`, made
+  absolute; table cells separated by `|`; image alt text. Scripts, styles,
+  navigation, footers and forms are left out, and a page's `<main>` or
+  `<article>` is used when it marks one. JSON, XML and plain text come back as
+  they are.
+  - At most 20,000 characters by default (`max_chars`, up to 100,000). A longer
+    text says how much is left and the `offset` to read on from.
+  - Bodies are read up to 5 MB. The fetch times out after 20 s, and at most 5
+    redirects are followed.
+  - Files (PDFs, images, archives) are refused, with how to download them in an
+    environment (`env.exec`, curl).
+- **Summarize.** `summarize: true` returns a short summary instead of the text,
+  and a question returns an answer from the page. Either is one model call on
+  the first 150,000 characters. It uses `WEB_SUMMARY_MODEL`, else `MODEL`, and
+  the usage is billed to the session's run. The page is marked untrusted in that
+  call too.
+- **Where it may go.** The same network setting as the employee's environments
+  (see [Project code and runtime](#project-code-and-runtime)):
+  - `none` refuses.
+  - An allowlist (the employee's, the project's, or both) allows only its
+    hosts.
+  - `direct` allows any public host.
+  - Every URL is checked, every redirect included.
+  - Whatever the setting, it never connects to a private, loopback or
+    link-local address, by IP or by what a name resolves to. The address it
+    checked is the address it connects to. URLs with credentials are refused.
+  - Internal hosts and anything behind a login are for `env.exec`.
+- **Who has it.** It's a read tool, offered from the start (an everyday tool).
+  Router contexts don't get it. Page content is information, not instructions,
+  like any other untrusted input.
+
 ### Code execution
 
 Employees can run code for math, data and charts, with their own files at

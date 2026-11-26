@@ -15,6 +15,7 @@ import { registerScheduleTools } from './tools/schedule.ts'
 import { registerSessionTools } from './tools/sessions.ts'
 import { registerTimeTools } from './tools/time.ts'
 import { registerToolTools } from './tools/tools.ts'
+import { registerWebTools } from './tools/web.ts'
 import type { StdlibDeps } from './types.ts'
 import { nodeWorktreeFs } from './worktree-fs.ts'
 
@@ -36,6 +37,7 @@ export function registerStdlib(registry: ToolRegistry, deps: StdlibDeps): string
   registerTimeTools(kit)
   registerScheduleTools(kit)
   registerImageTools(kit)
+  registerWebTools(kit)
   if (deps.config.toolsOnDemand !== false) registerToolTools(kit)
   if (deps.localProjects) registerProjectTools(kit, deps.localProjects)
   if (deps.git) registerGitTools(kit, deps.git, deps.worktreeFs ?? nodeWorktreeFs())

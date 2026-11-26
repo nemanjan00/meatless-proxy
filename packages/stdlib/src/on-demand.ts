@@ -74,6 +74,7 @@ export const CORE_TOOLS: readonly string[] = [
   'time.now',
   'tools.find',
   'tools.load',
+  'web.fetch',
   'mcp.slack.post_message',
   'mcp.slack.react',
   'mcp.slack.read_thread',

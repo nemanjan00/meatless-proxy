@@ -44,6 +44,7 @@ import { createUsage, type UsageService } from '@mp/usage'
 import pg from 'pg'
 import { cacheMarkersOn, contextWindowFor, type Config } from './config.ts'
 import { imageLoader, resolveVision, type VisionSettings } from './attachments.ts'
+import { webSummarizer } from './web-summary.ts'
 import { buildDescriber, describedEvent, enqueueDescriptions } from './image-descriptions.ts'
 import { createControl, type Control } from './control.ts'
 import { wireMcpNotifications } from './mcp-in.ts'
@@ -776,6 +777,8 @@ export async function buildServices(config: Config, o: AppOverrides = {}): Promi
       attachments,
       vision: { enabled: vision.enabled, maxSide: vision.maxSide, maxBytes: vision.maxBytes },
       describer,
+      // web.fetch summarize: one model call, billed to the session's run.
+      summarize: webSummarizer({ model, modelName: config.WEB_SUMMARY_MODEL, sessions, usage }),
       git,
       ...(containers ? { containers } : {}),
       // Work a router context starts gets the employee's full toolset, not the router's routing-only one.
