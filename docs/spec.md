@@ -3575,11 +3575,10 @@ in a new tab, without the opener. Unknown subjects stay plain text.
 - **Slack permalinks** come from `GET /api/subjects/permalink?subject=slack:<channel>/<ts>`
   with the `sessionId` (the subject must be one of its subscriptions) or the
   `eventId` (the event's subject) it belongs to, and that session's or event's
-  visibility. The server asks Slack's `chat.getPermalink` with the employee's
-  bot token (never sent to the UI) and keeps the answer for the integration
-  instance's life. When Slack's answer has `?thread_ts=<the message itself>&cid=…`,
-  as it does for a thread's first message, that part is dropped: in that form
-  the link doesn't open the message; without a token, or when Slack can't say, it answers
+  visibility. The link is the conversation in Slack's web client,
+  `https://app.slack.com/client/<team>/<channel>` (the workspace from the bot's
+  `auth.test`, asked once); Slack's own `archives/…` permalinks didn't open
+  reliably. Without a token, or when the workspace is unknown, it answers
   `https://slack.com/app_redirect?channel=<C>`, which opens the channel. The UI
   asks only when a link is about to be used (hover, focus, press), once per
   subject; until then the link opens the channel. A thread in a DM or a group

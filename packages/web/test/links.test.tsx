@@ -199,7 +199,7 @@ describe('SubjectLink', () => {
     expect(a).toHaveAttribute('href', 'https://slack.com/app_redirect?channel=C0TEST0001')
     expect(spy).not.toHaveBeenCalled()
     await userEvent.hover(a)
-    await waitFor(() => expect(a).toHaveAttribute('href', 'https://example.slack.com/archives/C0TEST0001/p1700000000000100'))
+    await waitFor(() => expect(a).toHaveAttribute('href', 'https://app.slack.com/client/T0TEST0001/C0TEST0001'))
     expect(spy).toHaveBeenCalledWith({ subject: 'slack:C0TEST0001/1700000000.000100', sessionId: SES.inc42 })
     await userEvent.unhover(a)
     await userEvent.hover(a)
@@ -211,14 +211,14 @@ describe('SubjectLink', () => {
       <SubjectLink subject={{ system: 'slack', ref: 'C0TEST0001/1700000000.000200' }} sessionId={SES.inc42} />,
     )
     vi.spyOn(data.api, 'subjectPermalink').mockResolvedValue({
-      url: 'https://example.slack.com/archives/C0TEST0001/p1700000000000200',
+      url: 'https://app.slack.com/client/T0TEST0001/C0TEST0001',
       permalink: true,
       conversation: 'group_dm',
     })
     const a = screen.getByRole('link', { name: /Slack thread in/ })
     await userEvent.hover(a)
     await waitFor(() => expect(a.getAttribute('title')).toMatch(/^In a Slack group DM: only its members can open it\n/))
-    expect(a).toHaveAttribute('href', 'https://example.slack.com/archives/C0TEST0001/p1700000000000200')
+    expect(a).toHaveAttribute('href', 'https://app.slack.com/client/T0TEST0001/C0TEST0001')
   })
 
   it('keeps the channel link when Slack has no permalink for it', async () => {

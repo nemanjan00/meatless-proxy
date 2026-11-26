@@ -697,7 +697,7 @@ export function createMockApi(db: MockDb, opts: MockApiOptions = {}): ApiClient 
       // The mock workspace knows the threads of #general (C0TEST0001); others open the channel.
       return delay(
         m[1] === 'C0TEST0001'
-          ? { url: `https://example.slack.com/archives/${m[1]}/p${m[2]!.replace('.', '')}`, permalink: true }
+          ? { url: `https://app.slack.com/client/T0TEST0001/${m[1]}`, permalink: true }
           : { url: `https://slack.com/app_redirect?channel=${m[1]}`, permalink: false },
       )
     },

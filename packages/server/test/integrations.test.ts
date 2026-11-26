@@ -74,7 +74,7 @@ function fakeApis() {
       calls.push({ system: 'slack', method, path: name, token: headers.get('authorization'), body })
       switch (name) {
         case 'auth.test':
-          return json({ ok: true, user_id: 'UBOT', bot_id: 'BBOT' })
+          return json({ ok: true, user_id: 'UBOT', bot_id: 'BBOT', team_id: 'T0TEST0001' })
         case 'conversations.info':
           return json({ ok: true, channel: { id: body.channel, name: 'general' } })
         case 'users.info': {
@@ -865,7 +865,7 @@ function integrationSuite(backend: Backend) {
     expect(events.map((e) => e.data.employeeId).sort()).toEqual([meatless, vee].sort())
   })
 
-  it('slack permalinks: the thread’s own link with the employee’s bot, cached; the channel when Slack can’t say', async () => {
+  it('slack links: the conversation in Slack's web client, in the bot's workspace; the channel without a bot', async () => {
     const s = t.a.services
     api.reset()
     const session = await s.sessions.create({ employeeId: meatless, title: 'Permalinks', entries: [] })
@@ -876,19 +876,13 @@ function integrationSuite(backend: Backend) {
 
     const r = await link('slack:C1/1700000009.000100', `sessionId=${session.id}`)
     expect(r.status).toBe(200)
-    expect(r.body).toEqual({ url: 'https://example.slack.com/archives/C1/p1700000009000100', permalink: true })
-    expect((await link('slack:C1/1700000009.000100', `sessionId=${session.id}`)).body).toEqual(r.body)
-    const asked = api.calls.filter((c) => c.path === 'chat.getPermalink')
-    expect(asked).toHaveLength(1)
-    expect(asked[0]!.token).toBe('Bearer xoxb-meatless')
-    expect(asked[0]!.body).toMatchObject({ channel: 'C1', message_ts: '1700000009.000100' })
-    expect(JSON.stringify(r.body)).not.toContain('xoxb')
-
-    // Slack refuses: the channel, through app_redirect.
+    // The conversation in Slack's web client, in the bot's workspace.
+    expect(r.body).toEqual({ url: 'https://app.slack.com/client/T0TEST0001/C1', permalink: true })
     expect((await link('slack:C404/1700000009.000200', `sessionId=${session.id}`)).body).toEqual({
-      url: 'https://slack.com/app_redirect?channel=C404',
-      permalink: false,
+      url: 'https://app.slack.com/client/T0TEST0001/C404',
+      permalink: true,
     })
+    expect(JSON.stringify(r.body)).not.toContain('xoxb')
     // An employee without a bot token: the same.
     const other = await s.sessions.create({ employeeId: kai, title: 'No Slack', entries: [] })
     await s.events.subscriptions.subscribe(other.id, { system: 'slack', id: 'C1/1700000009.000100' }, { primary: true })

@@ -47,8 +47,6 @@ const CHANNEL_MISS_TTL_MS = 60_000
 /** Most thread roots cached at once, and for how long: a root can be edited, so not for long. */
 const ROOT_CACHE_MAX = 1000
 const ROOT_TTL_MS = 10 * 60_000
-/** Most permalinks cached at once. */
-const PERMALINK_CACHE_MAX = 5000
 
 const json = (status: number, body: unknown, events: IntegrationEvent[] = []): WebhookResult => ({
   status,
@@ -56,18 +54,6 @@ const json = (status: number, body: unknown, events: IntegrationEvent[] = []): W
   headers: { 'content-type': 'application/json' },
   events,
 })
-
-/**
- * A permalink without `?thread_ts=…&cid=…` when the thread it names is the message itself: Slack adds it
- * to a thread's first message, and that form doesn't open it. A reply's link keeps it.
- */
-export function plainPermalink(url: string, ts: string): string {
-  const u = new URL(url)
-  if (u.searchParams.get('thread_ts') !== ts) return url
-  u.searchParams.delete('thread_ts')
-  u.searchParams.delete('cid')
-  return u.toString()
-}
 
 /** Whether a request is an interactivity payload (form-encoded `payload=`) rather than an Events API envelope. */
 const isInteractive = (req: WebhookRequest) =>
@@ -86,8 +72,8 @@ export interface SlackIntegration extends Integration {
    */
   uploadFile(input: SlackUploadInput, opts?: { maxBytes?: number; signal?: AbortSignal }): Promise<SlackUploadResult>
   /**
-   * A message's permalink (`chat.getPermalink`), for links in the UI. Cached for the instance's
-   * life: permalinks don't change. Throws when Slack can't give one (unknown channel, no access).
+   * Where a message's conversation opens, for links in the UI: `https://app.slack.com/client/<team>/<channel>`
+   * (the workspace from auth.test). Throws when the workspace is unknown.
    */
   permalink(channel: string, ts: string): Promise<string>
   /** A channel's name without the `#` (`conversations.info`, cached), or undefined for DMs and failures. */
@@ -168,13 +154,14 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
   }
 
   // The app's own bot identity (auth.test), for ignoring its own messages. Looked up once, lazily.
-  let authTest: Promise<{ userId?: string; botId?: string }> | undefined
+  let authTest: Promise<{ userId?: string; botId?: string; teamId?: string }> | undefined
   const ownIdentity = () => {
     authTest ??= quick
       .call('auth.test', {}, {})
       .then((r) => ({
         ...(typeof r.user_id === 'string' ? { userId: r.user_id } : {}),
         ...(typeof r.bot_id === 'string' ? { botId: r.bot_id } : {}),
+        ...(typeof r.team_id === 'string' ? { teamId: r.team_id } : {}),
       }))
       .catch((err) => {
         logger.warn('slack auth.test failed', { err: errorMessage(err) })
@@ -320,21 +307,13 @@ export function createSlackIntegration(opts: SlackIntegrationOptions): SlackInte
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     ...(apiHost ? { allowHost: (host: string) => host === apiHost } : {}),
   }
-  // Permalinks never change: cached until the instance is replaced (or the cache is full), failures not at all.
-  const permalinks = new Map<string, Promise<string>>()
-  const permalink: SlackIntegration['permalink'] = (channel, ts) => {
-    const key = `${channel}/${ts}`
-    const hit = permalinks.get(key)
-    if (hit) return hit
-    const p = quick.call('chat.getPermalink', { channel, message_ts: ts }, {}).then((r) => {
-      if (typeof r.permalink !== 'string' || !/^https:\/\//.test(r.permalink))
-        throw new Error(`slack chat.getPermalink: no permalink for ${key}`)
-      return plainPermalink(r.permalink, ts)
-    })
-    permalinks.set(key, p)
-    if (permalinks.size > PERMALINK_CACHE_MAX) permalinks.delete(permalinks.keys().next().value as string)
-    p.catch(() => permalinks.delete(key))
-    return p
+  // The conversation in Slack's web client, app.slack.com/client/<team>/<channel>: it opens in the browser
+  // and the app alike. Slack's own permalinks (archives/…) didn't open reliably.
+  const permalink: SlackIntegration['permalink'] = async (channel) => {
+    const { teamId } = await ownIdentity()
+    if (!teamId) throw new Error('slack: the workspace id is unknown (auth.test failed)')
+    if (!/^[A-Z0-9]+$/.test(channel)) throw new Error(`slack: not a channel id: ${channel}`)
+    return `https://app.slack.com/client/${teamId}/${channel}`
   }
 
   const downloadFile: SlackIntegration['downloadFile'] = (fileId, o) => downloadSlackFile(fileDeps, fileId, o)

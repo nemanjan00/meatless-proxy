@@ -1,7 +1,6 @@
 import { ManualClock } from '@mp/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSlackIntegration, type SlackIntegration } from '../src/index.ts'
-import { plainPermalink } from '../src/integration.ts'
 import { type FakeSlack, startFakeSlack, TOKEN } from './fake-slack.ts'
 
 let slack: FakeSlack
@@ -21,45 +20,17 @@ afterEach(async () => {
 })
 
 describe('permalink', () => {
-  it("asks chat.getPermalink once and keeps the answer: permalinks don't change", async () => {
-    const url = await integration.permalink('C1', '1712000002.000100')
-    expect(url).toBe('https://example.slack.com/archives/C1/p1712000002000100')
-    expect(await integration.permalink('C1', '1712000002.000100')).toBe(url)
-    expect(slack.callsTo('chat.getPermalink')).toHaveLength(1)
-    expect(slack.callsTo('chat.getPermalink')[0]!.params).toEqual({ channel: 'C1', message_ts: '1712000002.000100' })
+  it("opens the conversation in Slack's web client, asking auth.test for the workspace once", async () => {
+    expect(await integration.permalink('C1', '1712000002.000100')).toBe('https://app.slack.com/client/T1/C1')
+    expect(await integration.permalink('D2', '1712000003.000100')).toBe('https://app.slack.com/client/T1/D2')
+    expect(slack.callsTo('auth.test')).toHaveLength(1)
+    expect(slack.callsTo('chat.getPermalink')).toHaveLength(0)
   })
 
-  it('asks for two at once only once', async () => {
-    const [a, b] = await Promise.all([
-      integration.permalink('C1', '1712000003.000100'),
-      integration.permalink('C1', '1712000003.000100'),
-    ])
-    expect(a).toBe(b)
-    expect(slack.callsTo('chat.getPermalink')).toHaveLength(1)
-  })
-
-  it("throws when Slack can't give one, and asks again next time", async () => {
-    await expect(integration.permalink('C9', '1712000002.000100')).rejects.toThrow(/channel_not_found/)
-    slack.failWith('chat.getPermalink', 'ratelimited', 1)
-    await expect(integration.permalink('C1', '1712000001.000100')).rejects.toThrow()
-    expect(await integration.permalink('C1', '1712000001.000100')).toMatch(/^https:\/\/example\.slack\.com\/archives\/C1\//)
-  })
-
-  it("drops thread_ts and cid when they name the message itself (a thread's first message), and keeps a reply's", async () => {
-    const root = 'https://example.slack.com/archives/C1/p1712000002000100'
-    slack.script('chat.getPermalink', {
-      status: 200,
-      body: JSON.stringify({ ok: true, permalink: `${root}?thread_ts=1712000002.000100&cid=C1` }),
-    })
-    expect(await integration.permalink('C1', '1712000002.000100')).toBe(root)
-    expect(plainPermalink(`${root}?thread_ts=1712000001.000100&cid=C1`, '1712000002.000100')).toBe(
-      `${root}?thread_ts=1712000001.000100&cid=C1`,
-    )
-  })
-
-  it('refuses an answer that is not an https link', async () => {
-    slack.script('chat.getPermalink', { status: 200, body: JSON.stringify({ ok: true, permalink: 'javascript:alert(1)' }) })
-    await expect(integration.permalink('C1', '1712000002.000100')).rejects.toThrow(/no permalink/)
+  it('throws when the workspace is unknown, and asks again next time', async () => {
+    slack.failWith('auth.test', 'ratelimited', 1)
+    await expect(integration.permalink('C1', '1712000001.000100')).rejects.toThrow(/workspace id is unknown/)
+    expect(await integration.permalink('C1', '1712000001.000100')).toBe('https://app.slack.com/client/T1/C1')
   })
 })
 
