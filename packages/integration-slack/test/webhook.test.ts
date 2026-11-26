@@ -487,6 +487,27 @@ describe('event mapping', () => {
     expect(b.events[0]?.payload).toMatchObject({ text: 'Fixed, thanks <@U2>' })
   })
 
+  it('a forward in blocks only (message_blocks), an app attachment in blocks, fields and files are read too', async () => {
+    const rich = (text: string) => [
+      { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text }] }] },
+    ]
+    const forward = {
+      is_share: true,
+      author_id: 'U2',
+      fallback: '[no preview available]',
+      message_blocks: [{ message: { blocks: rich('Checkout fails on Safari') } }],
+    }
+    const app = {
+      blocks: rich('Ticket created'),
+      fields: [{ title: 'Status', value: 'Todo' }],
+      files: [{ id: 'F1', name: 'shot.png' }],
+    }
+    const r = await deliver(msg({ text: '', attachments: [forward, app] }))
+    expect(r.events[0]?.text).toBe(
+      'Slack #general U1:  [shared message from <@U2>: "Checkout fails on Safari"] [shared message: "Ticket created Status: Todo [file: shot.png, slack file F1]"]',
+    )
+  })
+
   it('group DMs (mpim) are channel messages', async () => {
     const r = await deliver(msg({ channel: 'GMP1', channel_type: 'mpim' }))
     expect(r.events[0]?.type).toBe('message.posted')

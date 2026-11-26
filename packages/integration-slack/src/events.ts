@@ -43,6 +43,12 @@ export interface SlackAttachment {
   author_id?: string
   author_name?: string
   from_url?: string
+  /** An app's attachment in blocks (no `text`). */
+  blocks?: Json[]
+  /** A forwarded message in Slack's newer shape: its blocks, with no `text`. */
+  message_blocks?: { message?: { blocks?: Json[] } }[]
+  fields?: { title?: string; value?: string }[]
+  files?: { id?: string; name?: string }[]
 }
 
 export interface SlackInnerEvent extends SlackMessage {
@@ -130,7 +136,9 @@ export const messageText = (m: Pick<SlackMessage, 'text' | 'blocks'>) => m.text 
 export function sharedOf(m: Pick<SlackMessage, 'attachments'>): { author?: string; text: string; link?: string }[] {
   return (m.attachments ?? [])
     .map((a) => {
-      const text = [a.pretext, a.title, a.text || a.fallback].filter((x) => x?.trim()).join('\n')
+      const body = a.text || blocksText(a.message_blocks?.map((b) => b.message?.blocks)) || blocksText(a.blocks) || a.fallback
+      const fields = (a.fields ?? []).map((f) => [f.title, f.value].filter(Boolean).join(': '))
+      const text = [a.pretext, a.title, body, ...fields, filesText(a.files).trim()].filter((x) => x?.trim()).join('\n')
       const author = a.author_id ? `<@${a.author_id}>` : a.author_name
       return {
         ...(author ? { author } : {}),
