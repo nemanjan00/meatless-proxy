@@ -173,6 +173,21 @@ describe('settings → employees: rename', () => {
   })
 })
 
+describe('settings → employees: title', () => {
+  it('saves its title on its contact, and the employee page shows it', async () => {
+    const user = userEvent.setup()
+    const data = renderAt('/settings/employees')
+    const editor = await screen.findByTestId('employee-editor')
+    const box = within(editor).getByLabelText(/^Title/)
+    await waitFor(() => expect(box).toBeEnabled())
+    await user.clear(box)
+    await user.type(box, 'Code reviewer')
+    await user.click(within(editor).getByRole('button', { name: 'Save' }))
+    const contactId = (await data.api.getRecord('employee', EMP.billing)).data.contactId as string
+    await waitFor(async () => expect((await data.api.getRecord('contact', contactId)).data.role).toBe('Code reviewer'))
+  })
+})
+
 describe('settings → employees: 👀 on pickup', () => {
   it('turns the Slack pickup reaction off', async () => {
     const user = userEvent.setup()

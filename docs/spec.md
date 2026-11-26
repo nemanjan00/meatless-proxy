@@ -3686,7 +3686,8 @@ All of these update live over the WebSocket.
   `DOCKER_DIRECT_NETWORK=false`, the control says direct means no network
   here.
 - **Settings → Employees** (admins) edits each employee's **name**,
-  personality, **standing instructions**, [watched channels](#watched-channels),
+  **title** (its contact's `role`, shown under its name in chat, People and its
+  page), personality, **standing instructions**, [watched channels](#watched-channels),
   whether it reacts 👀 on pickup in Slack, model, network and tool lists. A rename also renames its contact and
   moves its `@handle` to the new name (refused when another employee has it);
   messages already sent keep their links, and its Slack app's name is changed

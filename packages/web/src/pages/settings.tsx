@@ -97,7 +97,12 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
   const api = useApi()
   const d = employee.data
   const lists = toolLists(d)
+  const contact = useLoad(
+    (a) => (d.contactId ? a.getRecord<ContactData>('contact', d.contactId) : Promise.resolve(null)),
+    [d.contactId],
+  )
   const [name, setName] = useState(d.name)
+  const [title, setTitle] = useState('')
   const [personality, setPersonality] = useState(d.personality ?? '')
   const [instructions, setInstructions] = useState(d.instructions ?? '')
   const [watch, setWatch] = useState(d.watch ?? [])
@@ -121,6 +126,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     setAllow(l.allow.join('\n'))
     setDeny(l.deny.join('\n'))
   }, [d])
+  useEffect(() => setTitle(contact.data?.data.role ?? ''), [contact.data])
   const lines = (s: string) =>
     s
       .split('\n')
@@ -146,6 +152,9 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
         },
         employee.version,
       )
+      // The title lives on its contact, where people's titles are.
+      if (contact.data && title.trim() !== (contact.data.data.role ?? ''))
+        await api.updatePerson(contact.data.id, { role: title.trim() || null })
     } catch (err) {
       // e.g. a rename to a name another employee has.
       toast.error(err instanceof Error ? err.message : String(err))
@@ -153,6 +162,7 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
     }
     toast(`${name.trim() || d.name} saved`, { description: 'Tool and prompt changes reach running sessions at their next run.' })
     onSaved()
+    contact.reload()
   }
   const allowed = probe.trim() ? toolAllowed(probe.trim(), lines(allow), lines(deny)) : null
   return (
@@ -169,6 +179,16 @@ function EmployeeEditor({ employee, onSaved }: { employee: ApiRecord<EmployeeDat
       </div>
       <Field id="emp-name" label="Name" hint="Renaming changes its @handle too; its Slack app's name is set in Slack">
         <Input id="emp-name" value={name} onChange={(e) => setName(e.target.value)} className="max-w-72" />
+      </Field>
+      <Field id="emp-title" label="Title" hint="Shown under its name in chat and People, e.g. Code reviewer">
+        <Input
+          id="emp-title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="AI employee"
+          className="max-w-72"
+          disabled={!contact.data}
+        />
       </Field>
       <Field id="emp-personality" label="Personality" hint="Tone only; never overrides the rules">
         <Textarea id="emp-personality" value={personality} onChange={(e) => setPersonality(e.target.value)} rows={3} />
