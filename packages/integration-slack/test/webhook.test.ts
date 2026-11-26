@@ -519,7 +519,7 @@ describe('event mapping', () => {
     expect((await deliver(envelope({ type: 'message', subtype: undefined, channel: 'C1' }))).events).toEqual([])
   })
 
-  it('marks a message that mentions someone else, and not this app, as addressed to others', async () => {
+  it('marks a message that opens by mentioning someone else, and not this app, as addressed to others', async () => {
     const payloadOf = async (text: string, ts: string) =>
       (await deliver(msg({ text, ts }))).events[0]?.payload as { addressedToOthers?: boolean; mentions_app?: boolean }
     expect((await payloadOf('<@UOTHERBOT>, build a json viewer', '1700000101.000100')).addressedToOthers).toBe(true)
@@ -527,6 +527,10 @@ describe('event mapping', () => {
       (await payloadOf(`<@${BOT_USER}> and <@UOTHERBOT>, both of you`, '1700000102.000100')).addressedToOthers,
     ).toBeUndefined()
     expect((await payloadOf('anyone around?', '1700000103.000100')).addressedToOthers).toBeUndefined()
+    expect((await payloadOf('hey <@UANA> <@UBO>: can you look?', '1700000105.000100')).addressedToOthers).toBe(true)
+    // A mention inside the sentence is what it's about: the thread's owner still answers it.
+    expect((await payloadOf('do the same about <@UANA>', '1700000106.000100')).addressedToOthers).toBeUndefined()
+    expect((await payloadOf('what did <@UANA> decide here?', '1700000107.000100')).addressedToOthers).toBeUndefined()
     // Mentioning nobody (or others) in a channel is plain conversation for this app; mentioning it isn't.
     const plainOf = async (text: string, ts: string) => {
       const payload = (await deliver(msg({ text, ts }))).events[0]!.payload as { plainConversation?: boolean }

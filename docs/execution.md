@@ -151,8 +151,10 @@ and tags combine as described below:
    session.
    Not for plain chat between people (in chat, or a Slack channel message that
    doesn't mention the employee, `payload.plainConversation`), not for a message addressed to someone
-   else (it mentions others and not this employee, `payload.addressedToOthers`:
-   two employees' Slack apps both get it, and only the one mentioned acts),
+   else (it opens by mentioning others, not this employee, `payload.addressedToOthers`:
+   two employees' Slack apps both get it, and only the one mentioned acts; a
+   mention later in the sentence, as in "do the same for @Ana", is what it's
+   about, so a thread's owner still answers it),
    and not for reactions (the thread's owner gets them through its
    subscription). Nor for GitLab events that aren't about the employee:
    pushes, pipelines and jobs never (the session that pushed follows its

@@ -175,10 +175,19 @@ const threadLabel = (threadTs: string, root: SlackMessage | undefined, self: Sel
 const mentionsApp = (text: string | undefined, self: SelfIdentity) =>
   !!text && [...self.userIds].some((id) => text.includes(`<@${id}>`))
 
-/** Whether a message mentions someone, and not this app: it's addressed to them (the router doesn't fall back to this employee). */
+/** Mentions at the start of a message, after an optional greeting: who it's said to ("hey <@U1> <@U2>, can you…"). */
+const LEADING_MENTIONS = /^\s*(?:(?:hey|hi|hello|ej|cao|ćao|zdravo)[\s,]+)?((?:<@[A-Z0-9]+(?:\|[^>]*)?>[\s,:]*)+)/i
+
+/**
+ * Whether a message is said to someone else, not this app: it opens with mentions, none of them this app's
+ * (the router doesn't fall back to this employee). A mention later in the sentence is what it's about, not
+ * who it's for ("do the same for <@U2>").
+ */
 const addressedToOthers = (text: string | undefined, self: SelfIdentity) => {
-  const mentioned = [...(text ?? '').matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].map((m) => m[1]!)
-  return mentioned.length > 0 && !mentioned.some((id) => self.userIds.has(id))
+  const lead = LEADING_MENTIONS.exec(text ?? '')?.[1]
+  if (!lead) return false
+  const mentioned = [...lead.matchAll(/<@([A-Z0-9]+)/g)].map((m) => m[1]!)
+  return !mentioned.some((id) => self.userIds.has(id))
 }
 
 const pick = (obj: Record<string, Json | undefined>): Json =>
