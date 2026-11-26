@@ -71,7 +71,7 @@ back as `isError` results with `{ error, code, status? }`.
 | `get_file` | a file's raw content at `ref` (default: the default branch): up to `max_bytes` (15,000 characters, below the harness's limit for a tool result) cut at a line with `next: "start_line N reads on"`, a range (`start_line`, `end_line`), or only the lines matching `grep`, numbered; binary files are reported, not returned |
 | `list_tree` | files and directories at `path` and `ref`, optionally `recursive` |
 | `create_merge_request` | `source_branch`, `target_branch` (default: the default branch), `title`, `description`, `draft` (prefixes `Draft:`), `labels`, `reviewers` and `assignees` by username |
-| `update_merge_request` | `title`, `description`, `labels` / `add_labels` / `remove_labels`, `draft` |
+| `update_merge_request` | `title`, `description`, `labels` / `add_labels` / `remove_labels`, `draft`, `target_branch`; `state` (close or reopen) only for its own merge requests (author is the token's user), never merge |
 | `get_merge_request` | the MR with diff stats (files, additions, deletions), the latest pipeline, the count of unresolved discussions and the first 20 of them (id, author, body, path, line) |
 | `list_merge_requests` | by `state` (default `opened`), `author`, `source_branch`, `target_branch`, `search` |
 | `merge_request_changes` | the diffs per file, within a budget (60 KB total, 20 KB per file), or one file by `path` |

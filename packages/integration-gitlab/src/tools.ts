@@ -1,4 +1,4 @@
-import { errorMessage, MpError, ValidationError } from '@mp/core'
+import { DeniedError, errorMessage, MpError, ValidationError } from '@mp/core'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { type GitlabClient, projectRef } from './client.ts'
@@ -233,7 +233,7 @@ export function createGitlabMcpServer(api: GitlabClient): McpServer {
 
   tool(
     'update_merge_request',
-    'Change a merge request: title, description, labels or draft state. It cannot merge, approve or set auto-merge.',
+    'Change a merge request: title, description, labels, draft state or target branch, or close or reopen one you opened (e.g. one replaced by another). It cannot merge, approve or set auto-merge.',
     {
       project: projectArg,
       iid: iidArg('merge request'),
@@ -243,9 +243,18 @@ export function createGitlabMcpServer(api: GitlabClient): McpServer {
       add_labels: z.array(z.string()).optional(),
       remove_labels: z.array(z.string()).optional(),
       draft: z.boolean().optional().describe('true: mark as draft; false: mark as ready for review'),
+      target_branch: z.string().min(1).optional().describe('The branch it merges into, e.g. "main"'),
+      state: z.enum(['close', 'reopen']).optional().describe('Close or reopen it: only merge requests you opened'),
     },
     async (a) => {
       const body: Record<string, unknown> = {}
+      if (a.state) {
+        const [mr, me] = await Promise.all([api.get(mrPath(a.project, a.iid)), api.get('/user')])
+        if ((mr.author as { id?: number } | undefined)?.id !== me.id)
+          throw new DeniedError('you can only close or reopen merge requests you opened: ask its author or a maintainer')
+        body.state_event = a.state
+      }
+      if (a.target_branch !== undefined) body.target_branch = a.target_branch
       let title: string | undefined = a.title
       if (a.draft !== undefined) {
         title ??= (await api.get(mrPath(a.project, a.iid))).title as string
@@ -256,7 +265,8 @@ export function createGitlabMcpServer(api: GitlabClient): McpServer {
       if (a.labels) body.labels = a.labels.join(',')
       if (a.add_labels?.length) body.add_labels = a.add_labels.join(',')
       if (a.remove_labels?.length) body.remove_labels = a.remove_labels.join(',')
-      if (!Object.keys(body).length) throw new ValidationError('nothing to update')
+      if (!Object.keys(body).length)
+        throw new ValidationError('nothing to update: give title, description, labels, draft, target_branch or state')
       return f.mergeRequest(await api.put(mrPath(a.project, a.iid), body))
     },
   )

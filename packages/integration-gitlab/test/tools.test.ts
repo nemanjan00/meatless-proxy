@@ -255,6 +255,19 @@ describe('merge requests', () => {
     expect(nothing).toMatchObject({ isError: true, data: { code: 'validation' } })
   })
 
+  it('update_merge_request retargets, and closes or reopens only its own merge requests', async () => {
+    const moved = await ok('update_merge_request', { project: 42, iid: 12, target_branch: 'release' })
+    expect(moved.target_branch).toBe('release')
+    const closed = await ok('update_merge_request', { project: 42, iid: 12, state: 'close' })
+    expect(closed.state).toBe('closed')
+    expect(lastRequest('PUT', 'merge_requests').body).toEqual({ state_event: 'close' })
+    expect((await ok('update_merge_request', { project: 42, iid: 12, state: 'reopen' })).state).toBe('opened')
+    // !11 is someone else's.
+    const theirs = await call('update_merge_request', { project: 42, iid: 11, state: 'close' })
+    expect(theirs).toMatchObject({ isError: true, data: { code: 'denied' } })
+    expect(theirs.data.error).toContain('only close or reopen merge requests you opened')
+  })
+
   it('update_merge_request drops state_event and merge flags', async () => {
     await ok('update_merge_request', {
       project: 42,

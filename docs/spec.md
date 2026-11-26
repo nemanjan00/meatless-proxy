@@ -342,6 +342,10 @@ protected branches, cannot merge, and cannot deploy.
   git is asked, for every repository. In a [local project](#local-projects)
   merging is a person's action on the project's page in the web UI; AI
   employees never sign in, so no route merges for them.
+- **Its own merge requests, it may tidy.** `update_merge_request` changes a
+  merge request's target branch, and closes or reopens one only when the
+  employee opened it (one it replaced, one opened against the wrong branch).
+  Closing someone else's is refused, and merging stays impossible.
 
 Open questions:
 

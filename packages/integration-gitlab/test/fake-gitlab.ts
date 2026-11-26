@@ -587,6 +587,9 @@ function route(s: FakeState, method: string, seg: string[], q: URLSearchParams, 
         if (body.labels !== undefined) mr.labels = String(body.labels).split(',').filter(Boolean)
         if (body.add_labels) mr.labels = [...new Set([...mr.labels, ...String(body.add_labels).split(',')])]
         if (body.remove_labels) mr.labels = mr.labels.filter((l: string) => !String(body.remove_labels).split(',').includes(l))
+        if (body.target_branch !== undefined) mr.target_branch = body.target_branch
+        if (body.state_event === 'close') mr.state = 'closed'
+        if (body.state_event === 'reopen') mr.state = 'opened'
         if (body.state_event === 'merge' || body.merge_when_pipeline_succeeds) mr.state = 'merged'
         return send(res, 200, mr)
       }
