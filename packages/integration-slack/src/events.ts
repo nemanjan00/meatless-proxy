@@ -213,6 +213,8 @@ export async function mapSlackEvent(env: SlackEnvelope, ctx: MapContext): Promis
   const isDm = ev.channel_type === 'im' || (ev.channel_type === undefined && channel.startsWith('D'))
   const where = async () => {
     if (isDm) return 'DM'
+    // A group DM has no name of its own: say what it is (its members are the only ones who can open its links).
+    if (ev.channel_type === 'mpim') return `group DM ${channel}`
     return `#${(await ctx.channelName(channel)) ?? channel}`
   }
   const base = (

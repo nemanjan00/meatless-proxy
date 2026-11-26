@@ -541,6 +541,8 @@ export interface SubjectPermalink {
   url: string
   /** Whether `url` is the thread's own permalink. */
   permalink: boolean
+  /** The thread is in a DM or a group DM: Slack opens it only for that conversation's members. */
+  conversation?: 'dm' | 'group_dm'
 }
 
 /** Kind `event`: an input from outside or a lifecycle event, stored before anything acts on it. */

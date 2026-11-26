@@ -3580,7 +3580,11 @@ in a new tab, without the opener. Unknown subjects stay plain text.
   instance's life; without a token, or when Slack can't say, it answers
   `https://slack.com/app_redirect?channel=<C>`, which opens the channel. The UI
   asks only when a link is about to be used (hover, focus, press), once per
-  subject; until then the link opens the channel.
+  subject; until then the link opens the channel. A thread in a DM or a group
+  DM (`conversation: 'dm' | 'group_dm'`, from the event's `channel_type`)
+  says in its tooltip that only that conversation's members can open it:
+  Slack shows anyone else nothing. Event texts name a group DM as
+  `group DM <C…>`, not as a channel.
 - **Handles:** a Slack user id opens a DM with them
   (`app_redirect?channel=<U…>`), a GitLab username their profile on the
   deployment's GitLab (`GET /api/me` `deployment.gitlabBaseUrl`).

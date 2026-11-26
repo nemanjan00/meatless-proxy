@@ -206,6 +206,21 @@ describe('SubjectLink', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
+  it("says a group DM's link opens only for its members", async () => {
+    const { data } = renderLink(
+      <SubjectLink subject={{ system: 'slack', ref: 'C0TEST0001/1700000000.000200' }} sessionId={SES.inc42} />,
+    )
+    vi.spyOn(data.api, 'subjectPermalink').mockResolvedValue({
+      url: 'https://example.slack.com/archives/C0TEST0001/p1700000000000200',
+      permalink: true,
+      conversation: 'group_dm',
+    })
+    const a = screen.getByRole('link', { name: /Slack thread in/ })
+    await userEvent.hover(a)
+    await waitFor(() => expect(a.getAttribute('title')).toMatch(/^In a Slack group DM: only its members can open it\n/))
+    expect(a).toHaveAttribute('href', 'https://example.slack.com/archives/C0TEST0001/p1700000000000200')
+  })
+
   it('keeps the channel link when Slack has no permalink for it', async () => {
     renderLink(<SubjectLink subject={{ system: 'slack', ref: 'C0TEST0099/1700000000.000100' }} sessionId={SES.inc42} />)
     const a = screen.getByRole('link', { name: 'Slack thread in C0TEST0099' })

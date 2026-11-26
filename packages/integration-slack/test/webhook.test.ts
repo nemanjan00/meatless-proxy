@@ -511,7 +511,7 @@ describe('event mapping', () => {
   it('group DMs (mpim) are channel messages', async () => {
     const r = await deliver(msg({ channel: 'GMP1', channel_type: 'mpim' }))
     expect(r.events[0]?.type).toBe('message.posted')
-    expect(r.events[0]?.text).toBe('Slack #GMP1 U1: hello')
+    expect(r.events[0]?.text).toBe('Slack group DM GMP1 U1: hello')
   })
 
   it('unknown event types map to nothing', async () => {

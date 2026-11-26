@@ -60,8 +60,20 @@ export function useLinkContext(): LinkContext {
   return d?.gitlabBaseUrl ? { gitlabBaseUrl: d.gitlabBaseUrl } : {}
 }
 
+/** A Slack thread's permalink (null when Slack can't say), and whether it's in a DM or group DM. */
+interface Permalink {
+  url: string | null
+  conversation?: 'dm' | 'group_dm'
+}
+
+/** What a DM's or group DM's link says: Slack opens it only for that conversation's members. */
+export const CONVERSATION_NOTE = {
+  dm: 'In a Slack DM: only its two members can open it',
+  group_dm: 'In a Slack group DM: only its members can open it',
+} as const
+
 /** Slack permalinks already fetched, by subject: they don't change. */
-const permalinks = new Map<string, Promise<string | null>>()
+const permalinks = new Map<string, Promise<Permalink>>()
 
 /** Forgets fetched permalinks (tests). */
 export function clearPermalinkCache() {
@@ -73,10 +85,10 @@ function fetchPermalink(api: ApiClient, raw: string, scope: { sessionId?: string
   if (!p) {
     p = api
       .subjectPermalink({ subject: raw, ...scope })
-      .then((r) => (r.permalink ? r.url : null))
-      .catch(() => {
+      .then((r): Permalink => ({ url: r.permalink ? r.url : null, ...(r.conversation ? { conversation: r.conversation } : {}) }))
+      .catch((): Permalink => {
         permalinks.delete(raw)
-        return null
+        return { url: null }
       })
     permalinks.set(raw, p)
   }
@@ -89,11 +101,14 @@ function ViewLink({
   className,
   onPrefetch,
   href,
+  note,
 }: {
   view: LinkView
   className?: string
   onPrefetch?(): void
   href?: string
+  /** Said in the tooltip before the raw form. */
+  note?: string
 }) {
   const to = href ?? view.href
   if (!to)
@@ -105,7 +120,7 @@ function ViewLink({
   return (
     <ChatLink
       href={to}
-      title={view.raw}
+      title={note ? `${note}\n${view.raw}` : view.raw}
       className={cn('min-w-0 truncate', className)}
       testId="subject-link"
       inRow
@@ -134,20 +149,22 @@ export function SubjectLink({
 }) {
   const view = subjectView(subject, useLinkContext())
   const api = useOptionalApi()
-  const [permalink, setPermalink] = useState<string | null>(null)
+  const [fetched, setFetched] = useState<Permalink | null>(null)
   const scope = sessionId ? { sessionId } : eventId ? { eventId } : null
   const prefetch =
-    view.slack && api && scope && !permalink
+    view.slack && api && scope && !fetched
       ? () => {
-          void fetchPermalink(api, view.raw, scope).then((url) => url && setPermalink(url))
+          void fetchPermalink(api, view.raw, scope).then(setFetched)
         }
       : undefined
+  const note = fetched?.conversation ? CONVERSATION_NOTE[fetched.conversation] : undefined
   return (
     <ViewLink
       view={view}
       className={className}
       {...(prefetch ? { onPrefetch: prefetch } : {})}
-      {...(permalink ? { href: permalink } : {})}
+      {...(fetched?.url ? { href: fetched.url } : {})}
+      {...(note ? { note } : {})}
     />
   )
 }

@@ -563,27 +563,36 @@ export function apiRoutes(deps: ApiDeps): Hono {
     const eventId = c.req.query('eventId')
     if (!sessionId === !eventId) throw new BadRequestError('give the sessionId or the eventId the subject belongs to')
     let employeeId: string | undefined
+    let channelType: unknown
     if (sessionId) {
       const session = await vis.requireSession(viewer(c), sessionId)
       const subs = await s.events.subscriptions.forSession(session.id)
       if (!subs.some((x) => x.data.subjectKey === key)) throw new NotFoundError('subscription', key)
       employeeId = session.data.employeeId
+      const latest = await s.records.query<MpEvent['data']>('event', {
+        where: [{ field: 'subjectKey', op: 'eq', value: key }],
+        orderBy: { field: 'receivedAt', dir: 'desc' },
+        limit: 1,
+      })
+      channelType = (latest.items[0]?.data.payload as { channel_type?: unknown } | undefined)?.channel_type
     } else {
       const e = await requireVisible(c, await s.rawEvents.require(eventId!))
       const subject = e.data.subject
       if (!subject || `${subject.system}:${subject.id}` !== key) throw new NotFoundError('event subject', key)
       employeeId = e.data.employeeId
+      channelType = (e.data.payload as { channel_type?: unknown } | undefined)?.channel_type
     }
+    // Slack opens a DM's or group DM's messages only for its members: say so, rather than hand out a link that fails.
+    const conversation = channelType === 'im' ? 'dm' : channelType === 'mpim' ? 'group_dm' : undefined
     const slack = await slackFor(employeeId)
     const url = await slack?.permalink(channel, ts).catch((err) => {
       s.logger.debug('slack permalink failed', { channel, err: errorMessage(err) })
       return undefined
     })
-    return c.json(
-      (url
-        ? { url, permalink: true }
-        : { url: `https://slack.com/app_redirect?channel=${channel}`, permalink: false }) satisfies Api.SubjectPermalink,
-    )
+    return c.json({
+      ...(url ? { url, permalink: true } : { url: `https://slack.com/app_redirect?channel=${channel}`, permalink: false }),
+      ...(conversation ? { conversation } : {}),
+    } satisfies Api.SubjectPermalink)
   })
 
   app.post('/api/sessions/:id/fork', async (c) => {
